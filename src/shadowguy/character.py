@@ -1,4 +1,8 @@
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from shadowguy.fixer import JobOffer
 
 BASE_HEALTH = 10
 HEALTH_PER_BODY = 5
@@ -18,6 +22,7 @@ class Character:
     stamina: int | None = None
     day: int = 1
     advantage: dict[str, int] = field(default_factory=dict)
+    accepted_jobs: list["JobOffer"] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -25,14 +30,14 @@ class Character:
         if self.stamina is None:
             self.stamina = self.max_stamina
 
-    def advantage_for(self, mission_id: str) -> int:
-        return self.advantage.get(mission_id, 0)
+    def advantage_for(self, job_id: str) -> int:
+        return self.advantage.get(job_id, 0)
 
-    def add_advantage(self, mission_id: str, amount: int) -> None:
-        self.advantage[mission_id] = self.advantage_for(mission_id) + amount
+    def add_advantage(self, job_id: str, amount: int) -> None:
+        self.advantage[job_id] = self.advantage_for(job_id) + amount
 
-    def consume_advantage(self, mission_id: str) -> int:
-        return self.advantage.pop(mission_id, 0)
+    def consume_advantage(self, job_id: str) -> int:
+        return self.advantage.pop(job_id, 0)
 
     @property
     def max_health(self) -> int:
@@ -55,9 +60,16 @@ class Character:
     def spend_stamina(self, amount: int) -> None:
         self.stamina -= amount
 
+    def accept_job(self, offer: "JobOffer") -> None:
+        self.accepted_jobs.append(offer)
+
+    def remove_job(self, job_scene_id: str) -> None:
+        self.accepted_jobs = [job for job in self.accepted_jobs if job.scene.id != job_scene_id]
+
     def rest(self) -> None:
         self.day += 1
         self.stamina = self.max_stamina
+        self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
 
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:

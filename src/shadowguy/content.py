@@ -4,7 +4,7 @@ LEGWORK_CASE_THE_BLOCK = Scene(
     id="legwork_case_the_block",
     title="Case the Block",
     kind=SceneKind.LEGWORK,
-    prepares_for="mission_data_heist",
+    prepares_for="job_data_heist",
     start_stage="start",
     stages={
         "start": Stage(
@@ -59,10 +59,10 @@ GIG_FENCE_SOME_CHROME = Scene(
     },
 )
 
-MISSION_DATA_HEIST = Scene(
-    id="mission_data_heist",
+JOB_DATA_HEIST = Scene(
+    id="job_data_heist",
     title="Data Heist",
-    kind=SceneKind.MISSION,
+    kind=SceneKind.JOB,
     stamina_cost=2,
     start_stage="infiltrate",
     stages={
