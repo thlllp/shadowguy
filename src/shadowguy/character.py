@@ -9,14 +9,21 @@ if TYPE_CHECKING:
 BASE_HEALTH = 10
 HEALTH_PER_BODY = 5
 BASE_STAMINA = 5
-STAT_NAMES = frozenset({"body", "skill", "cool", "cash", "rep"})
+# Fixed pool granted at character creation; a future XP system will grant more over a run.
+STARTING_SKILL_POINTS = 5
+# The checkable stats: what gear/temp bonuses can apply to and checks.resolve_check runs against.
+CORE_STATS = ("body", "strength", "agility", "perception", "intelligence", "cool")
+STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep"}
 
 
 @dataclass
 class Character:
     name: str
     body: int = 3
-    skill: int = 3
+    strength: int = 3
+    agility: int = 3
+    perception: int = 3
+    intelligence: int = 3
     cool: int = 3
     cash: int = 0
     rep: int = 0
@@ -36,6 +43,10 @@ class Character:
     consumables: list[str] = field(default_factory=list)
     # stat name -> bonus from a used Chem, active until the next rest().
     temp_bonuses: dict[str, int] = field(default_factory=dict)
+    # skill id (shadowguy.skills.SKILLS_BY_ID) -> invested rank.
+    skill_ranks: dict[str, int] = field(default_factory=dict)
+    # Unspent points; spend_skill_point() converts one into a skill_ranks entry.
+    skill_points: int = STARTING_SKILL_POINTS
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -87,6 +98,16 @@ class Character:
     def add_temp_bonus(self, stat: str, amount: int) -> None:
         self.temp_bonuses[stat] = self.temp_bonuses.get(stat, 0) + amount
 
+    def skill_rank(self, skill_id: str) -> int:
+        return self.skill_ranks.get(skill_id, 0)
+
+    def spend_skill_point(self, skill_id: str) -> bool:
+        if self.skill_points <= 0:
+            return False
+        self.skill_points -= 1
+        self.skill_ranks[skill_id] = self.skill_rank(skill_id) + 1
+        return True
+
     def accept_job(self, offer: "JobOffer") -> None:
         self.accepted_jobs.append(offer)
 
@@ -103,7 +124,7 @@ class Character:
         if name not in STAT_NAMES:
             raise ValueError(f"unknown stat: {name!r}")
         value = getattr(self, name)
-        if name in ("body", "skill", "cool"):
+        if name in CORE_STATS:
             value += equipped_bonus(self.inventory, name)
             value += self.temp_bonuses.get(name, 0)
         return value

@@ -38,6 +38,7 @@ from shadowguy.shops import (
     toggle_equip,
     use_consumable,
 )
+from shadowguy.skills import SKILLS, skill_value
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
@@ -63,9 +64,9 @@ class CharacterSheet(Static):
         ) or "none"
         return (
             f"{c.name}\n"
-            f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}\n"
-            f"Health: {c.health}/{c.max_health}   "
-            f"Body: {c.stat('body')}  Skill: {c.stat('skill')}  Cool: {c.stat('cool')}\n"
+            f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}   Health: {c.health}/{c.max_health}\n"
+            f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}  "
+            f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  Cool: {c.stat('cool')}\n"
             f"Cash: {c.cash}eb   Rep: {c.rep}\n"
             f"Standing — {standings}\n"
             f"Gear: {gear}"
@@ -82,6 +83,7 @@ class MainMenu(Screen):
         ("m", "corp_map", "Corp Map (preview)"),
         ("f", "fixers", "Fixers"),
         ("i", "inventory", "Gear"),
+        ("k", "skills", "Skills"),
     ]
 
     CSS = """
@@ -102,6 +104,7 @@ class MainMenu(Screen):
         ("legwork", "Legwork"),
         ("local", "Local"),
         ("gear", "Gear"),
+        ("skills", "Skills"),
         ("fixer", "Fixers"),
         ("map", "Corp Map"),
     ]
@@ -126,6 +129,9 @@ class MainMenu(Screen):
 
     def action_inventory(self) -> None:
         self.app.push_screen(InventoryScreen())
+
+    def action_skills(self) -> None:
+        self.app.push_screen(SkillsScreen())
 
     async def on_mount(self) -> None:
         await self._refresh_categories()
@@ -264,6 +270,9 @@ class MainMenu(Screen):
             return
         if key == "gear":
             self.app.push_screen(InventoryScreen())
+            return
+        if key == "skills":
+            self.app.push_screen(SkillsScreen())
             return
         self.selected_category = key
         await self._refresh()
@@ -446,6 +455,48 @@ class InventoryScreen(Screen):
             index = int(item_id.removeprefix("use_"))
             self.notify(use_consumable(character, index))
 
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class SkillsScreen(Screen):
+    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(id="skill_points")
+        yield ListView(id="skill_list")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        self.query_one("#skill_points", Static).update(f"Skill points: {character.skill_points}")
+
+        items = []
+        for skill in SKILLS:
+            rank = character.skill_rank(skill.id)
+            label = (
+                f"{skill.name} ({skill.stat.capitalize()}) — rank {rank}, "
+                f"value {skill_value(character, skill.id)} — {skill.description}"
+            )
+            items.append(ListItem(Static(label), id=f"spend_{skill.id}"))
+        await _replace_items(self.query_one("#skill_list", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        skill_id = event.item.id.removeprefix("spend_")
+        if not character.spend_skill_point(skill_id):
+            self.notify("No skill points left.", severity="warning")
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 

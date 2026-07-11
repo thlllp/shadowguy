@@ -53,7 +53,7 @@ class Item:
     id: str
     name: str
     price: int
-    bonuses: dict[str, int]  # stat name (body, skill, cool) -> bonus applied to that check
+    bonuses: dict[str, int]  # stat name (see character.CORE_STATS) -> bonus applied to that check
     # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
     # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
     slot: Slot | None = None
@@ -104,13 +104,13 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot
     # Persistent +body gear moved out in favor of the consumables below.
     LocationKind.PHARMACY: [],
     LocationKind.COMPUTER_STORE: [
-        ("burner_deck", "Burner Deck", 200, {"skill": 1}, None),
-        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"skill": 2}, None),
-        ("zetatech_rig", "Zetatech Rig", 1000, {"skill": 3}, None),
+        ("burner_deck", "Burner Deck", 200, {"intelligence": 1}, None),
+        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"intelligence": 2}, None),
+        ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None),
     ],
     LocationKind.PAWN: [
         ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}, Slot.WEAPON),
-        ("pawned_deck", "Pawned Deck", 80, {"skill": 1}, None),
+        ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
     ],
 }
@@ -137,7 +137,7 @@ _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, 
         ("health_kit", "Health Kit", 100, EffectKind.HEAL, 5, None),
         ("energy_drink", "Energy Drink", 60, EffectKind.RESTORE_STAMINA, 2, None),
         ("chem_x", "Chem X", 150, EffectKind.TEMP_STAT_BOOST, 2, "body"),
-        ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "skill"),
+        ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "intelligence"),
     ],
     LocationKind.WEAPON_SHOP: [
         ("grenade_smoke", "Smoke Grenade", 100, EffectKind.NONE, 0, None),

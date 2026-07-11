@@ -45,19 +45,19 @@ SHOP_KINDS = (
 
 # The check stat a location kind is scouted with. jobs.py owns the flavor text
 # for each kind (jobs.LEGWORK_APPROACH_TEXT) and reads the stat from here, so
-# there is exactly one place that says "DATA is a skill check" — _location_kinds
+# there is exactly one place that says "DATA is an intelligence check" — _location_kinds
 # below also needs it, to keep a district's filler slot from repeating its own
 # specialty's stat (see FILLER_EXCLUDED_STATS).
 LOCATION_STAT = {
-    LocationKind.DATA: "skill",
-    LocationKind.LAB: "skill",
+    LocationKind.DATA: "intelligence",
+    LocationKind.LAB: "intelligence",
     LocationKind.DEPOT: "body",
     LocationKind.SOCIAL: "cool",
     LocationKind.PAWN: "cool",
     LocationKind.WEAPON_SHOP: "body",
     LocationKind.AUTO_DEALER: "cool",
-    LocationKind.PHARMACY: "skill",
-    LocationKind.COMPUTER_STORE: "skill",
+    LocationKind.PHARMACY: "intelligence",
+    LocationKind.COMPUTER_STORE: "intelligence",
 }
 if set(LOCATION_STAT) != set(LocationKind):
     raise ValueError("LOCATION_STAT must have exactly one entry per LocationKind")
@@ -352,7 +352,7 @@ def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
     filler_count = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
     # Keep the filler slot(s) off the specialty's own stat (see LOCATION_STAT)
     # — a shop that happens to share it (e.g. PHARMACY and COMPUTER_STORE are
-    # both "skill", same as DATA/LAB) would otherwise give that district's
+    # both "intelligence", same as DATA/LAB) would otherwise give that district's
     # legwork three checks of one stat and no real choice.
     owned_stat = LOCATION_STAT[owned_kind]
     filler_pool = [kind for kind in FILLER_KINDS if LOCATION_STAT[kind] != owned_stat]

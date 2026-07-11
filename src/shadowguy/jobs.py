@@ -16,7 +16,7 @@ TARGETS = [
 ]
 
 STAT_FLAVOR = {
-    "skill": "hack the system",
+    "intelligence": "hack the system",
     "cool": "talk or bluff your way through",
     "body": "force your way through",
 }
@@ -36,9 +36,9 @@ class JobArchetype:
 
 
 ARCHETYPES = [
-    JobArchetype(name="Heist", verb="break into", stat_sequence=("skill", "cool")),
+    JobArchetype(name="Heist", verb="break into", stat_sequence=("intelligence", "cool")),
     JobArchetype(name="Extraction", verb="extract a target from", stat_sequence=("cool", "body")),
-    JobArchetype(name="Sabotage", verb="sabotage", stat_sequence=("skill", "body")),
+    JobArchetype(name="Sabotage", verb="sabotage", stat_sequence=("intelligence", "body")),
 ]
 
 
@@ -166,7 +166,7 @@ def generate_job(
 # How each kind of place is scouted, in flavor text. The stat itself lives in
 # corpmap.LOCATION_STAT — that's also what corpmap._location_kinds reads to
 # keep a district's filler slot off its own specialty's stat, so there is one
-# place that says "DATA is a skill check" rather than two that must agree.
+# place that says "DATA is an intelligence check" rather than two that must agree.
 LEGWORK_APPROACH_TEXT = {
     LocationKind.DATA: "Sift the traffic in and out of {name}",
     LocationKind.LAB: "Pull the intake records at {name}",
