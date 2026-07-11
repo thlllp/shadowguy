@@ -60,7 +60,13 @@ class MainMenu(Screen):
     }
     """
 
-    CATEGORIES = [("gig", "Gigs"), ("job", "Jobs"), ("legwork", "Legwork"), ("fixer", "Fixers")]
+    CATEGORIES = [
+        ("gig", "Gigs"),
+        ("job", "Jobs"),
+        ("legwork", "Legwork"),
+        ("fixer", "Fixers"),
+        ("map", "Corp Map"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -172,6 +178,9 @@ class MainMenu(Screen):
     async def _select_category(self, key: str) -> None:
         if key == "fixer":
             self.app.push_screen(FixerListScreen())
+            return
+        if key == "map":
+            self.app.push_screen(CorpMapScreen())
             return
         self.selected_category = key
         await self._refresh()
