@@ -85,8 +85,8 @@ JOB_DATA_HEIST = Scene(
                     ),
                 ),
                 Choice(
-                    label="Hack the service door (Skill)",
-                    stat="skill",
+                    label="Hack the service door (Intelligence)",
+                    stat="intelligence",
                     difficulty=13,
                     success=Outcome(text="The lock clicks open silently.", next_stage="vault"),
                     failure=Outcome(
@@ -105,8 +105,8 @@ JOB_DATA_HEIST = Scene(
             prompt="You're in. The data vault's encryption is live and watching.",
             choices=[
                 Choice(
-                    label="Crack the encryption (Skill)",
-                    stat="skill",
+                    label="Crack the encryption (Intelligence)",
+                    stat="intelligence",
                     difficulty=14,
                     success=Outcome(text="The vault peels open. Data's yours.", next_stage="extract"),
                     failure=Outcome(
