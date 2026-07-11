@@ -339,7 +339,8 @@ class ShopScreen(Screen):
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
-            label = f"Buy {item.name} — {item.price}eb (+{item.bonus} {item.stat.capitalize()})"
+            bonus_text = ", ".join(f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items())
+            label = f"Buy {item.name} — {item.price}eb ({bonus_text})"
             if character.cash < item.price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))

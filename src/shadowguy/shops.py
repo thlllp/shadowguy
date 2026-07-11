@@ -23,36 +23,40 @@ class Item:
     id: str
     name: str
     price: int
-    stat: str  # body, skill, or cool — the check this item's bonus applies to
-    bonus: int
+    bonuses: dict[str, int]  # stat name (body, skill, cool) -> bonus applied to that check
 
 
-CATALOG: dict[LocationKind, list[Item]] = {
+# id, name, price, bonuses
+_CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int]]]] = {
     LocationKind.WEAPON_SHOP: [
-        Item(id="brass_knuckles", name="Brass Knuckles", price=150, stat="body", bonus=1),
-        Item(id="combat_knife", name="Combat Knife", price=400, stat="body", bonus=2),
-        Item(id="smart_pistol", name="Smart Pistol", price=900, stat="body", bonus=3),
+        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}),
+        ("combat_knife", "Combat Knife", 400, {"body": 2}),
+        ("smart_pistol", "Smart Pistol", 900, {"body": 3}),
     ],
     LocationKind.AUTO_DEALER: [
-        Item(id="beater_bike", name="Beater Bike", price=200, stat="cool", bonus=1),
-        Item(id="tuned_coupe", name="Tuned Coupe", price=500, stat="cool", bonus=2),
-        Item(id="armored_towncar", name="Armored Towncar", price=1000, stat="cool", bonus=3),
+        ("beater_bike", "Beater Bike", 200, {"cool": 1}),
+        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}),
+        ("armored_towncar", "Armored Towncar", 1000, {"cool": 3}),
     ],
     LocationKind.PHARMACY: [
-        Item(id="synth_adrenal_patch", name="Synth-Adrenal Patch", price=180, stat="body", bonus=1),
-        Item(id="nerve_booster", name="Nerve Booster", price=450, stat="body", bonus=2),
-        Item(id="militech_combat_stim", name="Militech Combat Stim", price=950, stat="body", bonus=3),
+        ("synth_adrenal_patch", "Synth-Adrenal Patch", 180, {"body": 1}),
+        ("nerve_booster", "Nerve Booster", 450, {"body": 2}),
+        ("militech_combat_stim", "Militech Combat Stim", 950, {"body": 3}),
     ],
     LocationKind.COMPUTER_STORE: [
-        Item(id="burner_deck", name="Burner Deck", price=200, stat="skill", bonus=1),
-        Item(id="cracked_cyberdeck", name="Cracked Cyberdeck", price=500, stat="skill", bonus=2),
-        Item(id="zetatech_rig", name="Zetatech Rig", price=1000, stat="skill", bonus=3),
+        ("burner_deck", "Burner Deck", 200, {"skill": 1}),
+        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"skill": 2}),
+        ("zetatech_rig", "Zetatech Rig", 1000, {"skill": 3}),
     ],
     LocationKind.PAWN: [
-        Item(id="pawned_knuckles", name="Pawned Knuckles", price=80, stat="body", bonus=1),
-        Item(id="pawned_deck", name="Pawned Deck", price=80, stat="skill", bonus=1),
-        Item(id="pawned_charm", name="Pawned Lucky Charm", price=80, stat="cool", bonus=1),
+        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}),
+        ("pawned_deck", "Pawned Deck", 80, {"skill": 1}),
+        ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}),
     ],
+}
+
+CATALOG: dict[LocationKind, list[Item]] = {
+    kind: [Item(*row) for row in rows] for kind, rows in _CATALOG_ROWS.items()
 }
 
 ITEMS_BY_ID = {item.id: item for items in CATALOG.values() for item in items}
@@ -65,7 +69,7 @@ if set(CATALOG) != set(SHOP_KINDS):
 
 
 def equipped_bonus(inventory: list[str], stat: str) -> int:
-    return sum(ITEMS_BY_ID[item_id].bonus for item_id in inventory if ITEMS_BY_ID[item_id].stat == stat)
+    return sum(ITEMS_BY_ID[item_id].bonuses.get(stat, 0) for item_id in inventory)
 
 
 def buy_item(character: "Character", item: Item) -> bool:
