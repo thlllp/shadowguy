@@ -7,7 +7,7 @@ from shadowguy.checks import CheckResult, resolve_check
 
 
 class SceneKind(StrEnum):
-    MISSION = "mission"
+    JOB = "job"
     GIG = "gig"
     LEGWORK = "legwork"
 
@@ -55,7 +55,7 @@ class Scene:
     title: str
     stages: dict[str, Stage]
     start_stage: str = "start"
-    kind: SceneKind = SceneKind.MISSION
+    kind: SceneKind = SceneKind.JOB
     prepares_for: str | None = None
     stamina_cost: int = 1
 
@@ -78,11 +78,11 @@ class Scene:
 
 
 def validate_scene_registry(scenes: Iterable[Scene]) -> None:
-    mission_ids = {scene.id for scene in scenes if scene.kind == SceneKind.MISSION}
+    job_ids = {scene.id for scene in scenes if scene.kind == SceneKind.JOB}
     for scene in scenes:
-        if scene.kind == SceneKind.LEGWORK and scene.prepares_for not in mission_ids:
+        if scene.kind == SceneKind.LEGWORK and scene.prepares_for not in job_ids:
             raise ValueError(
-                f"{scene.id}: legwork prepares_for {scene.prepares_for!r} is not a known mission"
+                f"{scene.id}: legwork prepares_for {scene.prepares_for!r} is not a known job"
             )
 
 
@@ -97,7 +97,7 @@ def apply_outcome(character: Character, outcome: Outcome, banks_advantage_for: s
 
 
 def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:
-    advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.MISSION else 0
+    advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.JOB else 0
     roll = resolve_check(
         stat_value=character.stat(choice.stat),
         difficulty=choice.difficulty,
