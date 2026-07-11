@@ -10,6 +10,8 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from shadowguy.character import Character
 from shadowguy.content import GIG_FENCE_SOME_CHROME
 from shadowguy.corpmap import (
+    MODIFIER_LABELS,
+    MODIFIER_MAX,
     RenderedMap,
     Territory,
     generate_corp_map,
@@ -366,6 +368,10 @@ class SceneScreen(Screen):
 
 TRAVEL_STAMINA_COST = 1
 
+# Width of one modifier column in the #modifiers panel. Five of them must fit an
+# 80-column terminal, and "Surveillance" is the longest label.
+MODIFIER_COLUMN = 13
+
 
 class CorpMapScreen(Screen):
     BINDINGS = [
@@ -380,17 +386,26 @@ class CorpMapScreen(Screen):
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
+    # The panels below the map are fixed height and the map scrolls in what is
+    # left, so every row they take is a row of board the player cannot see. At
+    # 80x24 the budget is exact: keep them free of vertical padding.
     CSS = """
     #map_scroll {
         height: 1fr;
         overflow-x: auto;
-        padding: 1;
+        padding: 0 1;
     }
 
     #territory_info {
         height: auto;
         border-top: solid $accent;
-        padding: 1;
+        padding: 0 1;
+    }
+
+    #modifiers {
+        height: auto;
+        border-top: solid $accent;
+        padding: 0 1;
     }
     """
 
@@ -399,11 +414,13 @@ class CorpMapScreen(Screen):
         self.selected_id = ""
         self.hovered_id: str | None = None
         self.rendered: RenderedMap | None = None
+        self._render_key: tuple[str, str] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
         yield Static(id="territory_info")
+        yield Static(markup=False, id="modifiers")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -453,7 +470,12 @@ class CorpMapScreen(Screen):
     def _refresh(self) -> None:
         corp_map = self.app.corp_map
         character = self.app.character
-        self.rendered = render_ascii_map(corp_map, self.selected_id, character.location_id)
+        # Hover only restyles the finished text, so re-render the board itself
+        # only when the cursor or the runner actually moved.
+        key = (self.selected_id, character.location_id)
+        if self.rendered is None or key != self._render_key:
+            self.rendered = render_ascii_map(corp_map, self.selected_id, character.location_id)
+            self._render_key = key
         text = Text(self.rendered.text)
         for span in self.rendered.spans:
             if span.territory_id == self.hovered_id:
@@ -470,6 +492,15 @@ class CorpMapScreen(Screen):
             f"Locations: {locations}\n"
             f"{self._travel_hint(t, here, character)}"
         )
+        self.query_one("#modifiers", Static).update(self._modifier_panel(t))
+
+    def _modifier_panel(self, t: Territory) -> str:
+        """Five levers across two lines — a row each would cost the map its viewport."""
+        labels, levels = [], []
+        for modifier, level in t.modifiers.items():
+            labels.append(MODIFIER_LABELS[modifier].ljust(MODIFIER_COLUMN))
+            levels.append(f"{level}/{MODIFIER_MAX}".ljust(MODIFIER_COLUMN))
+        return f"{''.join(labels).rstrip()}\n{''.join(levels).rstrip()}"
 
     def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
         stamina = f"{character.stamina}/{character.max_stamina}"

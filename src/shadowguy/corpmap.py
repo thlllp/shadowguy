@@ -1,13 +1,15 @@
 import random
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction, FactionSpecialty
 
-OWNER_NAMES = {"player": "You", "neutral": "Unclaimed"}
+OWNER_NAMES = {"neutral": "Unclaimed"}
 
+# No "player" owner: the runner starts standing on unclaimed ground, not holding it.
+# The map marks where the runner *is* with @ (see _label), not with a corp tag.
 OWNER_TAGS = {
-    "player": "YOU",
     "neutral": "",
     **{faction.id: faction.name.split()[0][:3].upper() for faction in FACTIONS},
 }
@@ -24,6 +26,27 @@ class LocationKind(StrEnum):
     LAB = "lab"
     DEPOT = "depot"
     SOCIAL = "social"
+
+
+class TerritoryModifier(StrEnum):
+    """The levers a corp pulls on ground it holds. Displayed only, so far."""
+
+    SECURITY = "security"
+    SURVEILLANCE = "surveillance"
+    UNREST = "unrest"
+    DEVELOPMENT = "development"
+    RESTRICTED = "restricted"
+
+
+MODIFIER_MAX = 5
+
+MODIFIER_LABELS = {
+    TerritoryModifier.SECURITY: "Security",
+    TerritoryModifier.SURVEILLANCE: "Surveillance",
+    TerritoryModifier.UNREST: "Unrest",
+    TerritoryModifier.DEVELOPMENT: "Development",
+    TerritoryModifier.RESTRICTED: "Restricted",
+}
 
 
 @dataclass
@@ -45,6 +68,7 @@ class Territory:
     value: int = 1
     connections: list[str] = field(default_factory=list)
     locations: list[Location] = field(default_factory=list)
+    modifiers: dict[TerritoryModifier, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -184,28 +208,42 @@ def render_ascii_map(
     return RenderedMap(text="\n".join(lines), spans=spans)
 
 
-GRID_COLS = 6
-GRID_ROWS = 4
-TERRITORY_COUNT = 18
-TERRITORIES_PER_FACTION = 4
+# The grid is deliberately roomier than TERRITORY_COUNT: the leftover cells are
+# the holes that keep _grow_region's blob from degenerating into a full rectangle.
+GRID_COLS = 8
+GRID_ROWS = 6
+TERRITORY_COUNT = 38
+TERRITORIES_PER_FACTION = 6
 
 # Every faction is handed exactly this multiset of values, so equal territory
 # count and equal total value are guaranteed by construction rather than found
-# by searching for a fair partition.
-FACTION_VALUE_SPREAD = (3, 2, 2, 1)
+# by searching for a fair partition. Must stay TERRITORIES_PER_FACTION long —
+# that one-to-one is what makes the guarantee free.
+FACTION_VALUE_SPREAD = (3, 3, 2, 2, 1, 1)
 
-PLAYER_START_VALUE = 4
 NEUTRAL_VALUES = (1, 2, 3)
+
+# The runner starts on unclaimed ground at the rim of the map. Demand a way out of
+# it: a start with one connection makes every trip a there-and-back.
+MIN_START_DEGREE = 2
 
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
 
+# Must comfortably exceed TERRITORY_COUNT: names are sampled without replacement,
+# and the surplus is what keeps two runs from drawing the same district list.
+# Single words only — a territory's id is its lowercased name, and that id ends up
+# inside Textual widget ids (see MainMenu's "local_" rows), which cannot hold spaces.
 DISTRICT_NAMES = [
     "Kabuki", "Northside", "Watson", "Pacifica", "Heywood", "Westbrook",
     "Rancho", "Arroyo", "Coastview", "Glen", "Vista", "Charter",
     "Downtown", "Japantown", "Badlands", "Autopia", "Dogtown", "Longshore",
     "Sunset", "Harbor", "Foundry", "Terminal", "Spire", "Ashgrove",
+    "Riverside", "Steelyard", "Saltflats", "Greywater", "Lowline", "Highgate",
+    "Ember", "Solace", "Quarry", "Blackstack", "Neon", "Drydock",
+    "Junction", "Marrow", "Halberd", "Verdant", "Slagworks", "Prospect",
+    "Kingsway", "Ravine", "Tannery", "Cathode", "Bracken", "Silo",
 ]
 
 LOCATIONS_PER_TERRITORY = 3
@@ -234,6 +272,28 @@ LOCATION_PREFIXES = [
     "Cinder", "Palisade", "Ashline", "Dead Man's",
 ]
 
+# The most locations of one kind a map can want: the faction whose specialty it is
+# takes SPECIALTY_LOCATIONS in each of its own districts, and every other district
+# can still roll one. _make_locations retries forever on a name collision, so an
+# undersized pool hangs generation rather than raising — hence the guard below.
+MAX_SAME_KIND_LOCATIONS = TERRITORIES_PER_FACTION * SPECIALTY_LOCATIONS + (
+    TERRITORY_COUNT - TERRITORIES_PER_FACTION
+)
+
+# Everything the generator needs is a module constant, so these are import-time
+# facts. Only the faction count depends on the caller — that guard lives in
+# generate_corp_map.
+if TERRITORY_COUNT > GRID_COLS * GRID_ROWS:
+    raise ValueError("grid is too small to hold TERRITORY_COUNT territories")
+if TERRITORY_COUNT > len(DISTRICT_NAMES):
+    raise ValueError("not enough DISTRICT_NAMES to name TERRITORY_COUNT territories")
+if len(FACTION_VALUE_SPREAD) != TERRITORIES_PER_FACTION:
+    raise ValueError("FACTION_VALUE_SPREAD must hold one value per faction territory")
+if len(LOCATION_PREFIXES) * min(len(s) for s in LOCATION_SUFFIXES.values()) < (
+    MAX_SAME_KIND_LOCATIONS
+):
+    raise ValueError("not enough LOCATION_PREFIXES/LOCATION_SUFFIXES to name every location")
+
 Cell = tuple[int, int]
 
 
@@ -259,6 +319,61 @@ def _make_locations(
         used_names.add(name)
         locations.append(Location(id=f"{territory_id}_loc{index}", name=name, kind=kind))
     return locations
+
+
+def _clamp(level: int) -> int:
+    return max(0, min(MODIFIER_MAX, level))
+
+
+def _development(security: int, surveillance: int, unrest: int) -> int:
+    """Capital only lands where the block is policed, watched and quiet.
+
+    Derived rather than rolled, so a holder's Development can never contradict
+    the levers that produce it — you raise it by raising Security and
+    Surveillance and putting the street down, not on its own. Governs held
+    ground only; neutral ground rolls its own (see _neutral_modifiers).
+    """
+    return _clamp((security + surveillance - unrest + 1) // 2)
+
+
+def _corp_modifiers(value: int, rng: random.Random) -> dict[TerritoryModifier, int]:
+    """Corp turf: garrisoned and watched in proportion to what it earns."""
+    security = _clamp(value + rng.randint(-1, 1))
+    surveillance = _clamp(value + rng.randint(-1, 1))
+    unrest = rng.randint(0, 2)
+    return {
+        TerritoryModifier.SECURITY: security,
+        TerritoryModifier.SURVEILLANCE: surveillance,
+        TerritoryModifier.UNREST: unrest,
+        TerritoryModifier.DEVELOPMENT: _development(security, surveillance, unrest),
+        TerritoryModifier.RESTRICTED: rng.randint(2, MODIFIER_MAX),
+    }
+
+
+def _neutral_modifiers(rng: random.Random) -> dict[TerritoryModifier, int]:
+    """Ground nobody holds, and the whole profile of it, in one place.
+
+    Nobody watches it, nobody polices its market, the street runs it (full
+    unrest), and the token security is whoever happens to be holding the door.
+    What little stands there got built without an owner investing in it, so
+    Development is rolled outright rather than run through _development — which
+    would pin every neutral node to 0. This is the one place it escapes that
+    formula, on purpose.
+    """
+    return {
+        TerritoryModifier.SECURITY: 1,
+        TerritoryModifier.SURVEILLANCE: 0,
+        TerritoryModifier.UNREST: MODIFIER_MAX,
+        TerritoryModifier.DEVELOPMENT: rng.randint(1, 2),
+        TerritoryModifier.RESTRICTED: 0,
+    }
+
+
+def _make_modifiers(owner: str, value: int, rng: random.Random) -> dict[TerritoryModifier, int]:
+    """Seed a district's levers. Held ground and open ground, one rule each."""
+    if owner in FACTIONS_BY_ID:
+        return _corp_modifiers(value, rng)
+    return _neutral_modifiers(rng)
 
 
 def _neighbors(cell: Cell) -> list[Cell]:
@@ -303,20 +418,36 @@ def _connect(region: list[Cell], rng: random.Random) -> set[frozenset[Cell]]:
     return edges
 
 
-def _player_start(region: list[Cell], rng: random.Random) -> Cell:
-    """The region cell nearest the middle of the grid, so the player starts boxed in."""
-    center = ((GRID_COLS - 1) / 2, (GRID_ROWS - 1) / 2)
-    return min(region, key=lambda c: (abs(c[0] - center[0]) + abs(c[1] - center[1]), c))
+def _on_grid_edge(cell: Cell) -> bool:
+    x, y = cell
+    return x in (0, GRID_COLS - 1) or y in (0, GRID_ROWS - 1)
+
+
+def _player_start(region: list[Cell], edges: set[frozenset[Cell]], rng: random.Random) -> Cell:
+    """Unclaimed ground out on the rim of the city — the runner is a nobody from nowhere.
+
+    The rim is also where the dead ends are, so demand a way out: MIN_START_DEGREE
+    connections. A degree-1 start makes every trip a there-and-back and taxes a
+    stamina budget that already has to cover gigs, jobs and legwork.
+    """
+    degree = Counter(cell for edge in edges for cell in edge)
+    candidates = [c for c in region if _on_grid_edge(c) and degree[c] >= MIN_START_DEGREE]
+    if not candidates:
+        candidates = [c for c in region if degree[c] >= MIN_START_DEGREE]
+    return rng.choice(sorted(candidates))
 
 
 def _grow_blocs(
     region: list[Cell],
     edges: set[frozenset[Cell]],
-    player_cell: Cell,
+    start_cell: Cell,
     faction_ids: list[str],
     rng: random.Random,
 ) -> dict[Cell, str] | None:
     """Race one contiguous bloc per faction outward from random seeds.
+
+    start_cell is reserved but never claimed: the runner's block has to still be
+    unclaimed when the blocs stop growing, so no faction may seed or expand onto it.
 
     Returns None if a bloc gets boxed in before reaching its quota; the caller
     retries with fresh seeds.
@@ -327,9 +458,9 @@ def _grow_blocs(
         graph[a].add(b)
         graph[b].add(a)
 
-    available = [cell for cell in region if cell != player_cell]
+    available = [cell for cell in region if cell != start_cell]
     seeds = rng.sample(available, k=len(faction_ids))
-    owners: dict[Cell, str] = {player_cell: "player"}
+    owners: dict[Cell, str] = {}
     blocs: dict[str, set[Cell]] = {}
     for faction_id, seed in zip(faction_ids, seeds):
         owners[seed] = faction_id
@@ -339,7 +470,12 @@ def _grow_blocs(
         for faction_id in faction_ids:
             bloc = blocs[faction_id]
             frontier = sorted(
-                {n for cell in bloc for n in graph[cell] if n not in owners}
+                {
+                    n
+                    for cell in bloc
+                    for n in graph[cell]
+                    if n not in owners and n != start_cell
+                }
             )
             if not frontier:
                 return None
@@ -360,14 +496,16 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     for _ in range(MAX_GENERATION_ATTEMPTS):
         region = _grow_region(rng)
         edges = _connect(region, rng)
-        player_cell = _player_start(region, rng)
-        owners = _grow_blocs(region, edges, player_cell, faction_ids, rng)
+        start_cell = _player_start(region, edges, rng)
+        owners = _grow_blocs(region, edges, start_cell, faction_ids, rng)
         if owners is not None:
             break
     else:
         raise RuntimeError("could not lay out contiguous faction blocs")
 
-    values: dict[Cell, int] = {player_cell: PLAYER_START_VALUE}
+    # start_cell is left out of owners, so the loop below gives it a neutral value
+    # just like any other unclaimed district.
+    values: dict[Cell, int] = {}
     for faction_id in faction_ids:
         bloc = sorted(cell for cell, owner in owners.items() if owner == faction_id)
         spread = list(FACTION_VALUE_SPREAD)
@@ -398,6 +536,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
                 if frozenset((cell, other)) in edges
             ),
             locations=_make_locations(ids[cell], owner, rng, used_names),
+            modifiers=_make_modifiers(owner, values[cell], rng),
         )
 
-    return CorpMap(territories=territories, player_start_id=ids[player_cell])
+    return CorpMap(territories=territories, player_start_id=ids[start_cell])
