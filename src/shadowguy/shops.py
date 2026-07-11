@@ -1,9 +1,14 @@
-"""Retail LocationKinds: persistent stat-boosting gear the runner buys with Cash.
+"""Retail LocationKinds: gear and consumables the runner buys with Cash.
 
-These can land on neutral ground or in a corp district's non-specialty slot (see
-corpmap.FILLER_KINDS), so a job can target one — corpmap.LOCATION_STAT and
-jobs.LEGWORK_APPROACH_TEXT each have an entry for every SHOP_KINDS member to
-cover that.
+Item is persistent stat-boosting gear (bought once, equipped/stowed, never
+used up). Consumable is single-use: buying it appends to Character.consumables,
+and using it pops that entry and applies a one-off effect (heal, restore
+stamina, or a temporary stat boost that clears on Character.rest()).
+
+These locations can land on neutral ground or in a corp district's
+non-specialty slot (see corpmap.FILLER_KINDS), so a job can target one —
+corpmap.LOCATION_STAT and jobs.LEGWORK_APPROACH_TEXT each have an entry for
+every SHOP_KINDS member to cover that.
 """
 
 from dataclasses import dataclass
@@ -67,6 +72,23 @@ def bonus_text(item: Item) -> str:
     return ", ".join(f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items())
 
 
+class EffectKind(Enum):
+    HEAL = "heal"
+    RESTORE_STAMINA = "restore_stamina"
+    TEMP_STAT_BOOST = "temp_stat_boost"  # stat name comes from Consumable.stat
+    NONE = "none"  # no mechanical effect yet (grenades: no combat system to target)
+
+
+@dataclass(frozen=True)
+class Consumable:
+    id: str
+    name: str
+    price: int
+    effect: EffectKind
+    amount: int = 0
+    stat: str | None = None  # only set when effect is TEMP_STAT_BOOST
+
+
 # id, name, price, bonuses, slot
 _CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot | None]]] = {
     LocationKind.WEAPON_SHOP: [
@@ -79,11 +101,8 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot
         ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, None),
         ("armored_towncar", "Armored Towncar", 1000, {"cool": 3}, None),
     ],
-    LocationKind.PHARMACY: [
-        ("synth_adrenal_patch", "Synth-Adrenal Patch", 180, {"body": 1}, None),
-        ("nerve_booster", "Nerve Booster", 450, {"body": 2}, None),
-        ("militech_combat_stim", "Militech Combat Stim", 950, {"body": 3}, None),
-    ],
+    # Persistent +body gear moved out in favor of the consumables below.
+    LocationKind.PHARMACY: [],
     LocationKind.COMPUTER_STORE: [
         ("burner_deck", "Burner Deck", 200, {"skill": 1}, None),
         ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"skill": 2}, None),
@@ -110,6 +129,28 @@ if set(CATALOG) != set(SHOP_KINDS):
 
 if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.values()):
     raise ValueError("two_handed items must have slot=Slot.WEAPON")
+
+
+# id, name, price, effect, amount, stat
+_CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, str | None]]] = {
+    LocationKind.PHARMACY: [
+        ("health_kit", "Health Kit", 100, EffectKind.HEAL, 5, None),
+        ("energy_drink", "Energy Drink", 60, EffectKind.RESTORE_STAMINA, 2, None),
+        ("chem_x", "Chem X", 150, EffectKind.TEMP_STAT_BOOST, 2, "body"),
+        ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "skill"),
+    ],
+    LocationKind.WEAPON_SHOP: [
+        ("grenade_smoke", "Smoke Grenade", 100, EffectKind.NONE, 0, None),
+        ("grenade_flash", "Flash Grenade", 120, EffectKind.NONE, 0, None),
+        ("grenade_frag", "Fragmentation Grenade", 200, EffectKind.NONE, 0, None),
+    ],
+}
+
+CONSUMABLE_CATALOG: dict[LocationKind, list[Consumable]] = {
+    kind: [Consumable(*row) for row in rows] for kind, rows in _CONSUMABLE_ROWS.items()
+}
+
+CONSUMABLES_BY_ID = {c.id: c for items in CONSUMABLE_CATALOG.values() for c in items}
 
 
 def equipped_bonus(inventory: list[InventoryItem], stat: str) -> int:
@@ -145,6 +186,29 @@ def buy_item(character: "Character", item: Item) -> bool:
     entry = InventoryItem(item.id, equipped=_fits_in_slot(character.inventory, item))
     character.inventory.append(entry)
     return True
+
+
+def buy_consumable(character: "Character", consumable: Consumable) -> bool:
+    if character.cash < consumable.price:
+        return False
+    character.cash -= consumable.price
+    character.consumables.append(consumable.id)
+    return True
+
+
+def use_consumable(character: "Character", index: int) -> str:
+    """Pop and apply consumables[index]. Returns a short message describing the effect."""
+    consumable = CONSUMABLES_BY_ID[character.consumables.pop(index)]
+    if consumable.effect is EffectKind.HEAL:
+        character.adjust_health(consumable.amount)
+        return f"+{consumable.amount} Health"
+    if consumable.effect is EffectKind.RESTORE_STAMINA:
+        character.restore_stamina(consumable.amount)
+        return f"+{consumable.amount} Stamina"
+    if consumable.effect is EffectKind.TEMP_STAT_BOOST:
+        character.add_temp_bonus(consumable.stat, consumable.amount)
+        return f"+{consumable.amount} {consumable.stat.capitalize()} until next rest"
+    return "No effect yet."
 
 
 def sell_item(character: "Character", index: int) -> int:
