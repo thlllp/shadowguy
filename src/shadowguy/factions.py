@@ -40,3 +40,15 @@ FACTIONS = [
 ]
 
 FACTIONS_BY_ID = {faction.id: faction for faction in FACTIONS}
+
+# Hitting a corp is a favour to its rivals: they move the opposite way, at half weight.
+RIVAL_WEIGHT = 2
+
+
+def standing_shift(target_faction_id: str, delta: int) -> dict[str, int]:
+    """Standing change for every faction when `delta` is applied to the one you hit."""
+    rival_delta = -delta // RIVAL_WEIGHT
+    return {
+        faction.id: delta if faction.id == target_faction_id else rival_delta
+        for faction in FACTIONS
+    }

@@ -1,13 +1,21 @@
 import random
 
+from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
 from shadowguy.content import GIG_FENCE_SOME_CHROME
-from shadowguy.corpmap import generate_corp_map, owner_label, render_ascii_map
+from shadowguy.corpmap import (
+    RenderedMap,
+    Territory,
+    generate_corp_map,
+    owner_label,
+    render_ascii_map,
+)
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
@@ -28,12 +36,16 @@ class CharacterSheet(Static):
 
     def render(self) -> str:
         c = self.character
+        standings = "  ".join(
+            f"{f.name.split()[0]}: {c.standing_with(f.id):+d}" for f in FACTIONS
+        )
         return (
             f"{c.name}\n"
             f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}\n"
             f"Health: {c.health}/{c.max_health}   "
             f"Body: {c.body}  Skill: {c.skill}  Cool: {c.cool}\n"
-            f"Cash: {c.cash}eb   Rep: {c.rep}"
+            f"Cash: {c.cash}eb   Rep: {c.rep}\n"
+            f"Standing — {standings}"
         )
 
 
@@ -64,6 +76,7 @@ class MainMenu(Screen):
         ("gig", "Gigs"),
         ("job", "Jobs"),
         ("legwork", "Legwork"),
+        ("local", "Local"),
         ("fixer", "Fixers"),
         ("map", "Corp Map"),
     ]
@@ -97,6 +110,13 @@ class MainMenu(Screen):
         items = [ListItem(Static(label), id=f"cat_{key}") for key, label in self.CATEGORIES]
         await _replace_items(self.query_one("#categories", ListView), items)
 
+    def _on_site(self, scene: Scene) -> bool:
+        """A job (and its legwork) can only be run in the district it targets."""
+        return self.app.character.location_id == scene.target_territory_id
+
+    def _district(self, scene: Scene) -> str:
+        return self.app.corp_map.territories[scene.target_territory_id].name
+
     async def _refresh(self) -> None:
         self.query_one(CharacterSheet).refresh()
         character = self.app.character
@@ -113,9 +133,10 @@ class MainMenu(Screen):
 
         if self.selected_category == "job":
             for job in character.accepted_jobs:
-                available = job.timing.is_available(character.day)
                 label = f"Job — {job.scene.title} ({job.scene.stamina_cost} stamina) — {job.timing.label}"
-                if not available:
+                if not self._on_site(job.scene):
+                    label += f" — travel to {self._district(job.scene)}"
+                elif not job.timing.is_available(character.day):
                     label += " — not yet"
                 elif not character.can_afford(job.scene.stamina_cost):
                     label += " — too tired"
@@ -127,7 +148,26 @@ class MainMenu(Screen):
                 legwork_label = f"Legwork — Case the job: {job.scene.title}"
                 if advantage:
                     legwork_label += f" (advantage +{advantage} banked)"
+                if not self._on_site(job.scene):
+                    legwork_label += f" — travel to {self._district(job.scene)}"
                 items.append(ListItem(Static(legwork_label), id=f"legwork_{job.id}"))
+
+        if self.selected_category == "local":
+            corp_map = self.app.corp_map
+            here = corp_map.territories[character.location_id]
+            items.append(
+                ListItem(
+                    Static(f"{here.name} — {owner_label(here.owner)}"),
+                    id="local_district",
+                )
+            )
+            for location in here.locations:
+                items.append(
+                    ListItem(
+                        Static(f"  {location.name} ({location.kind})"),
+                        id=f"local_{location.id}",
+                    )
+                )
 
         items.append(ListItem(Static("End the day (rest)"), id="end_day"))
         await _replace_items(self.query_one("#activities", ListView), items)
@@ -143,7 +183,7 @@ class MainMenu(Screen):
         if item_id == "end_day":
             character.rest()
             expire_offers(self.app.fixers, character.day)
-            refresh_offers(self.app.fixers, character.day, self.app.rng)
+            refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)
             await self._refresh()
             return
 
@@ -159,7 +199,9 @@ class MainMenu(Screen):
         if item_id.startswith("legwork_"):
             offer_id = item_id.removeprefix("legwork_")
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
-            legwork_scene = generate_legwork_for_job(job.scene.id, job.scene.title)
+            if not self._on_site(job.scene):
+                return
+            legwork_scene = generate_legwork_for_job(job.scene, self.app.corp_map)
             if not character.can_afford(legwork_scene.stamina_cost):
                 return
             character.spend_stamina(legwork_scene.stamina_cost)
@@ -169,6 +211,8 @@ class MainMenu(Screen):
         if item_id.startswith("job_"):
             offer_id = item_id.removeprefix("job_")
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
+            if not self._on_site(job.scene):
+                return
             if not job.timing.is_available(character.day) or not character.can_afford(job.scene.stamina_cost):
                 return
             character.spend_stamina(job.scene.stamina_cost)
@@ -320,6 +364,9 @@ class SceneScreen(Screen):
         await self._show_stage()
 
 
+TRAVEL_STAMINA_COST = 1
+
+
 class CorpMapScreen(Screen):
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -328,28 +375,54 @@ class CorpMapScreen(Screen):
         ("down", "move('down')", "Move"),
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
+        ("enter", "travel", "Travel here"),
     ]
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
+    CSS = """
+    #map_scroll {
+        height: 1fr;
+        overflow-x: auto;
+        padding: 1;
+    }
+
+    #territory_info {
+        height: auto;
+        border-top: solid $accent;
+        padding: 1;
+    }
+    """
+
     def __init__(self) -> None:
         super().__init__()
-        self.selected_id = "city_center"
+        self.selected_id = ""
+        self.hovered_id: str | None = None
+        self.rendered: RenderedMap | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Vertical(
-            Static(markup=False, id="map"),
-            Static(id="territory_info"),
-            id="corp_map_body",
-        )
+        yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
+        yield Static(id="territory_info")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.selected_id = self.app.character.location_id
         self._refresh()
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def action_travel(self) -> None:
+        character = self.app.character
+        here = self.app.corp_map.territories[character.location_id]
+        if self.selected_id not in here.connections:
+            return
+        if not character.can_afford(TRAVEL_STAMINA_COST):
+            return
+        character.spend_stamina(TRAVEL_STAMINA_COST)
+        character.location_id = self.selected_id
+        self._refresh()
 
     def action_move(self, direction: str) -> None:
         dx, dy = self.DIRECTIONS[direction]
@@ -361,13 +434,52 @@ class CorpMapScreen(Screen):
                 self._refresh()
                 return
 
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        offset = event.get_content_offset(self.query_one("#map", Static))
+        hovered = (
+            self.rendered.territory_at(offset.y, offset.x)
+            if offset is not None and self.rendered is not None
+            else None
+        )
+        if hovered != self.hovered_id:
+            self.hovered_id = hovered
+            self._refresh()
+
+    def on_click(self) -> None:
+        if self.hovered_id is not None:
+            self.selected_id = self.hovered_id
+            self._refresh()
+
     def _refresh(self) -> None:
         corp_map = self.app.corp_map
-        self.query_one("#map", Static).update(render_ascii_map(corp_map, self.selected_id))
-        t = corp_map.territories[self.selected_id]
+        character = self.app.character
+        self.rendered = render_ascii_map(corp_map, self.selected_id, character.location_id)
+        text = Text(self.rendered.text)
+        for span in self.rendered.spans:
+            if span.territory_id == self.hovered_id:
+                text.stylize("reverse", span.offset, span.offset + span.end - span.start)
+        self.query_one("#map", Static).update(text)
+
+        t = corp_map.territories[self.hovered_id or self.selected_id]
+        here = corp_map.territories[character.location_id]
+        borders = ", ".join(corp_map.territories[c].name for c in t.connections)
+        locations = ", ".join(f"{loc.name} ({loc.kind})" for loc in t.locations)
         self.query_one("#territory_info", Static).update(
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}\n"
+            f"Borders: {borders}\n"
+            f"Locations: {locations}\n"
+            f"{self._travel_hint(t, here, character)}"
         )
+
+    def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
+        stamina = f"{character.stamina}/{character.max_stamina}"
+        if t.id == here.id:
+            return f"You are here. Stamina: {stamina}"
+        if t.id not in here.connections:
+            return f"No route from {here.name} — travel is only to a bordering district."
+        if not character.can_afford(TRAVEL_STAMINA_COST):
+            return f"Too tired to travel ({TRAVEL_STAMINA_COST} stamina). Rest to move."
+        return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
 
 
 class ShadowguyApp(App):
@@ -375,11 +487,11 @@ class ShadowguyApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.character = Character(name="Runner")
         self.rng = random.Random()
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
+        self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers()
-        refresh_offers(self.fixers, self.character.day, self.rng)
+        refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
 
     def on_mount(self) -> None:
         self.push_screen(MainMenu())

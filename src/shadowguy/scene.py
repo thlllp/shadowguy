@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.factions import standing_shift
 
 
 class SceneKind(StrEnum):
@@ -19,6 +20,8 @@ class Outcome:
     cash_delta: int = 0
     rep_delta: int = 0
     advantage_delta: int = 0
+    # Applied to the scene's target_faction_id; rivals move the other way.
+    standing_delta: int = 0
     next_stage: str | None = None
 
 
@@ -58,6 +61,12 @@ class Scene:
     kind: SceneKind = SceneKind.JOB
     prepares_for: str | None = None
     stamina_cost: int = 1
+    # Which corp this scene is run against, and where. target_territory_id is the
+    # anchor for scenes that should also move territory control, not just standing.
+    # target_location_id is the specific place inside that territory being hit.
+    target_faction_id: str | None = None
+    target_territory_id: str | None = None
+    target_location_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
@@ -75,6 +84,10 @@ class Scene:
                         raise ValueError(
                             f"{self.id}: stage {stage.id!r} banks advantage but the scene is not legwork prep"
                         )
+                    if outcome.standing_delta and self.target_faction_id is None:
+                        raise ValueError(
+                            f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
+                        )
 
 
 def validate_scene_registry(scenes: Iterable[Scene]) -> None:
@@ -86,14 +99,19 @@ def validate_scene_registry(scenes: Iterable[Scene]) -> None:
             )
 
 
-def apply_outcome(character: Character, outcome: Outcome, banks_advantage_for: str | None) -> None:
+def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
     character.adjust_health(outcome.health_delta)
     character.cash += outcome.cash_delta
     character.rep += outcome.rep_delta
     if outcome.advantage_delta:
+        banks_advantage_for = scene.prepares_for if scene.kind == SceneKind.LEGWORK else None
         if not banks_advantage_for:
             raise ValueError("outcome has advantage_delta but no scene to bank it for")
         character.add_advantage(banks_advantage_for, outcome.advantage_delta)
+    if outcome.standing_delta:
+        shift = standing_shift(scene.target_faction_id, outcome.standing_delta)
+        for faction_id, delta in shift.items():
+            character.adjust_standing(faction_id, delta)
 
 
 def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:
@@ -104,6 +122,5 @@ def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[
         advantage=advantage,
     )
     outcome = choice.outcome_for(roll.result)
-    banks_advantage_for = scene.prepares_for if scene.kind == SceneKind.LEGWORK else None
-    apply_outcome(character, outcome, banks_advantage_for)
+    apply_outcome(character, outcome, scene)
     return roll.result, outcome

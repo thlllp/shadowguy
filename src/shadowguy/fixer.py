@@ -4,6 +4,7 @@ import random
 import uuid
 from dataclasses import dataclass, field
 
+from shadowguy.corpmap import CorpMap
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.scene import Scene
 
@@ -41,11 +42,13 @@ def expire_offers(fixers: list[Fixer], day: int) -> None:
         fixer.offers = [offer for offer in fixer.offers if not offer.timing.is_expired(day)]
 
 
-def refresh_offers(fixers: list[Fixer], day: int, rng: random.Random | None = None) -> None:
+def refresh_offers(
+    fixers: list[Fixer], day: int, corp_map: CorpMap, rng: random.Random | None = None
+) -> None:
     rng = rng or random.Random()
     for fixer in fixers:
         while len(fixer.offers) < fixer.max_offers:
-            scene, timing = generate_job(day, rng)
+            scene, timing = generate_job(day, corp_map, rng)
             fixer.offers.append(
                 JobOffer(
                     id=f"offer_{uuid.uuid4().hex[:8]}",
