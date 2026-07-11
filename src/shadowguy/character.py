@@ -31,6 +31,11 @@ class Character:
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
     inventory: list[InventoryItem] = field(default_factory=list)
+    # Owned consumables, ids from shops.CONSUMABLES_BY_ID. Duplicates allowed.
+    # Removed (via shops.use_consumable) once used, unlike persistent gear.
+    consumables: list[str] = field(default_factory=list)
+    # stat name -> bonus from a used Chem, active until the next rest().
+    temp_bonuses: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -76,6 +81,12 @@ class Character:
     def spend_stamina(self, amount: int) -> None:
         self.stamina -= amount
 
+    def restore_stamina(self, amount: int) -> None:
+        self.stamina = min(self.max_stamina, self.stamina + amount)
+
+    def add_temp_bonus(self, stat: str, amount: int) -> None:
+        self.temp_bonuses[stat] = self.temp_bonuses.get(stat, 0) + amount
+
     def accept_job(self, offer: "JobOffer") -> None:
         self.accepted_jobs.append(offer)
 
@@ -85,6 +96,7 @@ class Character:
     def rest(self) -> None:
         self.day += 1
         self.stamina = self.max_stamina
+        self.temp_bonuses = {}
         self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
 
     def stat(self, name: str) -> int:
@@ -93,4 +105,5 @@ class Character:
         value = getattr(self, name)
         if name in ("body", "skill", "cool"):
             value += equipped_bonus(self.inventory, name)
+            value += self.temp_bonuses.get(name, 0)
         return value

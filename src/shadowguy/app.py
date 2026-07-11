@@ -25,7 +25,19 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
-from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, bonus_text, buy_item, sell_item, toggle_equip
+from shadowguy.shops import (
+    CATALOG,
+    CONSUMABLE_CATALOG,
+    CONSUMABLES_BY_ID,
+    ITEMS_BY_ID,
+    PAWN_SELL_FRACTION,
+    bonus_text,
+    buy_consumable,
+    buy_item,
+    sell_item,
+    toggle_equip,
+    use_consumable,
+)
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
@@ -355,6 +367,12 @@ class ShopScreen(Screen):
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
+        for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
+            label = f"Buy {consumable.name} — {consumable.price}eb"
+            if character.cash < consumable.price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
+
         if self.location.kind == LocationKind.PAWN:
             for index, entry in enumerate(character.inventory):
                 item = ITEMS_BY_ID[entry.item_id]
@@ -371,6 +389,10 @@ class ShopScreen(Screen):
             item = ITEMS_BY_ID[item_id.removeprefix("buy_")]
             if not buy_item(character, item):
                 self.notify(f"Can't afford {item.name}.", severity="warning")
+        elif item_id.startswith("buyc_"):
+            consumable = CONSUMABLES_BY_ID[item_id.removeprefix("buyc_")]
+            if not buy_consumable(character, consumable):
+                self.notify(f"Can't afford {consumable.name}.", severity="warning")
         elif item_id.startswith("sell_"):
             sell_item(character, int(item_id.removeprefix("sell_")))
 
@@ -404,14 +426,26 @@ class InventoryScreen(Screen):
             slot_note = f", {item.slot.value}" if item.slot else ""
             label = f"{state} — {item.name} ({bonus_text(item)}{slot_note})"
             items.append(ListItem(Static(label), id=f"toggle_{index}"))
+
+        for index, item_id in enumerate(self.app.character.consumables):
+            consumable = CONSUMABLES_BY_ID[item_id]
+            items.append(ListItem(Static(f"Use {consumable.name}"), id=f"use_{index}"))
+
         await _replace_items(self.query_one("#inventory_items", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        index = int(event.item.id.removeprefix("toggle_"))
         character = self.app.character
-        item = ITEMS_BY_ID[character.inventory[index].item_id]
-        if not toggle_equip(character, index):
-            self.notify(f"No free {item.slot.value} slot.", severity="warning")
+        item_id = event.item.id
+
+        if item_id.startswith("toggle_"):
+            index = int(item_id.removeprefix("toggle_"))
+            item = ITEMS_BY_ID[character.inventory[index].item_id]
+            if not toggle_equip(character, index):
+                self.notify(f"No free {item.slot.value} slot.", severity="warning")
+        elif item_id.startswith("use_"):
+            index = int(item_id.removeprefix("use_"))
+            self.notify(use_consumable(character, index))
+
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
