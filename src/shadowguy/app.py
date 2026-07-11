@@ -25,7 +25,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
-from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, buy_item, sell_item, toggle_equip
+from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, bonus_text, buy_item, sell_item, toggle_equip
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
@@ -350,8 +350,7 @@ class ShopScreen(Screen):
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
-            bonus_text = ", ".join(f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items())
-            label = f"Buy {item.name} — {item.price}eb ({bonus_text})"
+            label = f"Buy {item.name} — {item.price}eb ({bonus_text(item)})"
             if character.cash < item.price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
@@ -403,7 +402,7 @@ class InventoryScreen(Screen):
             item = ITEMS_BY_ID[entry.item_id]
             state = "Equipped" if entry.equipped else "Stowed"
             slot_note = f", {item.slot.value}" if item.slot else ""
-            label = f"{state} — {item.name} (+{item.bonus} {item.stat.capitalize()}{slot_note})"
+            label = f"{state} — {item.name} ({bonus_text(item)}{slot_note})"
             items.append(ListItem(Static(label), id=f"toggle_{index}"))
         await _replace_items(self.query_one("#inventory_items", ListView), items)
 

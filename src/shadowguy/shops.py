@@ -49,35 +49,50 @@ class Item:
     name: str
     price: int
     bonuses: dict[str, int]  # stat name (body, skill, cool) -> bonus applied to that check
+    # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
+    # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
+    slot: Slot | None = None
+    # Only meaningful when slot is Slot.WEAPON: occupies both weapon slots.
+    two_handed: bool = False
 
 
-# id, name, price, bonuses
-_CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int]]]] = {
+@dataclass
+class InventoryItem:
+    item_id: str
+    # Only equipped items contribute their bonus (see equipped_bonus below).
+    equipped: bool = True
+
+
+def bonus_text(item: Item) -> str:
+    return ", ".join(f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items())
+
+
+# id, name, price, bonuses, slot
+_CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot | None]]] = {
     LocationKind.WEAPON_SHOP: [
-
-        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}),
-        ("combat_knife", "Combat Knife", 400, {"body": 2}),
-        ("smart_pistol", "Smart Pistol", 900, {"body": 3}),
+        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}, Slot.WEAPON),
+        ("combat_knife", "Combat Knife", 400, {"body": 2}, Slot.WEAPON),
+        ("smart_pistol", "Smart Pistol", 900, {"body": 3}, Slot.WEAPON),
     ],
     LocationKind.AUTO_DEALER: [
-        ("beater_bike", "Beater Bike", 200, {"cool": 1}),
-        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}),
-        ("armored_towncar", "Armored Towncar", 1000, {"cool": 3}),
+        ("beater_bike", "Beater Bike", 200, {"cool": 1}, None),
+        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, None),
+        ("armored_towncar", "Armored Towncar", 1000, {"cool": 3}, None),
     ],
     LocationKind.PHARMACY: [
-        ("synth_adrenal_patch", "Synth-Adrenal Patch", 180, {"body": 1}),
-        ("nerve_booster", "Nerve Booster", 450, {"body": 2}),
-        ("militech_combat_stim", "Militech Combat Stim", 950, {"body": 3}),
+        ("synth_adrenal_patch", "Synth-Adrenal Patch", 180, {"body": 1}, None),
+        ("nerve_booster", "Nerve Booster", 450, {"body": 2}, None),
+        ("militech_combat_stim", "Militech Combat Stim", 950, {"body": 3}, None),
     ],
     LocationKind.COMPUTER_STORE: [
-        ("burner_deck", "Burner Deck", 200, {"skill": 1}),
-        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"skill": 2}),
-        ("zetatech_rig", "Zetatech Rig", 1000, {"skill": 3}),
+        ("burner_deck", "Burner Deck", 200, {"skill": 1}, None),
+        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"skill": 2}, None),
+        ("zetatech_rig", "Zetatech Rig", 1000, {"skill": 3}, None),
     ],
     LocationKind.PAWN: [
-        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}),
-        ("pawned_deck", "Pawned Deck", 80, {"skill": 1}),
-        ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}),
+        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}, Slot.WEAPON),
+        ("pawned_deck", "Pawned Deck", 80, {"skill": 1}, None),
+        ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
     ],
 }
 
@@ -99,17 +114,26 @@ if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.
 
 def equipped_bonus(inventory: list[InventoryItem], stat: str) -> int:
     return sum(
-        ITEMS_BY_ID[entry.item_id].bonus
-        for entry in inventory
-        if entry.equipped and ITEMS_BY_ID[entry.item_id].stat == stat
+        ITEMS_BY_ID[entry.item_id].bonuses.get(stat, 0) for entry in inventory if entry.equipped
     )
 
 
 def _slot_cost(item: Item) -> int:
     return 2 if item.two_handed else 1
 
-def equipped_bonus(inventory: list[str], stat: str) -> int:
-    return sum(ITEMS_BY_ID[item_id].bonuses.get(stat, 0) for item_id in inventory)
+
+def slot_usage(inventory: list[InventoryItem], slot: Slot) -> int:
+    return sum(
+        _slot_cost(ITEMS_BY_ID[entry.item_id])
+        for entry in inventory
+        if entry.equipped and ITEMS_BY_ID[entry.item_id].slot is slot
+    )
+
+
+def _fits_in_slot(inventory: list[InventoryItem], item: Item) -> bool:
+    if item.slot is None:
+        return True
+    return slot_usage(inventory, item.slot) + _slot_cost(item) <= SLOT_CAPACITY[item.slot]
 
 
 def buy_item(character: "Character", item: Item) -> bool:
