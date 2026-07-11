@@ -25,7 +25,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
-from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, buy_item, sell_item
+from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, buy_item, sell_item, toggle_equip
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
@@ -45,7 +45,10 @@ class CharacterSheet(Static):
         standings = "  ".join(
             f"{f.name.split()[0]}: {c.standing_with(f.id):+d}" for f in FACTIONS
         )
-        gear = ", ".join(ITEMS_BY_ID[item_id].name for item_id in c.inventory) or "none"
+        gear = ", ".join(
+            ITEMS_BY_ID[entry.item_id].name if entry.equipped else f"{ITEMS_BY_ID[entry.item_id].name} (stowed)"
+            for entry in c.inventory
+        ) or "none"
         return (
             f"{c.name}\n"
             f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}\n"
@@ -66,6 +69,7 @@ class MainMenu(Screen):
         ("q", "quit", "Quit"),
         ("m", "corp_map", "Corp Map (preview)"),
         ("f", "fixers", "Fixers"),
+        ("i", "inventory", "Gear"),
     ]
 
     CSS = """
@@ -85,6 +89,7 @@ class MainMenu(Screen):
         ("job", "Jobs"),
         ("legwork", "Legwork"),
         ("local", "Local"),
+        ("gear", "Gear"),
         ("fixer", "Fixers"),
         ("map", "Corp Map"),
     ]
@@ -106,6 +111,9 @@ class MainMenu(Screen):
 
     def action_fixers(self) -> None:
         self.app.push_screen(FixerListScreen())
+
+    def action_inventory(self) -> None:
+        self.app.push_screen(InventoryScreen())
 
     async def on_mount(self) -> None:
         await self._refresh_categories()
@@ -242,6 +250,9 @@ class MainMenu(Screen):
         if key == "map":
             self.app.push_screen(CorpMapScreen())
             return
+        if key == "gear":
+            self.app.push_screen(InventoryScreen())
+            return
         self.selected_category = key
         await self._refresh()
 
@@ -346,8 +357,8 @@ class ShopScreen(Screen):
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
         if self.location.kind == LocationKind.PAWN:
-            for index, item_id in enumerate(character.inventory):
-                item = ITEMS_BY_ID[item_id]
+            for index, entry in enumerate(character.inventory):
+                item = ITEMS_BY_ID[entry.item_id]
                 proceeds = int(item.price * PAWN_SELL_FRACTION)
                 items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
 
@@ -364,6 +375,44 @@ class ShopScreen(Screen):
         elif item_id.startswith("sell_"):
             sell_item(character, int(item_id.removeprefix("sell_")))
 
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class InventoryScreen(Screen):
+    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield ListView(id="inventory_items")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        items = []
+        for index, entry in enumerate(self.app.character.inventory):
+            item = ITEMS_BY_ID[entry.item_id]
+            state = "Equipped" if entry.equipped else "Stowed"
+            slot_note = f", {item.slot.value}" if item.slot else ""
+            label = f"{state} — {item.name} (+{item.bonus} {item.stat.capitalize()}{slot_note})"
+            items.append(ListItem(Static(label), id=f"toggle_{index}"))
+        await _replace_items(self.query_one("#inventory_items", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        index = int(event.item.id.removeprefix("toggle_"))
+        character = self.app.character
+        item = ITEMS_BY_ID[character.inventory[index].item_id]
+        if not toggle_equip(character, index):
+            self.notify(f"No free {item.slot.value} slot.", severity="warning")
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
