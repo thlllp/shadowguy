@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
 
-OWNER_TAGS = {"player": "YOU", "neutral": ""}
+from shadowguy.factions import FACTIONS
+
+OWNER_TAGS = {
+    "player": "YOU",
+    "neutral": "",
+    **{faction.id: faction.name.split()[0][:3].upper() for faction in FACTIONS},
+}
 
 
 @dataclass
@@ -91,11 +97,11 @@ def render_ascii_map(corp_map: CorpMap, selected_id: str | None = None) -> str:
 NIGHT_CITY_MAP = CorpMap(
     territories={
         "watson": Territory(
-            id="watson", name="Watson", x=1, y=0, owner="arasaka",
+            id="watson", name="Watson", x=1, y=0, owner="faction_ghostwire",
             value=3, connections=["city_center"],
         ),
         "pacifica": Territory(
-            id="pacifica", name="Pacifica", x=0, y=1, owner="neutral",
+            id="pacifica", name="Pacifica", x=0, y=1, owner="faction_meridian",
             value=1, connections=["city_center", "westbrook"],
         ),
         "city_center": Territory(
@@ -103,11 +109,11 @@ NIGHT_CITY_MAP = CorpMap(
             value=4, connections=["watson", "pacifica", "santo_domingo", "heywood"],
         ),
         "santo_domingo": Territory(
-            id="santo_domingo", name="Santo Domingo", x=2, y=1, owner="militech",
+            id="santo_domingo", name="Santo Domingo", x=2, y=1, owner="faction_ironclad",
             value=2, connections=["city_center", "badlands"],
         ),
         "westbrook": Territory(
-            id="westbrook", name="Westbrook", x=0, y=2, owner="neutral",
+            id="westbrook", name="Westbrook", x=0, y=2, owner="faction_meridian",
             value=2, connections=["pacifica", "heywood"],
         ),
         "heywood": Territory(
@@ -115,7 +121,7 @@ NIGHT_CITY_MAP = CorpMap(
             value=2, connections=["city_center", "westbrook", "badlands"],
         ),
         "badlands": Territory(
-            id="badlands", name="Badlands", x=2, y=2, owner="neutral",
+            id="badlands", name="Badlands", x=2, y=2, owner="faction_ironclad",
             value=1, connections=["santo_domingo", "heywood"],
         ),
     }
