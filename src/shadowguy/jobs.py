@@ -4,7 +4,7 @@ import random
 import uuid
 from dataclasses import dataclass
 
-from shadowguy.corpmap import CorpMap, LocationKind
+from shadowguy.corpmap import LOCATION_STAT, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
 
@@ -163,17 +163,23 @@ def generate_job(
     return scene, _random_timing(day, rng)
 
 
-# How each kind of place is scouted. Which locations a corp keeps on its turf
-# therefore decides which stats the prep for a job in that district favours.
-# Nothing but SOCIAL checks Cool: a corp district is two of the owner's own kind
-# plus a bar, so if a second kind checked Cool that district's legwork would be
-# three Cool checks and no real choice.
-LEGWORK_APPROACH = {
-    LocationKind.DATA: ("skill", "Sift the traffic in and out of {name}"),
-    LocationKind.LAB: ("skill", "Pull the intake records at {name}"),
-    LocationKind.DEPOT: ("body", "Tail a shift worker out of {name}"),
-    LocationKind.SOCIAL: ("cool", "Work the crowd at {name}"),
+# How each kind of place is scouted, in flavor text. The stat itself lives in
+# corpmap.LOCATION_STAT — that's also what corpmap._location_kinds reads to
+# keep a district's filler slot off its own specialty's stat, so there is one
+# place that says "DATA is a skill check" rather than two that must agree.
+LEGWORK_APPROACH_TEXT = {
+    LocationKind.DATA: "Sift the traffic in and out of {name}",
+    LocationKind.LAB: "Pull the intake records at {name}",
+    LocationKind.DEPOT: "Tail a shift worker out of {name}",
+    LocationKind.SOCIAL: "Work the crowd at {name}",
+    LocationKind.PAWN: "Work the counter for gossip at {name}",
+    LocationKind.WEAPON_SHOP: "Tail a shipment out of {name}",
+    LocationKind.AUTO_DEALER: "Chat up the lot staff at {name}",
+    LocationKind.PHARMACY: "Pull the register logs at {name}",
+    LocationKind.COMPUTER_STORE: "Sift the sales records at {name}",
 }
+if set(LEGWORK_APPROACH_TEXT) != set(LocationKind):
+    raise ValueError("LEGWORK_APPROACH_TEXT must have exactly one entry per LocationKind")
 
 # Casing the target itself is the hardest read to get, and the best one.
 SITE_DIFFICULTY = 14
@@ -188,7 +194,8 @@ def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
 
     choices = []
     for location in territory.locations:
-        stat, approach = LEGWORK_APPROACH[location.kind]
+        stat = LOCATION_STAT[location.kind]
+        approach = LEGWORK_APPROACH_TEXT[location.kind]
         is_site = location.id == job.target_location_id
         label = f"Case {location.name} itself" if is_site else approach.format(name=location.name)
         choices.append(

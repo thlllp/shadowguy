@@ -110,7 +110,7 @@ All three share the same `Scene`/`Stage`/`Choice`/`Outcome` data model, distingu
 
 Travel lives on `CorpMapScreen`, and the two markers there are different things: `*` is the **cursor** (`selected_id`, moved by the arrow keys along connections, or by clicking any node) and `@` is the **runner** (`character.location_id`). `enter` moves the runner to the cursor's node — but only if it borders `location_id`, and only for `TRAVEL_STAMINA_COST` stamina, so crossing the map costs days. Base stamina is 5 (`character.BASE_STAMINA`), which is the budget travel competes with gigs, jobs and legwork for.
 
-The MainMenu **Local** category lists the `Location`s of whatever node the runner is in. Its rows are display-only — no branch in `on_list_view_selected` matches them.
+The MainMenu **Local** category lists the `Location`s of whatever node the runner is in. Most rows are still display-only, except the five shop `LocationKind`s (see Shops below), which open a `ShopScreen`.
 
 **Position gates jobs.** A job — and the legwork that preps it — can only be run while the runner is standing in the job's `target_territory_id` (`MainMenu._on_site`). Off-site, the row is labelled `travel to <district>` and selecting it is a no-op; the check is enforced in `on_list_view_selected`, not just in the label. That's what pays for travel: an accepted job is a *place you have to go*, and a hard `scheduled_day` job means being in the right district on the right day. Gigs are unaffected — they're street work, runnable anywhere.
 
@@ -159,7 +159,7 @@ Faction starts are fair **by construction, not by search**: the generator races 
 
 Territory `value` is assigned *after* ownership, which is why fairness is free. Don't invert that order to give nodes "intrinsic" value without replacing the balance guarantee.
 
-Each `Territory` also holds `LOCATIONS_PER_TERRITORY` `Location`s — the concrete places (data vaults, clinics, depots, bars) a job actually hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a bar, while neutral and player ground get a random mix. Location *kinds* are map data; the stat each kind is scouted with lives in `jobs.LEGWORK_APPROACH`. Only `SOCIAL` maps to Cool there, deliberately — give a second kind Cool and every pharma district's legwork degenerates into three Cool checks and no real choice.
+Each `Territory` also holds `LOCATIONS_PER_TERRITORY` `Location`s — the concrete places (data vaults, clinics, depots, bars, shops) a job actually hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a filler slot rolled from `FILLER_KINDS` (the bar, or one of the five shop kinds — see Shops below), while neutral and player ground get a random mix of every `LocationKind`. Location *kinds* are map data; the stat each kind is scouted with lives in `corpmap.LOCATION_STAT` (the flavor text is `jobs.LEGWORK_APPROACH_TEXT`, kept separate so there's one place, not two, that has to agree on which stat a kind uses). `DATA`/`LAB`/`DEPOT` never map to Cool there, deliberately — those are the only kinds that can take two of a district's three slots, so a second one checking Cool would make that district's legwork three Cool checks and no real choice. The filler slot is also filtered against the district's own specialty stat (`_location_kinds` excludes any `FILLER_KINDS` member whose `LOCATION_STAT` matches `owned_kind`'s) — otherwise, e.g., a Hacking district (`DATA`, skill) could roll `COMPUTER_STORE` or `PHARMACY` (both also skill) into the filler slot and hit the same three-checks-one-stat degeneracy.
 
 Each `Territory` also carries `modifiers`: a `dict[TerritoryModifier, int]` of `Security` / `Surveillance` / `Unrest` / `Development` / `Restricted`, each 0..`MODIFIER_MAX`. These are the levers a Corp-mode player will eventually pull on ground it holds; today they are **seeded at generation and displayed only** — the `#modifiers` panel under the corp map — and nothing reads them. The enum values are ids; the display names live in `MODIFIER_LABELS` (don't go back to deriving the label from the id, or a two-word modifier renders with its underscore showing).
 
@@ -181,6 +181,14 @@ Consequences of the profiles, not bugs: no district is ever at Unrest 3–4 (hel
 
 Known quirk: the spanning tree plus `EXTRA_EDGE_CHANCE` still leaves plenty of **degree-1 dead ends** elsewhere on the board. That's fine — a cul-de-sac is a real place. It's only the *start* node that's guaranteed a way out (`MIN_START_DEGREE`), because that's the one the stamina budget can't recover from.
 
+### Shops (`shadowguy/shops.py`)
+
+Five `LocationKind`s are retail rather than job-related: `PAWN`, `WEAPON_SHOP`, `AUTO_DEALER`, `PHARMACY`, `COMPUTER_STORE` (`corpmap.SHOP_KINDS`; `shops.CATALOG`'s keys are checked against this at import time). They're generated exactly like any other `Location` (see Corp map above): neutral ground can roll any of them, and a corp district can roll one into its filler slot (`corpmap.FILLER_KINDS`, excluding whichever shops share the district's own specialty stat) alongside its two specialty locations — so a shop can end up as a job's target site, and `corpmap.LOCATION_STAT`/`jobs.LEGWORK_APPROACH_TEXT` each have an entry for every shop kind to cover that. Real Estate was on the original request but deliberately left out: it doesn't fit the "carryable item" model below and wasn't worth special-casing yet.
+
+Selecting one of these locations from the MainMenu **Local** tab pushes a `ShopScreen` (`app.py`) instead of being a no-op. `shops.CATALOG` maps each shop `LocationKind` to a fixed list of `Item`s (id, name, price, `stat`, `bonus`). Buying spends `Cash` and appends the item id to `Character.inventory` — a flat `list[str]`, duplicates allowed, so the same item can be bought (and owned) more than once. Items are **persistent, not consumable**: `Character.stat()` adds up every owned item's bonus for the requested stat on top of the raw attribute, so gear silently strengthens every check that uses that stat — jobs and legwork included, since both go through the same `stat()` call.
+
+**Pawn Shop is the only kind that buys back**: `ShopScreen` also lists the runner's current `inventory` there, and selecting one sells it via `shops.sell_item` for `PAWN_SELL_FRACTION` of its catalog price. Sell rows are keyed by **inventory index**, not item id — the same item id can appear more than once in `inventory`, and a repeated id would collide as a Textual `ListView` id (see Known Textual gotchas).
+
 ### Codebase layout
 
 ```
@@ -193,7 +201,8 @@ src/shadowguy/
   fixer.py        Fixer/JobOffer persistent roster, offer refresh/expiry
   factions.py     rival corp Factions (id/name/specialty) that own map territory
   corpmap.py      procedural Corp-mode territory map + ASCII renderer
-  app.py          Textual App: MainMenu + FixerListScreen/FixerOffersScreen + SceneScreen + CorpMapScreen
+  shops.py        retail LocationKinds: Item catalog, buy_item/sell_item, equipped stat bonuses
+  app.py          Textual App: MainMenu + FixerListScreen/FixerOffersScreen + SceneScreen + CorpMapScreen + ShopScreen
 ```
 
 ### Verifying changes

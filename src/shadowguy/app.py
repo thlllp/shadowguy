@@ -12,6 +12,9 @@ from shadowguy.content import GIG_FENCE_SOME_CHROME
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
+    SHOP_KINDS,
+    Location,
+    LocationKind,
     RenderedMap,
     Territory,
     generate_corp_map,
@@ -22,6 +25,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
+from shadowguy.shops import CATALOG, ITEMS_BY_ID, PAWN_SELL_FRACTION, buy_item, sell_item
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
@@ -41,13 +45,15 @@ class CharacterSheet(Static):
         standings = "  ".join(
             f"{f.name.split()[0]}: {c.standing_with(f.id):+d}" for f in FACTIONS
         )
+        gear = ", ".join(ITEMS_BY_ID[item_id].name for item_id in c.inventory) or "none"
         return (
             f"{c.name}\n"
             f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}\n"
             f"Health: {c.health}/{c.max_health}   "
-            f"Body: {c.body}  Skill: {c.skill}  Cool: {c.cool}\n"
+            f"Body: {c.stat('body')}  Skill: {c.stat('skill')}  Cool: {c.stat('cool')}\n"
             f"Cash: {c.cash}eb   Rep: {c.rep}\n"
-            f"Standing — {standings}"
+            f"Standing — {standings}\n"
+            f"Gear: {gear}"
         )
 
 
@@ -221,6 +227,14 @@ class MainMenu(Screen):
             self.app.push_screen(SceneScreen(job.scene))
             return
 
+        if item_id.startswith("local_") and item_id != "local_district":
+            location_id = item_id.removeprefix("local_")
+            here = self.app.corp_map.territories[character.location_id]
+            location = next((loc for loc in here.locations if loc.id == location_id), None)
+            if location is not None and location.kind in SHOP_KINDS:
+                self.app.push_screen(ShopScreen(location))
+            return
+
     async def _select_category(self, key: str) -> None:
         if key == "fixer":
             self.app.push_screen(FixerListScreen())
@@ -297,6 +311,59 @@ class FixerOffersScreen(Screen):
         offer = next(offer for offer in self.fixer.offers if offer.id == event.item.id)
         self.app.character.accept_job(offer)
         self.fixer.offers = [o for o in self.fixer.offers if o.id != offer.id]
+        await self._refresh()
+
+
+class ShopScreen(Screen):
+    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="shop_info")
+        yield ListView(id="shop_items")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        items = []
+
+        for item in CATALOG.get(self.location.kind, []):
+            label = f"Buy {item.name} — {item.price}eb (+{item.bonus} {item.stat.capitalize()})"
+            if character.cash < item.price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buy_{item.id}"))
+
+        if self.location.kind == LocationKind.PAWN:
+            for index, item_id in enumerate(character.inventory):
+                item = ITEMS_BY_ID[item_id]
+                proceeds = int(item.price * PAWN_SELL_FRACTION)
+                items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
+
+        await _replace_items(self.query_one("#shop_items", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        item_id = event.item.id
+
+        if item_id.startswith("buy_"):
+            item = ITEMS_BY_ID[item_id.removeprefix("buy_")]
+            if not buy_item(character, item):
+                self.notify(f"Can't afford {item.name}.", severity="warning")
+        elif item_id.startswith("sell_"):
+            sell_item(character, int(item_id.removeprefix("sell_")))
+
+        self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
 

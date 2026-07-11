@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from shadowguy.shops import equipped_bonus
+
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
 
@@ -26,6 +28,8 @@ class Character:
     advantage: dict[str, int] = field(default_factory=dict)
     standing: dict[str, int] = field(default_factory=dict)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
+    # Owned item ids, from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
+    inventory: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -50,6 +54,8 @@ class Character:
 
     @property
     def max_health(self) -> int:
+        # Deliberately self.body, not stat("body"): gear strengthens checks,
+        # not survivability, so equipping/selling an item never moves max_health.
         return BASE_HEALTH + self.body * HEALTH_PER_BODY
 
     @property
@@ -83,4 +89,7 @@ class Character:
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:
             raise ValueError(f"unknown stat: {name!r}")
-        return getattr(self, name)
+        value = getattr(self, name)
+        if name in ("body", "skill", "cool"):
+            value += equipped_bonus(self.inventory, name)
+        return value
