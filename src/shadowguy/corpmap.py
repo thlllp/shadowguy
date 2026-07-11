@@ -1,6 +1,21 @@
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass, field, replace
 
-OWNER_TAGS = {"player": "YOU", "neutral": ""}
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
+
+OWNER_NAMES = {"player": "You", "neutral": "Unclaimed"}
+
+OWNER_TAGS = {
+    "player": "YOU",
+    "neutral": "",
+    **{faction.id: faction.name.split()[0][:3].upper() for faction in FACTIONS},
+}
+
+
+def owner_label(owner: str) -> str:
+    if owner in OWNER_NAMES:
+        return OWNER_NAMES[owner]
+    return FACTIONS_BY_ID[owner].name
 
 
 @dataclass
@@ -88,35 +103,42 @@ def render_ascii_map(corp_map: CorpMap, selected_id: str | None = None) -> str:
     return "\n".join(lines)
 
 
-NIGHT_CITY_MAP = CorpMap(
-    territories={
-        "watson": Territory(
-            id="watson", name="Watson", x=1, y=0, owner="arasaka",
-            value=3, connections=["city_center"],
-        ),
-        "pacifica": Territory(
-            id="pacifica", name="Pacifica", x=0, y=1, owner="neutral",
-            value=1, connections=["city_center", "westbrook"],
-        ),
-        "city_center": Territory(
-            id="city_center", name="City Center", x=1, y=1, owner="player",
-            value=4, connections=["watson", "pacifica", "santo_domingo", "heywood"],
-        ),
-        "santo_domingo": Territory(
-            id="santo_domingo", name="Santo Domingo", x=2, y=1, owner="militech",
-            value=2, connections=["city_center", "badlands"],
-        ),
-        "westbrook": Territory(
-            id="westbrook", name="Westbrook", x=0, y=2, owner="neutral",
-            value=2, connections=["pacifica", "heywood"],
-        ),
-        "heywood": Territory(
-            id="heywood", name="Heywood", x=1, y=2, owner="neutral",
-            value=2, connections=["city_center", "westbrook", "badlands"],
-        ),
-        "badlands": Territory(
-            id="badlands", name="Badlands", x=2, y=2, owner="neutral",
-            value=1, connections=["santo_domingo", "heywood"],
-        ),
-    }
-)
+PLAYER_TERRITORY_ID = "city_center"
+
+NIGHT_CITY_SHAPE = [
+    Territory(id="watson", name="Watson", x=1, y=0, value=3, connections=["city_center"]),
+    Territory(id="pacifica", name="Pacifica", x=0, y=1, value=1, connections=["city_center", "westbrook"]),
+    Territory(
+        id="city_center", name="City Center", x=1, y=1, value=4,
+        connections=["watson", "pacifica", "santo_domingo", "heywood"],
+    ),
+    Territory(id="santo_domingo", name="Santo Domingo", x=2, y=1, value=2, connections=["city_center", "badlands"]),
+    Territory(id="westbrook", name="Westbrook", x=0, y=2, value=2, connections=["pacifica", "heywood"]),
+    Territory(
+        id="heywood", name="Heywood", x=1, y=2, value=2,
+        connections=["city_center", "westbrook", "badlands"],
+    ),
+    Territory(id="badlands", name="Badlands", x=2, y=2, value=1, connections=["santo_domingo", "heywood"]),
+]
+
+# Groups of territories contested as a unit. On world generation, each cluster
+# is handed to one randomly selected faction; leftover clusters (more clusters
+# than available factions) stay neutral.
+CORP_CLUSTERS = [
+    ["watson"],
+    ["pacifica", "westbrook"],
+    ["santo_domingo", "badlands"],
+]
+
+
+def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
+    territories = {t.id: replace(t) for t in NIGHT_CITY_SHAPE}
+    territories[PLAYER_TERRITORY_ID].owner = "player"
+
+    clusters = rng.sample(CORP_CLUSTERS, k=len(CORP_CLUSTERS))
+    chosen_factions = rng.sample(factions, k=min(len(factions), len(clusters)))
+    for faction, cluster in zip(chosen_factions, clusters):
+        for territory_id in cluster:
+            territories[territory_id].owner = faction.id
+
+    return CorpMap(territories=territories)

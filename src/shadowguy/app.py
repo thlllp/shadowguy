@@ -7,7 +7,8 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
 from shadowguy.content import GIG_FENCE_SOME_CHROME
-from shadowguy.corpmap import NIGHT_CITY_MAP, render_ascii_map
+from shadowguy.corpmap import generate_corp_map, owner_label, render_ascii_map
+from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
@@ -59,7 +60,13 @@ class MainMenu(Screen):
     }
     """
 
-    CATEGORIES = [("gig", "Gigs"), ("job", "Jobs"), ("legwork", "Legwork"), ("fixer", "Fixers")]
+    CATEGORIES = [
+        ("gig", "Gigs"),
+        ("job", "Jobs"),
+        ("legwork", "Legwork"),
+        ("fixer", "Fixers"),
+        ("map", "Corp Map"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -171,6 +178,9 @@ class MainMenu(Screen):
     async def _select_category(self, key: str) -> None:
         if key == "fixer":
             self.app.push_screen(FixerListScreen())
+            return
+        if key == "map":
+            self.app.push_screen(CorpMapScreen())
             return
         self.selected_category = key
         await self._refresh()
@@ -324,7 +334,6 @@ class CorpMapScreen(Screen):
 
     def __init__(self) -> None:
         super().__init__()
-        self.corp_map = NIGHT_CITY_MAP
         self.selected_id = "city_center"
 
     def compose(self) -> ComposeResult:
@@ -344,19 +353,20 @@ class CorpMapScreen(Screen):
 
     def action_move(self, direction: str) -> None:
         dx, dy = self.DIRECTIONS[direction]
-        current = self.corp_map.territories[self.selected_id]
+        current = self.app.corp_map.territories[self.selected_id]
         for conn_id in current.connections:
-            candidate = self.corp_map.territories[conn_id]
+            candidate = self.app.corp_map.territories[conn_id]
             if (candidate.x - current.x, candidate.y - current.y) == (dx, dy):
                 self.selected_id = conn_id
                 self._refresh()
                 return
 
     def _refresh(self) -> None:
-        self.query_one("#map", Static).update(render_ascii_map(self.corp_map, self.selected_id))
-        t = self.corp_map.territories[self.selected_id]
+        corp_map = self.app.corp_map
+        self.query_one("#map", Static).update(render_ascii_map(corp_map, self.selected_id))
+        t = corp_map.territories[self.selected_id]
         self.query_one("#territory_info", Static).update(
-            f"{t.name} — owner: {t.owner}, value: {t.value}"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}"
         )
 
 
@@ -367,6 +377,7 @@ class ShadowguyApp(App):
         super().__init__()
         self.character = Character(name="Runner")
         self.rng = random.Random()
+        self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.fixers = create_fixers()
         refresh_offers(self.fixers, self.character.day, self.rng)
 
