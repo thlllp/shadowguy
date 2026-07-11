@@ -26,6 +26,41 @@ class LocationKind(StrEnum):
     LAB = "lab"
     DEPOT = "depot"
     SOCIAL = "social"
+    PAWN = "pawn"
+    WEAPON_SHOP = "weapon_shop"
+    AUTO_DEALER = "auto_dealer"
+    PHARMACY = "pharmacy"
+    COMPUTER_STORE = "computer_store"
+
+
+# Retail kinds: shops.py's business, but defined here (not there) since
+# _location_kinds below needs them and corpmap.py must not import shops.py.
+SHOP_KINDS = (
+    LocationKind.PAWN,
+    LocationKind.WEAPON_SHOP,
+    LocationKind.AUTO_DEALER,
+    LocationKind.PHARMACY,
+    LocationKind.COMPUTER_STORE,
+)
+
+# The check stat a location kind is scouted with. jobs.py owns the flavor text
+# for each kind (jobs.LEGWORK_APPROACH_TEXT) and reads the stat from here, so
+# there is exactly one place that says "DATA is a skill check" — _location_kinds
+# below also needs it, to keep a district's filler slot from repeating its own
+# specialty's stat (see FILLER_EXCLUDED_STATS).
+LOCATION_STAT = {
+    LocationKind.DATA: "skill",
+    LocationKind.LAB: "skill",
+    LocationKind.DEPOT: "body",
+    LocationKind.SOCIAL: "cool",
+    LocationKind.PAWN: "cool",
+    LocationKind.WEAPON_SHOP: "body",
+    LocationKind.AUTO_DEALER: "cool",
+    LocationKind.PHARMACY: "skill",
+    LocationKind.COMPUTER_STORE: "skill",
+}
+if set(LOCATION_STAT) != set(LocationKind):
+    raise ValueError("LOCATION_STAT must have exactly one entry per LocationKind")
 
 
 class TerritoryModifier(StrEnum):
@@ -249,7 +284,8 @@ DISTRICT_NAMES = [
 LOCATIONS_PER_TERRITORY = 3
 
 # How many of a corp-held district's locations are the corp's own kind of place.
-# The rest is the bar everyone drinks in, whoever owns the block.
+# The rest is one random filler slot (see FILLER_KINDS below) — the bar
+# everyone drinks in, or one of the shops, whoever owns the block.
 SPECIALTY_LOCATIONS = 2
 
 LOCATION_KIND_FOR_SPECIALTY = {
@@ -263,6 +299,11 @@ LOCATION_SUFFIXES = {
     LocationKind.LAB: ["Clinic", "Biolab", "Dispensary", "Trauma Ward"],
     LocationKind.DEPOT: ["Depot", "Armory", "Freight Yard", "Loading Dock"],
     LocationKind.SOCIAL: ["Bar", "Noodle House", "Club", "Pachinko Parlor"],
+    LocationKind.PAWN: ["Pawn Shop", "Loan & Trade", "Cash 4 Chrome", "Buy-Sell-Trade"],
+    LocationKind.WEAPON_SHOP: ["Gun Shop", "Arms Dealer", "Ironmonger", "Ballistics Outlet"],
+    LocationKind.AUTO_DEALER: ["Auto Dealer", "Motorpool", "Garage", "Chop Shop"],
+    LocationKind.PHARMACY: ["Pharmacy", "Chemist", "Drug Store", "Apothecary"],
+    LocationKind.COMPUTER_STORE: ["Computer Store", "Chip Shop", "Hardware Outlet", "Rig Emporium"],
 }
 
 LOCATION_PREFIXES = [
@@ -297,13 +338,25 @@ if len(LOCATION_PREFIXES) * min(len(s) for s in LOCATION_SUFFIXES.values()) < (
 Cell = tuple[int, int]
 
 
+# The non-specialty slots in a corp district: the bar everyone drinks in, or a
+# shop — whoever owns the block, the storefront doesn't care.
+FILLER_KINDS = (LocationKind.SOCIAL, *SHOP_KINDS)
+
+
 def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
     faction = FACTIONS_BY_ID.get(owner)
     if faction is None:
         # Neutral ground and the player's block carry no corp's stamp.
         return rng.sample(list(LocationKind), k=LOCATIONS_PER_TERRITORY)
     owned_kind = LOCATION_KIND_FOR_SPECIALTY[faction.specialty]
-    filler = [LocationKind.SOCIAL] * (LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS)
+    filler_count = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
+    # Keep the filler slot(s) off the specialty's own stat (see LOCATION_STAT)
+    # — a shop that happens to share it (e.g. PHARMACY and COMPUTER_STORE are
+    # both "skill", same as DATA/LAB) would otherwise give that district's
+    # legwork three checks of one stat and no real choice.
+    owned_stat = LOCATION_STAT[owned_kind]
+    filler_pool = [kind for kind in FILLER_KINDS if LOCATION_STAT[kind] != owned_stat]
+    filler = rng.sample(filler_pool, k=filler_count)
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
 
 
