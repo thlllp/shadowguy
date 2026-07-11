@@ -38,3 +38,5 @@ FACTIONS = [
         description="Pharmaceutical conglomerate pushing combat stims and black-clinic wetware.",
     ),
 ]
+
+FACTIONS_BY_ID = {faction.id: faction for faction in FACTIONS}
