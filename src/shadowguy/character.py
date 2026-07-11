@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from shadowguy.shops import equipped_bonus
+from shadowguy.shops import InventoryItem, equipped_bonus
 
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
@@ -28,8 +28,9 @@ class Character:
     advantage: dict[str, int] = field(default_factory=dict)
     standing: dict[str, int] = field(default_factory=dict)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
-    # Owned item ids, from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
-    inventory: list[str] = field(default_factory=list)
+    # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
+    # Only entries with equipped=True contribute their bonus via stat().
+    inventory: list[InventoryItem] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.health is None:
