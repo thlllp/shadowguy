@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 BASE_HEALTH = 10
 HEALTH_PER_BODY = 5
-BASE_STAMINA = 3
+BASE_STAMINA = 5
 STAT_NAMES = frozenset({"body", "skill", "cool", "cash", "rep"})
 
 
@@ -21,7 +21,10 @@ class Character:
     health: int | None = None
     stamina: int | None = None
     day: int = 1
+    # Which Territory of the corp map the runner is standing in.
+    location_id: str = ""
     advantage: dict[str, int] = field(default_factory=dict)
+    standing: dict[str, int] = field(default_factory=dict)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -38,6 +41,12 @@ class Character:
 
     def consume_advantage(self, job_id: str) -> int:
         return self.advantage.pop(job_id, 0)
+
+    def standing_with(self, faction_id: str) -> int:
+        return self.standing.get(faction_id, 0)
+
+    def adjust_standing(self, faction_id: str, delta: int) -> None:
+        self.standing[faction_id] = self.standing_with(faction_id) + delta
 
     @property
     def max_health(self) -> int:

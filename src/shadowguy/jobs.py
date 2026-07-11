@@ -4,15 +4,10 @@ import random
 import uuid
 from dataclasses import dataclass
 
+from shadowguy.corpmap import CorpMap, LocationKind
+from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
 
-CORPS = ["Arasaka", "Militech", "Biotechnica", "Kang Tao", "Petrochem"]
-LOCATIONS = [
-    "a data tower in City Center",
-    "a warehouse on Autopia Row",
-    "a clinic in Kabuki",
-    "a server farm in Northside",
-]
 TARGETS = [
     "a corp exec's private files",
     "a rival fixer's stash",
@@ -28,6 +23,9 @@ STAT_FLAVOR = {
 
 DIFFICULTY_BASE = (10, 13, 16)
 REWARD_BASE = (250, 450, 700)
+
+# Standing lost with the corp you just robbed, on a completed job.
+JOB_STANDING_HIT = -2
 
 
 @dataclass
@@ -83,11 +81,19 @@ def _random_timing(day: int, rng: random.Random) -> JobTiming:
     return JobTiming()
 
 
-def generate_job(day: int, rng: random.Random | None = None) -> tuple[Scene, JobTiming]:
+def generate_job(
+    day: int, corp_map: CorpMap, rng: random.Random | None = None
+) -> tuple[Scene, JobTiming]:
     rng = rng or random.Random()
     archetype = rng.choice(ARCHETYPES)
-    corp = rng.choice(CORPS)
-    location = rng.choice(LOCATIONS)
+    # The mark is a real corp, hit in a district it actually holds on this run's map.
+    held = sorted(
+        (t for t in corp_map.territories.values() if t.owner in FACTIONS_BY_ID),
+        key=lambda t: t.id,
+    )
+    territory = rng.choice(held)
+    faction = FACTIONS_BY_ID[territory.owner]
+    location = rng.choice(territory.locations)
     target = rng.choice(TARGETS)
     tier = _tier_for_day(day)
     difficulty_base = DIFFICULTY_BASE[tier]
@@ -102,7 +108,8 @@ def generate_job(day: int, rng: random.Random | None = None) -> tuple[Scene, Job
         next_stage = None if is_last else stage_ids[i + 1]
         difficulty = difficulty_base + i + rng.randint(-1, 2)
         prompt = (
-            f"You need to {archetype.verb} {corp}, to reach {target} hidden in {location}."
+            f"You need to {archetype.verb} {faction.name} at {location.name}, in {territory.name}, "
+            f"to reach {target}."
             if i == 0
             else f"You're in deep. One more push before you're clear with {target}."
         )
@@ -119,6 +126,7 @@ def generate_job(day: int, rng: random.Random | None = None) -> tuple[Scene, Job
                         next_stage=next_stage,
                         cash_delta=reward_base if is_last else 0,
                         rep_delta=1 if is_last else 0,
+                        standing_delta=JOB_STANDING_HIT if is_last else 0,
                     ),
                     failure=Outcome(
                         text="It gets messy, but you push on.",
@@ -130,6 +138,7 @@ def generate_job(day: int, rng: random.Random | None = None) -> tuple[Scene, Job
                         next_stage=next_stage,
                         cash_delta=int(reward_base * 1.5) if is_last else 0,
                         rep_delta=2 if is_last else 0,
+                        standing_delta=JOB_STANDING_HIT if is_last else 0,
                     ),
                     critical_failure=Outcome(
                         text="It goes bad, fast.",
@@ -142,42 +151,81 @@ def generate_job(day: int, rng: random.Random | None = None) -> tuple[Scene, Job
 
     scene = Scene(
         id=job_id,
-        title=f"{archetype.name}: {corp}",
+        title=f"{archetype.name}: {faction.name} ({territory.name})",
         kind=SceneKind.JOB,
         stamina_cost=2 if tier == 0 else 3,
         start_stage=stage_ids[0],
         stages=stages,
+        target_faction_id=faction.id,
+        target_territory_id=territory.id,
+        target_location_id=location.id,
     )
     return scene, _random_timing(day, rng)
 
 
-def generate_legwork_for_job(job_id: str, job_title: str) -> Scene:
+# How each kind of place is scouted. Which locations a corp keeps on its turf
+# therefore decides which stats the prep for a job in that district favours.
+# Nothing but SOCIAL checks Cool: a corp district is two of the owner's own kind
+# plus a bar, so if a second kind checked Cool that district's legwork would be
+# three Cool checks and no real choice.
+LEGWORK_APPROACH = {
+    LocationKind.DATA: ("skill", "Sift the traffic in and out of {name}"),
+    LocationKind.LAB: ("skill", "Pull the intake records at {name}"),
+    LocationKind.DEPOT: ("body", "Tail a shift worker out of {name}"),
+    LocationKind.SOCIAL: ("cool", "Work the crowd at {name}"),
+}
+
+# Casing the target itself is the hardest read to get, and the best one.
+SITE_DIFFICULTY = 14
+SITE_ADVANTAGE = 4
+NEARBY_DIFFICULTY = 11
+NEARBY_ADVANTAGE = 2
+
+
+def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
+    territory = corp_map.territories[job.target_territory_id]
+    faction = FACTIONS_BY_ID[job.target_faction_id]
+
+    choices = []
+    for location in territory.locations:
+        stat, approach = LEGWORK_APPROACH[location.kind]
+        is_site = location.id == job.target_location_id
+        label = f"Case {location.name} itself" if is_site else approach.format(name=location.name)
+        choices.append(
+            Choice(
+                label=f"{label} ({stat.capitalize()})",
+                stat=stat,
+                difficulty=SITE_DIFFICULTY if is_site else NEARBY_DIFFICULTY,
+                success=Outcome(
+                    text=(
+                        "You clock the pattern cold. You'll know exactly when to move."
+                        if is_site
+                        else "A shift roster, a few loose words. It adds up."
+                    ),
+                    advantage_delta=SITE_ADVANTAGE if is_site else NEARBY_ADVANTAGE,
+                ),
+                failure=Outcome(text="Nothing solid turns up. Wasted time."),
+                critical_failure=Outcome(
+                    text="Someone clocks you scoping the place. You bolt.",
+                    health_delta=-2,
+                ),
+            )
+        )
+
     return Scene(
-        id=f"legwork_{job_id}",
-        title=f"Case the job: {job_title}",
+        id=f"legwork_{job.id}",
+        title=f"Case the job: {job.title}",
         kind=SceneKind.LEGWORK,
-        prepares_for=job_id,
+        prepares_for=job.id,
         start_stage="start",
         stages={
             "start": Stage(
                 id="start",
-                prompt=f"You scope out the details before running the {job_title} job.",
-                choices=[
-                    Choice(
-                        label="Case the location (Cool)",
-                        stat="cool",
-                        difficulty=11,
-                        success=Outcome(
-                            text="You clock the pattern cold. You'll know exactly when to move.",
-                            advantage_delta=3,
-                        ),
-                        failure=Outcome(text="Nothing solid turns up. Wasted time."),
-                        critical_failure=Outcome(
-                            text="Someone clocks you scoping the place. You bolt.",
-                            health_delta=-2,
-                        ),
-                    ),
-                ],
+                prompt=(
+                    f"You have time to work {territory.name} before the job. "
+                    f"{faction.name} holds the district through a handful of places."
+                ),
+                choices=choices,
             ),
         },
     )
