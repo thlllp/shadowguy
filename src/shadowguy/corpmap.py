@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction, FactionSpecialty
+from shadowguy.skills import skill_for
 
 OWNER_NAMES = {"neutral": "Unclaimed"}
 
@@ -43,24 +44,38 @@ SHOP_KINDS = (
     LocationKind.COMPUTER_STORE,
 )
 
-# The check stat a location kind is scouted with. jobs.py owns the flavor text
-# for each kind (jobs.LEGWORK_APPROACH_TEXT) and reads the stat from here, so
-# there is exactly one place that says "DATA is an intelligence check" — _location_kinds
+# The skill a location kind is scouted with, on legwork. jobs.py owns the flavor
+# text for each kind (jobs.LEGWORK_APPROACH_TEXT) and reads the skill from here,
+# so there is exactly one place that says "DATA is a Hack check" — _location_kinds
 # below also needs it, to keep a district's filler slot from repeating its own
-# specialty's stat (see FILLER_EXCLUDED_STATS).
-LOCATION_STAT = {
-    LocationKind.DATA: "intelligence",
-    LocationKind.LAB: "intelligence",
-    LocationKind.DEPOT: "body",
-    LocationKind.SOCIAL: "cool",
-    LocationKind.PAWN: "cool",
-    LocationKind.WEAPON_SHOP: "body",
-    LocationKind.AUTO_DEALER: "cool",
-    LocationKind.PHARMACY: "intelligence",
-    LocationKind.COMPUTER_STORE: "intelligence",
+# specialty's stat (via location_stat() below).
+#
+# Legwork is scouting, so this table leans on the watching-and-casing skills:
+# perception and agility mostly, intelligence on the wired places, cool where
+# the read comes out of a conversation.
+LOCATION_SKILL = {
+    LocationKind.DATA: "hack",
+    LocationKind.LAB: "pattern_seeking",
+    LocationKind.DEPOT: "stealth",
+    LocationKind.SOCIAL: "read_the_room",
+    LocationKind.PAWN: "negotiations",
+    LocationKind.WEAPON_SHOP: "sight",
+    LocationKind.AUTO_DEALER: "deception",
+    LocationKind.PHARMACY: "infer",
+    LocationKind.COMPUTER_STORE: "hack",
 }
-if set(LOCATION_STAT) != set(LocationKind):
-    raise ValueError("LOCATION_STAT must have exactly one entry per LocationKind")
+if set(LOCATION_SKILL) != set(LocationKind):
+    raise ValueError("LOCATION_SKILL must have exactly one entry per LocationKind")
+
+
+def location_stat(kind: LocationKind) -> str:
+    """The core stat behind a kind's scouting skill. Derived, never a second table."""
+    return skill_for(LOCATION_SKILL[kind]).stat
+
+
+# Catches a typo'd skill id at import instead of when a legwork Scene is built.
+for _kind in LocationKind:
+    location_stat(_kind)
 
 
 class TerritoryModifier(StrEnum):
@@ -342,6 +357,29 @@ Cell = tuple[int, int]
 # shop — whoever owns the block, the storefront doesn't care.
 FILLER_KINDS = (LocationKind.SOCIAL, *SHOP_KINDS)
 
+FILLER_COUNT = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
+
+
+def _filler_pool(owned_kind: LocationKind) -> list[LocationKind]:
+    """Filler kinds that don't repeat the specialty's own stat.
+
+    A district is SPECIALTY_LOCATIONS of one kind plus filler, so a filler that
+    shared the specialty's stat (e.g. COMPUTER_STORE, also intelligence, next to
+    a Hacking corp's DATA) would make that district's legwork three checks of one
+    stat and no real choice.
+    """
+    owned_stat = location_stat(owned_kind)
+    return [kind for kind in FILLER_KINDS if location_stat(kind) != owned_stat]
+
+
+# rng.sample() below raises if the pool ever runs short, so prove at import that
+# it can't: every specialty a faction can have must leave FILLER_COUNT fillers.
+for _specialty_kind in LOCATION_KIND_FOR_SPECIALTY.values():
+    if len(_filler_pool(_specialty_kind)) < FILLER_COUNT:
+        raise ValueError(
+            f"LOCATION_SKILL leaves no filler kind off {_specialty_kind}'s own stat"
+        )
+
 
 def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
     faction = FACTIONS_BY_ID.get(owner)
@@ -349,14 +387,7 @@ def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
         # Neutral ground and the player's block carry no corp's stamp.
         return rng.sample(list(LocationKind), k=LOCATIONS_PER_TERRITORY)
     owned_kind = LOCATION_KIND_FOR_SPECIALTY[faction.specialty]
-    filler_count = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
-    # Keep the filler slot(s) off the specialty's own stat (see LOCATION_STAT)
-    # — a shop that happens to share it (e.g. PHARMACY and COMPUTER_STORE are
-    # both "intelligence", same as DATA/LAB) would otherwise give that district's
-    # legwork three checks of one stat and no real choice.
-    owned_stat = LOCATION_STAT[owned_kind]
-    filler_pool = [kind for kind in FILLER_KINDS if LOCATION_STAT[kind] != owned_stat]
-    filler = rng.sample(filler_pool, k=filler_count)
+    filler = rng.sample(_filler_pool(owned_kind), k=FILLER_COUNT)
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
 
 

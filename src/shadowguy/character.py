@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from shadowguy.shops import InventoryItem, equipped_bonus
+from shadowguy.skills import SKILLS, skill_for
 
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
@@ -9,22 +10,56 @@ if TYPE_CHECKING:
 BASE_HEALTH = 10
 HEALTH_PER_BODY = 5
 BASE_STAMINA = 5
-# Fixed pool granted at character creation; a future XP system will grant more over a run.
-STARTING_SKILL_POINTS = 5
-# The checkable stats: what gear/temp bonuses can apply to and checks.resolve_check runs against.
+
+# Everything starts at 1 and is bought up from there. Both pools are spent at
+# character creation (app.CharacterCreationScreen) and never refill — there is
+# no XP system, so the build you walk in with is the build you have.
+STARTING_STAT = 1
+STARTING_SKILL_RANK = 1
+STARTING_STAT_POINTS = 6
+STARTING_SKILL_POINTS = 20
+# Ceiling on a single skill's rank.
+MAX_SKILL_RANK = 10
+
+# Ranks get dearer the higher you climb: (lowest rank, highest rank, points per rank).
+# Buying one skill all the way from STARTING_SKILL_RANK to MAX_SKILL_RANK costs
+# 3*1 + 3*2 + 2*3 + 4 = 19 of the 20 points, so a specialist has almost nothing left
+# over — that's the trade, not an accident.
+_RANK_COST_ROWS = (
+    (2, 4, 1),
+    (5, 7, 2),
+    (8, 9, 3),
+    (10, 10, 4),
+)
+# rank -> points to *reach* that rank from the one below it.
+SKILL_RANK_COST = {
+    rank: cost for low, high, cost in _RANK_COST_ROWS for rank in range(low, high + 1)
+}
+if set(SKILL_RANK_COST) != set(range(STARTING_SKILL_RANK + 1, MAX_SKILL_RANK + 1)):
+    raise ValueError("SKILL_RANK_COST must price exactly every rank above STARTING_SKILL_RANK")
+
+# The stats a skill can be layered on, and what gear/chem bonuses apply to. Checks
+# roll a *skill* (skills.skill_value), never one of these on its own.
 CORE_STATS = ("body", "strength", "agility", "perception", "intelligence", "cool")
 STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep"}
+
+# The guard lives here, not in skills.py: skills.py has to stay import-free of
+# this module (character -> shops -> corpmap -> skills), so this is the only
+# place that can see both tables. A skill tied to a stat that doesn't exist
+# would otherwise raise from stat() the first time something rolled it.
+if any(skill.stat not in CORE_STATS for skill in SKILLS):
+    raise ValueError("every Skill.stat must be one of CORE_STATS")
 
 
 @dataclass
 class Character:
     name: str
-    body: int = 3
-    strength: int = 3
-    agility: int = 3
-    perception: int = 3
-    intelligence: int = 3
-    cool: int = 3
+    body: int = STARTING_STAT
+    strength: int = STARTING_STAT
+    agility: int = STARTING_STAT
+    perception: int = STARTING_STAT
+    intelligence: int = STARTING_STAT
+    cool: int = STARTING_STAT
     cash: int = 0
     rep: int = 0
     health: int | None = None
@@ -43,9 +78,14 @@ class Character:
     consumables: list[str] = field(default_factory=list)
     # stat name -> bonus from a used Chem, active until the next rest().
     temp_bonuses: dict[str, int] = field(default_factory=dict)
-    # skill id (shadowguy.skills.SKILLS_BY_ID) -> invested rank.
-    skill_ranks: dict[str, int] = field(default_factory=dict)
-    # Unspent points; spend_skill_point() converts one into a skill_ranks entry.
+    # skill id (shadowguy.skills.SKILLS_BY_ID) -> rank. Every skill starts at
+    # STARTING_SKILL_RANK, so the dict is fully populated rather than sparse.
+    skill_ranks: dict[str, int] = field(
+        default_factory=lambda: {skill.id: STARTING_SKILL_RANK for skill in SKILLS}
+    )
+    # Unspent creation points. spend_stat_point()/spend_skill_point() draw these down;
+    # nothing puts them back.
+    stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
 
     def __post_init__(self) -> None:
@@ -99,14 +139,48 @@ class Character:
         self.temp_bonuses[stat] = self.temp_bonuses.get(stat, 0) + amount
 
     def skill_rank(self, skill_id: str) -> int:
-        return self.skill_ranks.get(skill_id, 0)
+        return self.skill_ranks.get(skill_id, STARTING_SKILL_RANK)
+
+    def at_max_rank(self, skill_id: str) -> bool:
+        skill_for(skill_id)
+        return self.skill_rank(skill_id) >= MAX_SKILL_RANK
+
+    def next_rank_cost(self, skill_id: str) -> int | None:
+        """Points to buy this skill's next rank, or None if it's already maxed."""
+        if self.at_max_rank(skill_id):
+            return None
+        return SKILL_RANK_COST[self.skill_rank(skill_id) + 1]
 
     def spend_skill_point(self, skill_id: str) -> bool:
-        if self.skill_points <= 0:
+        skill_for(skill_id)  # unknown id: raise rather than burn points on a junk rank
+        cost = self.next_rank_cost(skill_id)
+        if cost is None or cost > self.skill_points:
             return False
-        self.skill_points -= 1
+        self.skill_points -= cost
         self.skill_ranks[skill_id] = self.skill_rank(skill_id) + 1
         return True
+
+    def spend_stat_point(self, name: str) -> bool:
+        if name not in CORE_STATS:
+            raise ValueError(f"not a core stat: {name!r}")
+        if self.stat_points <= 0:
+            return False
+        self.stat_points -= 1
+        setattr(self, name, getattr(self, name) + 1)
+        if name == "body":
+            # max_health is derived from body, so buying Body raises the ceiling.
+            # Carry current health up with it, or the run starts already wounded.
+            self.health += HEALTH_PER_BODY
+        return True
+
+    def reset_build(self) -> None:
+        """Undo every point spent at creation. The creation screen's only way back."""
+        for stat in CORE_STATS:
+            setattr(self, stat, STARTING_STAT)
+        self.skill_ranks = {skill.id: STARTING_SKILL_RANK for skill in SKILLS}
+        self.stat_points = STARTING_STAT_POINTS
+        self.skill_points = STARTING_SKILL_POINTS
+        self.health = self.max_health
 
     def accept_job(self, offer: "JobOffer") -> None:
         self.accepted_jobs.append(offer)

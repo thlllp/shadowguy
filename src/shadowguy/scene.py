@@ -5,6 +5,7 @@ from enum import StrEnum
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
 from shadowguy.factions import standing_shift
+from shadowguy.skills import skill_for, skill_value
 
 
 class SceneKind(StrEnum):
@@ -28,7 +29,9 @@ class Outcome:
 @dataclass
 class Choice:
     label: str
-    stat: str
+    # A skill id (skills.SKILLS_BY_ID), not a core stat: the roll is the skill's
+    # tied stat plus the rank invested in it. Scene.__post_init__ rejects unknown ids.
+    skill: str
     difficulty: int
     success: Outcome
     failure: Outcome
@@ -73,6 +76,7 @@ class Scene:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
         for stage in self.stages.values():
             for choice in stage.choices:
+                skill_for(choice.skill)  # unknown skill id: fail here, not mid-roll
                 for outcome in (choice.success, choice.failure, choice.critical_success, choice.critical_failure):
                     if outcome is None:
                         continue
@@ -117,7 +121,7 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
 def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:
     advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.JOB else 0
     roll = resolve_check(
-        stat_value=character.stat(choice.stat),
+        stat_value=skill_value(character, choice.skill),
         difficulty=choice.difficulty,
         advantage=advantage,
     )
