@@ -84,15 +84,38 @@ Switching between runner and corp is optional and meant to be difficult — neit
 - Runner mode ends when the character dies.
 - Corp mode ends when the corp is destroyed, taken over, or the character is assassinated.
 
-### Stats
+### Stats and skills (`shadowguy/character.py`, `shadowguy/skills.py`)
 
-`Body`, `Skill`, `Cool`, `Cash`, `Rep`. Health is a separate pool from Body but scales with it (`10 + body * 5`). Expect these to eventually split into finer-grained skills — don't over-fit code to exactly five flat stats.
+Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Perception`, `Intelligence`, `Cool`. Plus `Cash` and `Rep`, which are resources, not checkable stats — `STAT_NAMES` is the union, and `Character.stat()` only folds gear/chem bonuses into the six core ones. Health is a separate pool from Body but scales with it (`10 + body * 5`), off the raw attribute, so gear never moves max health.
+
+**Nothing rolls a core stat directly.** Each stat carries five **skills** (`skills.SKILLS`, 30 total); a `Choice` names a *skill*, and `skills.skill_value()` is what the dice see: the skill's tied stat (gear and chems included) plus the rank the player invested in that specific skill. `Character.skill_ranks` is `dict[skill_id, int]`, fully populated (every skill starts at `STARTING_SKILL_RANK`), not sparse. A skill id that isn't in `SKILLS_BY_ID` raises from `skills.skill_for()`, which is the single chokepoint: `Scene.__post_init__` runs it over every choice, so a typo fails when the scene is *built*, not mid-roll.
+
+`skills.py` is deliberately a **leaf module** — it imports nothing from the package at runtime, because `character.py → shops.py → corpmap.py` all end up importing it. That's why the "every `Skill.stat` is a real core stat" guard lives in `character.py` (the one module that can see both tables) rather than next to the skill table. Don't add a runtime `character` import to `skills.py`; it's a cycle.
 
 `Rep` is global standing in the street. Separate from that, `Character.standing` is a `dict[faction_id, int]` of per-corp standing — see Faction standing below. Rep is not faction-specific and the two are not interchangeable.
 
+### Character creation (`app.CharacterCreationScreen`)
+
+**Everything starts at 1** — all six stats, all thirty skill ranks — and is bought up from there at creation. The run opens on `CharacterCreationScreen` (not `MainMenu`), where the player spends `STARTING_STAT_POINTS` (6) and `STARTING_SKILL_POINTS` (20). A stat point raises a stat by 1; a skill point raises one skill's rank by 1. So an unspent runner rolls `skill_value` 2 on everything, and the build is entirely what those 26 points bought.
+
+**Archetypes (`shadowguy/archetypes.py`) are the fast path**: Enforcer, Hacker, Infiltrator, listed above the stat and skill rows. Each is a canned allocation of the same 6 + 20 points, and `Archetype.apply()` spends them through `spend_stat_point`/`spend_skill_point` rather than assigning fields — so a preset obeys the rank cap and the cost curve exactly like a hand-built runner and **cannot buy anything the player couldn't**. `_check_affordable()` runs every preset against a fresh `Character` at import and raises unless it spends both pools to exactly zero, so a preset that doesn't add up is a startup error rather than a half-applied runner. Picking one calls `reset_build()` first: a preset is the *whole* build, not a top-up, so picking twice or picking after hand-spending replaces cleanly instead of running the pools dry mid-apply.
+
+Presets only spend on the **11 skills something actually rolls** — the six in `jobs.ARCHETYPES`' `skill_sequence`s, the eight in `corpmap.LOCATION_SKILL` (legwork), and Negotiations (the gig). The other 19 skills exist but no check names them yet, so points there would be dead. Keep new presets inside the live set, and widen the set by wiring skills into content, not by having a preset buy them. (Note `archetypes.Archetype` is a *character* preset — unrelated to `jobs.JobArchetype`, which is a job template.)
+
+Both pools are **spent once and never refill** — there is no XP system, so this screen is the whole character-progression system. Consequences that are load-bearing:
+
+- **Begin is gated on an empty pool** (`action_begin`): unspent points would be silently forfeited once the run starts, so the screen refuses to leave until both pools are 0. It `switch_screen`s to `MainMenu` rather than pushing, so there's no going back to respend.
+- **`r` resets the whole build** (`Character.reset_build()`). 26 irreversible allocations with no undo is a footgun; reset is the way out of a misclick.
+- **`SkillsScreen` is read-only after creation.** It displays ranks; it does not spend. Don't re-add a spend path there without deciding where the points come from.
+- **Buying Body raises current health, not just max** (`spend_stat_point`). `max_health` is derived from Body, so without that the runner would start a 30-max run at 15 health.
+- **Skill rank is capped at `MAX_SKILL_RANK` (10) and ranks get dearer as they climb.** `SKILL_RANK_COST` prices the *next* rank: 1 point for ranks 2–4, 2 for 5–7, 3 for 8–9, 4 for rank 10 — so taking one skill from its starting rank 1 all the way to 10 costs **19 of the 20 points**. A specialist buys one great skill and almost nothing else; that's the trade. Both the cap and the price are enforced in `Character.spend_skill_point`, never in the UI, and a refused buy is **never charged**.
+- **Read `next_rank_cost()` before spending, not after.** It returns `None` for a maxed skill and otherwise the price, which is what lets `CharacterCreationScreen` tell apart "already at rank 10" from "rank 8 costs 3 points, you have 2". Since high ranks cost 3–4, *"can't afford" happens with points still in hand* — a bare `if not spend_skill_point(...)` would report "no points left" to a player staring at their remaining points.
+- The begin-gate can't deadlock on an unspendable remainder: ranks 2–4 always cost 1, and 20 points can never push enough of the 30 skills past rank 4 to exhaust the 1-point buys (a leftover point always has ~29 skills to land on).
+- Stats are uncapped and flat-priced (1 point each), but the 6-point pool is its own ceiling — 7 at most in one stat.
+
 ### Check resolution
 
-Randomized: `d20 + stat vs difficulty`. Natural 20 = critical success, natural 1 = critical failure, regardless of total.
+Randomized: `d20 + skill_value vs difficulty`, where `skill_value` is stat + gear + chems + invested rank. Natural 20 = critical success, natural 1 = critical failure, regardless of total.
 
 **Runs are not reproducible, and `app.rng` is a trap.** `ShadowguyApp.rng` is threaded through map and job *generation*, but `checks.resolve_check()` takes an optional `rng` that nobody passes, so it falls back to the **module-level `random`**. Seeding `app.rng` therefore does not control the dice. If you want seeded/replayable runs, thread `rng` down into `resolve_check` — until then, only `random.seed()` makes a check deterministic, and anything asserting on a job's outcome is flaky by default.
 
@@ -100,7 +123,7 @@ Randomized: `d20 + stat vs difficulty`. Natural 20 = critical success, natural 1
 
 All three share the same `Scene`/`Stage`/`Choice`/`Outcome` data model, distinguished by `Scene.kind`:
 
-- **Job** (`SceneKind.JOB`, formerly "mission") — multi-stage scene-based job, choices branch on stat checks, failure can end the job early. Jobs are not freely pickable: they're procedurally generated by Fixers (see below) and must be accepted before they show up as a runnable activity.
+- **Job** (`SceneKind.JOB`, formerly "mission") — multi-stage scene-based job, choices branch on skill checks, failure can end the job early. Jobs are not freely pickable: they're procedurally generated by Fixers (see below) and must be accepted before they show up as a runnable activity.
 - **Gig** — small single-stage activity for quick resources, still freely available from the main activity list (no Fixer needed).
 - **Legwork** — single-stage prep activity that banks an `advantage` bonus for a *specific* job (`Scene.prepares_for`), consumed on that job's first check only, then gone. `Character.advantage` is a `dict[job_id, int]`, not a flat global bonus — advantage from one job's legwork can't leak into an unrelated job or gig. For fixer-issued jobs, the legwork Scene itself is generated on the fly per accepted job (`jobs.generate_legwork_for_job`), since each job has a unique procedurally-generated id — there's no fixed legwork-to-job mapping to hand-author anymore. Its choices are the `Location`s of the job's target territory (see Corp map): casing the job's own site is the hardest check for the most advantage, scouting a neighbouring place in the same district is easier for less. That's why it takes the job's `Scene` and the `CorpMap` rather than a job id — legwork can't be built without knowing where the job lands.
 
@@ -159,7 +182,9 @@ Faction starts are fair **by construction, not by search**: the generator races 
 
 Territory `value` is assigned *after* ownership, which is why fairness is free. Don't invert that order to give nodes "intrinsic" value without replacing the balance guarantee.
 
-Each `Territory` also holds `LOCATIONS_PER_TERRITORY` `Location`s — the concrete places (data vaults, clinics, depots, bars, shops) a job actually hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a filler slot rolled from `FILLER_KINDS` (the bar, or one of the five shop kinds — see Shops below), while neutral and player ground get a random mix of every `LocationKind`. Location *kinds* are map data; the stat each kind is scouted with lives in `corpmap.LOCATION_STAT` (the flavor text is `jobs.LEGWORK_APPROACH_TEXT`, kept separate so there's one place, not two, that has to agree on which stat a kind uses). `DATA`/`LAB`/`DEPOT` never map to Cool there, deliberately — those are the only kinds that can take two of a district's three slots, so a second one checking Cool would make that district's legwork three Cool checks and no real choice. The filler slot is also filtered against the district's own specialty stat (`_location_kinds` excludes any `FILLER_KINDS` member whose `LOCATION_STAT` matches `owned_kind`'s) — otherwise, e.g., a Hacking district (`DATA`, skill) could roll `COMPUTER_STORE` or `PHARMACY` (both also skill) into the filler slot and hit the same three-checks-one-stat degeneracy.
+Each `Territory` also holds `LOCATIONS_PER_TERRITORY` `Location`s — the concrete places (data vaults, clinics, depots, bars, shops) a job actually hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a filler slot rolled from `FILLER_KINDS` (the bar, or one of the five shop kinds — see Shops below), while neutral and player ground get a random mix of every `LocationKind`. Location *kinds* are map data; the **skill** each kind is scouted with lives in `corpmap.LOCATION_SKILL` (the flavor text is `jobs.LEGWORK_APPROACH_TEXT`, kept separate so there's one place, not two, that has to agree on which skill a kind uses). Legwork is scouting, so the table leans on perception and agility, with intelligence on the wired places and cool where the read comes out of a conversation — that's where `Perception` earns its keep, since no job archetype rolls it.
+
+The stat behind a kind is **derived, never tabulated twice**: `corpmap.location_stat(kind)` is `skill_for(LOCATION_SKILL[kind]).stat`. That's what keeps a district's filler slot off its own specialty's stat — a district is `SPECIALTY_LOCATIONS` of one kind plus filler, so a filler sharing the specialty's stat (e.g. `COMPUTER_STORE`, also intelligence, next to a Hacking corp's `DATA`) would make that district's legwork three checks of one stat and no real choice. `_filler_pool` excludes them, and an import-time loop proves the pool can never run dry for any specialty a faction can actually have — otherwise `rng.sample` would raise mid-generation. If you retune `LOCATION_SKILL`, that guard is what catches you.
 
 Each `Territory` also carries `modifiers`: a `dict[TerritoryModifier, int]` of `Security` / `Surveillance` / `Unrest` / `Development` / `Restricted`, each 0..`MODIFIER_MAX`. These are the levers a Corp-mode player will eventually pull on ground it holds; today they are **seeded at generation and displayed only** — the `#modifiers` panel under the corp map — and nothing reads them. The enum values are ids; the display names live in `MODIFIER_LABELS` (don't go back to deriving the label from the id, or a two-word modifier renders with its underscore showing).
 
@@ -183,7 +208,7 @@ Known quirk: the spanning tree plus `EXTRA_EDGE_CHANCE` still leaves plenty of *
 
 ### Shops (`shadowguy/shops.py`)
 
-Five `LocationKind`s are retail rather than job-related: `PAWN`, `WEAPON_SHOP`, `AUTO_DEALER`, `PHARMACY`, `COMPUTER_STORE` (`corpmap.SHOP_KINDS`; `shops.CATALOG`'s keys are checked against this at import time). They're generated exactly like any other `Location` (see Corp map above): neutral ground can roll any of them, and a corp district can roll one into its filler slot (`corpmap.FILLER_KINDS`, excluding whichever shops share the district's own specialty stat) alongside its two specialty locations — so a shop can end up as a job's target site, and `corpmap.LOCATION_STAT`/`jobs.LEGWORK_APPROACH_TEXT` each have an entry for every shop kind to cover that. Real Estate was on the original request but deliberately left out: it doesn't fit the "carryable item" model below and wasn't worth special-casing yet.
+Five `LocationKind`s are retail rather than job-related: `PAWN`, `WEAPON_SHOP`, `AUTO_DEALER`, `PHARMACY`, `COMPUTER_STORE` (`corpmap.SHOP_KINDS`; `shops.CATALOG`'s keys are checked against this at import time). They're generated exactly like any other `Location` (see Corp map above): neutral ground can roll any of them, and a corp district can roll one into its filler slot (`corpmap.FILLER_KINDS`, excluding whichever shops share the district's own specialty stat) alongside its two specialty locations — so a shop can end up as a job's target site, and `corpmap.LOCATION_SKILL`/`jobs.LEGWORK_APPROACH_TEXT` each have an entry for every shop kind to cover that. Real Estate was on the original request but deliberately left out: it doesn't fit the "carryable item" model below and wasn't worth special-casing yet.
 
 Selecting one of these locations from the MainMenu **Local** tab pushes a `ShopScreen` (`app.py`) instead of being a no-op. `shops.CATALOG` maps each shop `LocationKind` to a fixed list of `Item`s (id, name, price, `stat`, `bonus`). Buying spends `Cash` and appends the item id to `Character.inventory` — a flat `list[str]`, duplicates allowed, so the same item can be bought (and owned) more than once. Items are **persistent, not consumable**: `Character.stat()` adds up every owned item's bonus for the requested stat on top of the raw attribute, so gear silently strengthens every check that uses that stat — jobs and legwork included, since both go through the same `stat()` call.
 
@@ -193,8 +218,10 @@ Selecting one of these locations from the MainMenu **Local** tab pushes a `ShopS
 
 ```
 src/shadowguy/
-  character.py   Character dataclass: stats, health, advantage bank, faction standing, accepted_jobs
-  checks.py       resolve_check(): d20 + stat vs difficulty
+  character.py   Character dataclass: core stats, health, skill ranks/points, advantage bank, faction standing, accepted_jobs
+  archetypes.py   Enforcer/Hacker/Infiltrator creation presets; apply() spends via Character's own spend methods
+  checks.py       resolve_check(): d20 + skill_value vs difficulty
+  skills.py       Skill table (5 per core stat), skill_value(), skill_for(); leaf module, imports nothing
   scene.py        Scene/Stage/Choice/Outcome data model, resolve_choice(), apply_outcome()
   content.py      hand-authored example gig/job/legwork data
   jobs.py         procedural job generation + timing (JobTiming) + per-job legwork generator
@@ -202,7 +229,7 @@ src/shadowguy/
   factions.py     rival corp Factions (id/name/specialty) that own map territory
   corpmap.py      procedural Corp-mode territory map + ASCII renderer
   shops.py        retail LocationKinds: Item catalog, buy_item/sell_item, equipped stat bonuses
-  app.py          Textual App: MainMenu + FixerListScreen/FixerOffersScreen + SceneScreen + CorpMapScreen + ShopScreen
+  app.py          Textual App: CharacterCreationScreen (start) + MainMenu + FixerListScreen/FixerOffersScreen + SceneScreen + CorpMapScreen + ShopScreen + InventoryScreen/SkillsScreen
 ```
 
 ### Verifying changes
