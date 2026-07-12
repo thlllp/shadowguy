@@ -93,6 +93,35 @@ class Scene:
                             f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
                         )
 
+    @property
+    def max_cash_loss(self) -> int:
+        """The most cash any path through this scene can charge — the stake.
+
+        Derived from the outcomes rather than written beside them, so a scene can't
+        claim a stake it doesn't risk. This is what the activity list gates on: you
+        may not sit down at a table you cannot cover. That gate is the only reason
+        apply_outcome can add cash_delta straight onto Character.cash — without it, a
+        broke runner would ride every losing outcome for free (cash floored at 0) and
+        the card table would be a money pump. If a scene ever charges cash outside the
+        gig list, gate it there too.
+        """
+        worst = min(
+            (
+                outcome.cash_delta
+                for stage in self.stages.values()
+                for choice in stage.choices
+                for outcome in (
+                    choice.success,
+                    choice.failure,
+                    choice.critical_success,
+                    choice.critical_failure,
+                )
+                if outcome is not None
+            ),
+            default=0,
+        )
+        return max(0, -worst)
+
 
 def validate_scene_registry(scenes: Iterable[Scene]) -> None:
     job_ids = {scene.id for scene in scenes if scene.kind == SceneKind.JOB}
@@ -105,8 +134,13 @@ def validate_scene_registry(scenes: Iterable[Scene]) -> None:
 
 def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
     character.adjust_health(outcome.health_delta)
+    # Not floored, unlike health: the activity list refuses a scene the runner can't
+    # cover (Scene.max_cash_loss), so a losing outcome always has the cash to take.
+    # Flooring here instead would hand a broke runner every loss for free.
     character.cash += outcome.cash_delta
-    character.rep += outcome.rep_delta
+    # Floored like health. A botched gig can burn rep you earned, but 0 is being a
+    # nobody and there is nothing below that — the street can't owe you a bad name.
+    character.rep = max(0, character.rep + outcome.rep_delta)
     if outcome.advantage_delta:
         banks_advantage_for = scene.prepares_for if scene.kind == SceneKind.LEGWORK else None
         if not banks_advantage_for:
