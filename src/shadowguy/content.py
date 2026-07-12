@@ -12,8 +12,8 @@ LEGWORK_CASE_THE_BLOCK = Scene(
             prompt="You spend a night watching the corp tower, clocking patrol rotations.",
             choices=[
                 Choice(
-                    label="Track the guard rotations (Cool)",
-                    stat="cool",
+                    label="Track the guard rotations (Pattern Seeking)",
+                    skill="pattern_seeking",
                     difficulty=11,
                     success=Outcome(
                         text="You clock the pattern cold. You'll know exactly when to move.",
@@ -41,8 +41,8 @@ GIG_FENCE_SOME_CHROME = Scene(
             prompt="A fence on Autopia Row eyes the cyberware you're carrying.",
             choices=[
                 Choice(
-                    label="Haggle for a fair price (Cool)",
-                    stat="cool",
+                    label="Haggle for a fair price (Negotiations)",
+                    skill="negotiations",
                     difficulty=10,
                     success=Outcome(text="You talk him up to a decent price.", cash_delta=150),
                     failure=Outcome(text="He lowballs you and won't budge.", cash_delta=50),
@@ -71,8 +71,8 @@ JOB_DATA_HEIST = Scene(
             prompt="Arasaka's tower looms above. You need a way past the perimeter.",
             choices=[
                 Choice(
-                    label="Slip past the guard drones (Cool)",
-                    stat="cool",
+                    label="Slip past the guard drones (Stealth)",
+                    skill="stealth",
                     difficulty=12,
                     success=Outcome(text="You thread the drone patrol without a flicker.", next_stage="vault"),
                     failure=Outcome(
@@ -85,8 +85,8 @@ JOB_DATA_HEIST = Scene(
                     ),
                 ),
                 Choice(
-                    label="Hack the service door (Intelligence)",
-                    stat="intelligence",
+                    label="Hack the service door (Hack)",
+                    skill="hack",
                     difficulty=13,
                     success=Outcome(text="The lock clicks open silently.", next_stage="vault"),
                     failure=Outcome(
@@ -105,8 +105,8 @@ JOB_DATA_HEIST = Scene(
             prompt="You're in. The data vault's encryption is live and watching.",
             choices=[
                 Choice(
-                    label="Crack the encryption (Intelligence)",
-                    stat="intelligence",
+                    label="Crack the encryption (Hack)",
+                    skill="hack",
                     difficulty=14,
                     success=Outcome(text="The vault peels open. Data's yours.", next_stage="extract"),
                     failure=Outcome(
@@ -132,8 +132,8 @@ JOB_DATA_HEIST = Scene(
             prompt="Lockdown is minutes out. You need to get clear of the tower.",
             choices=[
                 Choice(
-                    label="Fight through security (Body)",
-                    stat="body",
+                    label="Fight through security (Toughness)",
+                    skill="toughness",
                     difficulty=13,
                     success=Outcome(text="You put down the response team and clear the exit.", cash_delta=500, rep_delta=2),
                     failure=Outcome(text="You get out, bloodied and empty-handed.", health_delta=-5),
@@ -142,8 +142,8 @@ JOB_DATA_HEIST = Scene(
                     ),
                 ),
                 Choice(
-                    label="Bluff your way past the checkpoint (Cool)",
-                    stat="cool",
+                    label="Bluff your way past the checkpoint (Deception)",
+                    skill="deception",
                     difficulty=15,
                     success=Outcome(text="They wave you through without a second look.", cash_delta=500, rep_delta=1),
                     failure=Outcome(text="They see through it. You have to run for it.", health_delta=-5),

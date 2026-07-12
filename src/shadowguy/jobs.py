@@ -4,9 +4,10 @@ import random
 import uuid
 from dataclasses import dataclass
 
-from shadowguy.corpmap import LOCATION_STAT, CorpMap, LocationKind
+from shadowguy.corpmap import LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
+from shadowguy.skills import skill_for
 
 TARGETS = [
     "a corp exec's private files",
@@ -15,10 +16,14 @@ TARGETS = [
     "a black-market weapons cache",
 ]
 
-STAT_FLAVOR = {
-    "intelligence": "hack the system",
-    "cool": "talk or bluff your way through",
-    "body": "force your way through",
+# How a job's choice reads, per skill it can roll.
+SKILL_FLAVOR = {
+    "stealth": "slip in unseen",
+    "hack": "hack the system",
+    "deception": "talk or bluff your way through",
+    "grapple": "haul the target out by force",
+    "tinkering": "rig the hardware to fail",
+    "toughness": "force your way through and take the hits",
 }
 
 DIFFICULTY_BASE = (10, 13, 16)
@@ -32,14 +37,26 @@ JOB_STANDING_HIT = -2
 class JobArchetype:
     name: str
     verb: str
-    stat_sequence: tuple[str, ...]
+    skill_sequence: tuple[str, ...]  # skill ids (skills.SKILLS_BY_ID), one per stage
 
 
+# Between them these cover five of the six core stats — agility, intelligence,
+# cool, strength, body. Perception is the scout's stat, and it's what legwork
+# rolls (corpmap.LOCATION_SKILL), so it earns its keep on the way in, not on the job.
 ARCHETYPES = [
-    JobArchetype(name="Heist", verb="break into", stat_sequence=("intelligence", "cool")),
-    JobArchetype(name="Extraction", verb="extract a target from", stat_sequence=("cool", "body")),
-    JobArchetype(name="Sabotage", verb="sabotage", stat_sequence=("intelligence", "body")),
+    JobArchetype(name="Heist", verb="break into", skill_sequence=("stealth", "hack")),
+    JobArchetype(
+        name="Extraction", verb="extract a target from", skill_sequence=("deception", "grapple")
+    ),
+    JobArchetype(name="Sabotage", verb="sabotage", skill_sequence=("tinkering", "toughness")),
 ]
+
+# Every skill an archetype can roll needs a real id and a line of flavor.
+for _archetype in ARCHETYPES:
+    for _skill_id in _archetype.skill_sequence:
+        skill_for(_skill_id)
+        if _skill_id not in SKILL_FLAVOR:
+            raise ValueError(f"SKILL_FLAVOR has no entry for {_skill_id!r}")
 
 
 @dataclass
@@ -100,10 +117,10 @@ def generate_job(
     reward_base = REWARD_BASE[tier]
 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
-    stage_ids = [f"stage_{i}" for i in range(len(archetype.stat_sequence))]
+    stage_ids = [f"stage_{i}" for i in range(len(archetype.skill_sequence))]
     stages: dict[str, Stage] = {}
 
-    for i, stat in enumerate(archetype.stat_sequence):
+    for i, skill_id in enumerate(archetype.skill_sequence):
         is_last = i == len(stage_ids) - 1
         next_stage = None if is_last else stage_ids[i + 1]
         difficulty = difficulty_base + i + rng.randint(-1, 2)
@@ -118,8 +135,8 @@ def generate_job(
             prompt=prompt,
             choices=[
                 Choice(
-                    label=f"{STAT_FLAVOR[stat].capitalize()} ({stat.capitalize()})",
-                    stat=stat,
+                    label=f"{SKILL_FLAVOR[skill_id].capitalize()} ({skill_for(skill_id).name})",
+                    skill=skill_id,
                     difficulty=difficulty,
                     success=Outcome(
                         text="It goes clean.",
@@ -163,10 +180,10 @@ def generate_job(
     return scene, _random_timing(day, rng)
 
 
-# How each kind of place is scouted, in flavor text. The stat itself lives in
-# corpmap.LOCATION_STAT — that's also what corpmap._location_kinds reads to
+# How each kind of place is scouted, in flavor text. The skill itself lives in
+# corpmap.LOCATION_SKILL — that's also what corpmap._location_kinds reads to
 # keep a district's filler slot off its own specialty's stat, so there is one
-# place that says "DATA is an intelligence check" rather than two that must agree.
+# place that says "DATA is a Hack check" rather than two that must agree.
 LEGWORK_APPROACH_TEXT = {
     LocationKind.DATA: "Sift the traffic in and out of {name}",
     LocationKind.LAB: "Pull the intake records at {name}",
@@ -194,14 +211,14 @@ def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
 
     choices = []
     for location in territory.locations:
-        stat = LOCATION_STAT[location.kind]
+        skill = skill_for(LOCATION_SKILL[location.kind])
         approach = LEGWORK_APPROACH_TEXT[location.kind]
         is_site = location.id == job.target_location_id
         label = f"Case {location.name} itself" if is_site else approach.format(name=location.name)
         choices.append(
             Choice(
-                label=f"{label} ({stat.capitalize()})",
-                stat=stat,
+                label=f"{label} ({skill.name})",
+                skill=skill.id,
                 difficulty=SITE_DIFFICULTY if is_site else NEARBY_DIFFICULTY,
                 success=Outcome(
                     text=(

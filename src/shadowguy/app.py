@@ -7,7 +7,8 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import Character
+from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
+from shadowguy.character import CORE_STATS, MAX_SKILL_RANK, Character
 from shadowguy.content import GIG_FENCE_SOME_CHROME
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
@@ -38,14 +39,17 @@ from shadowguy.shops import (
     toggle_equip,
     use_consumable,
 )
-from shadowguy.skills import SKILLS, skill_value
+from shadowguy.skills import SKILLS, skill_for, skill_value
 
 
-async def _replace_items(list_view: ListView, items: list[ListItem]) -> None:
+async def _replace_items(list_view: ListView, items: list[ListItem], index: int = 0) -> None:
     await list_view.clear()
     for item in items:
         list_view.append(item)
-    list_view.index = 0
+    # Callers that repopulate under the player's cursor (rather than switching to a
+    # fresh list) pass the row to keep highlighted — otherwise the cursor snaps to
+    # the top and the next `enter` acts on a row the player never selected.
+    list_view.index = min(index, len(items) - 1) if items else 0
 
 
 class CharacterSheet(Static):
@@ -65,8 +69,12 @@ class CharacterSheet(Static):
         return (
             f"{c.name}\n"
             f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}   Health: {c.health}/{c.max_health}\n"
-            f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}  "
-            f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  Cool: {c.stat('cool')}\n"
+            # Two lines, not one: six stats overflow the 60 columns this widget gets
+            # beside MainMenu's sidebar, and a wrapped line silently eats a row of
+            # the activity list under it.
+            f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
+            f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
+            f"Cool: {c.stat('cool')}\n"
             f"Cash: {c.cash}eb   Rep: {c.rep}\n"
             f"Standing — {standings}\n"
             f"Gear: {gear}"
@@ -459,13 +467,132 @@ class InventoryScreen(Screen):
         await self._refresh()
 
 
+def _skill_label(character: Character, skill, show_cost: bool = False) -> str:
+    note = ""
+    if show_cost:
+        cost = character.next_rank_cost(skill.id)
+        note = " (MAX)" if cost is None else f" (next: {cost} pt{'s' if cost > 1 else ''})"
+    return (
+        f"{skill.name} ({skill.stat.capitalize()}) — "
+        f"rank {character.skill_rank(skill.id)}/{MAX_SKILL_RANK}{note}, "
+        f"value {skill_value(character, skill.id)} — {skill.description}"
+    )
+
+
+class CharacterCreationScreen(Screen):
+    """Build the runner. Both point pools are spent here and never refill."""
+
+    BINDINGS = [("q", "quit", "Quit"), ("r", "reset", "Reset build"), ("b", "begin", "Begin run")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(id="pools")
+        yield ListView(id="build_list")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    def _unspent(self) -> int:
+        character = self.app.character
+        return character.stat_points + character.skill_points
+
+    async def action_reset(self) -> None:
+        self.app.character.reset_build()
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+    def action_begin(self) -> None:
+        if self._unspent():
+            self.notify("Spend every point before the run starts.", severity="warning")
+            return
+        # switch, not push: the build is locked once the run begins, so there is
+        # no screen to come back to.
+        self.app.switch_screen(MainMenu())
+
+    async def _refresh(self, index: int = 0) -> None:
+        character = self.app.character
+        self.query_one("#pools", Static).update(
+            f"Stat points: {character.stat_points}   Skill points: {character.skill_points}"
+            "   —   enter spends, r resets, b begins"
+        )
+
+        items = [
+            ListItem(
+                Static(f"Archetype — {archetype.name}: {archetype.description}"),
+                id=f"arch_{archetype.id}",
+            )
+            for archetype in ARCHETYPES
+        ]
+        items += [
+            ListItem(Static(f"Stat — {stat.capitalize()}: {character.stat(stat)}"), id=f"stat_{stat}")
+            for stat in CORE_STATS
+        ]
+        items += [
+            ListItem(
+                Static(f"Skill — {_skill_label(character, skill, show_cost=True)}"),
+                id=f"skill_{skill.id}",
+            )
+            for skill in SKILLS
+        ]
+        begin = "Begin run" if not self._unspent() else f"Begin run — {self._unspent()} points unspent"
+        items.append(ListItem(Static(begin), id="begin"))
+        await _replace_items(self.query_one("#build_list", ListView), items, index)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id == "begin":
+            self.action_begin()
+            return
+
+        character = self.app.character
+
+        if item_id.startswith("arch_"):
+            archetype = ARCHETYPES_BY_ID[item_id.removeprefix("arch_")]
+            # Reset first: a preset is the whole build, not a top-up on whatever the
+            # player already spent — otherwise picking one twice, or after hand-spending,
+            # would run the pools dry part-way through and leave a half-applied runner.
+            character.reset_build()
+            archetype.apply(character)
+            self.notify(f"{archetype.name} build applied. Press b to begin, r to start over.")
+            self.query_one(CharacterSheet).refresh()
+            await self._refresh(event.list_view.index or 0)
+            return
+        # Keep the cursor on the row the player is spending into: the list is rebuilt
+        # after every point, and a snap back to the top would sink the next `enter`
+        # into Body instead of whatever they were actually looking at.
+        index = event.list_view.index or 0
+        if item_id.startswith("stat_"):
+            if not character.spend_stat_point(item_id.removeprefix("stat_")):
+                self.notify("No stat points left.", severity="warning")
+        else:
+            skill_id = item_id.removeprefix("skill_")
+            # Three different refusals. Read the cost before spending so a maxed skill
+            # and a merely unaffordable one don't both report "no points left" —
+            # ranks 8+ cost 3-4 points, so "can't afford" happens with points in hand.
+            name = skill_for(skill_id).name
+            cost = character.next_rank_cost(skill_id)
+            if cost is None:
+                self.notify(f"{name} is already at rank {MAX_SKILL_RANK}.", severity="warning")
+            elif not character.spend_skill_point(skill_id):
+                self.notify(
+                    f"{name} rank {character.skill_rank(skill_id) + 1} costs {cost} points; "
+                    f"you have {character.skill_points}.",
+                    severity="warning",
+                )
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh(index)
+
+
 class SkillsScreen(Screen):
+    """Read-only once the run starts: skill ranks are bought at creation, not in play."""
+
     BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Static(id="skill_points")
         yield ListView(id="skill_list")
         yield Footer()
 
@@ -480,25 +607,11 @@ class SkillsScreen(Screen):
 
     async def _refresh(self) -> None:
         character = self.app.character
-        self.query_one("#skill_points", Static).update(f"Skill points: {character.skill_points}")
-
-        items = []
-        for skill in SKILLS:
-            rank = character.skill_rank(skill.id)
-            label = (
-                f"{skill.name} ({skill.stat.capitalize()}) — rank {rank}, "
-                f"value {skill_value(character, skill.id)} — {skill.description}"
-            )
-            items.append(ListItem(Static(label), id=f"spend_{skill.id}"))
+        items = [
+            ListItem(Static(_skill_label(character, skill)), id=f"skill_{skill.id}")
+            for skill in SKILLS
+        ]
         await _replace_items(self.query_one("#skill_list", ListView), items)
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        character = self.app.character
-        skill_id = event.item.id.removeprefix("spend_")
-        if not character.spend_skill_point(skill_id):
-            self.notify("No skill points left.", severity="warning")
-        self.query_one(CharacterSheet).refresh()
-        await self._refresh()
 
 
 class SceneScreen(Screen):
@@ -726,7 +839,7 @@ class ShadowguyApp(App):
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
 
     def on_mount(self) -> None:
-        self.push_screen(MainMenu())
+        self.push_screen(CharacterCreationScreen())
 
 
 def main() -> None:

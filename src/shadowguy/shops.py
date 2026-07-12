@@ -7,7 +7,7 @@ stamina, or a temporary stat boost that clears on Character.rest()).
 
 These locations can land on neutral ground or in a corp district's
 non-specialty slot (see corpmap.FILLER_KINDS), so a job can target one —
-corpmap.LOCATION_STAT and jobs.LEGWORK_APPROACH_TEXT each have an entry for
+corpmap.LOCATION_SKILL and jobs.LEGWORK_APPROACH_TEXT each have an entry for
 every SHOP_KINDS member to cover that.
 """
 
