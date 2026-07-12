@@ -9,7 +9,14 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK, Character
-from shadowguy.content import GIG_FENCE_SOME_CHROME
+from shadowguy.content import (
+    GIG_CARD_TABLE,
+    GIG_CHEM_TRIAL,
+    GIG_FENCE_SOME_CHROME,
+    GIG_RING_FIGHT,
+    GIG_STREET_WHISPERS,
+    GIG_WORK_A_MARK,
+)
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
@@ -81,7 +88,14 @@ class CharacterSheet(Static):
         )
 
 
-STATIC_ACTIVITIES = [GIG_FENCE_SOME_CHROME]
+STATIC_ACTIVITIES = [
+    GIG_FENCE_SOME_CHROME,
+    GIG_CHEM_TRIAL,
+    GIG_RING_FIGHT,
+    GIG_CARD_TABLE,
+    GIG_STREET_WHISPERS,
+    GIG_WORK_A_MARK,
+]
 validate_scene_registry(STATIC_ACTIVITIES)
 
 
@@ -171,6 +185,8 @@ class MainMenu(Screen):
                 label = f"Gig — {scene.title} ({scene.stamina_cost} stamina)"
                 if not character.can_afford(scene.stamina_cost):
                     label += " — too tired"
+                elif character.cash < scene.max_cash_loss:
+                    label += f" — can't cover the stake ({scene.max_cash_loss} cash)"
                 items.append(ListItem(Static(label), id=f"static_{scene.id}"))
 
         if self.selected_category == "job":
@@ -233,6 +249,10 @@ class MainMenu(Screen):
             scene_id = item_id.removeprefix("static_")
             scene = next(scene for scene in STATIC_ACTIVITIES if scene.id == scene_id)
             if not character.can_afford(scene.stamina_cost):
+                return
+            # apply_outcome subtracts a losing bet straight off Character.cash, so a
+            # scene the runner can't cover is refused here, not floored on the way out.
+            if character.cash < scene.max_cash_loss:
                 return
             character.spend_stamina(scene.stamina_cost)
             self.app.push_screen(SceneScreen(scene))

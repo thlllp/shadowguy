@@ -8,10 +8,11 @@ curve exactly like a hand-built runner — it cannot buy something the player
 couldn't. `_check_affordable` proves at import that each one spends its pools to
 exactly zero, so an unaffordable preset is a startup error, not a broken run.
 
-Every skill here is one something actually rolls: the six in jobs.ARCHETYPES'
-skill_sequences, the eight in corpmap.LOCATION_SKILL (legwork), and Negotiations
-(the gig). Points in any of the other skills would be dead — nothing checks them
-yet — so presets stay out of them.
+Every one of the 30 skills is now rolled by something (jobs.ARCHETYPES' approaches,
+corpmap.LOCATION_SKILL for legwork, and the gigs in content.py), so a preset can
+spend anywhere without the points being dead. These three still buy narrow: a preset
+is meant to read as an archetype, not as a hedge. The breadth they give up is the
+reason each one has job stages it has to bleed through — see jobs._ARCHETYPE_ROWS.
 
 (Not to be confused with jobs.JobArchetype, which is a template for a *job*.)
 """
