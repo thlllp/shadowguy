@@ -29,12 +29,23 @@ class Fixer:
     id: str
     name: str
     specialty: str
+    # A Territory id (corpmap.Territory.id) — where this fixer can be found in
+    # person. Set once at run start (create_fixers), not moved around after: a
+    # fixer is a fixture of their turf, not a roaming NPC.
+    location_id: str = ""
     max_offers: int = 2
     offers: list[JobOffer] = field(default_factory=list)
 
 
-def create_fixers() -> list[Fixer]:
-    return [Fixer(id=fixer_id, name=name, specialty=specialty) for fixer_id, name, specialty in FIXER_ROSTER]
+def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[Fixer]:
+    """Seat every fixer in a distinct district on this run's map, so 'a fixer is in
+    the area' (app.MainMenu's Local tab) means something different every run."""
+    rng = rng or random.Random()
+    territory_ids = rng.sample(list(corp_map.territories), len(FIXER_ROSTER))
+    return [
+        Fixer(id=fixer_id, name=name, specialty=specialty, location_id=territory_id)
+        for (fixer_id, name, specialty), territory_id in zip(FIXER_ROSTER, territory_ids, strict=True)
+    ]
 
 
 def expire_offers(fixers: list[Fixer], day: int) -> None:
@@ -48,7 +59,7 @@ def refresh_offers(
     rng = rng or random.Random()
     for fixer in fixers:
         while len(fixer.offers) < fixer.max_offers:
-            scene, timing = generate_job(day, corp_map, rng)
+            scene, timing = generate_job(day, corp_map, fixer.id, rng)
             fixer.offers.append(
                 JobOffer(
                     id=f"offer_{uuid.uuid4().hex[:8]}",

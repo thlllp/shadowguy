@@ -32,6 +32,7 @@ from shadowguy.content import (
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
+    OWNER_COLORS,
     SHOP_KINDS,
     Location,
     LocationKind,
@@ -44,6 +45,7 @@ from shadowguy.corpmap import (
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
+from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.scene import (
     Encounter,
     Scene,
@@ -122,9 +124,9 @@ class MainMenu(Screen):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("m", "corp_map", "Corp Map (preview)"),
-        ("f", "fixers", "Fixers"),
         ("i", "inventory", "Gear"),
         ("k", "skills", "Skills"),
+        ("c", "contacts", "Contacts"),
     ]
 
     CSS = """
@@ -146,7 +148,7 @@ class MainMenu(Screen):
         ("local", "Local"),
         ("gear", "Gear"),
         ("skills", "Skills"),
-        ("fixer", "Fixers"),
+        ("contacts", "Contacts"),
         ("map", "Corp Map"),
     ]
 
@@ -165,14 +167,14 @@ class MainMenu(Screen):
     def action_corp_map(self) -> None:
         self.app.push_screen(CorpMapScreen())
 
-    def action_fixers(self) -> None:
-        self.app.push_screen(FixerListScreen())
-
     def action_inventory(self) -> None:
         self.app.push_screen(InventoryScreen())
 
     def action_skills(self) -> None:
         self.app.push_screen(SkillsScreen())
+
+    def action_contacts(self) -> None:
+        self.app.push_screen(ContactsScreen())
 
     async def on_mount(self) -> None:
         await self._refresh_categories()
@@ -245,6 +247,15 @@ class MainMenu(Screen):
                         id=f"local_{location.id}",
                     )
                 )
+            for fixer in self.app.fixers:
+                if fixer.location_id == character.location_id:
+                    character.discover_fixer(fixer.id)
+                    items.append(
+                        ListItem(
+                            Static(f"  {fixer.name} — {fixer.specialty} ({len(fixer.offers)} jobs available)"),
+                            id=f"local_fixer_{fixer.id}",
+                        )
+                    )
 
         items.append(ListItem(Static("End the day (rest)"), id="end_day"))
         await _replace_items(self.query_one("#activities", ListView), items)
@@ -300,6 +311,12 @@ class MainMenu(Screen):
             self.app.push_screen(SceneScreen(job.scene))
             return
 
+        if item_id.startswith("local_fixer_"):
+            fixer_id = item_id.removeprefix("local_fixer_")
+            fixer = next(fixer for fixer in self.app.fixers if fixer.id == fixer_id)
+            self.app.push_screen(FixerOffersScreen(fixer))
+            return
+
         if item_id.startswith("local_") and item_id != "local_district":
             location_id = item_id.removeprefix("local_")
             here = self.app.corp_map.territories[character.location_id]
@@ -309,8 +326,8 @@ class MainMenu(Screen):
             return
 
     async def _select_category(self, key: str) -> None:
-        if key == "fixer":
-            self.app.push_screen(FixerListScreen())
+        if key == "contacts":
+            self.app.push_screen(ContactsScreen())
             return
         if key == "map":
             self.app.push_screen(CorpMapScreen())
@@ -323,38 +340,6 @@ class MainMenu(Screen):
             return
         self.selected_category = key
         await self._refresh()
-
-
-class FixerListScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield ListView(id="fixers")
-        yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
-
-    async def _refresh(self) -> None:
-        items = [
-            ListItem(
-                Static(f"{fixer.name} — {fixer.specialty} ({len(fixer.offers)} jobs available)"),
-                id=fixer.id,
-            )
-            for fixer in self.app.fixers
-        ]
-        await _replace_items(self.query_one("#fixers", ListView), items)
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        fixer = next(fixer for fixer in self.app.fixers if fixer.id == event.item.id)
-        self.app.push_screen(FixerOffersScreen(fixer))
 
 
 class FixerOffersScreen(Screen):
@@ -623,6 +608,108 @@ class CharacterCreationScreen(Screen):
                 )
         self.query_one(CharacterSheet).refresh()
         await self._refresh(index)
+
+
+class ContactsScreen(Screen):
+    """Read-only: who you know and how they feel about you, split into the three
+    kinds of NPC the game tracks — Fixers (trust), Corps (standing), and Runners
+    (identity only; see runners.py for why there's no relationship value there yet).
+    Three panels rather than one mixed list, so each kind reads as its own thing.
+    """
+
+    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+
+    CSS = """
+    #fixers_panel, #corps_panel, #runners_panel {
+        height: auto;
+        border-top: solid $accent;
+        padding: 0 1;
+    }
+
+    #fixers_list, #corps_list, #runners_list {
+        height: auto;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Vertical(
+            Static("Fixers"),
+            ListView(id="fixers_list"),
+            id="fixers_panel",
+        )
+        yield Vertical(
+            Static("Corps"),
+            ListView(id="corps_list"),
+            id="corps_panel",
+        )
+        yield Vertical(
+            Static("Runners"),
+            ListView(id="runners_list"),
+            id="runners_panel",
+        )
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+
+        # Only fixers you've actually worked for — a fixer you've never done a job
+        # for isn't a contact yet, just someone you could look up in person (see the
+        # Local tab, which is location-gated instead of trust-gated).
+        established = [fixer for fixer in self.app.fixers if character.trust_with(fixer.id) > 0]
+        if established:
+            fixer_items = [
+                ListItem(
+                    Static(
+                        f"{fixer.name} — {fixer.specialty} "
+                        f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs available)"
+                    ),
+                    id=f"fixer_{fixer.id}",
+                )
+                for fixer in established
+            ]
+        else:
+            fixer_items = [ListItem(Static("No established contacts yet."), id="no_fixers")]
+        await _replace_items(self.query_one("#fixers_list", ListView), fixer_items)
+
+        corp_items = [
+            ListItem(
+                Static(
+                    f"{faction.name} — {faction.specialty.value} "
+                    f"(standing {character.standing_with(faction.id):+d})"
+                ),
+                id=f"faction_{faction.id}",
+            )
+            for faction in FACTIONS
+        ]
+        await _replace_items(self.query_one("#corps_list", ListView), corp_items)
+
+        runner_items = [
+            ListItem(
+                Static(f"{runner.name} — {runner.archetype}: {runner.description}"),
+                id=f"runner_{runner.id}",
+            )
+            for runner in RIVAL_RUNNERS
+        ]
+        await _replace_items(self.query_one("#runners_list", ListView), runner_items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if not event.item.id.startswith("fixer_"):
+            return
+        fixer_id = event.item.id.removeprefix("fixer_")
+        fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
+        if fixer is not None:
+            self.app.push_screen(FixerOffersScreen(fixer))
 
 
 class SkillsScreen(Screen):
@@ -959,6 +1046,13 @@ class CorpMapScreen(Screen):
     def _refresh(self) -> None:
         corp_map = self.app.corp_map
         character = self.app.character
+        # Standing in a fixer's district is what discovers them — a passive check
+        # here rather than a one-off in action_travel, so it also catches the
+        # starting location and any other way location_id could change later.
+        for fixer in self.app.fixers:
+            if fixer.location_id == character.location_id:
+                character.discover_fixer(fixer.id)
+
         # Hover only restyles the finished text, so re-render the board itself
         # only when the cursor or the runner actually moved.
         key = (self.selected_id, character.location_id)
@@ -967,6 +1061,9 @@ class CorpMapScreen(Screen):
             self._render_key = key
         text = Text(self.rendered.text)
         for span in self.rendered.spans:
+            color = OWNER_COLORS.get(corp_map.territories[span.territory_id].owner)
+            if color:
+                text.stylize(color, span.offset, span.offset + span.end - span.start)
             if span.territory_id == self.hovered_id:
                 text.stylize("reverse", span.offset, span.offset + span.end - span.start)
         self.query_one("#map", Static).update(text)
@@ -975,8 +1072,17 @@ class CorpMapScreen(Screen):
         here = corp_map.territories[character.location_id]
         borders = ", ".join(corp_map.territories[c].name for c in t.connections)
         locations = ", ".join(f"{loc.name} ({loc.kind})" for loc in t.locations)
+        fixer_here = next(
+            (
+                fixer
+                for fixer in self.app.fixers
+                if fixer.location_id == t.id and fixer.id in character.discovered_fixers
+            ),
+            None,
+        )
+        fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
         self.query_one("#territory_info", Static).update(
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}\n"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{fixer_suffix}\n"
             f"Borders: {borders}\n"
             f"Locations: {locations}\n"
             f"{self._travel_hint(t, here, character)}"
@@ -1010,7 +1116,7 @@ class ShadowguyApp(App):
         self.rng = random.Random()
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
-        self.fixers = create_fixers()
+        self.fixers = create_fixers(self.corp_map, self.rng)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
 
     def on_mount(self) -> None:
