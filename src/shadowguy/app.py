@@ -3,6 +3,7 @@ import random
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
@@ -417,7 +418,8 @@ class ShopScreen(Screen):
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
-            label = f"Buy {item.name} — {item.price}eb ({bonus_text(item)})"
+            bonus = bonus_text(item)
+            label = f"Buy {item.name} — {item.price}eb" + (f" ({bonus})" if bonus else "")
             if character.cash < item.price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
@@ -478,8 +480,8 @@ class InventoryScreen(Screen):
         for index, entry in enumerate(self.app.character.inventory):
             item = ITEMS_BY_ID[entry.item_id]
             state = "Equipped" if entry.equipped else "Stowed"
-            slot_note = f", {item.slot.value}" if item.slot else ""
-            label = f"{state} — {item.name} ({bonus_text(item)}{slot_note})"
+            parts = [p for p in (bonus_text(item), item.slot.value if item.slot else None) if p]
+            label = f"{state} — {item.name}" + (f" ({', '.join(parts)})" if parts else "")
             items.append(ListItem(Static(label), id=f"toggle_{index}"))
 
         for index, item_id in enumerate(self.app.character.consumables):
@@ -703,7 +705,13 @@ class SceneScreen(Screen):
         result, outcome = resolve_choice(character, self.scene, choice)
         self.query_one(CharacterSheet).refresh()
 
-        self.query_one("#prompt", Static).update(f"{result.name}: {outcome.text}")
+        prompt = self.query_one("#prompt", Static)
+        prompt.update(f"{result.name}: {outcome.text}")
+
+        if result in (CheckResult.CRITICAL_SUCCESS, CheckResult.CRITICAL_FAILURE):
+            flash = "green" if result is CheckResult.CRITICAL_SUCCESS else "red"
+            prompt.styles.background = Color.parse(flash)
+            prompt.styles.animate("background", value=Color(0, 0, 0, 0), duration=0.6)
 
         if not character.is_alive:
             self.app.exit(message=f"{character.name} has died. Game over.")
