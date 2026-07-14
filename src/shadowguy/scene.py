@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.combat import Enemy
 from shadowguy.factions import standing_shift
 from shadowguy.skills import skill_for, skill_value
 
@@ -48,11 +49,37 @@ class Choice:
         return self.failure
 
 
+@dataclass(frozen=True)
+class Encounter:
+    """A fight, as the scene graph sees it.
+
+    It lives here rather than in combat.py on purpose: it holds Outcomes, and
+    combat.py must not import scene (scene imports combat for Enemy). So combat
+    owns *how a fight resolves* and knows nothing about jobs; Encounter owns *what
+    winning or running is worth*, and reuses the ordinary Outcome to say so — which
+    is why fighting through the last stage of a job can pay the job's cash, rep and
+    standing without a second reward path.
+
+    `escape` is the Outcome for walking out (a made Dodge check, or a smoke
+    grenade). Losing has no Outcome: you are at 0 health, and that is already death
+    everywhere else in the game.
+    """
+
+    prompt: str
+    enemies: tuple[Enemy, ...]
+    victory: Outcome
+    escape: Outcome
+
+
 @dataclass
 class Stage:
     id: str
     prompt: str
     choices: list[Choice]
+    # A stage is either a set of choices or a fight, never both — a combat stage's
+    # "choices" are combat.available_actions, which come from the runner's own gear
+    # and skills rather than from the scene.
+    combat: Encounter | None = None
 
 
 @dataclass
@@ -74,24 +101,53 @@ class Scene:
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
+        if self.stages[self.start_stage].combat is not None:
+            # A fight is only ever routed to by a resolved check (that's what decides
+            # the drop), so a scene may not *open* on one — the screen would have no
+            # check to read and no choices to render.
+            raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight")
         for stage in self.stages.values():
+            if stage.combat is not None:
+                if stage.choices:
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} is a fight, so it cannot also offer choices"
+                    )
+                if not stage.combat.enemies:
+                    raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
             for choice in stage.choices:
                 skill_for(choice.skill)  # unknown skill id: fail here, not mid-roll
-                for outcome in (choice.success, choice.failure, choice.critical_success, choice.critical_failure):
-                    if outcome is None:
-                        continue
-                    if outcome.next_stage is not None and outcome.next_stage not in self.stages:
-                        raise ValueError(
-                            f"{self.id}: stage {stage.id!r} references unknown next_stage {outcome.next_stage!r}"
-                        )
-                    if outcome.advantage_delta and (self.kind != SceneKind.LEGWORK or self.prepares_for is None):
-                        raise ValueError(
-                            f"{self.id}: stage {stage.id!r} banks advantage but the scene is not legwork prep"
-                        )
-                    if outcome.standing_delta and self.target_faction_id is None:
-                        raise ValueError(
-                            f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
-                        )
+            for outcome in self._stage_outcomes(stage):
+                if outcome.next_stage is not None and outcome.next_stage not in self.stages:
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} references unknown next_stage {outcome.next_stage!r}"
+                    )
+                if outcome.advantage_delta and (self.kind != SceneKind.LEGWORK or self.prepares_for is None):
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} banks advantage but the scene is not legwork prep"
+                    )
+                if outcome.standing_delta and self.target_faction_id is None:
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
+                    )
+
+    @staticmethod
+    def _stage_outcomes(stage: Stage) -> Iterable[Outcome]:
+        """Every Outcome a stage can produce, whether it's a choice or a fight.
+
+        The single place that enumerates them, so a rule (next_stage resolves,
+        standing needs a target) can't hold for choices and quietly not for fights.
+        """
+        for choice in stage.choices:
+            for outcome in (
+                choice.success,
+                choice.failure,
+                choice.critical_success,
+                choice.critical_failure,
+            ):
+                if outcome is not None:
+                    yield outcome
+        if stage.combat is not None:
+            yield from (stage.combat.victory, stage.combat.escape)
 
     @property
     def max_cash_loss(self) -> int:
@@ -109,14 +165,7 @@ class Scene:
             (
                 outcome.cash_delta
                 for stage in self.stages.values()
-                for choice in stage.choices
-                for outcome in (
-                    choice.success,
-                    choice.failure,
-                    choice.critical_success,
-                    choice.critical_failure,
-                )
-                if outcome is not None
+                for outcome in self._stage_outcomes(stage)
             ),
             default=0,
         )

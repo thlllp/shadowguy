@@ -9,6 +9,17 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK, Character
+from shadowguy.checks import CheckResult
+from shadowguy.combat import (
+    Action,
+    CombatOutcome,
+    CombatState,
+    Drop,
+    available_actions,
+    drop_for_result,
+    start_combat,
+    take_turn,
+)
 from shadowguy.content import (
     GIG_CARD_TABLE,
     GIG_CHEM_TRIAL,
@@ -32,7 +43,14 @@ from shadowguy.corpmap import (
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
-from shadowguy.scene import Scene, SceneKind, resolve_choice, validate_scene_registry
+from shadowguy.scene import (
+    Encounter,
+    Scene,
+    SceneKind,
+    apply_outcome,
+    resolve_choice,
+    validate_scene_registry,
+)
 from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
@@ -263,7 +281,7 @@ class MainMenu(Screen):
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
             if not self._on_site(job.scene):
                 return
-            legwork_scene = generate_legwork_for_job(job.scene, self.app.corp_map)
+            legwork_scene = generate_legwork_for_job(job.scene, self.app.corp_map, self.app.rng)
             if not character.can_afford(legwork_scene.stamina_cost):
                 return
             character.spend_stamina(legwork_scene.stamina_cost)
@@ -643,6 +661,11 @@ class SceneScreen(Screen):
         self.stage_id = scene.start_stage
         self.awaiting_continue = False
         self._pending_next_stage: str | None = None
+        # The result of the check that routed us at the next stage. Only read when
+        # that stage turns out to be a fight, where it decides who got the drop
+        # (combat.drop_for_result) — a made ambush opens with a free round, a nat-1
+        # hands one to them.
+        self._pending_result: CheckResult | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -686,18 +709,142 @@ class SceneScreen(Screen):
             self.app.exit(message=f"{character.name} has died. Game over.")
             return
 
-        self._pending_next_stage = outcome.next_stage
+        await self._await_continue(outcome.next_stage, result)
+
+    async def _await_continue(self, next_stage: str | None, result: CheckResult | None) -> None:
+        """Arm the Continue row that carries the scene to next_stage on select."""
+        self._pending_next_stage = next_stage
+        self._pending_result = result
         await _replace_items(self.query_one("#choices", ListView), [ListItem(Static("Continue"), id="continue")])
         self.awaiting_continue = True
 
+    async def _show_combat(self, stage) -> None:
+        """Hand the stage over to CombatScreen and pick the scene back up after."""
+        self.stage_id = stage.id
+        self.app.push_screen(
+            CombatScreen(stage.combat, drop_for_result(self._pending_result)),
+            self._on_combat_end,
+        )
+
+    async def _on_combat_end(self, result: CombatOutcome) -> None:
+        character = self.app.character
+        if result is CombatOutcome.DEAD:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
+
+        stage = self._current_stage()
+        # Winning is a way *past* the stage (victory.next_stage rejoins the job, and on
+        # the last stage it carries the payout); running out ends the scene there.
+        outcome = stage.combat.victory if result is CombatOutcome.VICTORY else stage.combat.escape
+        apply_outcome(character, outcome, self.scene)
+        self.query_one(CharacterSheet).refresh()
+        self.query_one("#prompt", Static).update(outcome.text)
+
+        # result=None: no check routed us out of a fight, so if this outcome ever
+        # chains into another fight, that fight opens even (Drop.NONE) rather than
+        # inheriting the drop of the check that opened the *previous* one.
+        await self._await_continue(outcome.next_stage, None)
+
     async def _advance(self) -> None:
         if self._pending_next_stage is None:
+            # Includes fleeing a fight: the job is over, and over is over — a blown
+            # contract leaves accepted_jobs the same way a finished one does.
             if self.scene.kind == SceneKind.JOB:
                 self.app.character.remove_job(self.scene.id)
             self.app.pop_screen()
             return
+
+        stage = self.scene.stages[self._pending_next_stage]
+        if stage.combat is not None:
+            await self._show_combat(stage)
+            return
+
         self.stage_id = self._pending_next_stage
         await self._show_stage()
+
+
+# How many lines of the fight scroll back. The screen has to hold the enemy panel,
+# the log and the action list inside 24 rows, and the log is the elastic one.
+COMBAT_LOG_LINES = 8
+
+
+class CombatScreen(Screen):
+    """One fight, one round at a time.
+
+    Pushed by SceneScreen for a stage with an Encounter, and dismissed with the
+    CombatOutcome — the scene, not this screen, decides what winning or running was
+    worth (it owns the Encounter's Outcomes). All the rules live in combat.py; this
+    only renders CombatState and feeds it the action the player picked.
+    """
+
+    BINDINGS = [("q", "quit", "Quit")]
+
+    def __init__(self, encounter: Encounter, drop: Drop) -> None:
+        super().__init__()
+        self.encounter = encounter
+        self.drop = drop
+        self.state: CombatState | None = None
+        self.actions: list[Action] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Vertical(
+            Static(self.encounter.prompt, id="prompt"),
+            Static(id="enemies"),
+            Static(id="combat_log"),
+            ListView(id="actions"),
+            id="combat_body",
+        )
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.state = start_combat(
+            self.app.character, self.encounter.enemies, self.drop, self.app.rng
+        )
+        await self._refresh()
+
+    def _enemy_text(self) -> Text:
+        lines = []
+        for fighter in self.state.fighters:
+            if not fighter.is_standing:
+                lines.append(f"  {fighter.enemy.name}: down")
+            else:
+                stunned = " (reeling)" if fighter.stunned_rounds else ""
+                lines.append(
+                    f"  {fighter.enemy.name}: {fighter.health}/{fighter.enemy.health}{stunned}"
+                )
+        return Text("\n".join(lines))
+
+    async def _refresh(self) -> None:
+        state = self.state
+        self.query_one(CharacterSheet).refresh()
+        self.query_one("#enemies", Static).update(self._enemy_text())
+        # Text, not str: enemy names and weapon names are arbitrary content and a
+        # stray bracket would be eaten as Rich markup.
+        self.query_one("#combat_log", Static).update(Text("\n".join(state.log[-COMBAT_LOG_LINES:])))
+
+        if state.is_over:
+            self.actions = []
+            await _replace_items(
+                self.query_one("#actions", ListView), [ListItem(Static("Continue"), id="done")]
+            )
+            return
+
+        self.actions = available_actions(self.app.character)
+        await _replace_items(
+            self.query_one("#actions", ListView),
+            [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],
+        )
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if self.state.is_over:
+            self.dismiss(self.state.outcome)
+            return
+
+        action = self.actions[int(event.item.id.removeprefix("action_"))]
+        take_turn(self.state, action, self.app.rng)
+        await self._refresh()
 
 
 TRAVEL_STAMINA_COST = 1
