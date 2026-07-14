@@ -161,7 +161,7 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
     return f"{marker}[{' '.join(parts)}]"
 
 
-CONNECTOR_WIDTH = 4
+CONNECTOR_WIDTH = 6
 
 
 @dataclass(frozen=True)
@@ -198,7 +198,7 @@ def render_ascii_map(
     col_width = {}
     for col in range(max_col + 1):
         labels = [_label(t, selected_id, here_id) for (c, _), t in by_pos.items() if c == col]
-        col_width[col] = (max(len(label) for label in labels) if labels else 0) + 1
+        col_width[col] = (max(len(label) for label in labels) if labels else 0) + 2
 
     col_offset = {}
     offset = 0
