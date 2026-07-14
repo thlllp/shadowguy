@@ -16,6 +16,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from shadowguy.corpmap import SHOP_KINDS, LocationKind
+from shadowguy.skills import skill_for
 
 if TYPE_CHECKING:
     from shadowguy.character import Character
@@ -57,6 +58,13 @@ class Item:
     # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
     # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
     slot: Slot | None = None
+    # The next two are what make a weapon a weapon, and are meaningless (and
+    # rejected) on anything else: `skill` is the skill id its attack rolls, and
+    # `damage` is the health it takes off an enemy on a hit. This is the only place
+    # a weapon's combat profile is written — combat.py reads it rather than keeping
+    # a second table of its own that would have to agree with this one.
+    skill: str | None = None
+    damage: int = 0
     # Only meaningful when slot is Slot.WEAPON: occupies both weapon slots.
     two_handed: bool = False
 
@@ -76,7 +84,28 @@ class EffectKind(Enum):
     HEAL = "heal"
     RESTORE_STAMINA = "restore_stamina"
     TEMP_STAT_BOOST = "temp_stat_boost"  # stat name comes from Consumable.stat
-    NONE = "none"  # no mechanical effect yet (grenades: no combat system to target)
+    # The three below only mean anything inside a fight, and are spent by combat.py
+    # rather than by use_consumable — see COMBAT_EFFECTS.
+    COMBAT_DAMAGE_ALL = "combat_damage_all"  # amount = health off every standing enemy
+    COMBAT_STUN = "combat_stun"  # amount = rounds the enemies lose
+    COMBAT_ESCAPE = "combat_escape"  # walk out of the fight, no check
+
+
+# Effects with nothing to act on outside a fight, and equally the *only* things
+# reachable from inside one. use_consumable refuses these without spending them (a
+# grenade thrown at no one is a grenade wasted), and combat.py is the only thing that
+# resolves them.
+#
+# Healing is deliberately not in here, and it's the interesting exclusion: a Health Kit
+# is the obvious combat item in most games, but health comes back slowly in this one, so
+# a fight would be the cheapest possible place to spend a kit — top up, swing again, top
+# up. That turns a fight from a thing you survive into a thing you grind, and it makes
+# health (the resource the whole damage curve is denominated in) refundable mid-encounter.
+# You patch yourself up *after*, on your own time. Stamina and chems are out for the same
+# reason: a fight is not the place to come up on a stim.
+COMBAT_ONLY_EFFECTS = frozenset(
+    {EffectKind.COMBAT_DAMAGE_ALL, EffectKind.COMBAT_STUN, EffectKind.COMBAT_ESCAPE}
+)
 
 
 @dataclass(frozen=True)
@@ -89,12 +118,17 @@ class Consumable:
     stat: str | None = None  # only set when effect is TEMP_STAT_BOOST
 
 
-# id, name, price, bonuses, slot
-_CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot | None]]] = {
+# id, name, price, bonuses, slot, then for weapons only: skill, damage, two_handed.
+# A weapon's skill is what its attack rolls in combat and its damage is what a hit
+# takes off — the pool spans blunt/short_blade/long_blade/firearms, so no build is
+# stuck swinging a weapon it can't use. The bloodiest one is two-handed, which costs
+# both weapon slots (SLOT_CAPACITY).
+_CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.WEAPON_SHOP: [
-        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}, Slot.WEAPON),
-        ("combat_knife", "Combat Knife", 400, {"body": 2}, Slot.WEAPON),
-        ("smart_pistol", "Smart Pistol", 900, {"body": 3}, Slot.WEAPON),
+        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}, Slot.WEAPON, "blunt", 3),
+        ("combat_knife", "Combat Knife", 400, {"body": 2}, Slot.WEAPON, "short_blade", 4),
+        ("monoblade", "Monoblade", 700, {"body": 2}, Slot.WEAPON, "long_blade", 6, True),
+        ("smart_pistol", "Smart Pistol", 900, {"body": 3}, Slot.WEAPON, "firearms", 5),
     ],
     LocationKind.AUTO_DEALER: [
         ("beater_bike", "Beater Bike", 200, {"cool": 1}, None),
@@ -109,7 +143,7 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple[str, str, int, dict[str, int], Slot
         ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None),
     ],
     LocationKind.PAWN: [
-        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}, Slot.WEAPON),
+        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}, Slot.WEAPON, "blunt", 2),
         ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
     ],
@@ -130,6 +164,20 @@ if set(CATALOG) != set(SHOP_KINDS):
 if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.values()):
     raise ValueError("two_handed items must have slot=Slot.WEAPON")
 
+# A weapon's combat profile and its slot have to agree, both ways round. A Slot.WEAPON
+# item with no skill/damage would be an attack the combat screen can offer but never
+# resolve; a skill or damage on a non-weapon would be a combat profile nothing can ever
+# reach, since combat only ever swings what's equipped in Slot.WEAPON. The skill id goes
+# through skill_for, so a typo'd weapon skill fails on import rather than mid-fight.
+for _item in ITEMS_BY_ID.values():
+    _is_weapon = _item.slot is Slot.WEAPON
+    if _is_weapon and (_item.skill is None or _item.damage <= 0):
+        raise ValueError(f"{_item.id}: a Slot.WEAPON item needs a skill and damage to attack with")
+    if not _is_weapon and (_item.skill is not None or _item.damage):
+        raise ValueError(f"{_item.id}: only a Slot.WEAPON item can have a combat skill or damage")
+    if _item.skill is not None:
+        skill_for(_item.skill)
+
 
 # id, name, price, effect, amount, stat
 _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, str | None]]] = {
@@ -140,9 +188,9 @@ _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, 
         ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "intelligence"),
     ],
     LocationKind.WEAPON_SHOP: [
-        ("grenade_smoke", "Smoke Grenade", 100, EffectKind.NONE, 0, None),
-        ("grenade_flash", "Flash Grenade", 120, EffectKind.NONE, 0, None),
-        ("grenade_frag", "Fragmentation Grenade", 200, EffectKind.NONE, 0, None),
+        ("grenade_smoke", "Smoke Grenade", 100, EffectKind.COMBAT_ESCAPE, 0, None),
+        ("grenade_flash", "Flash Grenade", 120, EffectKind.COMBAT_STUN, 1, None),
+        ("grenade_frag", "Fragmentation Grenade", 200, EffectKind.COMBAT_DAMAGE_ALL, 5, None),
     ],
 }
 
@@ -197,8 +245,15 @@ def buy_consumable(character: "Character", consumable: Consumable) -> bool:
 
 
 def use_consumable(character: "Character", index: int) -> str:
-    """Pop and apply consumables[index]. Returns a short message describing the effect."""
-    consumable = CONSUMABLES_BY_ID[character.consumables.pop(index)]
+    """Pop and apply consumables[index]. Returns a short message describing the effect.
+
+    A combat-only consumable is refused rather than spent: there is nothing to throw a
+    grenade at out here, and popping it first would burn it for the message.
+    """
+    consumable = CONSUMABLES_BY_ID[character.consumables[index]]
+    if consumable.effect in COMBAT_ONLY_EFFECTS:
+        return "Only useful in a fight."
+    character.consumables.pop(index)
     if consumable.effect is EffectKind.HEAL:
         character.adjust_health(consumable.amount)
         return f"+{consumable.amount} Health"
@@ -208,7 +263,10 @@ def use_consumable(character: "Character", index: int) -> str:
     if consumable.effect is EffectKind.TEMP_STAT_BOOST:
         character.add_temp_bonus(consumable.stat, consumable.amount)
         return f"+{consumable.amount} {consumable.stat.capitalize()} until next rest"
-    return "No effect yet."
+    # Every non-combat effect is handled above; a new EffectKind that is neither
+    # listed in COMBAT_EFFECTS nor given a branch here would otherwise be silently
+    # eaten (the item spent, nothing applied).
+    raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
 
 
 def sell_item(character: "Character", index: int) -> int:

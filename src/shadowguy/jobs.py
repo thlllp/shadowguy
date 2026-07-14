@@ -5,9 +5,10 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shadowguy.combat import roll_enemies
 from shadowguy.corpmap import LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
+from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage
 from shadowguy.skills import skill_for
 
 TARGETS = [
@@ -42,6 +43,33 @@ FULL_POOL_CHANCE = 0.35
 
 # Standing lost with the corp you just robbed, on a completed job.
 JOB_STANDING_HIT = -2
+
+# Every stage carries a fight beside it, reachable two ways — and which way you got
+# there is the whole difference between the two (combat.drop_for_result reads it off
+# the check that routed you in):
+#
+# - You *chose* it. AMBUSH_LABEL is appended to every stage's choices on top of the
+#   drawn pool, so a job can never withhold every approach your build can pass: there
+#   is always a way through, and it is always the one that bleeds. Make the Tactics
+#   check and you open with a free round; miss it and the fight starts even.
+# - You *botched into* it. A critical failure on any normal approach goes loud, and
+#   they get the free round instead. Only a critical failure — a plain failure still
+#   costs health and advances, which is the property the whole damage curve is tuned
+#   around (see DAMAGE_FOR_DELTA). Routing every failure into a fight is how you get
+#   a job that is mostly fighting and a death rate to match.
+#
+# The ambush deliberately isn't held to the "approaches must sit on different stats"
+# rule the pools are: it doesn't *pass* the stage, it replaces passing it with a
+# fight, so it isn't a second bite at the same gate.
+AMBUSH_SKILL = "tactics"
+AMBUSH_DIFFICULTY = 12
+AMBUSH_LABEL = "Take them first"
+
+# Fighting through a stage is a way *past* it, not a way to skip the job: winning
+# rejoins the job at the next stage, and winning the last stage pays it out like any
+# other success. Running, though, ends the run of the job entirely (next_stage None) —
+# the contract is blown, and the fixer keeps the money.
+FIGHT_PROMPT = "{faction} security comes down on you at {location}. No more talking."
 
 
 class StageType(StrEnum):
@@ -435,6 +463,7 @@ def generate_job(
     for i, job_stage in enumerate(job_stages):
         is_last = i == len(stage_ids) - 1
         next_stage = None if is_last else stage_ids[i + 1]
+        fight_id = f"{stage_ids[i]}_fight"
         # Which ways through this job happens to leave open. Kept in pool order so
         # the clean approach still reads before the bloody one.
         pool = job_stage.approaches
@@ -446,6 +475,64 @@ def generate_job(
         # so an Approach's difficulty_delta means the same thing on every job.
         ramp = round(STAGE_DIFFICULTY_RAMP * i / (len(job_stages) - 1)) if i else 0
         difficulty = difficulty_base + ramp + rng.randint(-1, 2)
+
+        # The payout rides on however you get past the *last* stage — talked, sneaked
+        # or fought — so it's written once here and handed to both the success outcomes
+        # and the fight's victory. A second reward path would be a second thing to
+        # retune every time REWARD_BASE moves.
+        def payout(text: str, multiplier: float = 1.0, rep: int = 1) -> Outcome:
+            return Outcome(
+                text=text,
+                next_stage=next_stage,
+                cash_delta=int(reward_base * multiplier) if is_last else 0,
+                rep_delta=rep if is_last else 0,
+                standing_delta=JOB_STANDING_HIT if is_last else 0,
+            )
+
+        choices = [
+            Choice(
+                label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+                skill=approach.skill,
+                difficulty=difficulty + approach.difficulty_delta,
+                success=payout("It goes clean."),
+                failure=Outcome(
+                    text="It gets messy, but you push on.",
+                    health_delta=-approach.failure_damage,
+                    next_stage=next_stage,
+                ),
+                critical_success=payout(
+                    "Flawless. You walk out with more than you bargained for.",
+                    multiplier=1.5,
+                    rep=2,
+                ),
+                # The one branch that doesn't just cost health and carry on: you're
+                # made, and they arrive holding the initiative. Note it deals the
+                # *plain* failure damage, not CRITICAL_FAILURE_MULTIPLIER's doubled
+                # hit: the fight is the critical failure's punishment, and charging
+                # both stacked a double-damage hit under a squad that opens with a
+                # free round — which is a nat-1 killing a light build outright.
+                critical_failure=Outcome(
+                    text="It goes bad, fast. Someone hits the alarm.",
+                    health_delta=-approach.failure_damage,
+                    next_stage=fight_id,
+                ),
+            )
+            for approach in approaches
+        ]
+        # Always offered, whatever the pool draw left you: the guaranteed way through.
+        choices.append(
+            Choice(
+                label=f"{AMBUSH_LABEL} ({skill_for(AMBUSH_SKILL).name})",
+                skill=AMBUSH_SKILL,
+                difficulty=AMBUSH_DIFFICULTY,
+                success=Outcome(text="You pick your moment.", next_stage=fight_id),
+                failure=Outcome(text="You move too early.", next_stage=fight_id),
+                critical_failure=Outcome(
+                    text="You walk straight into them.", next_stage=fight_id
+                ),
+            )
+        )
+
         stages[stage_ids[i]] = Stage(
             id=stage_ids[i],
             prompt=job_stage.prompt.format(
@@ -455,38 +542,18 @@ def generate_job(
                 location=location.name,
                 target=target,
             ),
-            choices=[
-                Choice(
-                    label=f"{approach.flavor} ({skill_for(approach.skill).name})",
-                    skill=approach.skill,
-                    difficulty=difficulty + approach.difficulty_delta,
-                    success=Outcome(
-                        text="It goes clean.",
-                        next_stage=next_stage,
-                        cash_delta=reward_base if is_last else 0,
-                        rep_delta=1 if is_last else 0,
-                        standing_delta=JOB_STANDING_HIT if is_last else 0,
-                    ),
-                    failure=Outcome(
-                        text="It gets messy, but you push on.",
-                        health_delta=-approach.failure_damage,
-                        next_stage=next_stage,
-                    ),
-                    critical_success=Outcome(
-                        text="Flawless. You walk out with more than you bargained for.",
-                        next_stage=next_stage,
-                        cash_delta=int(reward_base * 1.5) if is_last else 0,
-                        rep_delta=2 if is_last else 0,
-                        standing_delta=JOB_STANDING_HIT if is_last else 0,
-                    ),
-                    critical_failure=Outcome(
-                        text="It goes bad, fast.",
-                        health_delta=-approach.failure_damage * CRITICAL_FAILURE_MULTIPLIER,
-                        next_stage=next_stage,
-                    ),
-                )
-                for approach in approaches
-            ],
+            choices=choices,
+        )
+        stages[fight_id] = Stage(
+            id=fight_id,
+            prompt="",  # the Encounter carries the prose; a fight stage has no choices
+            choices=[],
+            combat=Encounter(
+                prompt=FIGHT_PROMPT.format(faction=faction.name, location=location.name),
+                enemies=roll_enemies(tier, rng),
+                victory=payout("They stop coming. You finish what you came for."),
+                escape=Outcome(text="You get out with your skin. The job is blown."),
+            ),
         )
 
     scene = Scene(
@@ -527,8 +594,20 @@ SITE_ADVANTAGE = 4
 NEARBY_DIFFICULTY = 11
 NEARBY_ADVANTAGE = 2
 
+# Getting made while scouting used to be a flat -2 health. Now it's a fight — but a
+# street-tier one: what catches you casing a block is a couple of locals who don't
+# like being looked at, not the corp response team you'd meet inside on the job. Note
+# there's no ambush option here, and no way to *win* your way to an advantage: legwork
+# is scouting, so a fight means it went wrong. The best you get is out.
+LEGWORK_FIGHT_TIER = 0
+LEGWORK_FIGHT_STAGE = "made"
+LEGWORK_FIGHT_PROMPT = "Two of {faction}'s people peel off the corner. They've seen enough."
 
-def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
+
+def generate_legwork_for_job(
+    job: Scene, corp_map: CorpMap, rng: random.Random | None = None
+) -> Scene:
+    rng = rng or random.Random()
     territory = corp_map.territories[job.target_territory_id]
     faction = FACTIONS_BY_ID[job.target_faction_id]
 
@@ -553,8 +632,8 @@ def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
                 ),
                 failure=Outcome(text="Nothing solid turns up. Wasted time."),
                 critical_failure=Outcome(
-                    text="Someone clocks you scoping the place. You bolt.",
-                    health_delta=-2,
+                    text="Someone clocks you scoping the place.",
+                    next_stage=LEGWORK_FIGHT_STAGE,
                 ),
             )
         )
@@ -573,6 +652,19 @@ def generate_legwork_for_job(job: Scene, corp_map: CorpMap) -> Scene:
                     f"{faction.name} holds the district through a handful of places."
                 ),
                 choices=choices,
+            ),
+            LEGWORK_FIGHT_STAGE: Stage(
+                id=LEGWORK_FIGHT_STAGE,
+                prompt="",
+                choices=[],
+                combat=Encounter(
+                    prompt=LEGWORK_FIGHT_PROMPT.format(faction=faction.name),
+                    enemies=roll_enemies(LEGWORK_FIGHT_TIER, rng),
+                    # Winning the fight doesn't hand you the intel you failed to get —
+                    # both ways out of here end the legwork with nothing banked.
+                    victory=Outcome(text="They stay down. But you're burned here today."),
+                    escape=Outcome(text="You lose them three streets over. Nothing learned."),
+                ),
             ),
         },
     )

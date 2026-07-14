@@ -58,6 +58,11 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         ("listening", "Listening", "Picking up sounds and conversations"),
         ("sight", "Sight", "Spotting details at range or in the dark"),
         ("read_the_room", "Read the Room", "Sensing social undercurrents and mood"),
+        # Filed under perception, not strength: a gun is aimed, not swung, so what
+        # it rolls is the same faculty as Sight. This is the one stat with six
+        # skills — nothing enforces five, and a stat's cost is per-skill anyway,
+        # so a sixth makes perception broader, not stronger.
+        ("firearms", "Firearms", "Shooting straight under pressure"),
     ],
     "intelligence": [
         ("hack", "Hack", "Breaking into networks and systems"),
