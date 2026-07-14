@@ -11,6 +11,7 @@ corpmap.LOCATION_SKILL and jobs.LEGWORK_APPROACH_TEXT each have an entry for
 every SHOP_KINDS member to cover that.
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -58,13 +59,22 @@ class Item:
     # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
     # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
     slot: Slot | None = None
-    # The next two are what make a weapon a weapon, and are meaningless (and
-    # rejected) on anything else: `skill` is the skill id its attack rolls, and
-    # `damage` is the health it takes off an enemy on a hit. This is the only place
-    # a weapon's combat profile is written — combat.py reads it rather than keeping
-    # a second table of its own that would have to agree with this one.
+    # What the item adds to player_defense() (combat.py) when equipped: 3-8, and
+    # only valid on a wearable slot (not WEAPON, not an unlimited-slot item like a
+    # vehicle or deck). Not restricted to Slot.TORSO — armor is the common case,
+    # but any wearable can carry it.
+    defense: int = 0
+    # The next three are what make a weapon a weapon, and are meaningless (and
+    # rejected) on anything else: `skill` is the skill id its attack rolls,
+    # `damage` (4-10) is the health it takes off an enemy on a hit, and
+    # `concealment` (1-5, higher = easier to keep out of sight) is seeded for
+    # later — nothing reads it yet, same as corpmap's Territory modifiers. This
+    # is the only place a weapon's combat profile is written — combat.py reads
+    # it rather than keeping a second table of its own that would have to agree
+    # with this one.
     skill: str | None = None
     damage: int = 0
+    concealment: int = 0
     # Only meaningful when slot is Slot.WEAPON: occupies both weapon slots.
     two_handed: bool = False
 
@@ -77,7 +87,16 @@ class InventoryItem:
 
 
 def bonus_text(item: Item) -> str:
-    return ", ".join(f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items())
+    """Every stat a shop/inventory listing should show for this item: gear bonuses,
+    plus a weapon's damage or armor's defense — the two combat-facing numbers that
+    don't live in `bonuses` and would otherwise be invisible on a buy/equip screen.
+    """
+    parts = [f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items()]
+    if item.damage:
+        parts.append(f"{item.damage} dmg")
+    if item.defense:
+        parts.append(f"+{item.defense} defense")
+    return ", ".join(parts)
 
 
 class EffectKind(Enum):
@@ -118,17 +137,25 @@ class Consumable:
     stat: str | None = None  # only set when effect is TEMP_STAT_BOOST
 
 
-# id, name, price, bonuses, slot, then for weapons only: skill, damage, two_handed.
-# A weapon's skill is what its attack rolls in combat and its damage is what a hit
-# takes off — the pool spans blunt/short_blade/long_blade/firearms, so no build is
-# stuck swinging a weapon it can't use. The bloodiest one is two-handed, which costs
-# both weapon slots (SLOT_CAPACITY).
+# id, name, price, bonuses, slot, defense, then for weapons only: skill, damage,
+# concealment, two_handed. A weapon's skill is what its attack rolls in combat and
+# its damage is what a hit takes off — the pool spans blunt/short_blade/long_blade/
+# firearms, so no build is stuck swinging a weapon it can't use. The bloodiest one
+# is two-handed, which costs both weapon slots (SLOT_CAPACITY). Weapons carry no
+# stat bonus by default — damage/skill/concealment are their whole profile — so
+# `bonuses` is {} unless a specific weapon deliberately earns one. Armor is the same
+# shop's other business: `defense` (3-8) adds straight onto combat.player_defense()
+# while equipped, and it's not restricted to Slot.TORSO — any wearable can carry it.
 _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.WEAPON_SHOP: [
-        ("brass_knuckles", "Brass Knuckles", 150, {"body": 1}, Slot.WEAPON, "blunt", 3),
-        ("combat_knife", "Combat Knife", 400, {"body": 2}, Slot.WEAPON, "short_blade", 4),
-        ("monoblade", "Monoblade", 700, {"body": 2}, Slot.WEAPON, "long_blade", 6, True),
-        ("smart_pistol", "Smart Pistol", 900, {"body": 3}, Slot.WEAPON, "firearms", 5),
+        ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "blunt", 4, 5),
+        ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 4, 4),
+        ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "long_blade", 6, 1, True),
+        ("smart_pistol", "Smart Pistol", 900, {}, Slot.WEAPON, 0, "firearms", 5, 3),
+        ("leather_jacket", "Leather Jacket", 200, {}, Slot.TORSO, 3),
+        ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 5),
+        ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
+        ("reinforced_helmet", "Reinforced Helmet", 250, {}, Slot.HEADWEAR, 3),
     ],
     LocationKind.AUTO_DEALER: [
         ("beater_bike", "Beater Bike", 200, {"cool": 1}, None),
@@ -143,7 +170,7 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None),
     ],
     LocationKind.PAWN: [
-        ("pawned_knuckles", "Pawned Knuckles", 80, {"body": 1}, Slot.WEAPON, "blunt", 2),
+        ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "blunt", 4, 5),
         ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
     ],
@@ -165,18 +192,32 @@ if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.
     raise ValueError("two_handed items must have slot=Slot.WEAPON")
 
 # A weapon's combat profile and its slot have to agree, both ways round. A Slot.WEAPON
-# item with no skill/damage would be an attack the combat screen can offer but never
-# resolve; a skill or damage on a non-weapon would be a combat profile nothing can ever
-# reach, since combat only ever swings what's equipped in Slot.WEAPON. The skill id goes
-# through skill_for, so a typo'd weapon skill fails on import rather than mid-fight.
+# item with no skill/damage/concealment would be an attack the combat screen can offer
+# but never resolve; a skill, damage, or concealment on a non-weapon would be a combat
+# profile nothing can ever reach, since combat only ever swings what's equipped in
+# Slot.WEAPON. The skill id goes through skill_for, so a typo'd weapon skill fails on
+# import rather than mid-fight. Defense is the wearable counterpart to a weapon's
+# damage: it has to live on something you can actually put on (not a weapon, not an
+# unlimited-slot item like a vehicle or deck), and it's bounded the same way damage
+# is, so a typo'd 80 doesn't quietly turn one jacket into full plot armor.
 for _item in ITEMS_BY_ID.values():
     _is_weapon = _item.slot is Slot.WEAPON
-    if _is_weapon and (_item.skill is None or _item.damage <= 0):
-        raise ValueError(f"{_item.id}: a Slot.WEAPON item needs a skill and damage to attack with")
-    if not _is_weapon and (_item.skill is not None or _item.damage):
-        raise ValueError(f"{_item.id}: only a Slot.WEAPON item can have a combat skill or damage")
+    if _is_weapon and (
+        _item.skill is None or not (4 <= _item.damage <= 10) or not (1 <= _item.concealment <= 5)
+    ):
+        raise ValueError(
+            f"{_item.id}: a Slot.WEAPON item needs a skill, 4-10 damage, and 1-5 concealment"
+        )
+    if not _is_weapon and (_item.skill is not None or _item.damage or _item.concealment):
+        raise ValueError(
+            f"{_item.id}: only a Slot.WEAPON item can have a combat skill, damage, or concealment"
+        )
     if _item.skill is not None:
         skill_for(_item.skill)
+    if _item.defense and (_is_weapon or _item.slot is None):
+        raise ValueError(f"{_item.id}: only a wearable item can have defense")
+    if _item.defense and not (3 <= _item.defense <= 8):
+        raise ValueError(f"{_item.id}: defense must be 3-8")
 
 
 # id, name, price, effect, amount, stat
@@ -201,10 +242,16 @@ CONSUMABLE_CATALOG: dict[LocationKind, list[Consumable]] = {
 CONSUMABLES_BY_ID = {c.id: c for items in CONSUMABLE_CATALOG.values() for c in items}
 
 
+def _equipped_items(inventory: list[InventoryItem]) -> Iterator[Item]:
+    return (ITEMS_BY_ID[entry.item_id] for entry in inventory if entry.equipped)
+
+
 def equipped_bonus(inventory: list[InventoryItem], stat: str) -> int:
-    return sum(
-        ITEMS_BY_ID[entry.item_id].bonuses.get(stat, 0) for entry in inventory if entry.equipped
-    )
+    return sum(item.bonuses.get(stat, 0) for item in _equipped_items(inventory))
+
+
+def equipped_defense(inventory: list[InventoryItem]) -> int:
+    return sum(item.defense for item in _equipped_items(inventory))
 
 
 def _slot_cost(item: Item) -> int:
@@ -212,11 +259,7 @@ def _slot_cost(item: Item) -> int:
 
 
 def slot_usage(inventory: list[InventoryItem], slot: Slot) -> int:
-    return sum(
-        _slot_cost(ITEMS_BY_ID[entry.item_id])
-        for entry in inventory
-        if entry.equipped and ITEMS_BY_ID[entry.item_id].slot is slot
-    )
+    return sum(_slot_cost(item) for item in _equipped_items(inventory) if item.slot is slot)
 
 
 def _fits_in_slot(inventory: list[InventoryItem], item: Item) -> bool:

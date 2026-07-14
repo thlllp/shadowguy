@@ -1,9 +1,9 @@
 """Combat: rounds, enemies, and the one place a fight's rules live.
 
 Combat is the only part of the game that is not a single check. It is still the
-same dice, though — every roll here is checks.resolve_check(), d20 + skill_value
-vs a difficulty, with the same crit rules — so a fight is a *sequence* of the
-game's existing checks rather than a second resolution model bolted on beside it.
+same dice, though — every roll here is checks.resolve_check(), an opposed d6 pool
+with the same four-tier CheckResult — so a fight is a *sequence* of the game's
+existing checks rather than a second resolution model bolted on beside it.
 
 The shape of a round:
 
@@ -28,6 +28,16 @@ Two rules carry most of the design:
   you connect; shops.Item.damage decides what that costs the enemy. So investing
   in Short Blade makes you land the knife more often, and buying a better knife
   makes each landing hurt more. Neither substitutes for the other.
+
+A landed hit is not the final damage. Every attack is two rolls: the attacker's
+stat_value+advantage d6 opposed against the target's dodge (an ordinary
+resolve_check), and the margin — net successes the attack pool cleared the dodge
+pool by — is added on top of the weapon's (or enemy's) base damage, so a clean hit
+costs more than a scraped one. The target then rolls a soak: body + defense
+(armor, or an enemy's toughness) d6, and every success blocks one point of that
+damage. `_resolve_hit` is the one place both halves happen, for both directions of
+a fight, so a player's attack and an enemy's attack are the same function with the
+roles swapped.
 """
 
 import random
@@ -35,7 +45,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
-from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.checks import CheckResult, CheckRoll, count_successes, resolve_check
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -44,16 +54,20 @@ from shadowguy.shops import (
     EffectKind,
     Item,
     Slot,
+    equipped_defense,
 )
 from shadowguy.skills import skill_for, skill_value
 
-# What an enemy's d20 + attack has to beat to land a hit on you. Defense is built
+# What an enemy's attack pool has to beat to land a hit on you. Defense is built
 # from Dodge (skill_value, so gear and rank both count), which is what stops
 # Agility from being a stat you only spend on job approaches.
 DEFENSE_BASE = 12
 
 # Empty-handed. A real weapon is strictly better, but there is always *an* attack:
-# a runner who sold their last knife can still fight, badly.
+# a runner who sold their last knife can still fight, badly. Built by hand rather
+# than through shops.CATALOG, so shops.py's import-time weapon-profile guard never
+# sees it — the assertion below is that guard's bound, re-applied here, so a bad
+# edit to this Item still fails at import instead of mid-fight.
 UNARMED = Item(
     id="unarmed",
     name="Bare Hands",
@@ -61,14 +75,18 @@ UNARMED = Item(
     bonuses={},
     slot=Slot.WEAPON,
     skill="grapple",
-    damage=3,
+    damage=4,
+    concealment=5,  # nothing to search or confiscate
 )
+if not (4 <= UNARMED.damage <= 10) or not (1 <= UNARMED.concealment <= 5):
+    raise ValueError("UNARMED must satisfy the same weapon-profile bounds as shops.CATALOG")
 
-# A crit doubles what a blow takes off — and it cuts both ways: enemies crit you too.
-CRITICAL_DAMAGE_MULTIPLIER = 2
+# A crit still hits harder — it's whatever margin (net successes) it takes to clear
+# checks.CRITICAL_MARGIN, which feeds straight into the margin _resolve_hit adds to
+# base damage. There's no separate multiplier; the margin does that work on its own.
 
-# Bracing (Toughness) soaks this much off *each* hit you take that round, so it
-# scales with how badly you're outnumbered — the answer to being swarmed.
+# Bracing (Toughness) adds this much to the soak roll for *every* hit you take that
+# round, so it scales with how badly you're outnumbered — the answer to being swarmed.
 BRACE_DIFFICULTY = 11
 BRACE_SOAK = 3
 # A failed brace is not a wasted round; you still get something for covering up.
@@ -160,26 +178,29 @@ class CombatOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class Enemy:
-    """One hostile. `defense` is the difficulty your attack rolls against."""
+    """One hostile. `defense` is the difficulty your attack rolls against (their
+    dodge); `toughness` is their soak-roll bonus (their body + armor, collapsed
+    into one number since an enemy carries no separate stats or gear)."""
 
     id: str
     name: str
     health: int
-    attack: int  # added to the enemy's d20
+    attack: int  # the enemy's attack pool (dice rolled against your defense)
     defense: int  # what your attack roll must beat
-    damage: int  # health off you on a hit
+    damage: int  # base health off you on a hit, before the attack roll's margin
+    toughness: int  # added to the soak roll that mitigates a landed hit
 
 
-# id, name, health, attack, defense, damage.
+# id, name, health, attack, defense, damage, toughness.
 # The ladder the tiers draw from: a thug is a nuisance, a chromed enforcer is a
 # death sentence to a runner who brought the wrong build. Tuned against a runner's
 # 15-30 health and DAMAGE_FOR_DELTA in jobs.py — see the balance sim before touching.
 _ENEMY_ROWS = (
-    ("thug", "Street Thug", 4, 1, 9, 2),
-    ("ganger", "Ganger", 5, 2, 10, 2),
-    ("corp_sec", "Corp Sec", 7, 2, 11, 3),
-    ("sec_heavy", "Sec Heavy", 9, 3, 12, 3),
-    ("enforcer", "Chromed Enforcer", 11, 4, 13, 4),
+    ("thug", "Street Thug", 4, 1, 9, 2, 1),
+    ("ganger", "Ganger", 5, 2, 10, 2, 2),
+    ("corp_sec", "Corp Sec", 7, 2, 11, 3, 2),
+    ("sec_heavy", "Sec Heavy", 9, 3, 12, 3, 3),
+    ("enforcer", "Chromed Enforcer", 11, 4, 13, 4, 4),
 )
 
 ENEMIES = [Enemy(*row) for row in _ENEMY_ROWS]
@@ -245,6 +266,54 @@ class Action:
 
 def player_defense(character: Character) -> int:
     return DEFENSE_BASE + skill_value(character, "dodge")
+
+
+def player_soak(character: Character) -> int:
+    """Body + equipped armor's defense: the player's soak pool size (dice rolled to
+    mitigate a landed hit — see _resolve_hit).
+
+    Bracing (CombatState.soak) is added on top of this per-round, at the call site
+    — it is not part of the character's standing soak, since it clears at round end.
+    """
+    return character.stat("body") + equipped_defense(character.inventory)
+
+
+def _soak_damage(rng: random.Random, base_damage: int, soak_pool: int) -> int:
+    """Roll soak_pool d6 and take the successes off base_damage, floored at 0.
+
+    The shared tail end of any damage a target takes, whether it followed a to-hit
+    roll (_resolve_hit) or was guaranteed (a flee's parting shot) — the soak isn't
+    opposed by anything, so it doesn't go through the four-tier CheckResult, just a
+    plain success count.
+    """
+    return max(0, base_damage - count_successes(soak_pool, rng))
+
+
+def _resolve_hit(
+    rng: random.Random,
+    attacker_stat_value: int,
+    attacker_advantage: int,
+    to_hit_difficulty: int,
+    base_damage: int,
+    soak_pool: int,
+) -> tuple[CheckRoll, int]:
+    """Roll to hit; on a hit, add the margin to base_damage and mitigate with a soak
+    roll off soak_pool. Returns the to-hit roll (miss/crit is read off this) and the
+    final damage — 0 on a miss, and also 0 if the soak roll swallows the hit whole.
+
+    This is the one function both directions of a fight go through, so a player's
+    attack and an enemy's attack can never quietly drift into two different formulas.
+    """
+    roll = resolve_check(
+        stat_value=attacker_stat_value,
+        difficulty=to_hit_difficulty,
+        advantage=attacker_advantage,
+        rng=rng,
+    )
+    if not roll.result.passed:
+        return roll, 0
+    # roll.margin is always > 0 here: resolve_check only passes on margin > 0.
+    return roll, _soak_damage(rng, base_damage + roll.margin, soak_pool)
 
 
 def equipped_weapons(character: Character) -> list[Item]:
@@ -365,12 +434,18 @@ def start_combat(
         rng = rng or random
         first = state.fighters[0]
         state.log.append("They were ready for you.")
-        roll = resolve_check(
-            stat_value=first.enemy.attack, difficulty=player_defense(character), rng=rng
+        # No BRACE bonus here — it's a free hit before your first action, so there's
+        # been no round to brace in yet.
+        roll, damage = _resolve_hit(
+            rng, first.enemy.attack, 0, player_defense(character), first.enemy.damage,
+            player_soak(character),
         )
         if roll.result.passed:
-            character.adjust_health(-first.enemy.damage)
-            state.log.append(f"{first.enemy.name} opens on you for {first.enemy.damage}.")
+            character.adjust_health(-damage)
+            if damage:
+                state.log.append(f"{first.enemy.name} opens on you for {damage}.")
+            else:
+                state.log.append(f"{first.enemy.name} opens on you, but it doesn't get through.")
         else:
             state.log.append(f"{first.enemy.name} fires first, and misses.")
         _settle(state)
@@ -391,22 +466,23 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     bonus = state.next_attack_bonus
     state.next_attack_bonus = 0
 
-    roll = resolve_check(
-        stat_value=skill_value(state.character, weapon.skill),
-        difficulty=target.enemy.defense,
-        advantage=bonus,
-        rng=rng,
+    roll, damage = _resolve_hit(
+        rng,
+        skill_value(state.character, weapon.skill),
+        bonus,
+        target.enemy.defense,
+        weapon.damage,
+        target.enemy.toughness,
     )
-    if roll.result.passed:
-        damage = weapon.damage
-        if roll.result is CheckResult.CRITICAL_SUCCESS:
-            damage *= CRITICAL_DAMAGE_MULTIPLIER
-            state.log.append(f"Critical hit — {weapon.name} for {damage}.")
-        else:
-            state.log.append(f"You land {weapon.name} on {target.enemy.name} for {damage}.")
-        _damage_fighter(state, target, damage)
-    else:
+    if not roll.result.passed:
         state.log.append(f"You swing at {target.enemy.name} and miss.")
+        return
+    if damage:
+        prefix = "Critical hit — " if roll.result is CheckResult.CRITICAL_SUCCESS else ""
+        state.log.append(f"{prefix}You land {weapon.name} on {target.enemy.name} for {damage}.")
+    else:
+        state.log.append(f"You land {weapon.name} on {target.enemy.name}, but it doesn't get through.")
+    _damage_fighter(state, target, damage)
 
 
 def _brace(state: CombatState, rng: random.Random) -> None:
@@ -418,9 +494,9 @@ def _brace(state: CombatState, rng: random.Random) -> None:
     hit = roll.result.passed
     state.soak = BRACE_SOAK if hit else BRACE_SOAK_ON_FAILURE
     state.log.append(
-        f"You set yourself. Soaking {state.soak} off every hit this round."
+        f"You set yourself. +{state.soak} to your soak roll against every hit this round."
         if hit
-        else f"You cover up badly. Soaking only {state.soak}."
+        else f"You cover up badly. Only +{state.soak} to your soak roll."
     )
 
 
@@ -489,10 +565,16 @@ def _flee(state: CombatState, rng: random.Random) -> None:
 
     # One parting shot, from whoever is closest — not one from every enemy. A whole
     # squad's worth of free hits is what a runner eats *because* they were low enough
-    # to be running, so it turned the exit into the thing that killed them.
+    # to be running, so it turned the exit into the thing that killed them. It's
+    # guaranteed (no to-hit roll, you're already turning your back), but still goes
+    # through your soak roll — armor helps even on the way out.
     catcher = state.standing[0]
-    state.character.adjust_health(-catcher.enemy.damage)
-    state.log.append(f"You run. {catcher.enemy.name} catches you for {catcher.enemy.damage}.")
+    damage = _soak_damage(rng, catcher.enemy.damage, player_soak(state.character))
+    state.character.adjust_health(-damage)
+    if damage:
+        state.log.append(f"You run. {catcher.enemy.name} catches you for {damage}.")
+    else:
+        state.log.append(f"You run. {catcher.enemy.name} gets a shot off, but it doesn't land clean.")
     # If the parting shot kills you, _settle turns ESCAPED into DEAD right after.
 
 
@@ -503,22 +585,25 @@ def _enemy_turn(state: CombatState, rng: random.Random) -> None:
         return
 
     defense = player_defense(state.character)
+    # Bracing (state.soak) folds into the soak pool here, not the final damage — so
+    # it applies per hit, for every attacker this round, same as before.
+    soak_pool = player_soak(state.character) + state.soak
     for fighter in state.standing:
         if fighter.stunned_rounds > 0:
             fighter.stunned_rounds -= 1
             state.log.append(f"{fighter.enemy.name} is still reeling.")
             continue
-        roll = resolve_check(stat_value=fighter.enemy.attack, difficulty=defense, rng=rng)
+        roll, damage = _resolve_hit(
+            rng, fighter.enemy.attack, 0, defense, fighter.enemy.damage, soak_pool
+        )
         if not roll.result.passed:
             state.log.append(f"{fighter.enemy.name} swings wide.")
             continue
-        damage = fighter.enemy.damage
-        if roll.result is CheckResult.CRITICAL_SUCCESS:
-            damage *= CRITICAL_DAMAGE_MULTIPLIER
-        # Soak is per hit, not per round: bracing is how you survive a crowd.
-        damage = max(0, damage - state.soak)
         state.character.adjust_health(-damage)
-        state.log.append(f"{fighter.enemy.name} hits you for {damage}.")
+        if damage:
+            state.log.append(f"{fighter.enemy.name} hits you for {damage}.")
+        else:
+            state.log.append(f"{fighter.enemy.name} connects, but your armor holds.")
 
 
 def _settle(state: CombatState) -> None:
