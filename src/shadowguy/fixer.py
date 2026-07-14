@@ -3,10 +3,14 @@
 import random
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from shadowguy.corpmap import CorpMap
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.scene import Scene
+
+if TYPE_CHECKING:
+    from shadowguy.character import Character
 
 FIXER_ROSTER = [
     ("fixer_rook", "Rook", "Corp data & heists"),
@@ -39,13 +43,30 @@ class Fixer:
 
 def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[Fixer]:
     """Seat every fixer in a distinct district on this run's map, so 'a fixer is in
-    the area' (app.MainMenu's Local tab) means something different every run."""
+    the area' (app.MainMenu's Local tab) means something different every run.
+    Seated on neutral ground only, and never the player's own start tile — a
+    fixer is a street-level contact, not a plant inside a corp's own turf, and
+    the start tile is guaranteed reachable day one either way."""
     rng = rng or random.Random()
-    territory_ids = rng.sample(list(corp_map.territories), len(FIXER_ROSTER))
+    candidates = [
+        territory.id
+        for territory in corp_map.territories.values()
+        if territory.owner == "neutral" and territory.id != corp_map.player_start_id
+    ]
+    territory_ids = rng.sample(candidates, len(FIXER_ROSTER))
     return [
         Fixer(id=fixer_id, name=name, specialty=specialty, location_id=territory_id)
         for (fixer_id, name, specialty), territory_id in zip(FIXER_ROSTER, territory_ids, strict=True)
     ]
+
+
+def discover_fixers_here(fixers: list[Fixer], character: "Character") -> None:
+    """Standing in a fixer's district is what discovers them. The single chokepoint
+    for that check — call this from anywhere character.location_id could have
+    changed or be displayed, rather than re-checking fixer.location_id locally."""
+    for fixer in fixers:
+        if fixer.location_id == character.location_id:
+            character.discover_fixer(fixer.id)
 
 
 def expire_offers(fixers: list[Fixer], day: int) -> None:

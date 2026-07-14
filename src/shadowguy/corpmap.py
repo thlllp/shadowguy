@@ -17,12 +17,9 @@ OWNER_TAGS = {
 
 # Distinct terminal colors per corp, so a district's owner reads at a glance on the
 # map without checking the 3-letter tag. Neutral ground gets no entry (and so no
-# override) — unclaimed is meant to look unclaimed, not tagged bright anything. A
-# plain list rather than a dict literal so the guard below can catch a FACTIONS
-# change that leaves it under- or over-sized, rather than zip() silently truncating.
+# override) — unclaimed is meant to look unclaimed, not tagged bright anything.
+# strict=True raises at import time if this list drifts out of sync with FACTIONS.
 _OWNER_COLOR_VALUES = ["red", "cyan", "green"]
-if len(_OWNER_COLOR_VALUES) != len(FACTIONS):
-    raise ValueError("OWNER_COLORS needs exactly one color per FACTIONS entry")
 OWNER_COLORS = dict(zip((faction.id for faction in FACTIONS), _OWNER_COLOR_VALUES, strict=True))
 
 

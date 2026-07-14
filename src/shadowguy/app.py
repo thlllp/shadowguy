@@ -43,7 +43,7 @@ from shadowguy.corpmap import (
     render_ascii_map,
 )
 from shadowguy.factions import FACTIONS
-from shadowguy.fixer import Fixer, create_fixers, expire_offers, refresh_offers
+from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.scene import (
@@ -247,9 +247,9 @@ class MainMenu(Screen):
                         id=f"local_{location.id}",
                     )
                 )
+            discover_fixers_here(self.app.fixers, character)
             for fixer in self.app.fixers:
                 if fixer.location_id == character.location_id:
-                    character.discover_fixer(fixer.id)
                     items.append(
                         ListItem(
                             Static(f"  {fixer.name} — {fixer.specialty} ({len(fixer.offers)} jobs available)"),
@@ -667,41 +667,48 @@ class ContactsScreen(Screen):
         # for isn't a contact yet, just someone you could look up in person (see the
         # Local tab, which is location-gated instead of trust-gated).
         established = [fixer for fixer in self.app.fixers if character.trust_with(fixer.id) > 0]
-        if established:
-            fixer_items = [
-                ListItem(
-                    Static(
-                        f"{fixer.name} — {fixer.specialty} "
-                        f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs available)"
-                    ),
-                    id=f"fixer_{fixer.id}",
-                )
-                for fixer in established
-            ]
+        await self._populate(
+            "#fixers_list",
+            established,
+            id_prefix="fixer_",
+            label=lambda fixer: (
+                f"{fixer.name} — {fixer.specialty} "
+                f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs available)"
+            ),
+            empty_label="No established contacts yet.",
+            empty_id="no_fixers",
+        )
+        await self._populate(
+            "#corps_list",
+            FACTIONS,
+            id_prefix="faction_",
+            label=lambda faction: (
+                f"{faction.name} — {faction.specialty.value} "
+                f"(standing {character.standing_with(faction.id):+d})"
+            ),
+        )
+        await self._populate(
+            "#runners_list",
+            RIVAL_RUNNERS,
+            id_prefix="runner_",
+            label=lambda runner: f"{runner.name} — {runner.archetype}: {runner.description}",
+        )
+
+    async def _populate(
+        self,
+        list_view_id: str,
+        entries: list,
+        *,
+        id_prefix: str,
+        label,
+        empty_label: str | None = None,
+        empty_id: str = "",
+    ) -> None:
+        if entries:
+            items = [ListItem(Static(label(entry)), id=f"{id_prefix}{entry.id}") for entry in entries]
         else:
-            fixer_items = [ListItem(Static("No established contacts yet."), id="no_fixers")]
-        await _replace_items(self.query_one("#fixers_list", ListView), fixer_items)
-
-        corp_items = [
-            ListItem(
-                Static(
-                    f"{faction.name} — {faction.specialty.value} "
-                    f"(standing {character.standing_with(faction.id):+d})"
-                ),
-                id=f"faction_{faction.id}",
-            )
-            for faction in FACTIONS
-        ]
-        await _replace_items(self.query_one("#corps_list", ListView), corp_items)
-
-        runner_items = [
-            ListItem(
-                Static(f"{runner.name} — {runner.archetype}: {runner.description}"),
-                id=f"runner_{runner.id}",
-            )
-            for runner in RIVAL_RUNNERS
-        ]
-        await _replace_items(self.query_one("#runners_list", ListView), runner_items)
+            items = [ListItem(Static(empty_label), id=empty_id)] if empty_label else []
+        await _replace_items(self.query_one(list_view_id, ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if not event.item.id.startswith("fixer_"):
@@ -1046,12 +1053,9 @@ class CorpMapScreen(Screen):
     def _refresh(self) -> None:
         corp_map = self.app.corp_map
         character = self.app.character
-        # Standing in a fixer's district is what discovers them — a passive check
-        # here rather than a one-off in action_travel, so it also catches the
-        # starting location and any other way location_id could change later.
-        for fixer in self.app.fixers:
-            if fixer.location_id == character.location_id:
-                character.discover_fixer(fixer.id)
+        # A passive check here (rather than a one-off in action_travel) so it also
+        # catches the starting location and any other way location_id could change.
+        discover_fixers_here(self.app.fixers, character)
 
         # Hover only restyles the finished text, so re-render the board itself
         # only when the cursor or the runner actually moved.

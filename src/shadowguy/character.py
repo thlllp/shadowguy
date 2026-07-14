@@ -75,7 +75,7 @@ class Character:
     fixer_trust: dict[str, int] = field(default_factory=dict)
     # Fixer ids (fixer.Fixer.id) whose location the runner has stood in at least
     # once. A fixer's presence on the corp map is hidden until discovered this way
-    # — see app.CorpMapScreen, which is the only place that reveals it again.
+    # — see fixer.discover_fixers_here(), the single place that reveals it.
     discovered_fixers: set[str] = field(default_factory=set)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
