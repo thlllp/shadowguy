@@ -24,6 +24,9 @@ class Outcome:
     advantage_delta: int = 0
     # Applied to the scene's target_faction_id; rivals move the other way.
     standing_delta: int = 0
+    # Applied to the scene's target_fixer_id. No rival effect — trust is a direct,
+    # one-fixer relationship, unlike standing_shift's corp-vs-corp competition.
+    fixer_trust_delta: int = 0
     next_stage: str | None = None
 
 
@@ -97,6 +100,10 @@ class Scene:
     target_faction_id: str | None = None
     target_territory_id: str | None = None
     target_location_id: str | None = None
+    # Which Fixer issued this job (fixer.Fixer.id). Set by fixer.refresh_offers at
+    # generation time, same as the other target_* fields — not by JobOffer, which
+    # already carries fixer_id but only wraps the scene rather than being part of it.
+    target_fixer_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
@@ -128,6 +135,10 @@ class Scene:
                 if outcome.standing_delta and self.target_faction_id is None:
                     raise ValueError(
                         f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
+                    )
+                if outcome.fixer_trust_delta and self.target_fixer_id is None:
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} moves fixer trust but the scene has no target fixer"
                     )
 
     @staticmethod
@@ -199,6 +210,8 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
         shift = standing_shift(scene.target_faction_id, outcome.standing_delta)
         for faction_id, delta in shift.items():
             character.adjust_standing(faction_id, delta)
+    if outcome.fixer_trust_delta:
+        character.adjust_fixer_trust(scene.target_fixer_id, outcome.fixer_trust_delta)
 
 
 def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:

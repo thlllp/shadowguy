@@ -49,6 +49,12 @@ FULL_POOL_CHANCE = 0.35
 # Standing lost with the corp you just robbed, on a completed job.
 JOB_STANDING_HIT = -2
 
+# Trust gained with the fixer who sent you, on a completed job — the other half of
+# JOB_STANDING_HIT: the corp you hit likes you less, the fixer who profits off it
+# likes you more. Same trigger (the final stage's success/critical-success), same
+# "botched or abandoned jobs cost nothing" rule as standing.
+FIXER_TRUST_GAIN = 2
+
 # Every stage carries a fight beside it, reachable two ways — and which way you got
 # there is the whole difference between the two (combat.drop_for_result reads it off
 # the check that routed you in):
@@ -434,7 +440,7 @@ def _random_timing(day: int, rng: random.Random) -> JobTiming:
 
 
 def generate_job(
-    day: int, corp_map: CorpMap, rng: random.Random | None = None
+    day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
 ) -> tuple[Scene, JobTiming]:
     rng = rng or random.Random()
     archetype = rng.choice(ARCHETYPES)
@@ -492,6 +498,7 @@ def generate_job(
                 cash_delta=int(reward_base * multiplier) if is_last else 0,
                 rep_delta=rep if is_last else 0,
                 standing_delta=JOB_STANDING_HIT if is_last else 0,
+                fixer_trust_delta=FIXER_TRUST_GAIN if is_last else 0,
             )
 
         choices = [
@@ -571,6 +578,7 @@ def generate_job(
         target_faction_id=faction.id,
         target_territory_id=territory.id,
         target_location_id=location.id,
+        target_fixer_id=fixer_id,
     )
     return scene, _random_timing(day, rng)
 

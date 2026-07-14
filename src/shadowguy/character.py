@@ -69,6 +69,14 @@ class Character:
     location_id: str = ""
     advantage: dict[str, int] = field(default_factory=dict)
     standing: dict[str, int] = field(default_factory=dict)
+    # Trust with a specific Fixer (fixer.Fixer.id), separate from standing (which is
+    # per-faction) and rep (which is global). Only completed jobs move it, same rule
+    # as standing — see jobs.FIXER_TRUST_GAIN.
+    fixer_trust: dict[str, int] = field(default_factory=dict)
+    # Fixer ids (fixer.Fixer.id) whose location the runner has stood in at least
+    # once. A fixer's presence on the corp map is hidden until discovered this way
+    # — see app.CorpMapScreen, which is the only place that reveals it again.
+    discovered_fixers: set[str] = field(default_factory=set)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
@@ -108,6 +116,15 @@ class Character:
 
     def adjust_standing(self, faction_id: str, delta: int) -> None:
         self.standing[faction_id] = self.standing_with(faction_id) + delta
+
+    def trust_with(self, fixer_id: str) -> int:
+        return self.fixer_trust.get(fixer_id, 0)
+
+    def adjust_fixer_trust(self, fixer_id: str, delta: int) -> None:
+        self.fixer_trust[fixer_id] = self.trust_with(fixer_id) + delta
+
+    def discover_fixer(self, fixer_id: str) -> None:
+        self.discovered_fixers.add(fixer_id)
 
     @property
     def max_health(self) -> int:
