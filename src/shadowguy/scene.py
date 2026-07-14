@@ -101,6 +101,11 @@ class Scene:
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
+        if self.stages[self.start_stage].combat is not None:
+            # A fight is only ever routed to by a resolved check (that's what decides
+            # the drop), so a scene may not *open* on one — the screen would have no
+            # check to read and no choices to render.
+            raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight")
         for stage in self.stages.values():
             if stage.combat is not None:
                 if stage.choices:

@@ -64,8 +64,7 @@ UNARMED = Item(
     damage=3,
 )
 
-# A crit doubles what a blow takes off — the same idea as jobs.CRITICAL_FAILURE_MULTIPLIER,
-# and it cuts both ways: enemies crit you too.
+# A crit doubles what a blow takes off — and it cuts both ways: enemies crit you too.
 CRITICAL_DAMAGE_MULTIPLIER = 2
 
 # Bracing (Toughness) soaks this much off *each* hit you take that round, so it
@@ -112,7 +111,6 @@ FLEE_DIFFICULTY_PER_ENEMY = 2
 # and it reads right — the difference between picking your moment and having the alarm
 # bring everyone is who you have to fight, not just who moves first.
 FREE_ROUND = 1
-AMBUSH_REMOVES_ENEMY = True
 
 
 class Drop(StrEnum):
@@ -128,7 +126,7 @@ class Drop(StrEnum):
     ENEMY = "enemy"  # you were made: they get a free round before you act
 
 
-def drop_for_result(result: CheckResult) -> Drop:
+def drop_for_result(result: CheckResult | None) -> Drop:
     """Who got the drop, read straight off the check that routed you into the fight.
 
     This is the whole reason a fight needs no extra data on Outcome to know how it
@@ -140,8 +138,13 @@ def drop_for_result(result: CheckResult) -> Drop:
     - You critically failed *anything*: they were waiting. This is also the only way
       a normal approach reaches a fight at all, which is why going loud always hands
       the initiative to them and choosing the fight never does.
+
+    None means no check routed you here at all (a fight chained straight off another
+    fight's outcome), and nobody has the drop in a fight nobody set up.
     """
-    if result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+    if result is None:
+        return Drop.NONE
+    if result.passed:
         return Drop.PLAYER
     if result is CheckResult.CRITICAL_FAILURE:
         return Drop.ENEMY
@@ -314,8 +317,6 @@ class CombatState:
 
     character: Character
     fighters: list[Fighter]
-    drop: Drop = Drop.NONE
-    round: int = 1
     outcome: CombatOutcome = CombatOutcome.ONGOING
     log: list[str] = field(default_factory=list)
     # Banked by READ, spent by the next ATTACK. Not a permanent buff: setting up a
@@ -345,14 +346,13 @@ def start_combat(
     state = CombatState(
         character=character,
         fighters=[Fighter(enemy=enemy, health=enemy.health) for enemy in enemies],
-        drop=drop,
     )
     if drop is Drop.PLAYER:
         state.enemy_skip_rounds = FREE_ROUND
         state.log.append("You have the drop on them.")
         # Never the last one standing: taking out a lone enemy before the fight would
         # be a fight you never had, and a stage you passed for free.
-        if AMBUSH_REMOVES_ENEMY and len(state.fighters) > 1:
+        if len(state.fighters) > 1:
             straggler = state.fighters[-1]
             straggler.health = 0
             state.log.append(f"You put {straggler.enemy.name} down before they see you.")
@@ -368,7 +368,7 @@ def start_combat(
         roll = resolve_check(
             stat_value=first.enemy.attack, difficulty=player_defense(character), rng=rng
         )
-        if roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+        if roll.result.passed:
             character.adjust_health(-first.enemy.damage)
             state.log.append(f"{first.enemy.name} opens on you for {first.enemy.damage}.")
         else:
@@ -397,7 +397,7 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
         advantage=bonus,
         rng=rng,
     )
-    if roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+    if roll.result.passed:
         damage = weapon.damage
         if roll.result is CheckResult.CRITICAL_SUCCESS:
             damage *= CRITICAL_DAMAGE_MULTIPLIER
@@ -415,7 +415,7 @@ def _brace(state: CombatState, rng: random.Random) -> None:
         difficulty=BRACE_DIFFICULTY,
         rng=rng,
     )
-    hit = roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS)
+    hit = roll.result.passed
     state.soak = BRACE_SOAK if hit else BRACE_SOAK_ON_FAILURE
     state.log.append(
         f"You set yourself. Soaking {state.soak} off every hit this round."
@@ -430,7 +430,7 @@ def _read(state: CombatState, rng: random.Random) -> None:
         difficulty=READ_DIFFICULTY,
         rng=rng,
     )
-    if roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+    if roll.result.passed:
         state.next_attack_bonus += READ_BONUS
         state.log.append(f"You see the opening. +{READ_BONUS} to your next attack.")
     else:
@@ -444,7 +444,7 @@ def _intimidate(state: CombatState, rng: random.Random) -> None:
         difficulty=target.enemy.defense + INTIMIDATE_DIFFICULTY_BONUS,
         rng=rng,
     )
-    if roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+    if roll.result.passed:
         # Not killed — gone. Same effect on the fight, different story, and it's the
         # only way to end a fight without putting anyone on the floor.
         target.health = 0
@@ -468,6 +468,10 @@ def _throw(state: CombatState, action: Action) -> None:
         # That's what you paid for.
         state.outcome = CombatOutcome.ESCAPED
         state.log.append(f"{consumable.name} — you walk out of the fight clean.")
+    else:
+        # Same guard as shops.use_consumable, from the other side: a new combat-only
+        # effect with no branch here would otherwise be popped and silently do nothing.
+        raise ValueError(f"consumable effect not handled in combat: {consumable.effect}")
 
 
 def _flee(state: CombatState, rng: random.Random) -> None:
@@ -479,7 +483,7 @@ def _flee(state: CombatState, rng: random.Random) -> None:
     )
     # Escaping either way — see FLEE_DIFFICULTY. The roll only decides the bill.
     state.outcome = CombatOutcome.ESCAPED
-    if roll.result in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+    if roll.result.passed:
         state.log.append("You break contact clean and go.")
         return
 
@@ -489,8 +493,7 @@ def _flee(state: CombatState, rng: random.Random) -> None:
     catcher = state.standing[0]
     state.character.adjust_health(-catcher.enemy.damage)
     state.log.append(f"You run. {catcher.enemy.name} catches you for {catcher.enemy.damage}.")
-    if not state.character.is_alive:
-        state.outcome = CombatOutcome.DEAD
+    # If the parting shot kills you, _settle turns ESCAPED into DEAD right after.
 
 
 def _enemy_turn(state: CombatState, rng: random.Random) -> None:
@@ -506,7 +509,7 @@ def _enemy_turn(state: CombatState, rng: random.Random) -> None:
             state.log.append(f"{fighter.enemy.name} is still reeling.")
             continue
         roll = resolve_check(stat_value=fighter.enemy.attack, difficulty=defense, rng=rng)
-        if roll.result not in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS):
+        if not roll.result.passed:
             state.log.append(f"{fighter.enemy.name} swings wide.")
             continue
         damage = fighter.enemy.damage
@@ -553,4 +556,3 @@ def take_turn(state: CombatState, action: Action, rng: random.Random | None = No
     _settle(state)
     # Soak was bought for the round that just resolved, not the next one.
     state.soak = 0
-    state.round += 1

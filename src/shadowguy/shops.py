@@ -85,7 +85,7 @@ class EffectKind(Enum):
     RESTORE_STAMINA = "restore_stamina"
     TEMP_STAT_BOOST = "temp_stat_boost"  # stat name comes from Consumable.stat
     # The three below only mean anything inside a fight, and are spent by combat.py
-    # rather than by use_consumable — see COMBAT_EFFECTS.
+    # rather than by use_consumable — see COMBAT_ONLY_EFFECTS.
     COMBAT_DAMAGE_ALL = "combat_damage_all"  # amount = health off every standing enemy
     COMBAT_STUN = "combat_stun"  # amount = rounds the enemies lose
     COMBAT_ESCAPE = "combat_escape"  # walk out of the fight, no check
@@ -264,7 +264,7 @@ def use_consumable(character: "Character", index: int) -> str:
         character.add_temp_bonus(consumable.stat, consumable.amount)
         return f"+{consumable.amount} {consumable.stat.capitalize()} until next rest"
     # Every non-combat effect is handled above; a new EffectKind that is neither
-    # listed in COMBAT_EFFECTS nor given a branch here would otherwise be silently
+    # listed in COMBAT_ONLY_EFFECTS nor given a branch here would otherwise be silently
     # eaten (the item spent, nothing applied).
     raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
 

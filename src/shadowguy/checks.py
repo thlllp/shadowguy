@@ -9,6 +9,11 @@ class CheckResult(Enum):
     FAILURE = auto()
     CRITICAL_FAILURE = auto()
 
+    @property
+    def passed(self) -> bool:
+        """Did the check succeed at all? Crits count — a nat 20 is still a success."""
+        return self in (CheckResult.CRITICAL_SUCCESS, CheckResult.SUCCESS)
+
 
 @dataclass
 class CheckRoll:

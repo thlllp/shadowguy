@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 
-from shadowguy.combat import roll_enemies
+from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage
@@ -21,15 +21,20 @@ TARGETS = [
 DIFFICULTY_BASE = (10, 13, 16)
 REWARD_BASE = (250, 450, 700)
 
+# One tier domain, three tables: a job's difficulty, its pay, and who turns up to its
+# fights (combat.ENEMY_TIERS) are all indexed by the tier _tier_for_day yields. The
+# last one lives in another module that can't import this one, so the drift is caught
+# here — extending the tiers in one table without the others should fail on import,
+# not KeyError inside a fixer's offer refresh.
+if len(DIFFICULTY_BASE) != len(REWARD_BASE) or set(ENEMY_TIERS) != set(range(len(DIFFICULTY_BASE))):
+    raise ValueError("DIFFICULTY_BASE, REWARD_BASE and combat.ENEMY_TIERS must cover the same tiers")
+
 # How much harder the last stage of a job is than the first. Spread across however
 # many stages the job turned out to have, so the arc is the same shape whether it
 # runs 3 stages or 4 — a longer job is more *checks*, not a steeper climb. (A flat
 # +1 per stage index, which is what this replaces, quietly made 4-stage jobs harder
 # to finish than 3-stage ones for the same money.)
 STAGE_DIFFICULTY_RAMP = 2
-
-# A critical failure hurts this much more than a plain one.
-CRITICAL_FAILURE_MULTIPLIER = 2
 
 # A stage offers a subset of its pool, not the whole thing: how many ways in this
 # particular job happens to have is part of what makes one offer better than another.
@@ -134,8 +139,8 @@ class Approach:
     """One way through a job stage: a skill, and how hard/bloody that way is.
 
     difficulty_delta shifts the stage's rolled difficulty, and it alone fixes the
-    health cost (failure_damage, x CRITICAL_FAILURE_MULTIPLIER on a critical): the
-    cheap check is always the one that hurts. A stage rolls its base difficulty
+    health cost (failure_damage; a critical failure deals the same and goes loud):
+    the cheap check is always the one that hurts. A stage rolls its base difficulty
     *once* and every approach is offset from it, so a delta means the same thing on
     every job.
     """
@@ -416,7 +421,7 @@ class JobTiming:
 
 
 def _tier_for_day(day: int) -> int:
-    return min(2, (day - 1) // 3)
+    return min(len(DIFFICULTY_BASE) - 1, (day - 1) // 3)
 
 
 def _random_timing(day: int, rng: random.Random) -> JobTiming:
@@ -507,8 +512,8 @@ def generate_job(
                 ),
                 # The one branch that doesn't just cost health and carry on: you're
                 # made, and they arrive holding the initiative. Note it deals the
-                # *plain* failure damage, not CRITICAL_FAILURE_MULTIPLIER's doubled
-                # hit: the fight is the critical failure's punishment, and charging
+                # *plain* failure damage, not the doubled hit a critical used to
+                # deal: the fight is the critical failure's punishment, and charging
                 # both stacked a double-damage hit under a squad that opens with a
                 # free round — which is a nat-1 killing a light build outright.
                 critical_failure=Outcome(

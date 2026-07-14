@@ -709,7 +709,11 @@ class SceneScreen(Screen):
             self.app.exit(message=f"{character.name} has died. Game over.")
             return
 
-        self._pending_next_stage = outcome.next_stage
+        await self._await_continue(outcome.next_stage, result)
+
+    async def _await_continue(self, next_stage: str | None, result: CheckResult | None) -> None:
+        """Arm the Continue row that carries the scene to next_stage on select."""
+        self._pending_next_stage = next_stage
         self._pending_result = result
         await _replace_items(self.query_one("#choices", ListView), [ListItem(Static("Continue"), id="continue")])
         self.awaiting_continue = True
@@ -736,9 +740,10 @@ class SceneScreen(Screen):
         self.query_one(CharacterSheet).refresh()
         self.query_one("#prompt", Static).update(outcome.text)
 
-        self._pending_next_stage = outcome.next_stage
-        await _replace_items(self.query_one("#choices", ListView), [ListItem(Static("Continue"), id="continue")])
-        self.awaiting_continue = True
+        # result=None: no check routed us out of a fight, so if this outcome ever
+        # chains into another fight, that fight opens even (Drop.NONE) rather than
+        # inheriting the drop of the check that opened the *previous* one.
+        await self._await_continue(outcome.next_stage, None)
 
     async def _advance(self) -> None:
         if self._pending_next_stage is None:
