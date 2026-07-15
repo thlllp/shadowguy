@@ -39,6 +39,16 @@ class LocationKind(StrEnum):
     AUTO_DEALER = "auto_dealer"
     PHARMACY = "pharmacy"
     COMPUTER_STORE = "computer_store"
+    APARTMENT = "apartment"
+
+
+# Kinds the world generator never rolls onto the map: the runner's home is injected
+# explicitly into the start territory (see generate_corp_map), and acquired safehouses
+# will be too. They're a job target for no one, scouted by no one and run by no NPC, so
+# the per-kind world tables (LOCATION_SKILL, LOCATION_ROLES, gigs._GIG_TEMPLATES,
+# jobs.LEGWORK_APPROACH_TEXT) carry no entry for them — each guards against GENERATED_KINDS,
+# not the full enum.
+GENERATED_KINDS = tuple(k for k in LocationKind if k != LocationKind.APARTMENT)
 
 
 # Retail kinds: shops.py's business, but defined here (not there) since
@@ -71,8 +81,8 @@ LOCATION_SKILL = {
     LocationKind.PHARMACY: "infer",
     LocationKind.COMPUTER_STORE: "hack",
 }
-if set(LOCATION_SKILL) != set(LocationKind):
-    raise ValueError("LOCATION_SKILL must have exactly one entry per LocationKind")
+if set(LOCATION_SKILL) != set(GENERATED_KINDS):
+    raise ValueError("LOCATION_SKILL must have exactly one entry per generated LocationKind")
 
 
 def location_stat(kind: LocationKind) -> str:
@@ -81,7 +91,7 @@ def location_stat(kind: LocationKind) -> str:
 
 
 # Catches a typo'd skill id at import instead of when a legwork Scene is built.
-for _kind in LocationKind:
+for _kind in GENERATED_KINDS:
     location_stat(_kind)
 
 
@@ -411,8 +421,8 @@ if len(LOCATION_PREFIXES) * min(len(s) for s in LOCATION_SUFFIXES.values()) < (
 # roll one, so one role is enough for them. A short list would make rng.sample raise
 # mid-generation, hence the import-time proof.
 MAX_CHARACTERS_PER_LOCATION = 2
-if set(LOCATION_ROLES) != set(LocationKind):
-    raise ValueError("LOCATION_ROLES must have exactly one entry per LocationKind")
+if set(LOCATION_ROLES) != set(GENERATED_KINDS):
+    raise ValueError("LOCATION_ROLES must have exactly one entry per generated LocationKind")
 for _kind, _roles in LOCATION_ROLES.items():
     _needed = 1 if _kind in SHOP_KINDS else MAX_CHARACTERS_PER_LOCATION
     if len(_roles) < _needed:
@@ -455,7 +465,7 @@ def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
     faction = FACTIONS_BY_ID.get(owner)
     if faction is None:
         # Neutral ground and the player's block carry no corp's stamp.
-        return rng.sample(list(LocationKind), k=LOCATIONS_PER_TERRITORY)
+        return rng.sample(list(GENERATED_KINDS), k=LOCATIONS_PER_TERRITORY)
     owned_kind = LOCATION_KIND_FOR_SPECIALTY[faction.specialty]
     filler = rng.sample(_filler_pool(owned_kind), k=FILLER_COUNT)
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
@@ -712,5 +722,13 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             locations=_make_locations(ids[cell], owner, rng, used_names),
             modifiers=_make_modifiers(owner, values[cell], rng),
         )
+
+    # The runner's home: a fixed, player-owned place in the start district, injected
+    # rather than rolled (see GENERATED_KINDS). No owner NPC — it's the runner's own.
+    start = territories[ids[start_cell]]
+    start.locations.insert(
+        0,
+        Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT),
+    )
 
     return CorpMap(territories=territories, player_start_id=ids[start_cell])

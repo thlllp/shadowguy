@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
-from shadowguy.corpmap import LOCATION_SKILL, CorpMap, LocationKind
+from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage
 from shadowguy.skills import skill_for
@@ -598,8 +598,8 @@ LEGWORK_APPROACH_TEXT = {
     LocationKind.PHARMACY: "Pull the register logs at {name}",
     LocationKind.COMPUTER_STORE: "Sift the sales records at {name}",
 }
-if set(LEGWORK_APPROACH_TEXT) != set(LocationKind):
-    raise ValueError("LEGWORK_APPROACH_TEXT must have exactly one entry per LocationKind")
+if set(LEGWORK_APPROACH_TEXT) != set(GENERATED_KINDS):
+    raise ValueError("LEGWORK_APPROACH_TEXT must have exactly one entry per generated LocationKind")
 
 # Casing the target itself is the hardest read to get, and the best one.
 SITE_DIFFICULTY = 14

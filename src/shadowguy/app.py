@@ -341,8 +341,12 @@ class MainMenu(PanelNav, Screen):
             location_id = item_id.removeprefix("local_")
             here = self.app.corp_map.territories[character.location_id]
             location = next((loc for loc in here.locations if loc.id == location_id), None)
-            if location is not None and location.kind in SHOP_KINDS:
+            if location is None:
+                return
+            if location.kind in SHOP_KINDS:
                 self.app.push_screen(ShopScreen(location))
+            elif location.kind == LocationKind.APARTMENT:
+                self.app.push_screen(ApartmentScreen(location))
             return
 
     async def _select_category(self, key: str) -> None:
@@ -477,6 +481,27 @@ class ShopScreen(Screen):
 
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
+
+
+class ApartmentScreen(Screen):
+    """The runner's home in the start district. A stub for now — safehouse functions
+    (rest, stash, ...) land here in later steps."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name)
+        yield Static("Home. Nothing to do here yet.")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
 
 class InventoryScreen(Screen):

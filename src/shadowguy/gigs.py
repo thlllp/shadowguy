@@ -23,7 +23,14 @@ import random
 import uuid
 from dataclasses import dataclass
 
-from shadowguy.corpmap import CorpMap, LocalCharacter, Location, LocationKind, Territory
+from shadowguy.corpmap import (
+    GENERATED_KINDS,
+    CorpMap,
+    LocalCharacter,
+    Location,
+    LocationKind,
+    Territory,
+)
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
 from shadowguy.skills import skill_for
 
@@ -179,8 +186,8 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
     ),
 }
 
-if set(_GIG_TEMPLATES) != set(LocationKind):
-    raise ValueError("_GIG_TEMPLATES must have exactly one entry per LocationKind")
+if set(_GIG_TEMPLATES) != set(GENERATED_KINDS):
+    raise ValueError("_GIG_TEMPLATES must have exactly one entry per generated LocationKind")
 for _template in _GIG_TEMPLATES.values():
     if not _template.approaches:
         raise ValueError("a gig template has no approaches")
