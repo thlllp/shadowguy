@@ -774,17 +774,17 @@ class ContactsScreen(PanelNav, Screen):
     Three panels rather than one mixed list, so each kind reads as its own thing.
     """
 
-    PANEL_IDS = ("fixers_list", "corps_list", "runners_list")
+    PANEL_IDS = ("fixers_list", "corps_list", "locals_list", "runners_list")
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
 
     CSS = """
-    #fixers_panel, #corps_panel, #runners_panel {
+    #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
         height: auto;
         border-top: solid $accent;
         padding: 0 1;
     }
 
-    #fixers_list, #corps_list, #runners_list {
+    #fixers_list, #corps_list, #locals_list, #runners_list {
         height: auto;
     }
     """
@@ -801,6 +801,11 @@ class ContactsScreen(PanelNav, Screen):
             Static("Corps"),
             ListView(id="corps_list"),
             id="corps_panel",
+        )
+        yield Vertical(
+            Static("Locals"),
+            ListView(id="locals_list"),
+            id="locals_panel",
         )
         yield Vertical(
             Static("Runners"),
@@ -844,6 +849,27 @@ class ContactsScreen(PanelNav, Screen):
                 f"{faction.name} — {faction.specialty.value} "
                 f"(standing {character.standing_with(faction.id):+d})"
             ),
+        )
+
+        # Only locals whose regard you've actually moved — same rule as fixers. A
+        # character you've never done a gig for isn't a contact, just someone behind
+        # a counter. Location captured per-id for the label.
+        loc_by_char = {char.id: loc for loc, char in self.app.corp_map.characters()}
+        known_locals = [
+            char
+            for _loc, char in self.app.corp_map.characters()
+            if character.local_standing_with(char.id) != 0
+        ]
+        await self._populate(
+            "#locals_list",
+            known_locals,
+            id_prefix="local_",
+            label=lambda char: (
+                f"{char.name} ({char.role}) — {loc_by_char[char.id].name} "
+                f"(standing {character.local_standing_with(char.id):+d})"
+            ),
+            empty_label="No locals know you yet.",
+            empty_id="no_locals",
         )
         await self._populate(
             "#runners_list",

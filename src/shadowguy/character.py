@@ -73,6 +73,10 @@ class Character:
     # per-faction) and rep (which is global). Only completed jobs move it, same rule
     # as standing — see jobs.FIXER_TRUST_GAIN.
     fixer_trust: dict[str, int] = field(default_factory=dict)
+    # Standing with a specific LocalCharacter (corpmap.LocalCharacter.id) — the people
+    # who run/haunt a Location. Moved by that location's gigs (Outcome.local_standing_delta)
+    # and read by shop pricing. Direct and one-person, like fixer_trust; no rival effect.
+    local_standing: dict[str, int] = field(default_factory=dict)
     # Fixer ids (fixer.Fixer.id) whose location the runner has stood in at least
     # once. A fixer's presence on the corp map is hidden until discovered this way
     # — see fixer.discover_fixers_here(), the single place that reveals it.
@@ -122,6 +126,12 @@ class Character:
 
     def adjust_fixer_trust(self, fixer_id: str, delta: int) -> None:
         self.fixer_trust[fixer_id] = self.trust_with(fixer_id) + delta
+
+    def local_standing_with(self, character_id: str) -> int:
+        return self.local_standing.get(character_id, 0)
+
+    def adjust_local_standing(self, character_id: str, delta: int) -> None:
+        self.local_standing[character_id] = self.local_standing_with(character_id) + delta
 
     def discover_fixer(self, fixer_id: str) -> None:
         self.discovered_fixers.add(fixer_id)

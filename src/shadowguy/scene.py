@@ -27,6 +27,9 @@ class Outcome:
     # Applied to the scene's target_fixer_id. No rival effect — trust is a direct,
     # one-fixer relationship, unlike standing_shift's corp-vs-corp competition.
     fixer_trust_delta: int = 0
+    # Applied to the scene's target_character_id (a corpmap.LocalCharacter). Like fixer
+    # trust: a direct, one-person relationship, no rival effect.
+    local_standing_delta: int = 0
     next_stage: str | None = None
 
 
@@ -104,6 +107,8 @@ class Scene:
     # generation time, same as the other target_* fields — not by JobOffer, which
     # already carries fixer_id but only wraps the scene rather than being part of it.
     target_fixer_id: str | None = None
+    # Which LocalCharacter (corpmap.LocalCharacter.id) a gig's standing reward lands on.
+    target_character_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
@@ -139,6 +144,10 @@ class Scene:
                 if outcome.fixer_trust_delta and self.target_fixer_id is None:
                     raise ValueError(
                         f"{self.id}: stage {stage.id!r} moves fixer trust but the scene has no target fixer"
+                    )
+                if outcome.local_standing_delta and self.target_character_id is None:
+                    raise ValueError(
+                        f"{self.id}: stage {stage.id!r} moves local standing but the scene has no target character"
                     )
 
     @staticmethod
@@ -212,6 +221,8 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
             character.adjust_standing(faction_id, delta)
     if outcome.fixer_trust_delta:
         character.adjust_fixer_trust(scene.target_fixer_id, outcome.fixer_trust_delta)
+    if outcome.local_standing_delta:
+        character.adjust_local_standing(scene.target_character_id, outcome.local_standing_delta)
 
 
 def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:
