@@ -27,7 +27,9 @@ SAVE_DIR = Path.home() / ".shadowguy" / "saves"
 SAVE_SUFFIX = ".save"
 # Bump on any change that makes an old bundle unloadable; older saves are then refused.
 # v2 added location_gigs (per-location gig offers).
-SAVE_VERSION = 2
+# v3 added Character.free_travel_used and moved vehicles onto Slot.VEHICLE (a pre-v3
+# Character has no free_travel_used and its owned vehicles were unlimited-slot).
+SAVE_VERSION = 3
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
