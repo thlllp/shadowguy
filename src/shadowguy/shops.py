@@ -25,6 +25,30 @@ if TYPE_CHECKING:
 # What a Pawn Shop pays back on an item, relative to its catalog price.
 PAWN_SELL_FRACTION = 0.5
 
+# Standing with a shop's owner (corpmap.LocalCharacter) bends its prices: each point is
+# STANDING_PRICE_STEP off what you pay and onto what a pawnbroker pays you, capped both
+# ways at STANDING_PRICE_CAP. Negative standing (a botched gig) cuts the other way — an
+# owner who's soured on you charges more and pays less. This is the hook a future
+# "standing unlocks stock/info" system hangs off; today it only moves price.
+STANDING_PRICE_STEP = 0.03
+STANDING_PRICE_CAP = 0.20
+
+
+def _standing_discount(standing: int) -> float:
+    return max(-STANDING_PRICE_CAP, min(STANDING_PRICE_CAP, standing * STANDING_PRICE_STEP))
+
+
+def buy_price(base: int, standing: int) -> int:
+    """What you pay for a `base`-priced item at a shop whose owner you have `standing`
+    with. Higher standing is cheaper, negative is a markup; never below 1eb."""
+    return max(1, round(base * (1 - _standing_discount(standing))))
+
+
+def sell_price(base: int, standing: int) -> int:
+    """What a pawnbroker you have `standing` with pays back on a `base`-priced item:
+    PAWN_SELL_FRACTION, improved or worsened by standing."""
+    return int(base * PAWN_SELL_FRACTION * (1 + _standing_discount(standing)))
+
 
 class Slot(Enum):
     HEADWEAR = "headwear"
@@ -268,10 +292,11 @@ def _fits_in_slot(inventory: list[InventoryItem], item: Item) -> bool:
     return slot_usage(inventory, item.slot) + _slot_cost(item) <= SLOT_CAPACITY[item.slot]
 
 
-def buy_item(character: "Character", item: Item) -> bool:
-    if character.cash < item.price:
+def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
+    price = buy_price(item.price, standing)
+    if character.cash < price:
         return False
-    character.cash -= item.price
+    character.cash -= price
     # Auto-equip only if there's room; otherwise it's bought stowed and the
     # player equips it manually (swapping out whatever's occupying the slot).
     entry = InventoryItem(item.id, equipped=_fits_in_slot(character.inventory, item))
@@ -279,10 +304,11 @@ def buy_item(character: "Character", item: Item) -> bool:
     return True
 
 
-def buy_consumable(character: "Character", consumable: Consumable) -> bool:
-    if character.cash < consumable.price:
+def buy_consumable(character: "Character", consumable: Consumable, standing: int = 0) -> bool:
+    price = buy_price(consumable.price, standing)
+    if character.cash < price:
         return False
-    character.cash -= consumable.price
+    character.cash -= price
     character.consumables.append(consumable.id)
     return True
 
@@ -312,10 +338,10 @@ def use_consumable(character: "Character", index: int) -> str:
     raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
 
 
-def sell_item(character: "Character", index: int) -> int:
+def sell_item(character: "Character", index: int, standing: int = 0) -> int:
     # By index, not id: the same item id can be owned more than once.
     entry = character.inventory.pop(index)
-    proceeds = int(ITEMS_BY_ID[entry.item_id].price * PAWN_SELL_FRACTION)
+    proceeds = sell_price(ITEMS_BY_ID[entry.item_id].price, standing)
     character.cash += proceeds
     return proceeds
 

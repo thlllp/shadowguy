@@ -107,12 +107,27 @@ MODIFIER_LABELS = {
 
 
 @dataclass
+class LocalCharacter:
+    """A person who runs or haunts a Location — a shop's owner, a bar's regular.
+
+    Standing with them is tracked on Character.local_standing, keyed by this id
+    (unique across the map by construction), moved by gigs and read by shop pricing.
+    """
+
+    id: str
+    name: str
+    role: str
+
+
+@dataclass
 class Location:
     """A concrete place inside a Territory — what a job actually hits."""
 
     id: str
     name: str
     kind: LocationKind
+    # Who runs or haunts the place: 1 for a shop (its owner), 1–2 for anywhere else.
+    characters: list[LocalCharacter] = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +157,16 @@ class CorpMap:
                     raise ValueError(
                         f"{territory.id} -> {conn_id} connection is not symmetric"
                     )
+
+    def characters(self) -> list[tuple[Location, LocalCharacter]]:
+        """Every LocalCharacter on the board, paired with the Location they belong to.
+        The one place other systems (Contacts, gigs, shop pricing) enumerate them."""
+        return [
+            (location, character)
+            for territory in self.territories.values()
+            for location in territory.locations
+            for character in location.characters
+        ]
 
 
 def _owner_tag(owner: str) -> str:
@@ -335,6 +360,31 @@ LOCATION_PREFIXES = [
     "Cinder", "Palisade", "Ashline", "Dead Man's",
 ]
 
+# Street handles for the people who run/haunt locations. Sampled distinct within one
+# location; repeats across the map are fine, since standing is keyed by LocalCharacter.id
+# (which is location-scoped and unique), not by name.
+CHARACTER_NAMES = [
+    "Kite", "Mube", "Vesh", "Doc Aluko", "Sparrow", "Tallow", "Nix", "Rue",
+    "Gethin", "Onyx", "Marisol", "Breaker", "Coil", "Suri", "Fenn", "Locke",
+    "Amp", "Devi", "Praxis", "Wren", "Cutter", "Halo", "Jettison", "Mara",
+    "Oki", "Rho", "Salt", "Torque", "Vandal", "Yara",
+]
+
+# The role each location kind's characters read as, for flavor and to tell two
+# characters at one venue apart. Non-shop kinds can roll two characters, so they
+# need at least two distinct roles (guarded below); shops need only their owner.
+LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
+    LocationKind.DATA: ("netrunner", "data broker", "sysop"),
+    LocationKind.LAB: ("ripperdoc", "chemist", "lab tech"),
+    LocationKind.DEPOT: ("quartermaster", "dockhand", "fixer's runner"),
+    LocationKind.SOCIAL: ("bartender", "regular", "bouncer", "hustler"),
+    LocationKind.PAWN: ("pawnbroker",),
+    LocationKind.WEAPON_SHOP: ("gunsmith",),
+    LocationKind.AUTO_DEALER: ("dealer",),
+    LocationKind.PHARMACY: ("pharmacist",),
+    LocationKind.COMPUTER_STORE: ("techie",),
+}
+
 # The most locations of one kind a map can want: the faction whose specialty it is
 # takes SPECIALTY_LOCATIONS in each of its own districts, and every other district
 # can still roll one. _make_locations retries forever on a name collision, so an
@@ -356,6 +406,19 @@ if len(LOCATION_PREFIXES) * min(len(s) for s in LOCATION_SUFFIXES.values()) < (
     MAX_SAME_KIND_LOCATIONS
 ):
     raise ValueError("not enough LOCATION_PREFIXES/LOCATION_SUFFIXES to name every location")
+# _make_characters samples distinct roles up to MAX_CHARACTERS_PER_LOCATION, so every
+# kind that can roll two characters must offer at least two roles for rng.sample; shops
+# roll one, so one role is enough for them. A short list would make rng.sample raise
+# mid-generation, hence the import-time proof.
+MAX_CHARACTERS_PER_LOCATION = 2
+if set(LOCATION_ROLES) != set(LocationKind):
+    raise ValueError("LOCATION_ROLES must have exactly one entry per LocationKind")
+for _kind, _roles in LOCATION_ROLES.items():
+    _needed = 1 if _kind in SHOP_KINDS else MAX_CHARACTERS_PER_LOCATION
+    if len(_roles) < _needed:
+        raise ValueError(f"LOCATION_ROLES[{_kind}] needs at least {_needed} roles")
+if len(CHARACTER_NAMES) < MAX_CHARACTERS_PER_LOCATION:
+    raise ValueError("CHARACTER_NAMES too small to name a location's characters")
 
 Cell = tuple[int, int]
 
@@ -398,6 +461,18 @@ def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
 
 
+def _make_characters(location_id: str, kind: LocationKind, rng: random.Random) -> list[LocalCharacter]:
+    """One character for a shop (its owner), 1–2 for anywhere else. Names and roles are
+    distinct within the location; ids (the standing key) are unique by construction."""
+    count = 1 if kind in SHOP_KINDS else rng.randint(1, MAX_CHARACTERS_PER_LOCATION)
+    names = rng.sample(CHARACTER_NAMES, count)
+    roles = rng.sample(LOCATION_ROLES[kind], count)
+    return [
+        LocalCharacter(id=f"{location_id}_p{i}", name=names[i], role=roles[i])
+        for i in range(count)
+    ]
+
+
 def _make_locations(
     territory_id: str, owner: str, rng: random.Random, used_names: set[str]
 ) -> list[Location]:
@@ -408,7 +483,15 @@ def _make_locations(
             if name not in used_names:
                 break
         used_names.add(name)
-        locations.append(Location(id=f"{territory_id}_loc{index}", name=name, kind=kind))
+        location_id = f"{territory_id}_loc{index}"
+        locations.append(
+            Location(
+                id=location_id,
+                name=name,
+                kind=kind,
+                characters=_make_characters(location_id, kind, rng),
+            )
+        )
     return locations
 
 

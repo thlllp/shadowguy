@@ -21,13 +21,6 @@ from shadowguy.combat import (
     start_combat,
     take_turn,
 )
-from shadowguy.content import (
-    GIG_CARD_TABLE,
-    GIG_CHEM_TRIAL,
-    GIG_RING_FIGHT,
-    GIG_STREET_WHISPERS,
-    GIG_WORK_A_MARK,
-)
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
@@ -43,6 +36,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
+from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
@@ -52,18 +46,18 @@ from shadowguy.scene import (
     SceneKind,
     apply_outcome,
     resolve_choice,
-    validate_scene_registry,
 )
 from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
-    PAWN_SELL_FRACTION,
     bonus_text,
     buy_consumable,
     buy_item,
+    buy_price,
     sell_item,
+    sell_price,
     toggle_equip,
     use_consumable,
 )
@@ -108,32 +102,6 @@ class CharacterSheet(Static):
             f"Gear: {gear}"
         )
 
-
-STATIC_ACTIVITIES = [
-    GIG_CHEM_TRIAL,
-    GIG_RING_FIGHT,
-    GIG_CARD_TABLE,
-    GIG_STREET_WHISPERS,
-    GIG_WORK_A_MARK,
-]
-validate_scene_registry(STATIC_ACTIVITIES)
-
-# Which LocationKinds a gig plausibly happens at — a gig only shows up in the
-# activity list while the runner is standing in a territory that has one of
-# these among its (LOCATIONS_PER_TERRITORY) locations. A gig may list more than
-# one kind where its flavor genuinely fits either (e.g. a ripperdoc's chem test
-# reads as either a clinic or a pharmacy); it's not padded just to widen reach.
-GIG_LOCATION_KINDS: dict[str, tuple[LocationKind, ...]] = {
-    GIG_CHEM_TRIAL.id: (LocationKind.LAB, LocationKind.PHARMACY),
-    GIG_RING_FIGHT.id: (LocationKind.SOCIAL, LocationKind.DEPOT),
-    GIG_CARD_TABLE.id: (LocationKind.SOCIAL,),
-    GIG_STREET_WHISPERS.id: (LocationKind.SOCIAL, LocationKind.DATA),
-    GIG_WORK_A_MARK.id: (LocationKind.SOCIAL,),
-}
-if set(GIG_LOCATION_KINDS) != {
-    scene.id for scene in STATIC_ACTIVITIES if scene.kind == SceneKind.GIG
-}:
-    raise ValueError("GIG_LOCATION_KINDS must have exactly one entry per gig in STATIC_ACTIVITIES")
 
 
 # Shared left/right panel navigation for the multi-ListView screens. A ListView
@@ -243,19 +211,21 @@ class MainMenu(PanelNav, Screen):
         items = []
 
         if self.selected_category == "gig":
+            # One gig per local location, each owned by one of that location's
+            # characters — street work you self-select into, gated only by being here.
             here = self.app.corp_map.territories[character.location_id]
-            local_kinds = {location.kind for location in here.locations}
-            for scene in STATIC_ACTIVITIES:
-                if scene.kind != SceneKind.GIG:
+            for location in here.locations:
+                gig = self.app.location_gigs.get(location.id)
+                if gig is None:
                     continue
-                if local_kinds.isdisjoint(GIG_LOCATION_KINDS[scene.id]):
-                    continue
-                label = f"Gig — {scene.title} ({scene.stamina_cost} stamina)"
-                if not character.can_afford(scene.stamina_cost):
+                owner = next((c for c in location.characters if c.id == gig.target_character_id), None)
+                who = f" — {owner.name}" if owner else ""
+                label = f"Gig — {gig.title} @ {location.name}{who} ({gig.stamina_cost} stamina)"
+                if not character.can_afford(gig.stamina_cost):
                     label += " — too tired"
-                elif character.cash < scene.max_cash_loss:
-                    label += f" — can't cover the stake ({scene.max_cash_loss} cash)"
-                items.append(ListItem(Static(label), id=f"static_{scene.id}"))
+                elif character.cash < gig.max_cash_loss:
+                    label += f" — can't cover the stake ({gig.max_cash_loss} cash)"
+                items.append(ListItem(Static(label), id=f"gig_{location.id}"))
 
         if self.selected_category == "job":
             for job in character.accepted_jobs:
@@ -319,20 +289,23 @@ class MainMenu(PanelNav, Screen):
             character.rest()
             expire_offers(self.app.fixers, character.day)
             refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)
+            refresh_gigs(self.app.corp_map, self.app.location_gigs, character.day, self.app.rng)
             await self._refresh()
             return
 
-        if item_id.startswith("static_"):
-            scene_id = item_id.removeprefix("static_")
-            scene = next(scene for scene in STATIC_ACTIVITIES if scene.id == scene_id)
-            if not character.can_afford(scene.stamina_cost):
+        if item_id.startswith("gig_"):
+            location_id = item_id.removeprefix("gig_")
+            gig = self.app.location_gigs.get(location_id)
+            if gig is None:
+                return
+            if not character.can_afford(gig.stamina_cost):
                 return
             # apply_outcome subtracts a losing bet straight off Character.cash, so a
             # scene the runner can't cover is refused here, not floored on the way out.
-            if character.cash < scene.max_cash_loss:
+            if character.cash < gig.max_cash_loss:
                 return
-            character.spend_stamina(scene.stamina_cost)
-            self.app.push_screen(SceneScreen(scene))
+            character.spend_stamina(gig.stamina_cost)
+            self.app.push_screen(SceneScreen(gig))
             return
 
         if item_id.startswith("legwork_"):
@@ -445,45 +418,62 @@ class ShopScreen(Screen):
     async def on_mount(self) -> None:
         await self._refresh()
 
+    def _owner_standing(self) -> int:
+        """Standing with the shop's owner (its single character). Bends every price
+        here (shops.buy_price/sell_price). Defaults to 0 if the shop somehow has no
+        owner, which is the neutral, no-effect case."""
+        character = self.app.character
+        owner = self.location.characters[0] if self.location.characters else None
+        return character.local_standing_with(owner.id) if owner else 0
+
     async def _refresh(self) -> None:
         character = self.app.character
+        standing = self._owner_standing()
+        owner = self.location.characters[0] if self.location.characters else None
+        header = self.location.name
+        if owner:
+            header += f" — {owner.name} ({owner.role}), standing {standing:+d}"
+        self.query_one("#shop_info", Static).update(header)
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
+            price = buy_price(item.price, standing)
             bonus = bonus_text(item)
-            label = f"Buy {item.name} — {item.price}eb" + (f" ({bonus})" if bonus else "")
-            if character.cash < item.price:
+            label = f"Buy {item.name} — {price}eb" + (f" ({bonus})" if bonus else "")
+            if character.cash < price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
         for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
-            label = f"Buy {consumable.name} — {consumable.price}eb"
-            if character.cash < consumable.price:
+            price = buy_price(consumable.price, standing)
+            label = f"Buy {consumable.name} — {price}eb"
+            if character.cash < price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
 
         if self.location.kind == LocationKind.PAWN:
             for index, entry in enumerate(character.inventory):
                 item = ITEMS_BY_ID[entry.item_id]
-                proceeds = int(item.price * PAWN_SELL_FRACTION)
+                proceeds = sell_price(item.price, standing)
                 items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
 
         await _replace_items(self.query_one("#shop_items", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
+        standing = self._owner_standing()
         item_id = event.item.id
 
         if item_id.startswith("buy_"):
             item = ITEMS_BY_ID[item_id.removeprefix("buy_")]
-            if not buy_item(character, item):
+            if not buy_item(character, item, standing):
                 self.notify(f"Can't afford {item.name}.", severity="warning")
         elif item_id.startswith("buyc_"):
             consumable = CONSUMABLES_BY_ID[item_id.removeprefix("buyc_")]
-            if not buy_consumable(character, consumable):
+            if not buy_consumable(character, consumable, standing):
                 self.notify(f"Can't afford {consumable.name}.", severity="warning")
         elif item_id.startswith("sell_"):
-            sell_item(character, int(item_id.removeprefix("sell_")))
+            sell_item(character, int(item_id.removeprefix("sell_")), standing)
 
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
@@ -774,17 +764,17 @@ class ContactsScreen(PanelNav, Screen):
     Three panels rather than one mixed list, so each kind reads as its own thing.
     """
 
-    PANEL_IDS = ("fixers_list", "corps_list", "runners_list")
+    PANEL_IDS = ("fixers_list", "corps_list", "locals_list", "runners_list")
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
 
     CSS = """
-    #fixers_panel, #corps_panel, #runners_panel {
+    #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
         height: auto;
         border-top: solid $accent;
         padding: 0 1;
     }
 
-    #fixers_list, #corps_list, #runners_list {
+    #fixers_list, #corps_list, #locals_list, #runners_list {
         height: auto;
     }
     """
@@ -801,6 +791,11 @@ class ContactsScreen(PanelNav, Screen):
             Static("Corps"),
             ListView(id="corps_list"),
             id="corps_panel",
+        )
+        yield Vertical(
+            Static("Locals"),
+            ListView(id="locals_list"),
+            id="locals_panel",
         )
         yield Vertical(
             Static("Runners"),
@@ -844,6 +839,27 @@ class ContactsScreen(PanelNav, Screen):
                 f"{faction.name} — {faction.specialty.value} "
                 f"(standing {character.standing_with(faction.id):+d})"
             ),
+        )
+
+        # Only locals whose regard you've actually moved — same rule as fixers. A
+        # character you've never done a gig for isn't a contact, just someone behind
+        # a counter. Location captured per-id for the label.
+        loc_by_char = {char.id: loc for loc, char in self.app.corp_map.characters()}
+        known_locals = [
+            char
+            for _loc, char in self.app.corp_map.characters()
+            if character.local_standing_with(char.id) != 0
+        ]
+        await self._populate(
+            "#locals_list",
+            known_locals,
+            id_prefix="local_",
+            label=lambda char: (
+                f"{char.name} ({char.role}) — {loc_by_char[char.id].name} "
+                f"(standing {character.local_standing_with(char.id):+d})"
+            ),
+            empty_label="No locals know you yet.",
+            empty_id="no_locals",
         )
         await self._populate(
             "#runners_list",
@@ -1045,6 +1061,10 @@ class SceneScreen(Screen):
             # contract leaves accepted_jobs the same way a finished one does.
             if self.scene.kind == SceneKind.JOB:
                 self.app.character.remove_job(self.scene.id)
+            elif self.scene.kind == SceneKind.GIG:
+                # A gig is one-shot: spent whether won or blown, and a fresh one spawns
+                # at that location on the next rest (refresh_gigs).
+                self.app.location_gigs.pop(self.scene.target_location_id, None)
             self.app.pop_screen()
             return
 
@@ -1437,6 +1457,10 @@ class ShadowguyApp(App):
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+        # One gig per location, keyed by location id — the street-work counterpart to
+        # the fixers' job board, topped up on each rest (see gigs.refresh_gigs).
+        self.location_gigs: dict[str, Scene] = {}
+        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:
         # push, not switch: the menu overlays play and dismisses back to it.
@@ -1447,23 +1471,26 @@ class ShadowguyApp(App):
         self._reopen(CharacterCreationScreen())
 
     def save_run(self) -> SaveSlot:
-        """Pickle the current run — the four fields _new_run seeds are exactly the run's
+        """Pickle the current run — the fields _new_run seeds are exactly the run's
         state, so they are exactly what a save round-trips."""
         state = {
             "rng": self.rng,
             "corp_map": self.corp_map,
             "character": self.character,
             "fixers": self.fixers,
+            "location_gigs": self.location_gigs,
         }
         return save_game(state, self.character.day)
 
     def load_state(self, state: dict) -> None:
-        # Resolve all four before mutating any: load_game already validates the bundle's
+        # Resolve all fields before mutating any: load_game already validates the bundle's
         # shape, but keeping the assignment atomic means even a future malformed state
         # replaces the whole run or none of it — never leaving a half-swapped App.
         rng, corp_map = state["rng"], state["corp_map"]
         character, fixers = state["character"], state["fixers"]
+        location_gigs = state["location_gigs"]
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
+        self.location_gigs = location_gigs
         # Where a load resumes depends on whether the saved run had finished creation.
         # A save taken mid-build still has points to spend; dropping it straight into
         # MainMenu would strand those points unspendable (SkillsScreen is read-only),
