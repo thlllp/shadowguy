@@ -18,6 +18,10 @@ STARTING_STAT = 1
 STARTING_SKILL_RANK = 1
 STARTING_STAT_POINTS = 6
 STARTING_SKILL_POINTS = 20
+# A little walking-around money so the first nights' lodging (corpmap.lodging_cost)
+# don't strand a fresh runner before their first payday. Not part of the build — the
+# creation screen spends points, not cash — so reset_build() leaves it alone.
+STARTING_CASH = 100
 # Ceiling on a single skill's rank.
 MAX_SKILL_RANK = 10
 
@@ -60,7 +64,7 @@ class Character:
     perception: int = STARTING_STAT
     intelligence: int = STARTING_STAT
     cool: int = STARTING_STAT
-    cash: int = 0
+    cash: int = STARTING_CASH
     rep: int = 0
     health: int | None = None
     stamina: int | None = None
