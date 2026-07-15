@@ -27,6 +27,10 @@ SAVE_DIR = Path.home() / ".shadowguy" / "saves"
 SAVE_SUFFIX = ".save"
 # Bump on any change that makes an old bundle unloadable; older saves are then refused.
 SAVE_VERSION = 1
+# The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
+# Checked at load so a payload that unpickles but isn't a whole run is rejected here,
+# at the boundary, rather than half-applied to the live App by the caller.
+STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers"})
 
 
 @dataclass(frozen=True)
@@ -42,16 +46,22 @@ class SaveSlot:
         return f"Day {self.day} — {self.saved_at:%Y-%m-%d %H:%M}"
 
 
+# Filename timestamp: microsecond resolution so two saves in the same second get
+# distinct names instead of the later one silently clobbering the earlier. The load
+# list still shows minute resolution (SaveSlot.label) — this is only about uniqueness.
+_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S-%f"
+
+
 def save_game(state: dict[str, Any], day: int, now: datetime | None = None) -> SaveSlot:
-    """Pickle `state` to a new file auto-named `day{N}_{YYYYMMDD-HHMMSS}`. `now` is a
-    seam for tests; production passes nothing and gets the wall clock."""
+    """Pickle `state` to a new file auto-named `day{N}_{timestamp}`. `now` is a seam for
+    tests; production passes nothing and gets the wall clock."""
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     now = now or datetime.now()
-    path = SAVE_DIR / f"day{day}_{now:%Y%m%d-%H%M%S}{SAVE_SUFFIX}"
+    path = SAVE_DIR / f"day{day}_{now:{_TIMESTAMP_FORMAT}}{SAVE_SUFFIX}"
     payload = {"version": SAVE_VERSION, "state": state}
     with path.open("wb") as handle:
         pickle.dump(payload, handle)
-    return SaveSlot(path, day, now.replace(microsecond=0))
+    return SaveSlot(path, day, now)
 
 
 def list_saves() -> list[SaveSlot]:
@@ -72,15 +82,18 @@ def load_game(path: Path) -> dict[str, Any]:
         payload = pickle.load(handle)
     if not isinstance(payload, dict) or payload.get("version") != SAVE_VERSION:
         raise ValueError("save was written by an incompatible version")
-    return payload["state"]
+    state = payload.get("state")
+    if not isinstance(state, dict) or not STATE_KEYS <= state.keys():
+        raise ValueError("save is missing required run state")
+    return state
 
 
 def _slot_from_path(path: Path) -> SaveSlot | None:
-    # filename stem is `day{N}_{YYYYMMDD-HHMMSS}`; anything else isn't ours.
+    # filename stem is `day{N}_{timestamp}`; anything else isn't ours.
     try:
         day_part, ts_part = path.stem.split("_", 1)
         day = int(day_part.removeprefix("day"))
-        saved_at = datetime.strptime(ts_part, "%Y%m%d-%H%M%S")
+        saved_at = datetime.strptime(ts_part, _TIMESTAMP_FORMAT)
     except ValueError:
         return None
     return SaveSlot(path, day, saved_at)

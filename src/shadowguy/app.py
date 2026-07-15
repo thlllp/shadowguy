@@ -1307,22 +1307,29 @@ class CorpMapScreen(Screen):
 # The two menus share the same centered-dialog look; kept in one place so the load
 # list and the quit menu can't drift apart.
 _MENU_CSS = """
-%(screen)s {
+__SCREEN__ {
     align: center middle;
 }
 
-#%(dialog)s {
+#__DIALOG__ {
     width: auto;
     height: auto;
     border: round $accent;
     padding: 1 2;
 }
 
-#%(dialog)s ListView {
+#__DIALOG__ ListView {
     width: 28;
     height: auto;
 }
 """
+
+
+def _menu_css(screen: str, dialog: str) -> str:
+    """Fill the shared dialog stylesheet for one modal. Uses str.replace, not
+    %-formatting or .format — the CSS is full of literal `{ }` and could grow a `%`
+    (e.g. a percentage width), either of which would blow those up at import time."""
+    return _MENU_CSS.replace("__SCREEN__", screen).replace("__DIALOG__", dialog)
 
 
 class QuitMenu(ModalScreen):
@@ -1332,7 +1339,7 @@ class QuitMenu(ModalScreen):
     There is no meta-progression, so Restart is just a new run from scratch."""
 
     BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
-    CSS = _MENU_CSS % {"screen": "QuitMenu", "dialog": "quit_dialog"}
+    CSS = _menu_css("QuitMenu", "quit_dialog")
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -1351,7 +1358,15 @@ class QuitMenu(ModalScreen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "save":
-            slot = self.app.save_run()
+            # A save must never take the run down with it: a full disk, a read-only
+            # home, or an unpicklable object in state should report and leave you in
+            # play, not crash — losing the very progress you were trying to keep. Load
+            # is guarded the same way.
+            try:
+                slot = self.app.save_run()
+            except Exception as exc:
+                self.app.notify(f"Couldn't save: {exc}", severity="error")
+                return
             self.app.notify(f"Saved: {slot.label}")
             self.dismiss()
         elif event.item.id == "load":
@@ -1373,7 +1388,7 @@ class LoadMenu(ModalScreen):
     minute share a label and a duplicate ListView id would raise."""
 
     BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
-    CSS = _MENU_CSS % {"screen": "LoadMenu", "dialog": "load_dialog"}
+    CSS = _menu_css("LoadMenu", "load_dialog")
 
     def __init__(self, slots: list[SaveSlot]) -> None:
         super().__init__()
@@ -1443,13 +1458,20 @@ class ShadowguyApp(App):
         return save_game(state, self.character.day)
 
     def load_state(self, state: dict) -> None:
-        self.rng = state["rng"]
-        self.corp_map = state["corp_map"]
-        self.character = state["character"]
-        self.fixers = state["fixers"]
-        # A loaded run is already built and under way, so it opens on MainMenu, not the
-        # creation screen a fresh/restarted run opens on.
-        self._reopen(MainMenu())
+        # Resolve all four before mutating any: load_game already validates the bundle's
+        # shape, but keeping the assignment atomic means even a future malformed state
+        # replaces the whole run or none of it — never leaving a half-swapped App.
+        rng, corp_map = state["rng"], state["corp_map"]
+        character, fixers = state["character"], state["fixers"]
+        self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
+        # Where a load resumes depends on whether the saved run had finished creation.
+        # A save taken mid-build still has points to spend; dropping it straight into
+        # MainMenu would strand those points unspendable (SkillsScreen is read-only),
+        # silently forfeiting the build the creation gate exists to protect. So resume
+        # an unfinished build on the creation screen and a run already under way on
+        # MainMenu — pools-empty is the same "creation done" test action_begin gates on.
+        unspent = self.character.stat_points + self.character.skill_points
+        self._reopen(CharacterCreationScreen() if unspent else MainMenu())
 
     def _reopen(self, screen: Screen) -> None:
         """Tear the whole screen stack down to the base and open on `screen` — the menu
