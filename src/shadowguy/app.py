@@ -45,6 +45,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
 from shadowguy.scene import (
     Encounter,
     Scene,
@@ -1303,36 +1304,42 @@ class CorpMapScreen(Screen):
         return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
 
 
+# The two menus share the same centered-dialog look; kept in one place so the load
+# list and the quit menu can't drift apart.
+_MENU_CSS = """
+%(screen)s {
+    align: center middle;
+}
+
+#%(dialog)s {
+    width: auto;
+    height: auto;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#%(dialog)s ListView {
+    width: 28;
+    height: auto;
+}
+"""
+
+
 class QuitMenu(ModalScreen):
     """The `q` menu, overlaid on whatever screen is in play. Opening it is a safe
-    reflex — `q`/`escape` dismiss it back to the game with nothing lost — so the two
-    rows are the only irreversible acts: leave the app, or throw this run away for a
-    fresh one. There is no meta-progression, so Restart is just a new run from scratch."""
+    reflex — `q`/`escape` dismiss it back to the game with nothing lost — so only the
+    bottom rows are irreversible: leave the app, or throw this run away for a fresh one.
+    There is no meta-progression, so Restart is just a new run from scratch."""
 
     BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
-
-    CSS = """
-    QuitMenu {
-        align: center middle;
-    }
-
-    #quit_dialog {
-        width: auto;
-        height: auto;
-        border: round $accent;
-        padding: 1 2;
-    }
-
-    #quit_dialog ListView {
-        width: 20;
-        height: auto;
-    }
-    """
+    CSS = _MENU_CSS % {"screen": "QuitMenu", "dialog": "quit_dialog"}
 
     def compose(self) -> ComposeResult:
         yield Vertical(
             Static("Menu"),
             ListView(
+                ListItem(Static("Save Game"), id="save"),
+                ListItem(Static("Load Game"), id="load"),
                 ListItem(Static("Quit Game"), id="quit"),
                 ListItem(Static("Restart Game"), id="restart"),
             ),
@@ -1343,10 +1350,61 @@ class QuitMenu(ModalScreen):
         self.dismiss()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.item.id == "quit":
+        if event.item.id == "save":
+            slot = self.app.save_run()
+            self.app.notify(f"Saved: {slot.label}")
+            self.dismiss()
+        elif event.item.id == "load":
+            slots = list_saves()
+            if not slots:
+                self.app.notify("No saved games found.", severity="warning")
+                return
+            # push, not replace: escape from the load list drops back to this menu.
+            self.app.push_screen(LoadMenu(slots))
+        elif event.item.id == "quit":
             self.app.exit()
         elif event.item.id == "restart":
             self.app.restart_run()
+
+
+class LoadMenu(ModalScreen):
+    """The Load-Game pick-list: every save on disk, newest first. Rows are keyed by
+    list index rather than by anything off the save, because two saves made in the same
+    minute share a label and a duplicate ListView id would raise."""
+
+    BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
+    CSS = _MENU_CSS % {"screen": "LoadMenu", "dialog": "load_dialog"}
+
+    def __init__(self, slots: list[SaveSlot]) -> None:
+        super().__init__()
+        self._slots = slots
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Load Game"),
+            ListView(
+                *(
+                    ListItem(Static(slot.label), id=f"slot_{i}")
+                    for i, slot in enumerate(self._slots)
+                ),
+            ),
+            id="load_dialog",
+        )
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        slot = self._slots[int(event.item.id.removeprefix("slot_"))]
+        try:
+            state = load_game(slot.path)
+        except Exception:
+            # A save can go stale as the code moves on (see saves.SAVE_VERSION), and a
+            # file can be truncated/corrupt. Either way, report it rather than crash.
+            self.app.notify(f"Couldn't load {slot.label}.", severity="error")
+            return
+        # load_state tears the stack down, taking this menu and the QuitMenu with it.
+        self.app.load_state(state)
 
 
 class ShadowguyApp(App):
@@ -1371,11 +1429,35 @@ class ShadowguyApp(App):
 
     def restart_run(self) -> None:
         self._new_run()
-        # Tear the whole screen stack down to the base and open on a fresh build —
-        # the QuitMenu that called this, and any game screens under it, all go.
+        self._reopen(CharacterCreationScreen())
+
+    def save_run(self) -> SaveSlot:
+        """Pickle the current run — the four fields _new_run seeds are exactly the run's
+        state, so they are exactly what a save round-trips."""
+        state = {
+            "rng": self.rng,
+            "corp_map": self.corp_map,
+            "character": self.character,
+            "fixers": self.fixers,
+        }
+        return save_game(state, self.character.day)
+
+    def load_state(self, state: dict) -> None:
+        self.rng = state["rng"]
+        self.corp_map = state["corp_map"]
+        self.character = state["character"]
+        self.fixers = state["fixers"]
+        # A loaded run is already built and under way, so it opens on MainMenu, not the
+        # creation screen a fresh/restarted run opens on.
+        self._reopen(MainMenu())
+
+    def _reopen(self, screen: Screen) -> None:
+        """Tear the whole screen stack down to the base and open on `screen` — the menu
+        that called this, and any game screens under it, all go. Shared by restart and
+        load, the two acts that replace the run wholesale."""
         while len(self.screen_stack) > 1:
             self.pop_screen()
-        self.push_screen(CharacterCreationScreen())
+        self.push_screen(screen)
 
     def on_mount(self) -> None:
         self.push_screen(CharacterCreationScreen())
