@@ -30,52 +30,6 @@ LEGWORK_CASE_THE_BLOCK = Scene(
     },
 )
 
-GIG_FENCE_SOME_CHROME = Scene(
-    id="gig_fence_some_chrome",
-    title="Fence Some Chrome",
-    kind=SceneKind.GIG,
-    start_stage="start",
-    stages={
-        "start": Stage(
-            id="start",
-            prompt="A fence on Autopia Row eyes the cyberware you're carrying.",
-            choices=[
-                Choice(
-                    label="Haggle for a fair price (Negotiations)",
-                    skill="negotiations",
-                    difficulty=10,
-                    success=Outcome(text="You talk him up to a decent price.", cash_delta=150),
-                    failure=Outcome(text="He lowballs you and won't budge.", cash_delta=50),
-                    critical_success=Outcome(
-                        text="He's impressed, pays top eddies for the lot.", cash_delta=300
-                    ),
-                    critical_failure=Outcome(
-                        text="He laughs you out of the shop and talks you down around town.",
-                        rep_delta=-1,
-                    ),
-                ),
-                Choice(
-                    label="Lean on him for a better cut (Intimidation)",
-                    skill="intimidation",
-                    difficulty=12,
-                    success=Outcome(text="He pays up, and doesn't meet your eye.", cash_delta=200),
-                    failure=Outcome(
-                        text="He's been leaned on by worse. You take what he offers.", cash_delta=50
-                    ),
-                    critical_success=Outcome(
-                        text="He empties the till and thanks you for your business.", cash_delta=350
-                    ),
-                    critical_failure=Outcome(
-                        text="His muscle walks you out. Word gets around that you're desperate.",
-                        health_delta=-3,
-                        rep_delta=-1,
-                    ),
-                ),
-            ],
-        ),
-    },
-)
-
 GIG_CHEM_TRIAL = Scene(
     id="gig_chem_trial",
     title="Chem Trial",
@@ -94,16 +48,16 @@ GIG_CHEM_TRIAL = Scene(
                     skill="resist_poison",
                     difficulty=13,
                     success=Outcome(
-                        text="Your liver files a complaint. The doc pays in full.", cash_delta=250
+                        text="Your liver files a complaint. The doc pays in full.", cash_delta=100
                     ),
                     failure=Outcome(
                         text="You come out of it shaking, and he docks you for the mess.",
                         health_delta=-5,
-                        cash_delta=100,
+                        cash_delta=40,
                     ),
                     critical_success=Outcome(
                         text="You barely feel it. He wants you back next week.",
-                        cash_delta=350,
+                        cash_delta=165,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
@@ -117,16 +71,16 @@ GIG_CHEM_TRIAL = Scene(
                     difficulty=12,
                     success=Outcome(
                         text="Whatever it was, your blood ate it. He pays and says nothing.",
-                        cash_delta=220,
+                        cash_delta=85,
                     ),
                     failure=Outcome(
                         text="You run a fever for two days and get half the fee.",
                         health_delta=-4,
-                        cash_delta=110,
+                        cash_delta=35,
                     ),
                     critical_success=Outcome(
                         text="It never takes. He pays extra for the blood work alone.",
-                        cash_delta=320,
+                        cash_delta=140,
                     ),
                     critical_failure=Outcome(
                         text="It takes hold. You are sick in ways the doc will not name.",
@@ -157,7 +111,7 @@ GIG_RING_FIGHT = Scene(
                     difficulty=13,
                     success=Outcome(
                         text="Three exchanges and it's over. The crowd pays out.",
-                        cash_delta=250,
+                        cash_delta=100,
                         rep_delta=1,
                     ),
                     failure=Outcome(
@@ -166,7 +120,7 @@ GIG_RING_FIGHT = Scene(
                     ),
                     critical_success=Outcome(
                         text="One movement, and they're down. The room goes quiet, then loud.",
-                        cash_delta=400,
+                        cash_delta=165,
                         rep_delta=2,
                     ),
                     critical_failure=Outcome(
@@ -180,7 +134,7 @@ GIG_RING_FIGHT = Scene(
                     difficulty=12,
                     success=Outcome(
                         text="You stay on your feet through all of it. They don't.",
-                        cash_delta=200,
+                        cash_delta=88,
                         rep_delta=1,
                     ),
                     failure=Outcome(
@@ -189,7 +143,7 @@ GIG_RING_FIGHT = Scene(
                     ),
                     critical_success=Outcome(
                         text="They punch themselves out on you, and fall over unaided.",
-                        cash_delta=330,
+                        cash_delta=145,
                         rep_delta=2,
                     ),
                     critical_failure=Outcome(
@@ -202,7 +156,7 @@ GIG_RING_FIGHT = Scene(
                     difficulty=15,
                     success=Outcome(
                         text="They fight like someone looking for the exit. It's short.",
-                        cash_delta=180,
+                        cash_delta=78,
                         rep_delta=1,
                     ),
                     failure=Outcome(
@@ -212,7 +166,7 @@ GIG_RING_FIGHT = Scene(
                     critical_success=Outcome(
                         text="They don't come out for the bell. You are paid for a fight "
                         "that never happened.",
-                        cash_delta=300,
+                        cash_delta=130,
                         rep_delta=2,
                     ),
                     critical_failure=Outcome(
@@ -243,15 +197,15 @@ GIG_CARD_TABLE = Scene(
                     label="Play the players, not the cards (Read Face)",
                     skill="read_face",
                     difficulty=13,
-                    success=Outcome(text="You know their hands before they do.", cash_delta=280),
-                    failure=Outcome(text="You misread the quiet one and pay for it.", cash_delta=-120),
+                    success=Outcome(text="You know their hands before they do.", cash_delta=90),
+                    failure=Outcome(text="You misread the quiet one and pay for it.", cash_delta=-30),
                     critical_success=Outcome(
                         text="You clean the table without ever showing a card.",
-                        cash_delta=500,
+                        cash_delta=150,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
-                        text="The whole table was reading you. You leave light.", cash_delta=-250
+                        text="The whole table was reading you. You leave light.", cash_delta=-65
                     ),
                 ),
                 Choice(
@@ -259,33 +213,33 @@ GIG_CARD_TABLE = Scene(
                     skill="deception",
                     difficulty=12,
                     success=Outcome(
-                        text="You take three pots without a hand worth playing.", cash_delta=220
+                        text="You take three pots without a hand worth playing.", cash_delta=75
                     ),
-                    failure=Outcome(text="They call you on the big one.", cash_delta=-100),
+                    failure=Outcome(text="They call you on the big one.", cash_delta=-25),
                     critical_success=Outcome(
                         text="You bluff a full table off a pot you had no business winning.",
-                        cash_delta=420,
+                        cash_delta=125,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
                         text="They've had your tell since the first hour, and they let you bleed.",
-                        cash_delta=-220,
+                        cash_delta=-55,
                     ),
                 ),
                 Choice(
                     label="Improve your hand on the way past (Sleight of Hand)",
                     skill="sleight_of_hand",
                     difficulty=15,
-                    success=Outcome(text="Nobody sees the swap. Nobody ever does.", cash_delta=400),
-                    failure=Outcome(text="You lose your nerve and play it straight.", cash_delta=-80),
+                    success=Outcome(text="Nobody sees the swap. Nobody ever does.", cash_delta=100),
+                    failure=Outcome(text="You lose your nerve and play it straight.", cash_delta=-20),
                     critical_success=Outcome(
                         text="You deal yourself the whole night, and they thank you for the game.",
-                        cash_delta=650,
+                        cash_delta=165,
                     ),
                     critical_failure=Outcome(
                         text="A hand closes on your wrist. They take the pot and a finger's worth of skin.",
                         health_delta=-6,
-                        cash_delta=-200,
+                        cash_delta=-50,
                         rep_delta=-1,
                     ),
                 ),
@@ -311,11 +265,11 @@ GIG_STREET_WHISPERS = Scene(
                     label="Sit in the right bars and say nothing (Listening)",
                     skill="listening",
                     difficulty=11,
-                    success=Outcome(text="Two loose conversations, one worth selling.", cash_delta=180),
+                    success=Outcome(text="Two loose conversations, one worth selling.", cash_delta=75),
                     failure=Outcome(text="A week of bad coffee and nothing to show for it."),
                     critical_success=Outcome(
                         text="You overhear a name that shouldn't have been said aloud.",
-                        cash_delta=320,
+                        cash_delta=125,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
@@ -327,11 +281,11 @@ GIG_STREET_WHISPERS = Scene(
                     label="Case their movements yourself (Recon)",
                     skill="recon",
                     difficulty=13,
-                    success=Outcome(text="You bring her a schedule she can actually use.", cash_delta=250),
+                    success=Outcome(text="You bring her a schedule she can actually use.", cash_delta=88),
                     failure=Outcome(text="You watch the wrong building for three days."),
                     critical_success=Outcome(
                         text="You bring her the rotation, the vehicles, and a face she recognises.",
-                        cash_delta=400,
+                        cash_delta=145,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
@@ -345,13 +299,13 @@ GIG_STREET_WHISPERS = Scene(
                     difficulty=14,
                     success=Outcome(
                         text="An internal memo that never existed. She pays without blinking.",
-                        cash_delta=300,
+                        cash_delta=100,
                     ),
                     failure=Outcome(text="She reads two lines, hands it back, and says nothing."),
                     critical_success=Outcome(
                         text="Your memo is good enough that it turns out to be true. "
                         "She pays twice and asks no questions.",
-                        cash_delta=500,
+                        cash_delta=165,
                     ),
                     critical_failure=Outcome(
                         text="She acts on it, loses money, and makes sure the street knows whose paper it was.",
@@ -382,12 +336,12 @@ GIG_WORK_A_MARK = Scene(
                     difficulty=13,
                     success=Outcome(
                         text="They pay for everything, and hand you their card at the door.",
-                        cash_delta=260,
+                        cash_delta=100,
                     ),
                     failure=Outcome(text="They're married, bored, and not interested."),
                     critical_success=Outcome(
                         text="They talk all night. Half of it was worth money.",
-                        cash_delta=420,
+                        cash_delta=165,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
@@ -401,12 +355,12 @@ GIG_WORK_A_MARK = Scene(
                     difficulty=12,
                     success=Outcome(
                         text="They hate their boss. You let them talk, and take notes.",
-                        cash_delta=200,
+                        cash_delta=80,
                     ),
                     failure=Outcome(text="You misjudge the mood and they close up."),
                     critical_success=Outcome(
                         text="They hate their boss enough to prove it, and hand you the proof.",
-                        cash_delta=340,
+                        cash_delta=132,
                         rep_delta=1,
                     ),
                     critical_failure=Outcome(
