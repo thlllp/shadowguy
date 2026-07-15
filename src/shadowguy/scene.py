@@ -192,15 +192,6 @@ class Scene:
         return max(0, -worst)
 
 
-def validate_scene_registry(scenes: Iterable[Scene]) -> None:
-    job_ids = {scene.id for scene in scenes if scene.kind == SceneKind.JOB}
-    for scene in scenes:
-        if scene.kind == SceneKind.LEGWORK and scene.prepares_for not in job_ids:
-            raise ValueError(
-                f"{scene.id}: legwork prepares_for {scene.prepares_for!r} is not a known job"
-            )
-
-
 def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
     character.adjust_health(outcome.health_delta)
     # Not floored, unlike health: the activity list refuses a scene the runner can't

@@ -21,13 +21,6 @@ from shadowguy.combat import (
     start_combat,
     take_turn,
 )
-from shadowguy.content import (
-    GIG_CARD_TABLE,
-    GIG_CHEM_TRIAL,
-    GIG_RING_FIGHT,
-    GIG_STREET_WHISPERS,
-    GIG_WORK_A_MARK,
-)
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
@@ -43,6 +36,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
+from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
@@ -52,7 +46,6 @@ from shadowguy.scene import (
     SceneKind,
     apply_outcome,
     resolve_choice,
-    validate_scene_registry,
 )
 from shadowguy.shops import (
     CATALOG,
@@ -108,32 +101,6 @@ class CharacterSheet(Static):
             f"Gear: {gear}"
         )
 
-
-STATIC_ACTIVITIES = [
-    GIG_CHEM_TRIAL,
-    GIG_RING_FIGHT,
-    GIG_CARD_TABLE,
-    GIG_STREET_WHISPERS,
-    GIG_WORK_A_MARK,
-]
-validate_scene_registry(STATIC_ACTIVITIES)
-
-# Which LocationKinds a gig plausibly happens at — a gig only shows up in the
-# activity list while the runner is standing in a territory that has one of
-# these among its (LOCATIONS_PER_TERRITORY) locations. A gig may list more than
-# one kind where its flavor genuinely fits either (e.g. a ripperdoc's chem test
-# reads as either a clinic or a pharmacy); it's not padded just to widen reach.
-GIG_LOCATION_KINDS: dict[str, tuple[LocationKind, ...]] = {
-    GIG_CHEM_TRIAL.id: (LocationKind.LAB, LocationKind.PHARMACY),
-    GIG_RING_FIGHT.id: (LocationKind.SOCIAL, LocationKind.DEPOT),
-    GIG_CARD_TABLE.id: (LocationKind.SOCIAL,),
-    GIG_STREET_WHISPERS.id: (LocationKind.SOCIAL, LocationKind.DATA),
-    GIG_WORK_A_MARK.id: (LocationKind.SOCIAL,),
-}
-if set(GIG_LOCATION_KINDS) != {
-    scene.id for scene in STATIC_ACTIVITIES if scene.kind == SceneKind.GIG
-}:
-    raise ValueError("GIG_LOCATION_KINDS must have exactly one entry per gig in STATIC_ACTIVITIES")
 
 
 # Shared left/right panel navigation for the multi-ListView screens. A ListView
@@ -243,19 +210,21 @@ class MainMenu(PanelNav, Screen):
         items = []
 
         if self.selected_category == "gig":
+            # One gig per local location, each owned by one of that location's
+            # characters — street work you self-select into, gated only by being here.
             here = self.app.corp_map.territories[character.location_id]
-            local_kinds = {location.kind for location in here.locations}
-            for scene in STATIC_ACTIVITIES:
-                if scene.kind != SceneKind.GIG:
+            for location in here.locations:
+                gig = self.app.location_gigs.get(location.id)
+                if gig is None:
                     continue
-                if local_kinds.isdisjoint(GIG_LOCATION_KINDS[scene.id]):
-                    continue
-                label = f"Gig — {scene.title} ({scene.stamina_cost} stamina)"
-                if not character.can_afford(scene.stamina_cost):
+                owner = next((c for c in location.characters if c.id == gig.target_character_id), None)
+                who = f" — {owner.name}" if owner else ""
+                label = f"Gig — {gig.title} @ {location.name}{who} ({gig.stamina_cost} stamina)"
+                if not character.can_afford(gig.stamina_cost):
                     label += " — too tired"
-                elif character.cash < scene.max_cash_loss:
-                    label += f" — can't cover the stake ({scene.max_cash_loss} cash)"
-                items.append(ListItem(Static(label), id=f"static_{scene.id}"))
+                elif character.cash < gig.max_cash_loss:
+                    label += f" — can't cover the stake ({gig.max_cash_loss} cash)"
+                items.append(ListItem(Static(label), id=f"gig_{location.id}"))
 
         if self.selected_category == "job":
             for job in character.accepted_jobs:
@@ -319,20 +288,23 @@ class MainMenu(PanelNav, Screen):
             character.rest()
             expire_offers(self.app.fixers, character.day)
             refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)
+            refresh_gigs(self.app.corp_map, self.app.location_gigs, character.day, self.app.rng)
             await self._refresh()
             return
 
-        if item_id.startswith("static_"):
-            scene_id = item_id.removeprefix("static_")
-            scene = next(scene for scene in STATIC_ACTIVITIES if scene.id == scene_id)
-            if not character.can_afford(scene.stamina_cost):
+        if item_id.startswith("gig_"):
+            location_id = item_id.removeprefix("gig_")
+            gig = self.app.location_gigs.get(location_id)
+            if gig is None:
+                return
+            if not character.can_afford(gig.stamina_cost):
                 return
             # apply_outcome subtracts a losing bet straight off Character.cash, so a
             # scene the runner can't cover is refused here, not floored on the way out.
-            if character.cash < scene.max_cash_loss:
+            if character.cash < gig.max_cash_loss:
                 return
-            character.spend_stamina(scene.stamina_cost)
-            self.app.push_screen(SceneScreen(scene))
+            character.spend_stamina(gig.stamina_cost)
+            self.app.push_screen(SceneScreen(gig))
             return
 
         if item_id.startswith("legwork_"):
@@ -1071,6 +1043,10 @@ class SceneScreen(Screen):
             # contract leaves accepted_jobs the same way a finished one does.
             if self.scene.kind == SceneKind.JOB:
                 self.app.character.remove_job(self.scene.id)
+            elif self.scene.kind == SceneKind.GIG:
+                # A gig is one-shot: spent whether won or blown, and a fresh one spawns
+                # at that location on the next rest (refresh_gigs).
+                self.app.location_gigs.pop(self.scene.target_location_id, None)
             self.app.pop_screen()
             return
 
@@ -1463,6 +1439,10 @@ class ShadowguyApp(App):
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+        # One gig per location, keyed by location id — the street-work counterpart to
+        # the fixers' job board, topped up on each rest (see gigs.refresh_gigs).
+        self.location_gigs: dict[str, Scene] = {}
+        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:
         # push, not switch: the menu overlays play and dismisses back to it.
@@ -1473,23 +1453,26 @@ class ShadowguyApp(App):
         self._reopen(CharacterCreationScreen())
 
     def save_run(self) -> SaveSlot:
-        """Pickle the current run — the four fields _new_run seeds are exactly the run's
+        """Pickle the current run — the fields _new_run seeds are exactly the run's
         state, so they are exactly what a save round-trips."""
         state = {
             "rng": self.rng,
             "corp_map": self.corp_map,
             "character": self.character,
             "fixers": self.fixers,
+            "location_gigs": self.location_gigs,
         }
         return save_game(state, self.character.day)
 
     def load_state(self, state: dict) -> None:
-        # Resolve all four before mutating any: load_game already validates the bundle's
+        # Resolve all fields before mutating any: load_game already validates the bundle's
         # shape, but keeping the assignment atomic means even a future malformed state
         # replaces the whole run or none of it — never leaving a half-swapped App.
         rng, corp_map = state["rng"], state["corp_map"]
         character, fixers = state["character"], state["fixers"]
+        location_gigs = state["location_gigs"]
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
+        self.location_gigs = location_gigs
         # Where a load resumes depends on whether the saved run had finished creation.
         # A save taken mid-build still has points to spend; dropping it straight into
         # MainMenu would strand those points unspendable (SkillsScreen is read-only),

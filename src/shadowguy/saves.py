@@ -26,11 +26,12 @@ from typing import Any
 SAVE_DIR = Path.home() / ".shadowguy" / "saves"
 SAVE_SUFFIX = ".save"
 # Bump on any change that makes an old bundle unloadable; older saves are then refused.
-SAVE_VERSION = 1
+# v2 added location_gigs (per-location gig offers).
+SAVE_VERSION = 2
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
-STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers"})
+STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers", "location_gigs"})
 
 
 @dataclass(frozen=True)
