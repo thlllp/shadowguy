@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from shadowguy.shops import InventoryItem, equipped_bonus
+from shadowguy.shops import InventoryItem, equipped_bonus, equipped_skill_bonus, equipped_travel_bonus
 from shadowguy.skills import SKILLS, skill_for
 
 if TYPE_CHECKING:
@@ -99,6 +99,12 @@ class Character:
     # nothing puts them back.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
+    # How many of today's free travel moves (shops.Item.travel_bonus, from the
+    # equipped Slot.VEHICLE item) have already been spent. Tracked as usage rather
+    # than a remaining count so re-equipping a different vehicle mid-day raises or
+    # lowers the cap immediately instead of waiting for the next rest(). Reset to 0
+    # on rest(), same as stamina.
+    free_travel_used: int = 0
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -162,11 +168,20 @@ class Character:
     def restore_stamina(self, amount: int) -> None:
         self.stamina = min(self.max_stamina, self.stamina + amount)
 
+    def free_travel_remaining(self) -> int:
+        return max(0, equipped_travel_bonus(self.inventory) - self.free_travel_used)
+
+    def spend_free_travel(self) -> None:
+        self.free_travel_used += 1
+
     def add_temp_bonus(self, stat: str, amount: int) -> None:
         self.temp_bonuses[stat] = self.temp_bonuses.get(stat, 0) + amount
 
     def skill_rank(self, skill_id: str) -> int:
         return self.skill_ranks.get(skill_id, STARTING_SKILL_RANK)
+
+    def skill_gear_bonus(self, skill_id: str) -> int:
+        return equipped_skill_bonus(self.inventory, skill_id)
 
     def at_max_rank(self, skill_id: str) -> bool:
         skill_for(skill_id)
@@ -218,6 +233,7 @@ class Character:
     def rest(self) -> None:
         self.day += 1
         self.stamina = self.max_stamina
+        self.free_travel_used = 0
         self.temp_bonuses = {}
         self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
 

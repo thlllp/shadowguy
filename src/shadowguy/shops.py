@@ -12,7 +12,7 @@ every SHOP_KINDS member to cover that.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -58,11 +58,14 @@ class Slot(Enum):
     BOOTS = "boots"
     ACCESSORY = "accessory"
     WEAPON = "weapon"
+    VEHICLE = "vehicle"
 
 
 # How many items can be equipped in each slot at once. WEAPON is 2 (e.g. a
 # main-hand and off-hand piece) rather than 1 like the wearable slots, so a
-# two-handed weapon (Item.two_handed) costs both.
+# two-handed weapon (Item.two_handed) costs both. VEHICLE is 1 like the
+# wearable slots — you only ever have one ride active at a time, even if you
+# own more (see Item.travel_bonus).
 SLOT_CAPACITY: dict[Slot, int] = {
     Slot.HEADWEAR: 1,
     Slot.FACEWEAR: 1,
@@ -71,6 +74,7 @@ SLOT_CAPACITY: dict[Slot, int] = {
     Slot.BOOTS: 1,
     Slot.ACCESSORY: 1,
     Slot.WEAPON: 2,
+    Slot.VEHICLE: 1,
 }
 
 
@@ -83,7 +87,7 @@ class Item:
     # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
     # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
     slot: Slot | None = None
-    # What the item adds to player_defense() (combat.py) when equipped: 3-8, and
+    # What the item adds to player_defense() (combat.py) when equipped: 1-8, and
     # only valid on a wearable slot (not WEAPON, not an unlimited-slot item like a
     # vehicle or deck). Not restricted to Slot.TORSO — armor is the common case,
     # but any wearable can carry it.
@@ -101,6 +105,17 @@ class Item:
     concealment: int = 0
     # Only meaningful when slot is Slot.WEAPON: occupies both weapon slots.
     two_handed: bool = False
+    # skill id (skills.SKILLS_BY_ID) -> bonus applied to that skill only, on top of
+    # its stat (see skills.skill_value). Distinct from `bonuses`, which moves a whole
+    # core stat and so every skill layered on it — this is for gear that's specialized
+    # rather than generally useful. Same wearable-only restriction as `defense`.
+    skill_bonuses: dict[str, int] = field(default_factory=dict)
+    # Only meaningful (and only valid, 1-5) on a Slot.VEHICLE item: free travel
+    # moves (CorpMapScreen.action_travel) it grants per day, refilled on
+    # Character.rest() rather than consumed from the shared stamina pool — a
+    # bigger ride buys back more of the day, it doesn't make any single trip
+    # cheaper.
+    travel_bonus: int = 0
 
 
 @dataclass
@@ -116,10 +131,15 @@ def bonus_text(item: Item) -> str:
     don't live in `bonuses` and would otherwise be invisible on a buy/equip screen.
     """
     parts = [f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items()]
+    parts += [
+        f"+{bonus} {skill_for(skill_id).name}" for skill_id, bonus in item.skill_bonuses.items()
+    ]
     if item.damage:
         parts.append(f"{item.damage} dmg")
     if item.defense:
         parts.append(f"+{item.defense} defense")
+    if item.travel_bonus:
+        parts.append(f"+{item.travel_bonus} free travel/day")
     return ", ".join(parts)
 
 
@@ -162,13 +182,15 @@ class Consumable:
 
 
 # id, name, price, bonuses, slot, defense, then for weapons only: skill, damage,
-# concealment, two_handed. A weapon's skill is what its attack rolls in combat and
+# concealment, two_handed, then skill_bonuses (a wearable's per-skill bonus, e.g.
+# Slippers' Stealth), and finally travel_bonus (a Slot.VEHICLE item's free travel
+# moves per day, e.g. Beater Bike). A weapon's skill is what its attack rolls in combat and
 # its damage is what a hit takes off — the pool spans blunt/short_blade/long_blade/
 # firearms, so no build is stuck swinging a weapon it can't use. The bloodiest one
 # is two-handed, which costs both weapon slots (SLOT_CAPACITY). Weapons carry no
 # stat bonus by default — damage/skill/concealment are their whole profile — so
 # `bonuses` is {} unless a specific weapon deliberately earns one. Armor is the same
-# shop's other business: `defense` (3-8) adds straight onto combat.player_defense()
+# shop's other business: `defense` (1-8) adds straight onto combat.player_defense()
 # while equipped, and it's not restricted to Slot.TORSO — any wearable can carry it.
 _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.WEAPON_SHOP: [
@@ -180,11 +202,27 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 5),
         ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
         ("reinforced_helmet", "Reinforced Helmet", 250, {}, Slot.HEADWEAR, 3),
+        ("kevlar_helmet", "Kevlar Helmet", 120, {}, Slot.HEADWEAR, 1),
+        ("steel_toe_boots", "Steel Toe Boots", 120, {}, Slot.BOOTS, 1),
+        ("slippers", "Slippers", 100, {}, Slot.BOOTS, 0, None, 0, 0, False, {"stealth": 1}),
     ],
     LocationKind.AUTO_DEALER: [
-        ("beater_bike", "Beater Bike", 200, {"cool": 1}, None),
-        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, None),
-        ("armored_towncar", "Armored Towncar", 1000, {"cool": 3}, None),
+        ("beater_bike", "Beater Bike", 200, {"cool": 1}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 1),
+        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 2),
+        (
+            "armored_towncar",
+            "Armored Towncar",
+            1000,
+            {"cool": 3},
+            Slot.VEHICLE,
+            0,
+            None,
+            0,
+            0,
+            False,
+            {},
+            3,
+        ),
     ],
     # Persistent +body gear moved out in favor of the consumables below.
     LocationKind.PHARMACY: [],
@@ -222,7 +260,7 @@ if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.
 # Slot.WEAPON. The skill id goes through skill_for, so a typo'd weapon skill fails on
 # import rather than mid-fight. Defense is the wearable counterpart to a weapon's
 # damage: it has to live on something you can actually put on (not a weapon, not an
-# unlimited-slot item like a vehicle or deck), and it's bounded the same way damage
+# unlimited-slot item like a deck), and it's bounded the same way damage
 # is, so a typo'd 80 doesn't quietly turn one jacket into full plot armor.
 for _item in ITEMS_BY_ID.values():
     _is_weapon = _item.slot is Slot.WEAPON
@@ -240,8 +278,16 @@ for _item in ITEMS_BY_ID.values():
         skill_for(_item.skill)
     if _item.defense and (_is_weapon or _item.slot is None):
         raise ValueError(f"{_item.id}: only a wearable item can have defense")
-    if _item.defense and not (3 <= _item.defense <= 8):
-        raise ValueError(f"{_item.id}: defense must be 3-8")
+    if _item.defense and not (1 <= _item.defense <= 8):
+        raise ValueError(f"{_item.id}: defense must be 1-8")
+    if _item.skill_bonuses and (_is_weapon or _item.slot is None):
+        raise ValueError(f"{_item.id}: only a wearable item can have skill_bonuses")
+    for _skill_id in _item.skill_bonuses:
+        skill_for(_skill_id)
+    if _item.travel_bonus and _item.slot is not Slot.VEHICLE:
+        raise ValueError(f"{_item.id}: only a Slot.VEHICLE item can have travel_bonus")
+    if _item.travel_bonus and not (1 <= _item.travel_bonus <= 5):
+        raise ValueError(f"{_item.id}: travel_bonus must be 1-5")
 
 
 # id, name, price, effect, amount, stat
@@ -276,6 +322,14 @@ def equipped_bonus(inventory: list[InventoryItem], stat: str) -> int:
 
 def equipped_defense(inventory: list[InventoryItem]) -> int:
     return sum(item.defense for item in _equipped_items(inventory))
+
+
+def equipped_skill_bonus(inventory: list[InventoryItem], skill_id: str) -> int:
+    return sum(item.skill_bonuses.get(skill_id, 0) for item in _equipped_items(inventory))
+
+
+def equipped_travel_bonus(inventory: list[InventoryItem]) -> int:
+    return sum(item.travel_bonus for item in _equipped_items(inventory))
 
 
 def _slot_cost(item: Item) -> int:

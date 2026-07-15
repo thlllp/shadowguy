@@ -3,9 +3,10 @@
 A Choice names a skill, never a raw stat (see scene.Choice). The skill's
 effective value (skill_value) is its tied core stat — character.stat(), which
 already folds in gear and chem bonuses — plus the character's invested rank in
-that specific skill. Ranks are spent from Character.skill_points, a fixed pool
-granted at character creation for now; a future XP system will grant more over
-the course of a run.
+that specific skill, plus any gear bonus aimed at that specific skill alone
+(shops.Item.skill_bonuses, e.g. Slippers' Stealth). Ranks are spent from
+Character.skill_points, a fixed pool granted at character creation for now; a
+future XP system will grant more over the course of a run.
 
 This module is deliberately a leaf: it imports nothing from the package at
 runtime, because character.py -> shops.py -> corpmap.py all end up importing
@@ -103,4 +104,8 @@ def skill_for(skill_id: str) -> Skill:
 
 def skill_value(character: "Character", skill_id: str) -> int:
     skill = skill_for(skill_id)
-    return character.stat(skill.stat) + character.skill_rank(skill_id)
+    return (
+        character.stat(skill.stat)
+        + character.skill_rank(skill_id)
+        + character.skill_gear_bonus(skill_id)
+    )

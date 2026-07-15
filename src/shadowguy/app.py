@@ -1230,9 +1230,12 @@ class CorpMapScreen(Screen):
         here = self.app.corp_map.territories[character.location_id]
         if self.selected_id not in here.connections:
             return
-        if not character.can_afford(TRAVEL_STAMINA_COST):
+        if character.free_travel_remaining() > 0:
+            character.spend_free_travel()
+        elif character.can_afford(TRAVEL_STAMINA_COST):
+            character.spend_stamina(TRAVEL_STAMINA_COST)
+        else:
             return
-        character.spend_stamina(TRAVEL_STAMINA_COST)
         character.location_id = self.selected_id
         self._refresh()
 
@@ -1319,6 +1322,9 @@ class CorpMapScreen(Screen):
             return f"You are here. Stamina: {stamina}"
         if t.id not in here.connections:
             return f"No route from {here.name} — travel is only to a bordering district."
+        free = character.free_travel_remaining()
+        if free > 0:
+            return f"enter: travel here (free — {free} left today) — Stamina: {stamina}"
         if not character.can_afford(TRAVEL_STAMINA_COST):
             return f"Too tired to travel ({TRAVEL_STAMINA_COST} stamina). Rest to move."
         return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
