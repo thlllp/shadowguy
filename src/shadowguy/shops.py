@@ -11,6 +11,7 @@ corpmap.LOCATION_SKILL and jobs.LEGWORK_APPROACH_TEXT each have an entry for
 every SHOP_KINDS member to cover that.
 """
 
+import random
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -321,11 +322,11 @@ CONSUMABLE_CATALOG: dict[LocationKind, list[Consumable]] = {
 
 CONSUMABLES_BY_ID = {c.id: c for items in CONSUMABLE_CATALOG.values() for c in items}
 
-# What a HOSPITAL (corpmap.LocationKind.HOSPITAL) charges to restore one point of
-# health. Cheaper per point than a portable Health Kit (100eb / 5hp = 20eb/hp above):
-# the trade is that you have to be standing in the hospital to use it, so it's the
-# bulk-heal-in-town option, not the carry-it-into-the-field one.
-HOSPITAL_COST_PER_HP = 10
+# A HOSPITAL (corpmap.LocationKind.HOSPITAL) heals over time, not on the spot: each day
+# you check in you pay this — the same as a nice district's lodging (LODGING per point of
+# Development, ~4 on a good block) — and heal 1d6 + Body. Slow but the only real bulk
+# healing there is; a Health Kit is a one-off top-up, resting elsewhere doesn't heal.
+HOSPITAL_STAY_COST = 20
 
 
 def _equipped_items(inventory: list[InventoryItem]) -> Iterator[Item]:
@@ -392,10 +393,19 @@ def use_consumable(character: "Character", index: int) -> str:
     consumable = CONSUMABLES_BY_ID[character.consumables[index]]
     if consumable.effect in COMBAT_ONLY_EFFECTS:
         return "Only useful in a fight."
+    # A Health Kit only helps if there's a wound to close, and only once a day — refuse
+    # (without spending it) rather than let it be popped for nothing or stacked to full.
+    if consumable.effect is EffectKind.HEAL:
+        if character.health >= character.max_health:
+            return "No wounds to treat."
+        if character.health_kit_used_today:
+            return "Already used a kit today."
     character.consumables.pop(index)
     if consumable.effect is EffectKind.HEAL:
+        before = character.health
         character.adjust_health(consumable.amount)
-        return f"+{consumable.amount} Health"
+        character.health_kit_used_today = True
+        return f"+{character.health - before} Health"
     if consumable.effect is EffectKind.RESTORE_STAMINA:
         character.restore_stamina(consumable.amount)
         return f"+{consumable.amount} Stamina"
@@ -408,19 +418,18 @@ def use_consumable(character: "Character", index: int) -> str:
     raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
 
 
-def heal_at_hospital(character: "Character") -> str:
-    """Patch the runner up at a hospital: heal to full, or as far as their cash reaches,
-    at HOSPITAL_COST_PER_HP per point. Never strands a broke runner (they just heal what
-    they can afford). Returns a short message describing what happened."""
-    missing = character.max_health - character.health
-    if missing == 0:
-        return "No wounds to treat."
-    healed = min(missing, character.cash // HOSPITAL_COST_PER_HP)
-    if healed == 0:
-        return "Can't afford treatment."
-    character.adjust_health(healed)
-    character.cash -= healed * HOSPITAL_COST_PER_HP
-    return f"Patched up +{healed} Health for {healed * HOSPITAL_COST_PER_HP}eb."
+def hospital_stay(character: "Character", rng: random.Random | None = None) -> str | None:
+    """One day of inpatient care: charge HOSPITAL_STAY_COST and heal 1d6 + Body (raw Body,
+    like max_health — recovery is a survivability thing, gear doesn't speed it). Returns
+    the result message, or None if the runner can't afford the day (the caller then leaves
+    the day unspent). The stay is a day; the caller advances the run around it."""
+    if character.cash < HOSPITAL_STAY_COST:
+        return None
+    character.cash -= HOSPITAL_STAY_COST
+    roll = (rng or random).randint(1, 6)
+    before = character.health
+    character.adjust_health(roll + character.body)
+    return f"A day in the ward: +{character.health - before} Health for {HOSPITAL_STAY_COST}eb."
 
 
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:

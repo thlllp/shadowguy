@@ -56,13 +56,13 @@ from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
-    HOSPITAL_COST_PER_HP,
+    HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
-    heal_at_hospital,
+    hospital_stay,
     sell_item,
     sell_price,
     toggle_equip,
@@ -302,10 +302,7 @@ class MainMenu(PanelNav, Screen):
                 paid = min(cost, character.cash)
                 character.cash -= paid
                 self.notify(f"Paid {paid}eb for lodging in {here.name}.")
-            character.rest()
-            expire_offers(self.app.fixers, character.day)
-            refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)
-            refresh_gigs(self.app.corp_map, self.app.location_gigs, character.day, self.app.rng)
+            self.app.advance_day()
             await self._refresh()
             return
 
@@ -588,9 +585,10 @@ class RealEstateScreen(Screen):
 
 
 class HospitalScreen(Screen):
-    """A hospital: pay to restore health (shops.heal_at_hospital, HOSPITAL_COST_PER_HP
-    per point). Heals to full, or as far as cash reaches — the one place health comes
-    back other than a Health Kit, and cheaper per point in exchange for being on-site."""
+    """A hospital heals over time: each day you stay in the ward you pay HOSPITAL_STAY_COST
+    and heal 1d6 + Body (shops.hospital_stay). A stay *is* a day, so it turns the run over
+    like any other rest (app.advance_day). It's the main way health comes back — resting
+    elsewhere doesn't heal, and a Health Kit is only a small one-off top-up."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
@@ -616,21 +614,25 @@ class HospitalScreen(Screen):
 
     async def _refresh(self) -> None:
         character = self.app.character
-        missing = character.max_health - character.health
-        if missing == 0:
-            label = "Fully patched up — nothing to treat."
+        if character.health >= character.max_health:
+            row = ListItem(Static("Fully patched up — nothing to treat."), id="none")
         else:
-            label = f"Treat wounds — heal {missing} to full for {missing * HOSPITAL_COST_PER_HP}eb"
-            if character.cash < missing * HOSPITAL_COST_PER_HP:
-                label += " (or as much as you can afford)"
-        await _replace_items(
-            self.query_one("#hospital_actions", ListView), [ListItem(Static(label), id="treat")]
-        )
+            label = f"Stay the night — heal 1d6+Body, {HOSPITAL_STAY_COST}eb"
+            if character.cash < HOSPITAL_STAY_COST:
+                label += " (can't afford)"
+            row = ListItem(Static(label), id="stay")
+        await _replace_items(self.query_one("#hospital_actions", ListView), [row])
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.item.id != "treat":
+        if event.item.id != "stay":
             return
-        self.notify(heal_at_hospital(self.app.character))
+        message = hospital_stay(self.app.character)
+        if message is None:
+            self.notify("Can't afford a night's care.", severity="warning")
+            return
+        # A stay is a day — turn the run over around the care, same as any rest.
+        self.app.advance_day()
+        self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
@@ -1621,6 +1623,15 @@ class ShadowguyApp(App):
         # One gig per location, keyed by location id — the street-work counterpart to
         # the fixers' job board, topped up on each rest (see gigs.refresh_gigs).
         self.location_gigs: dict[str, Scene] = {}
+        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+
+    def advance_day(self) -> None:
+        """Advance one day and refresh the day-driven boards. The shared spine of every
+        rest: the MainMenu 'end the day' (paying district lodging) and a HospitalScreen
+        stay (paying for care and healing) both call this to actually turn the day over."""
+        self.character.rest()
+        expire_offers(self.fixers, self.character.day)
+        refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:

@@ -109,6 +109,10 @@ class Character:
     # lowers the cap immediately instead of waiting for the next rest(). Reset to 0
     # on rest(), same as stamina.
     free_travel_used: int = 0
+    # Whether a Health Kit has already been used today. A kit is a small emergency
+    # top-up, not a stack you burn to full — one per day (shops.use_consumable enforces
+    # it), cleared on rest() like stamina. Real recovery is time in a hospital ward.
+    health_kit_used_today: bool = False
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -238,6 +242,7 @@ class Character:
         self.day += 1
         self.stamina = self.max_stamina
         self.free_travel_used = 0
+        self.health_kit_used_today = False
         self.temp_bonuses = {}
         self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
 
