@@ -75,10 +75,11 @@ UNARMED = Item(
     bonuses={},
     slot=Slot.WEAPON,
     skill="grapple",
-    damage=4,
+    damage=0,
+    stun_damage=4,
     concealment=5,  # nothing to search or confiscate
 )
-if not (4 <= UNARMED.damage <= 10) or not (1 <= UNARMED.concealment <= 5):
+if not (1 <= UNARMED.concealment <= 5) or not (1 <= UNARMED.stun_damage <= 10):
     raise ValueError("UNARMED must satisfy the same weapon-profile bounds as shops.CATALOG")
 
 # A crit still hits harder — it's whatever margin (net successes) it takes to clear
@@ -174,6 +175,7 @@ class CombatOutcome(StrEnum):
     VICTORY = "victory"
     ESCAPED = "escaped"
     DEAD = "dead"
+    KNOCKED_OUT = "knocked_out"
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ class Enemy:
     defense: int  # what your attack roll must beat
     damage: int  # base health off you on a hit, before the attack roll's margin
     toughness: int  # added to the soak roll that mitigates a landed hit
+    stun_damage: int = 0  # non-lethal stun damage dealt per hit (0 = none)
 
 
 # id, name, health, attack, defense, damage, toughness.
@@ -232,6 +235,10 @@ class Fighter:
     enemy: Enemy
     health: int
     stunned_rounds: int = 0
+    # Accumulated stun damage (non-lethal). When stun >= health, the fighter is
+    # incapacitated — same effect as reaching 0 health but they stay alive.
+    # Stun builds up from 0, health drops from max; when they meet, they're stunned.
+    stun: int = 0
 
     @property
     def is_standing(self) -> bool:
@@ -345,22 +352,34 @@ def _combat_consumables(character: Character) -> list[tuple[int, Consumable]]:
     ]
 
 
-def available_actions(character: Character) -> list[Action]:
+def available_actions(
+    character: Character, cooldowns: dict[str, int] | None = None
+) -> list[Action]:
     """Everything the runner can do this round.
 
-    One attack per equipped weapon, the four stat-spread options, and one row per
-    grenade actually carried. Always non-empty: bare hands, bracing and running are
-    unconditional, so a round can never present an empty list.
+    One attack per equipped weapon (excluding any on cooldown), the four stat-spread
+    options, and one row per grenade actually carried. Always non-empty: bare hands,
+    bracing and running are unconditional, so a round can never present an empty list.
     """
+    weapons = [
+        weapon
+        for weapon in equipped_weapons(character)
+        if not (cooldowns and cooldowns.get(weapon.id, 0) > 0)
+    ]
+    # If every weapon is on cooldown, you can still use your fists.
+    if not weapons:
+        weapons = [UNARMED]
     actions = [
         Action(
             kind=ActionKind.ATTACK,
-            label=f"Attack with {weapon.name} ({skill_for(weapon.skill).name}, {weapon.damage} dmg)",
+            label=_weapon_label(weapon),
             skill=weapon.skill,
             weapon=weapon,
         )
-        for weapon in equipped_weapons(character)
+        for weapon in weapons
     ]
+
+
     actions.append(
         Action(kind=ActionKind.BRACE, label="Brace for it (Toughness)", skill="toughness")
     )
@@ -380,6 +399,17 @@ def available_actions(character: Character) -> list[Action]:
     return actions
 
 
+def _weapon_label(weapon: Item) -> str:
+    """Action label for an attack with this weapon."""
+    parts = []
+    if weapon.damage:
+        parts.append(f"{weapon.damage} dmg")
+    if weapon.stun_damage:
+        parts.append(f"{weapon.stun_damage} stun")
+    profile = " + ".join(parts) if parts else "?"
+    return f"Attack with {weapon.name} ({skill_for(weapon.skill).name}, {profile})"
+
+
 @dataclass
 class CombatState:
     """A fight in progress. The screen renders this; take_turn advances it."""
@@ -395,6 +425,14 @@ class CombatState:
     soak: int = 0
     # Rounds the enemies owe you (a landed ambush, a flash grenade).
     enemy_skip_rounds: int = 0
+    # weapon id (shops.ITEMS_BY_ID) -> rounds remaining before it can fire again.
+    # Populated by _attack when the weapon has recharge_rounds > 0; decremented at
+    # round end in take_turn. Resets between fights (CombatState is per-fight).
+    weapon_cooldowns: dict[str, int] = field(default_factory=dict)
+    # Player's accumulated stun damage this fight. Starts at 0, goes up; when it
+    # meets or exceeds the player's current health, the outcome becomes
+    # KNOCKED_OUT — the fight ends (see _stun_player). Clears with CombatState.
+    player_stun: int = 0
 
     @property
     def standing(self) -> list[Fighter]:
@@ -458,6 +496,24 @@ def _damage_fighter(state: CombatState, fighter: Fighter, damage: int) -> None:
         state.log.append(f"{fighter.enemy.name} goes down.")
 
 
+def _stun_fighter(state: CombatState, fighter: Fighter, stun_amount: int) -> None:
+    """Apply stun damage to a fighter. If stun >= health, they're incapacitated."""
+    fighter.stun += stun_amount
+    state.log.append(f"{fighter.enemy.name} reels from the shock ({fighter.stun} stun).")
+    if fighter.stun >= fighter.enemy.health:
+        fighter.health = 0
+        state.log.append(f"{fighter.enemy.name} is stunned unconscious.")
+
+
+def _stun_player(state: CombatState, stun_amount: int) -> None:
+    """Apply stun damage to the player. If stun >= health, they're knocked out."""
+    state.player_stun += stun_amount
+    state.log.append(f"Your nerves crackle ({state.player_stun} stun).")
+    if state.player_stun >= state.character.health:
+        state.outcome = CombatOutcome.KNOCKED_OUT
+        state.log.append("You're knocked out.")
+
+
 def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     # You fight through them in order: no targeting step, so being outnumbered costs
     # you rounds rather than clicks. Grenades are how you hit the back of the pack.
@@ -477,12 +533,24 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     if not roll.result.passed:
         state.log.append(f"You swing at {target.enemy.name} and miss.")
         return
-    if damage:
+
+    if weapon.stun_damage:
+        parts = [f"{weapon.stun_damage} stun"]
+        if damage:
+            parts.insert(0, f"{damage} damage")
+        state.log.append(
+            f"You land {weapon.name} on {target.enemy.name} for {' and '.join(parts)}."
+        )
+    elif damage:
         prefix = "Critical hit — " if roll.result is CheckResult.CRITICAL_SUCCESS else ""
         state.log.append(f"{prefix}You land {weapon.name} on {target.enemy.name} for {damage}.")
     else:
         state.log.append(f"You land {weapon.name} on {target.enemy.name}, but it doesn't get through.")
     _damage_fighter(state, target, damage)
+    if weapon.stun_damage:
+        _stun_fighter(state, target, weapon.stun_damage)
+    if weapon.recharge_rounds:
+        state.weapon_cooldowns[weapon.id] = weapon.recharge_rounds
 
 
 def _brace(state: CombatState, rng: random.Random) -> None:
@@ -600,6 +668,8 @@ def _enemy_turn(state: CombatState, rng: random.Random) -> None:
             state.log.append(f"{fighter.enemy.name} swings wide.")
             continue
         state.character.adjust_health(-damage)
+        if fighter.enemy.stun_damage:
+            _stun_player(state, fighter.enemy.stun_damage)
         if damage:
             state.log.append(f"{fighter.enemy.name} hits you for {damage}.")
         else:
@@ -607,10 +677,11 @@ def _enemy_turn(state: CombatState, rng: random.Random) -> None:
 
 
 def _settle(state: CombatState) -> None:
-    """Read the board after a turn. Death beats victory: a mutual knockout kills you."""
+    """Read the board after a turn. Death beats victory: a mutual knockout kills you.
+    KNOCKED_OUT is already set by _stun_player and is terminal — don't overwrite."""
     if not state.character.is_alive:
         state.outcome = CombatOutcome.DEAD
-    elif not state.standing:
+    elif not state.standing and state.outcome is not CombatOutcome.KNOCKED_OUT:
         state.outcome = CombatOutcome.VICTORY
 
 
@@ -641,3 +712,10 @@ def take_turn(state: CombatState, action: Action, rng: random.Random | None = No
     _settle(state)
     # Soak was bought for the round that just resolved, not the next one.
     state.soak = 0
+    # Weapon cooldowns tick down at round end, so a weapon fired this round
+    # stays unavailable through the cooldown's full duration.
+    for weapon_id in list(state.weapon_cooldowns):
+        state.weapon_cooldowns[weapon_id] -= 1
+        if state.weapon_cooldowns[weapon_id] <= 0:
+            del state.weapon_cooldowns[weapon_id]
+

@@ -600,6 +600,7 @@ LEGWORK_APPROACH_TEXT = {
     LocationKind.AUTO_DEALER: "Chat up the lot staff at {name}",
     LocationKind.PHARMACY: "Pull the register logs at {name}",
     LocationKind.COMPUTER_STORE: "Sift the sales records at {name}",
+    LocationKind.HOSPITAL: "Pull the admissions log at {name}",
     LocationKind.REAL_ESTATE: "Pose as a buyer at {name}",
 }
 if set(LEGWORK_APPROACH_TEXT) != set(GENERATED_KINDS):

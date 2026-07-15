@@ -184,6 +184,18 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             _GigApproach("sleight_of_hand", "Swap the failed part", "Quick hands, part swapped, done.", "You strip the socket doing it."),
         ),
     ),
+    LocationKind.HOSPITAL: _GigTemplate(
+        titles=("Off the Books", "John Doe"),
+        prompts=(
+            "{who}, the {role} at {place}, needs a patient discharged before the corp comes asking.",
+            "There's a body at {place} with no name, and {who} will pay to keep it that way.",
+        ),
+        approaches=(
+            _GigApproach("forgery", "Fake the discharge papers", "Clean paperwork, and they're a ghost by morning.", "A clerk flags the forgery and it lands on you."),
+            _GigApproach("infer", "Read the chart for the tell", "The chart tells you exactly what they're hiding.", "You misread the labs and vouch for the wrong thing."),
+            _GigApproach("negotiations", "Grease the admissions desk", "A quiet envelope and the record never existed.", "They take the money and talk anyway."),
+        ),
+    ),
     LocationKind.REAL_ESTATE: _GigTemplate(
         titles=("Eviction", "Showing"),
         prompts=(

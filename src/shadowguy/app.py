@@ -56,11 +56,13 @@ from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
+    HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
+    hospital_stay,
     sell_item,
     sell_price,
     toggle_equip,
@@ -300,10 +302,7 @@ class MainMenu(PanelNav, Screen):
                 paid = min(cost, character.cash)
                 character.cash -= paid
                 self.notify(f"Paid {paid}eb for lodging in {here.name}.")
-            character.rest()
-            expire_offers(self.app.fixers, character.day)
-            refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)
-            refresh_gigs(self.app.corp_map, self.app.location_gigs, character.day, self.app.rng)
+            self.app.advance_day()
             await self._refresh()
             return
 
@@ -359,6 +358,8 @@ class MainMenu(PanelNav, Screen):
                 return
             if location.kind in SHOP_KINDS:
                 self.app.push_screen(ShopScreen(location))
+            elif location.kind == LocationKind.HOSPITAL:
+                self.app.push_screen(HospitalScreen(location))
             elif location.kind == LocationKind.REAL_ESTATE:
                 self.app.push_screen(RealEstateScreen(location))
             elif location.kind in PLAYER_OWNED_KINDS:
@@ -457,6 +458,8 @@ class ShopScreen(Screen):
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
+            if item.min_standing > standing:
+                continue
             price = buy_price(item.price, standing)
             bonus = bonus_text(item)
             label = f"Buy {item.name} — {price}eb" + (f" ({bonus})" if bonus else "")
@@ -465,6 +468,8 @@ class ShopScreen(Screen):
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
         for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
+            if consumable.min_standing > standing:
+                continue
             price = buy_price(consumable.price, standing)
             label = f"Buy {consumable.name} — {price}eb"
             if character.cash < price:
@@ -579,6 +584,59 @@ class RealEstateScreen(Screen):
         character.cash -= price
         add_safehouse(territory)
         self.notify(f"Bought a safehouse in {territory.name} for {price}eb.")
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class HospitalScreen(Screen):
+    """A hospital heals over time: each day you stay in the ward you pay HOSPITAL_STAY_COST
+    and heal 1d6 + Body (shops.hospital_stay). A stay *is* a day, so it turns the run over
+    like any other rest (app.advance_day). It's the main way health comes back — resting
+    elsewhere doesn't heal, and a Health Kit is only a small one-off top-up."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="hospital_info")
+        yield ListView(id="hospital_actions")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        if character.health >= character.max_health:
+            row = ListItem(Static("Fully patched up — nothing to treat."), id="none")
+        else:
+            label = f"Stay the night — heal 1d6+Body, {HOSPITAL_STAY_COST}eb"
+            if character.cash < HOSPITAL_STAY_COST:
+                label += " (can't afford)"
+            row = ListItem(Static(label), id="stay")
+        await _replace_items(self.query_one("#hospital_actions", ListView), [row])
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id != "stay":
+            return
+        message = hospital_stay(self.app.character)
+        if message is None:
+            self.notify("Can't afford a night's care.", severity="warning")
+            return
+        # A stay is a day — turn the run over around the care, same as any rest.
+        self.app.advance_day()
+        self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
@@ -1145,6 +1203,24 @@ class SceneScreen(Screen):
             self.app.exit(message=f"{character.name} has died. Game over.")
             return
 
+        if result is CombatOutcome.KNOCKED_OUT:
+            roll = self.app.rng.randint(1, 6)
+            if roll <= 2:
+                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
+                return
+            # Wake up alive but badly off: lose half your cash, 1 health.
+            character.cash //= 2
+            character.health = 1
+            msg = "Most of your creds are gone." if roll <= 4 else "At least you're alive."
+            self.notify("You came to in an alley. " + msg)
+            # The job/gig is blown — pop back to MainMenu.
+            if self.scene.kind == SceneKind.JOB:
+                character.remove_job(self.scene.id)
+            elif self.scene.kind == SceneKind.GIG:
+                self.app.location_gigs.pop(self.scene.target_location_id, None)
+            self.app.pop_screen()
+            return
+
         stage = self._current_stage()
         # Winning is a way *past* the stage (victory.next_stage rejoins the job, and on
         # the last stage it carries the payout); running out ends the scene there.
@@ -1248,7 +1324,7 @@ class CombatScreen(Screen):
             )
             return
 
-        self.actions = available_actions(self.app.character)
+        self.actions = available_actions(self.app.character, self.state.weapon_cooldowns)
         await _replace_items(
             self.query_one("#actions", ListView),
             [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],
@@ -1569,6 +1645,15 @@ class ShadowguyApp(App):
         # One gig per location, keyed by location id — the street-work counterpart to
         # the fixers' job board, topped up on each rest (see gigs.refresh_gigs).
         self.location_gigs: dict[str, Scene] = {}
+        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+
+    def advance_day(self) -> None:
+        """Advance one day and refresh the day-driven boards. The shared spine of every
+        rest: the MainMenu 'end the day' (paying district lodging) and a HospitalScreen
+        stay (paying for care and healing) both call this to actually turn the day over."""
+        self.character.rest()
+        expire_offers(self.fixers, self.character.day)
+        refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:

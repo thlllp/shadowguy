@@ -11,6 +11,7 @@ corpmap.LOCATION_SKILL and jobs.LEGWORK_APPROACH_TEXT each have an entry for
 every SHOP_KINDS member to cover that.
 """
 
+import random
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -126,6 +127,24 @@ class Item:
     # bigger ride buys back more of the day, it doesn't make any single trip
     # cheaper.
     travel_bonus: int = 0
+    # Minimum standing with this shop's owner (LocalCharacter) required to see
+    # and buy the item. 0 = no gate (all current items). Tier 2 items use 2
+    # (see _CATALOG_ROWS). Hidden from the shop UI until the runner reaches
+    # this standing.
+    min_standing: int = 0
+    # How many rounds this weapon must cool down after being fired before it can
+    # be used again. 0 = no cooldown (normal weapon). Only meaningful on a
+    # Slot.WEAPON item — enforced at import. The cooldown starts ticking at the
+    # end of the round you fired, so recharge_rounds=1 means you skip one round
+    # between shots (fire every 2nd round).
+    recharge_rounds: int = 0
+    # Non-lethal stun damage: builds up a separate stun meter on the target. When
+    # stun >= current health, the target is knocked out. A weapon can do both
+    # lethal and stun damage (e.g. a shock-baton), or just one.
+    stun_damage: int = 0
+    # Short flavor tag shown in parentheses on shop/inventory listings, e.g.
+    # "old tech" for a pre-war pipe pistol. Empty string = no tag.
+    tag: str = ""
 
 
 @dataclass
@@ -140,12 +159,17 @@ def bonus_text(item: Item) -> str:
     plus a weapon's damage or armor's defense — the two combat-facing numbers that
     don't live in `bonuses` and would otherwise be invisible on a buy/equip screen.
     """
-    parts = [f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items()]
+    parts = []
+    if item.tag:
+        parts.append(f"({item.tag})")
+    parts += [f"+{bonus} {stat.capitalize()}" for stat, bonus in item.bonuses.items()]
     parts += [
         f"+{bonus} {skill_for(skill_id).name}" for skill_id, bonus in item.skill_bonuses.items()
     ]
     if item.damage:
         parts.append(f"{item.damage} dmg")
+    if item.stun_damage:
+        parts.append(f"{item.stun_damage} stun")
     if item.defense:
         parts.append(f"+{item.defense} defense")
     if item.travel_bonus:
@@ -189,12 +213,17 @@ class Consumable:
     effect: EffectKind
     amount: int = 0
     stat: str | None = None  # only set when effect is TEMP_STAT_BOOST
+    # Same gate as Item.min_standing: a consumable the owner only sells to people
+    # they trust. 0 = no gate.
+    min_standing: int = 0
 
 
 # id, name, price, bonuses, slot, defense, then for weapons only: skill, damage,
 # concealment, two_handed, then skill_bonuses (a wearable's per-skill bonus, e.g.
-# Slippers' Stealth), and finally travel_bonus (a Slot.VEHICLE item's free travel
-# moves per day, e.g. Beater Bike). A weapon's skill is what its attack rolls in combat and
+# Slippers' Stealth), then travel_bonus (a Slot.VEHICLE item's free travel
+# moves per day, e.g. Beater Bike), then min_standing (tier gate), then
+# recharge_rounds (weapon cooldown between shots), and finally stun_damage
+# (non-lethal knockout damage). A weapon's skill is what its attack rolls in combat and
 # its damage is what a hit takes off — the pool spans blunt/short_blade/long_blade/
 # firearms, so no build is stuck swinging a weapon it can't use. The bloodiest one
 # is two-handed, which costs both weapon slots (SLOT_CAPACITY). Weapons carry no
@@ -207,7 +236,7 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "blunt", 4, 5),
         ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 4, 4),
         ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "long_blade", 6, 1, True),
-        ("smart_pistol", "Smart Pistol", 900, {}, Slot.WEAPON, 0, "firearms", 5, 3),
+        ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "firearms", 5, 4, False, {}, 0, 0, 0, 0, "old tech"),
         ("leather_jacket", "Leather Jacket", 200, {}, Slot.TORSO, 3),
         ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 5),
         ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
@@ -215,6 +244,37 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("kevlar_helmet", "Kevlar Helmet", 120, {}, Slot.HEADWEAR, 1),
         ("steel_toe_boots", "Steel Toe Boots", 120, {}, Slot.BOOTS, 1),
         ("slippers", "Slippers", 100, {}, Slot.BOOTS, 0, None, 0, 0, False, {"stealth": 1}),
+        # Misc weapons (Misc Weapons skill): tasers with a cooldown between shots.
+        # The M5 fires every 3 rounds; the H6 fires every 2. Both do stun damage
+        # (non-lethal — builds a stun meter instead of reducing health).
+        ("taser_m5", "Taser (M5)", 600, {}, Slot.WEAPON, 0, "misc",
+         0,   # damage (lethal)
+         5,   # concealment
+         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_bonus, min_standing
+         2,   # recharge_rounds
+         5),  # stun_damage
+        ("taser_h6", "Taser (H6)", 800, {}, Slot.WEAPON, 0, "misc",
+         0,   # damage (lethal)
+         4,   # concealment
+         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_bonus, min_standing
+         1,   # recharge_rounds
+         6),  # stun_damage
+        # Tier 2 — requires standing 2 with the gunsmith to browse the back room.
+        (
+            "mono_katana",
+            "Mono Katana",
+            1400,
+            {},
+            Slot.WEAPON,
+            0,
+            "long_blade",
+            7,
+            1,
+            True,
+            {},
+            0,
+            2,
+        ),
     ],
     LocationKind.AUTO_DEALER: [
         ("beater_bike", "Beater Bike", 200, {"cool": 1}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 1),
@@ -245,6 +305,22 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "blunt", 4, 5),
         ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
+        # Tier 2 — the pawnbroker keeps the interesting finds under the counter.
+        (
+            "pawned_artifact",
+            "Pawned Artifact",
+            400,
+            {"cool": 2, "perception": 1},
+            Slot.ACCESSORY,
+            0,
+            None,
+            0,
+            0,
+            False,
+            {},
+            0,
+            2,
+        ),
     ],
 }
 
@@ -264,25 +340,35 @@ if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.
     raise ValueError("two_handed items must have slot=Slot.WEAPON")
 
 # A weapon's combat profile and its slot have to agree, both ways round. A Slot.WEAPON
-# item with no skill/damage/concealment would be an attack the combat screen can offer
-# but never resolve; a skill, damage, or concealment on a non-weapon would be a combat
-# profile nothing can ever reach, since combat only ever swings what's equipped in
-# Slot.WEAPON. The skill id goes through skill_for, so a typo'd weapon skill fails on
+# item with no skill/damage/concealment/stun would be an attack the combat screen can
+# offer but never resolve; a skill, damage, or concealment on a non-weapon would be a
+# combat profile nothing can ever reach, since combat only ever swings what's equipped
+# in Slot.WEAPON. The skill id goes through skill_for, so a typo'd weapon skill fails on
 # import rather than mid-fight. Defense is the wearable counterpart to a weapon's
 # damage: it has to live on something you can actually put on (not a weapon, not an
 # unlimited-slot item like a deck), and it's bounded the same way damage
 # is, so a typo'd 80 doesn't quietly turn one jacket into full plot armor.
 for _item in ITEMS_BY_ID.values():
     _is_weapon = _item.slot is Slot.WEAPON
+    _has_lethal = bool(_item.damage)
+    _has_stun = bool(_item.stun_damage)
     if _is_weapon and (
-        _item.skill is None or not (4 <= _item.damage <= 10) or not (1 <= _item.concealment <= 5)
+        _item.skill is None
+        or not (1 <= _item.concealment <= 5)
+        or not (_has_lethal or _has_stun)
+        or (_has_lethal and not (4 <= _item.damage <= 10))
+        or (_has_stun and not (1 <= _item.stun_damage <= 10))
     ):
         raise ValueError(
-            f"{_item.id}: a Slot.WEAPON item needs a skill, 4-10 damage, and 1-5 concealment"
+            f"{_item.id}: a Slot.WEAPON item needs a skill, 1-5 concealment,"
+            " and either 4-10 damage or 1-10 stun_damage (or both)"
         )
-    if not _is_weapon and (_item.skill is not None or _item.damage or _item.concealment):
+    if not _is_weapon and (
+        _item.skill is not None or _item.damage or _item.stun_damage or _item.concealment
+    ):
         raise ValueError(
-            f"{_item.id}: only a Slot.WEAPON item can have a combat skill, damage, or concealment"
+            f"{_item.id}: only a Slot.WEAPON item can have a combat skill, damage,"
+            " stun_damage, or concealment"
         )
     if _item.skill is not None:
         skill_for(_item.skill)
@@ -298,15 +384,40 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: only a Slot.VEHICLE item can have travel_bonus")
     if _item.travel_bonus and not (1 <= _item.travel_bonus <= 5):
         raise ValueError(f"{_item.id}: travel_bonus must be 1-5")
+    if _item.min_standing < 0:
+        raise ValueError(f"{_item.id}: min_standing must be >= 0")
+    if _item.recharge_rounds and not _is_weapon:
+        raise ValueError(f"{_item.id}: recharge_rounds is only valid on a Slot.WEAPON item")
+    if _item.recharge_rounds < 0:
+        raise ValueError(f"{_item.id}: recharge_rounds must be >= 0")
 
 
-# id, name, price, effect, amount, stat
-_CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, str | None]]] = {
+# id, name, price, effect, amount, stat, min_standing
+_CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, str | None, int]]] = {
     LocationKind.PHARMACY: [
         ("health_kit", "Health Kit", 100, EffectKind.HEAL, 5, None),
         ("energy_drink", "Energy Drink", 60, EffectKind.RESTORE_STAMINA, 2, None),
         ("chem_x", "Chem X", 150, EffectKind.TEMP_STAT_BOOST, 2, "body"),
         ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "intelligence"),
+        # Tier 2 — stronger stock the pharmacist reserves for regulars.
+        (
+            "advanced_health_kit",
+            "Advanced Health Kit",
+            250,
+            EffectKind.HEAL,
+            10,
+            None,
+            2,
+        ),
+        (
+            "chem_x2",
+            "Chem X2",
+            300,
+            EffectKind.TEMP_STAT_BOOST,
+            3,
+            "body",
+            2,
+        ),
     ],
     LocationKind.WEAPON_SHOP: [
         ("grenade_smoke", "Smoke Grenade", 100, EffectKind.COMBAT_ESCAPE, 0, None),
@@ -320,6 +431,16 @@ CONSUMABLE_CATALOG: dict[LocationKind, list[Consumable]] = {
 }
 
 CONSUMABLES_BY_ID = {c.id: c for items in CONSUMABLE_CATALOG.values() for c in items}
+
+for _c in CONSUMABLES_BY_ID.values():
+    if _c.min_standing < 0:
+        raise ValueError(f"{_c.id}: min_standing must be >= 0")
+
+# A HOSPITAL (corpmap.LocationKind.HOSPITAL) heals over time, not on the spot: each day
+# you check in you pay this — the same as a nice district's lodging (LODGING per point of
+# Development, ~4 on a good block) — and heal 1d6 + Body. Slow but the only real bulk
+# healing there is; a Health Kit is a one-off top-up, resting elsewhere doesn't heal.
+HOSPITAL_STAY_COST = 20
 
 
 def _equipped_items(inventory: list[InventoryItem]) -> Iterator[Item]:
@@ -357,6 +478,8 @@ def _fits_in_slot(inventory: list[InventoryItem], item: Item) -> bool:
 
 
 def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
+    if standing < item.min_standing:
+        return False
     price = buy_price(item.price, standing)
     if character.cash < price:
         return False
@@ -369,6 +492,8 @@ def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
 
 
 def buy_consumable(character: "Character", consumable: Consumable, standing: int = 0) -> bool:
+    if standing < consumable.min_standing:
+        return False
     price = buy_price(consumable.price, standing)
     if character.cash < price:
         return False
@@ -386,10 +511,19 @@ def use_consumable(character: "Character", index: int) -> str:
     consumable = CONSUMABLES_BY_ID[character.consumables[index]]
     if consumable.effect in COMBAT_ONLY_EFFECTS:
         return "Only useful in a fight."
+    # A Health Kit only helps if there's a wound to close, and only once a day — refuse
+    # (without spending it) rather than let it be popped for nothing or stacked to full.
+    if consumable.effect is EffectKind.HEAL:
+        if character.health >= character.max_health:
+            return "No wounds to treat."
+        if character.health_kit_used_today:
+            return "Already used a kit today."
     character.consumables.pop(index)
     if consumable.effect is EffectKind.HEAL:
+        before = character.health
         character.adjust_health(consumable.amount)
-        return f"+{consumable.amount} Health"
+        character.health_kit_used_today = True
+        return f"+{character.health - before} Health"
     if consumable.effect is EffectKind.RESTORE_STAMINA:
         character.restore_stamina(consumable.amount)
         return f"+{consumable.amount} Stamina"
@@ -400,6 +534,20 @@ def use_consumable(character: "Character", index: int) -> str:
     # listed in COMBAT_ONLY_EFFECTS nor given a branch here would otherwise be silently
     # eaten (the item spent, nothing applied).
     raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
+
+
+def hospital_stay(character: "Character", rng: random.Random | None = None) -> str | None:
+    """One day of inpatient care: charge HOSPITAL_STAY_COST and heal 1d6 + Body (raw Body,
+    like max_health — recovery is a survivability thing, gear doesn't speed it). Returns
+    the result message, or None if the runner can't afford the day (the caller then leaves
+    the day unspent). The stay is a day; the caller advances the run around it."""
+    if character.cash < HOSPITAL_STAY_COST:
+        return None
+    character.cash -= HOSPITAL_STAY_COST
+    roll = (rng or random).randint(1, 6)
+    before = character.health
+    character.adjust_health(roll + character.body)
+    return f"A day in the ward: +{character.health - before} Health for {HOSPITAL_STAY_COST}eb."
 
 
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:
