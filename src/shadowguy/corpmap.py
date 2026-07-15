@@ -58,6 +58,14 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 # GENERATED_KINDS, not the full enum.
 GENERATED_KINDS = tuple(k for k in LocationKind if k not in PLAYER_OWNED_KINDS)
 
+# Hospitals are placed to a fixed count (generate_corp_map / HOSPITAL_COUNT) rather than
+# rolled in with everything else, so every map has about the same healing access instead
+# of it swinging with the location lottery. So the random location pools draw from
+# everything generated *except* the hospital. It still needs the per-kind world tables
+# (it can be a job site, and gigs spawn there), so it stays in GENERATED_KINDS — that's
+# what the import guards check against.
+ROLLED_KINDS = tuple(k for k in GENERATED_KINDS if k is not LocationKind.HOSPITAL)
+
 
 # Retail kinds: shops.py's business, but defined here (not there) since
 # _location_kinds below needs them and corpmap.py must not import shops.py.
@@ -382,6 +390,12 @@ MIN_START_DEGREE = 2
 # portfolio rather than the whole market, so offices differ and the list stays readable.
 REAL_ESTATE_LISTING_COUNT = 4
 
+# About one hospital per this many districts, placed to a fixed count (see
+# generate_corp_map) so healing access is even across every map. round() keeps it close
+# for a TERRITORY_COUNT the ratio doesn't divide evenly.
+TILES_PER_HOSPITAL = 5
+HOSPITAL_COUNT = round(TERRITORY_COUNT / TILES_PER_HOSPITAL)
+
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
@@ -401,12 +415,22 @@ DISTRICT_NAMES = [
     "Kingsway", "Ravine", "Tannery", "Cathode", "Bracken", "Silo",
 ]
 
-LOCATIONS_PER_TERRITORY = 3
+# A district holds a variable number of locations — roomier now there are more kinds to
+# draw from. A territory that also gets an injected place (the runner's apartment on the
+# start node, or a hospital) rolls one fewer, so the total still caps at MAX (see
+# generate_corp_map). Both bounds are inclusive.
+MIN_LOCATIONS_PER_TERRITORY = 4
+MAX_LOCATIONS_PER_TERRITORY = 6
 
-# How many of a corp-held district's locations are the corp's own kind of place.
-# The rest is one random filler slot (see FILLER_KINDS below) — the bar
-# everyone drinks in, or one of the shops, whoever owns the block.
+# How many of a corp-held district's locations are the corp's own kind of place. The rest
+# are random filler slots (see FILLER_KINDS below) — the bar everyone drinks in, or one of
+# the shops, whoever owns the block.
 SPECIALTY_LOCATIONS = 2
+
+# The most filler a district can want: the biggest district (MAX locations) minus its
+# specialty pair. _filler_pool must be able to supply this for every specialty (guarded
+# below), or rng.sample would raise mid-generation.
+MAX_FILLER_COUNT = MAX_LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
 
 LOCATION_KIND_FOR_SPECIALTY = {
     FactionSpecialty.WEAPONS: LocationKind.DEPOT,
@@ -464,8 +488,9 @@ LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
 
 # The most locations of one kind a map can want: the faction whose specialty it is
 # takes SPECIALTY_LOCATIONS in each of its own districts, and every other district
-# can still roll one. _make_locations retries forever on a name collision, so an
-# undersized pool hangs generation rather than raising — hence the guard below.
+# can still roll one (a district's kinds are a distinct sample, so at most one each).
+# _unique_location_name retries forever on a name collision, so an undersized pool hangs
+# generation rather than raising — hence the guard below.
 MAX_SAME_KIND_LOCATIONS = TERRITORIES_PER_FACTION * SPECIALTY_LOCATIONS + (
     TERRITORY_COUNT - TERRITORIES_PER_FACTION
 )
@@ -500,12 +525,9 @@ if len(CHARACTER_NAMES) < MAX_CHARACTERS_PER_LOCATION:
 Cell = tuple[int, int]
 
 
-# The non-specialty slots in a corp district: the bar everyone drinks in, the local
-# hospital, or a shop — whoever owns the block, the storefront doesn't care. (Unlike
-# real estate, which is neutral-only, a hospital sits on corp turf fine.)
-FILLER_KINDS = (LocationKind.SOCIAL, LocationKind.HOSPITAL, *SHOP_KINDS)
-
-FILLER_COUNT = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
+# The non-specialty slots in a corp district: the bar everyone drinks in, or a
+# shop — whoever owns the block, the storefront doesn't care.
+FILLER_KINDS = (LocationKind.SOCIAL, *SHOP_KINDS)
 
 
 def _filler_pool(owned_kind: LocationKind) -> list[LocationKind]:
@@ -520,22 +542,24 @@ def _filler_pool(owned_kind: LocationKind) -> list[LocationKind]:
     return [kind for kind in FILLER_KINDS if location_stat(kind) != owned_stat]
 
 
-# rng.sample() below raises if the pool ever runs short, so prove at import that
-# it can't: every specialty a faction can have must leave FILLER_COUNT fillers.
+# rng.sample() below raises if the pool ever runs short, so prove at import that it
+# can't: every specialty a faction can have must leave MAX_FILLER_COUNT fillers, enough
+# to fill even the largest district off the specialty's own stat.
 for _specialty_kind in LOCATION_KIND_FOR_SPECIALTY.values():
-    if len(_filler_pool(_specialty_kind)) < FILLER_COUNT:
+    if len(_filler_pool(_specialty_kind)) < MAX_FILLER_COUNT:
         raise ValueError(
-            f"LOCATION_SKILL leaves no filler kind off {_specialty_kind}'s own stat"
+            f"LOCATION_SKILL leaves too few filler kinds off {_specialty_kind}'s own stat"
         )
 
 
-def _location_kinds(owner: str, rng: random.Random) -> list[LocationKind]:
+def _location_kinds(owner: str, rng: random.Random, count: int) -> list[LocationKind]:
     faction = FACTIONS_BY_ID.get(owner)
     if faction is None:
-        # Neutral ground and the player's block carry no corp's stamp.
-        return rng.sample(list(GENERATED_KINDS), k=LOCATIONS_PER_TERRITORY)
+        # Neutral ground and the player's block carry no corp's stamp. Hospitals aren't
+        # in ROLLED_KINDS — they're placed to a fixed density in generate_corp_map.
+        return rng.sample(list(ROLLED_KINDS), k=count)
     owned_kind = LOCATION_KIND_FOR_SPECIALTY[faction.specialty]
-    filler = rng.sample(_filler_pool(owned_kind), k=FILLER_COUNT)
+    filler = rng.sample(_filler_pool(owned_kind), k=count - SPECIALTY_LOCATIONS)
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
 
 
@@ -551,26 +575,42 @@ def _make_characters(location_id: str, kind: LocationKind, rng: random.Random) -
     ]
 
 
+def _unique_location_name(kind: LocationKind, rng: random.Random, used_names: set[str]) -> str:
+    """A prefix+suffix name for this kind not yet used anywhere on the map."""
+    while True:
+        name = f"{rng.choice(LOCATION_PREFIXES)} {rng.choice(LOCATION_SUFFIXES[kind])}"
+        if name not in used_names:
+            used_names.add(name)
+            return name
+
+
 def _make_locations(
-    territory_id: str, owner: str, rng: random.Random, used_names: set[str]
+    territory_id: str, owner: str, rng: random.Random, used_names: set[str], count: int
 ) -> list[Location]:
     locations = []
-    for index, kind in enumerate(_location_kinds(owner, rng)):
-        while True:
-            name = f"{rng.choice(LOCATION_PREFIXES)} {rng.choice(LOCATION_SUFFIXES[kind])}"
-            if name not in used_names:
-                break
-        used_names.add(name)
+    for index, kind in enumerate(_location_kinds(owner, rng, count)):
         location_id = f"{territory_id}_loc{index}"
         locations.append(
             Location(
                 id=location_id,
-                name=name,
+                name=_unique_location_name(kind, rng, used_names),
                 kind=kind,
                 characters=_make_characters(location_id, kind, rng),
             )
         )
     return locations
+
+
+def _make_hospital(territory_id: str, rng: random.Random, used_names: set[str]) -> Location:
+    """A hospital placed on a district out of band from the location roll (see
+    HOSPITAL_COUNT). At most one per territory, so the fixed id can't collide."""
+    location_id = f"{territory_id}_hospital"
+    return Location(
+        id=location_id,
+        name=_unique_location_name(LocationKind.HOSPITAL, rng, used_names),
+        kind=LocationKind.HOSPITAL,
+        characters=_make_characters(location_id, LocationKind.HOSPITAL, rng),
+    )
 
 
 def _clamp(level: int) -> int:
@@ -769,14 +809,26 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
 
     names = rng.sample(DISTRICT_NAMES, k=len(region))
     ids = {cell: name.lower() for cell, name in zip(region, names)}
+    start_id = ids[start_cell]
+
+    # Which districts get a hospital, picked up front (about one per TILES_PER_HOSPITAL)
+    # so the count roll below can reserve a slot for it. The start is left out — it gets
+    # the apartment, and a district takes only one injected place so its total still caps
+    # at MAX_LOCATIONS_PER_TERRITORY.
+    elsewhere = [ids[cell] for cell in region if cell != start_cell]
+    hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
+    gets_injection = hospital_ids | {start_id}
 
     territories = {}
     used_names: set[str] = set()
     for cell, name in zip(region, names):
         x, y = cell
+        tid = ids[cell]
         owner = owners.get(cell, "neutral")
-        territories[ids[cell]] = Territory(
-            id=ids[cell],
+        reserved = 1 if tid in gets_injection else 0
+        count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
+        territories[tid] = Territory(
+            id=tid,
             name=name,
             x=x,
             y=y,
@@ -787,17 +839,22 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
                 for other in region
                 if frozenset((cell, other)) in edges
             ),
-            locations=_make_locations(ids[cell], owner, rng, used_names),
+            locations=_make_locations(tid, owner, rng, used_names, count),
             modifiers=_make_modifiers(owner, values[cell], rng),
         )
 
     # The runner's home: a fixed, player-owned place in the start district, injected
     # rather than rolled (see GENERATED_KINDS). No owner NPC — it's the runner's own.
-    start = territories[ids[start_cell]]
+    start = territories[start_id]
     start.locations.insert(
         0,
         Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT),
     )
+
+    # Hospitals to a fixed density (about one per TILES_PER_HOSPITAL) rather than rolled
+    # in, so healing access is even on every map — one added to each district chosen above.
+    for tid in hospital_ids:
+        territories[tid].locations.append(_make_hospital(tid, rng, used_names))
 
     # Hand every real estate office a portfolio of districts to sell safehouses in.
     # Anywhere the runner doesn't already own (i.e. not the start) is fair game; a

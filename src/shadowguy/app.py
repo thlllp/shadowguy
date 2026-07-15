@@ -458,6 +458,8 @@ class ShopScreen(Screen):
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
+            if item.min_standing > standing:
+                continue
             price = buy_price(item.price, standing)
             bonus = bonus_text(item)
             label = f"Buy {item.name} — {price}eb" + (f" ({bonus})" if bonus else "")
@@ -466,6 +468,8 @@ class ShopScreen(Screen):
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
         for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
+            if consumable.min_standing > standing:
+                continue
             price = buy_price(consumable.price, standing)
             label = f"Buy {consumable.name} — {price}eb"
             if character.cash < price:
@@ -1199,6 +1203,24 @@ class SceneScreen(Screen):
             self.app.exit(message=f"{character.name} has died. Game over.")
             return
 
+        if result is CombatOutcome.KNOCKED_OUT:
+            roll = self.app.rng.randint(1, 6)
+            if roll <= 2:
+                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
+                return
+            # Wake up alive but badly off: lose half your cash, 1 health.
+            character.cash //= 2
+            character.health = 1
+            msg = "Most of your creds are gone." if roll <= 4 else "At least you're alive."
+            self.notify("You came to in an alley. " + msg)
+            # The job/gig is blown — pop back to MainMenu.
+            if self.scene.kind == SceneKind.JOB:
+                character.remove_job(self.scene.id)
+            elif self.scene.kind == SceneKind.GIG:
+                self.app.location_gigs.pop(self.scene.target_location_id, None)
+            self.app.pop_screen()
+            return
+
         stage = self._current_stage()
         # Winning is a way *past* the stage (victory.next_stage rejoins the job, and on
         # the last stage it carries the payout); running out ends the scene there.
@@ -1302,7 +1324,7 @@ class CombatScreen(Screen):
             )
             return
 
-        self.actions = available_actions(self.app.character)
+        self.actions = available_actions(self.app.character, self.state.weapon_cooldowns)
         await _replace_items(
             self.query_one("#actions", ListView),
             [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],
