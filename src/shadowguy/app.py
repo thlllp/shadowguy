@@ -24,7 +24,6 @@ from shadowguy.combat import (
 from shadowguy.content import (
     GIG_CARD_TABLE,
     GIG_CHEM_TRIAL,
-    GIG_FENCE_SOME_CHROME,
     GIG_RING_FIGHT,
     GIG_STREET_WHISPERS,
     GIG_WORK_A_MARK,
@@ -110,7 +109,6 @@ class CharacterSheet(Static):
 
 
 STATIC_ACTIVITIES = [
-    GIG_FENCE_SOME_CHROME,
     GIG_CHEM_TRIAL,
     GIG_RING_FIGHT,
     GIG_CARD_TABLE,
@@ -118,6 +116,23 @@ STATIC_ACTIVITIES = [
     GIG_WORK_A_MARK,
 ]
 validate_scene_registry(STATIC_ACTIVITIES)
+
+# Which LocationKinds a gig plausibly happens at — a gig only shows up in the
+# activity list while the runner is standing in a territory that has one of
+# these among its (LOCATIONS_PER_TERRITORY) locations. A gig may list more than
+# one kind where its flavor genuinely fits either (e.g. a ripperdoc's chem test
+# reads as either a clinic or a pharmacy); it's not padded just to widen reach.
+GIG_LOCATION_KINDS: dict[str, tuple[LocationKind, ...]] = {
+    GIG_CHEM_TRIAL.id: (LocationKind.LAB, LocationKind.PHARMACY),
+    GIG_RING_FIGHT.id: (LocationKind.SOCIAL, LocationKind.DEPOT),
+    GIG_CARD_TABLE.id: (LocationKind.SOCIAL,),
+    GIG_STREET_WHISPERS.id: (LocationKind.SOCIAL, LocationKind.DATA),
+    GIG_WORK_A_MARK.id: (LocationKind.SOCIAL,),
+}
+if set(GIG_LOCATION_KINDS) != {
+    scene.id for scene in STATIC_ACTIVITIES if scene.kind == SceneKind.GIG
+}:
+    raise ValueError("GIG_LOCATION_KINDS must have exactly one entry per gig in STATIC_ACTIVITIES")
 
 
 class MainMenu(Screen):
@@ -200,8 +215,12 @@ class MainMenu(Screen):
         items = []
 
         if self.selected_category == "gig":
+            here = self.app.corp_map.territories[character.location_id]
+            local_kinds = {location.kind for location in here.locations}
             for scene in STATIC_ACTIVITIES:
                 if scene.kind != SceneKind.GIG:
+                    continue
+                if local_kinds.isdisjoint(GIG_LOCATION_KINDS[scene.id]):
                     continue
                 label = f"Gig — {scene.title} ({scene.stamina_cost} stamina)"
                 if not character.can_afford(scene.stamina_cost):
