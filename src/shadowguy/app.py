@@ -4,8 +4,8 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.color import Color
-from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.screen import Screen
+from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
@@ -135,13 +135,40 @@ if set(GIG_LOCATION_KINDS) != {
     raise ValueError("GIG_LOCATION_KINDS must have exactly one entry per gig in STATIC_ACTIVITIES")
 
 
-class MainMenu(Screen):
+# Shared left/right panel navigation for the multi-ListView screens. A ListView
+# only binds up/down/enter, so left/right bubble to the screen unused — bind them
+# there to move focus between panels and the whole screen is keyboard-navigable
+# without Tab or the mouse. up/down still move the highlight within the focused
+# list. The bindings can't live on the mixin (Textual doesn't merge BINDINGS from
+# a plain mixin's MRO), so each screen splices PANEL_NAV_BINDINGS into its own
+# BINDINGS; the mixin only supplies the action, found by ordinary attribute lookup.
+PANEL_NAV_BINDINGS = [
+    ("left", "focus_panel(-1)", "Prev panel"),
+    ("right", "focus_panel(1)", "Next panel"),
+]
+
+
+class PanelNav:
+    """Mixin: cycle focus through PANEL_IDS (in visual order) with left/right."""
+
+    PANEL_IDS: tuple[str, ...] = ()
+
+    def action_focus_panel(self, step: int) -> None:
+        panels = [self.query_one(f"#{pid}", ListView) for pid in self.PANEL_IDS]
+        focused = self.focused
+        current = next((i for i, panel in enumerate(panels) if panel is focused), 0)
+        panels[(current + step) % len(panels)].focus()
+
+
+class MainMenu(PanelNav, Screen):
+    PANEL_IDS = ("categories", "activities")
     BINDINGS = [
-        ("q", "quit", "Quit"),
+        ("q", "quit_menu", "Menu"),
         ("m", "corp_map", "Corp Map (preview)"),
         ("i", "inventory", "Gear"),
         ("k", "skills", "Skills"),
         ("c", "contacts", "Contacts"),
+        *PANEL_NAV_BINDINGS,
     ]
 
     CSS = """
@@ -362,7 +389,7 @@ class MainMenu(Screen):
 
 
 class FixerOffersScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
     def __init__(self, fixer: Fixer) -> None:
         super().__init__()
@@ -398,7 +425,7 @@ class FixerOffersScreen(Screen):
 
 
 class ShopScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -462,7 +489,7 @@ class ShopScreen(Screen):
 
 
 class InventoryScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -511,28 +538,128 @@ class InventoryScreen(Screen):
         await self._refresh()
 
 
-def _skill_label(character: Character, skill, show_cost: bool = False) -> str:
-    note = ""
+def _compact_skill_label(character: Character, skill, show_cost: bool = False) -> str:
+    """Two-line row text for the stat-column grids — the read-only SkillsScreen and
+    the interactive creation screen both use it. The column header already names the
+    stat and there's no room for the flavor description; two explicit lines rather
+    than one long one because the longest skill names don't fit an 80-column
+    terminal's 3-wide columns, and a deliberate break reads better than whatever
+    mid-word point Rich's auto-wrap would pick. `show_cost` appends the next-rank
+    price for the creation screen, where a point is about to be spent; SkillsScreen
+    is read-only and leaves it off."""
+    rank = character.skill_rank(skill.id)
+    value = skill_value(character, skill.id)
+    detail = f"  rank {rank}/{MAX_SKILL_RANK}  value {value}"
     if show_cost:
         cost = character.next_rank_cost(skill.id)
-        note = " (MAX)" if cost is None else f" (next: {cost} pt{'s' if cost > 1 else ''})"
-    return (
-        f"{skill.name} ({skill.stat.capitalize()}) — "
-        f"rank {character.skill_rank(skill.id)}/{MAX_SKILL_RANK}{note}, "
-        f"value {skill_value(character, skill.id)} — {skill.description}"
+        detail += "  MAX" if cost is None else f"  next +{cost}"
+    return f"{skill.name}\n{detail}"
+
+
+class CharacterCreationScreen(PanelNav, Screen):
+    """Build the runner. Both point pools are spent here and never refill.
+
+    Laid out like SkillsScreen: a 3x2 grid of stat columns, each column raising its
+    core stat (top row) and then that stat's skills. The archetype fast-path sits
+    above as a row of bordered cards. left/right walks the cards, then the columns,
+    then the Begin bar (PanelNav); up/down and enter spend within the focused panel.
+    """
+
+    PANEL_IDS = (
+        *(f"arch_card_{archetype.id}" for archetype in ARCHETYPES),
+        *(f"build_list_{stat}" for stat in CORE_STATS),
+        "begin_row",
     )
 
+    BINDINGS = [
+        ("q", "quit_menu", "Menu"),
+        ("r", "reset", "Reset build"),
+        ("b", "begin", "Begin run"),
+        *PANEL_NAV_BINDINGS,
+    ]
 
-class CharacterCreationScreen(Screen):
-    """Build the runner. Both point pools are spent here and never refill."""
+    CSS = """
+    #pools {
+        padding: 0 1;
+    }
 
-    BINDINGS = [("q", "quit", "Quit"), ("r", "reset", "Reset build"), ("b", "begin", "Begin run")]
+    #arch_grid {
+        grid-size: 3 1;
+        grid-gutter: 0 1;
+        height: auto;
+    }
+
+    .arch_card {
+        height: auto;
+        border: round $accent;
+        padding: 0 1;
+    }
+
+    .arch_card:focus {
+        border: round $secondary;
+    }
+
+    #build_scroll {
+        height: 1fr;
+    }
+
+    #build_grid {
+        grid-size: 3 2;
+        grid-gutter: 1 2;
+        height: auto;
+    }
+
+    .build_column {
+        height: auto;
+        border-top: solid $accent;
+        padding: 0 1;
+    }
+
+    .build_column ListView {
+        height: auto;
+    }
+
+    .build_column ListView:focus {
+        background: $boost;
+    }
+
+    #begin_row {
+        height: auto;
+        border: round $success;
+    }
+    """
+
+    def _arch_card(self, archetype) -> ListView:
+        """One archetype as a bordered card: the border-title names it, the single
+        selectable row is its pitch. Selecting it applies the preset."""
+        card = ListView(
+            ListItem(Static(archetype.description), id=f"arch_{archetype.id}"),
+            id=f"arch_card_{archetype.id}",
+            classes="arch_card",
+        )
+        card.border_title = archetype.name
+        return card
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(id="pools")
-        yield ListView(id="build_list")
+        yield Grid(*(self._arch_card(archetype) for archetype in ARCHETYPES), id="arch_grid")
+        yield ScrollableContainer(
+            Grid(
+                *(
+                    Vertical(
+                        Static(id=f"build_head_{stat}"),
+                        ListView(id=f"build_list_{stat}"),
+                        classes="build_column",
+                    )
+                    for stat in CORE_STATS
+                ),
+                id="build_grid",
+            ),
+            id="build_scroll",
+        )
+        yield ListView(id="begin_row")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -555,34 +682,38 @@ class CharacterCreationScreen(Screen):
         # no screen to come back to.
         self.app.switch_screen(MainMenu())
 
-    async def _refresh(self, index: int = 0) -> None:
+    def _update_pools(self) -> None:
         character = self.app.character
         self.query_one("#pools", Static).update(
             f"Stat points: {character.stat_points}   Skill points: {character.skill_points}"
-            "   —   enter spends, r resets, b begins"
+            "   —   enter spends · left/right change panel · r resets · b begins"
         )
 
-        items = [
-            ListItem(
-                Static(f"Archetype — {archetype.name}: {archetype.description}"),
-                id=f"arch_{archetype.id}",
-            )
-            for archetype in ARCHETYPES
-        ]
+    async def _refresh_column(self, stat: str, index: int = 0) -> None:
+        """Rebuild one stat column: its header, the stat-raise row, then its skills.
+        A single spend only touches one column (a stat change moves that stat's skill
+        values, a skill change moves only its own row), so callers refresh just the
+        affected column and leave the other five — and their cursors — alone."""
+        character = self.app.character
+        self.query_one(f"#build_head_{stat}", Static).update(f"{stat.capitalize()} — {character.stat(stat)}")
+        items = [ListItem(Static(f"Raise {stat.capitalize()}\n  1 stat point"), id=f"stat_{stat}")]
         items += [
-            ListItem(Static(f"Stat — {stat.capitalize()}: {character.stat(stat)}"), id=f"stat_{stat}")
-            for stat in CORE_STATS
-        ]
-        items += [
-            ListItem(
-                Static(f"Skill — {_skill_label(character, skill, show_cost=True)}"),
-                id=f"skill_{skill.id}",
-            )
+            ListItem(Static(_compact_skill_label(character, skill, show_cost=True)), id=f"skill_{skill.id}")
             for skill in SKILLS
+            if skill.stat == stat
         ]
-        begin = "Begin run" if not self._unspent() else f"Begin run — {self._unspent()} points unspent"
-        items.append(ListItem(Static(begin), id="begin"))
-        await _replace_items(self.query_one("#build_list", ListView), items, index)
+        await _replace_items(self.query_one(f"#build_list_{stat}", ListView), items, index)
+
+    async def _refresh_begin(self) -> None:
+        unspent = self._unspent()
+        label = "Begin run" if not unspent else f"Begin run — {unspent} points unspent"
+        await _replace_items(self.query_one("#begin_row", ListView), [ListItem(Static(label), id="begin")])
+
+    async def _refresh(self) -> None:
+        self._update_pools()
+        for stat in CORE_STATS:
+            await self._refresh_column(stat)
+        await self._refresh_begin()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
@@ -601,17 +732,19 @@ class CharacterCreationScreen(Screen):
             archetype.apply(character)
             self.notify(f"{archetype.name} build applied. Press b to begin, r to start over.")
             self.query_one(CharacterSheet).refresh()
-            await self._refresh(event.list_view.index or 0)
+            await self._refresh()
             return
-        # Keep the cursor on the row the player is spending into: the list is rebuilt
+        # Keep the cursor on the row the player is spending into: the column is rebuilt
         # after every point, and a snap back to the top would sink the next `enter`
-        # into Body instead of whatever they were actually looking at.
+        # into the stat-raise row instead of whatever they were actually looking at.
         index = event.list_view.index or 0
         if item_id.startswith("stat_"):
-            if not character.spend_stat_point(item_id.removeprefix("stat_")):
+            stat = item_id.removeprefix("stat_")
+            if not character.spend_stat_point(stat):
                 self.notify("No stat points left.", severity="warning")
         else:
             skill_id = item_id.removeprefix("skill_")
+            stat = skill_for(skill_id).stat
             # Three different refusals. Read the cost before spending so a maxed skill
             # and a merely unaffordable one don't both report "no points left" —
             # ranks 8+ cost 3-4 points, so "can't afford" happens with points in hand.
@@ -625,18 +758,23 @@ class CharacterCreationScreen(Screen):
                     f"you have {character.skill_points}.",
                     severity="warning",
                 )
+        # Only the spent-into stat's column changes (its header value and/or one skill
+        # row); the pools and Begin bar track the shrinking point total.
         self.query_one(CharacterSheet).refresh()
-        await self._refresh(index)
+        self._update_pools()
+        await self._refresh_column(stat, index)
+        await self._refresh_begin()
 
 
-class ContactsScreen(Screen):
+class ContactsScreen(PanelNav, Screen):
     """Read-only: who you know and how they feel about you, split into the three
     kinds of NPC the game tracks — Fixers (trust), Corps (standing), and Runners
     (identity only; see runners.py for why there's no relationship value there yet).
     Three panels rather than one mixed list, so each kind reads as its own thing.
     """
 
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+    PANEL_IDS = ("fixers_list", "corps_list", "runners_list")
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
 
     CSS = """
     #fixers_panel, #corps_panel, #runners_panel {
@@ -738,15 +876,47 @@ class ContactsScreen(Screen):
             self.app.push_screen(FixerOffersScreen(fixer))
 
 
-class SkillsScreen(Screen):
-    """Read-only once the run starts: skill ranks are bought at creation, not in play."""
+class SkillsScreen(PanelNav, Screen):
+    """Read-only once the run starts: skill ranks are bought at creation, not in play.
 
-    BINDINGS = [("q", "quit", "Quit"), ("escape", "back", "Back")]
+    Laid out as a 3x2 grid, one column per core stat, so the six faculties read
+    as six groups instead of one 31-row list.
+    """
+
+    PANEL_IDS = tuple(f"skill_list_{stat}" for stat in CORE_STATS)
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
+
+    CSS = """
+    #skills_grid {
+        grid-size: 3 2;
+        grid-gutter: 1 2;
+    }
+
+    .skill_column {
+        height: auto;
+        border-top: solid $accent;
+        padding: 0 1;
+    }
+
+    .skill_column ListView {
+        height: auto;
+    }
+    """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield ListView(id="skill_list")
+        yield Grid(
+            *(
+                Vertical(
+                    Static(stat.capitalize()),
+                    ListView(id=f"skill_list_{stat}"),
+                    classes="skill_column",
+                )
+                for stat in CORE_STATS
+            ),
+            id="skills_grid",
+        )
         yield Footer()
 
     def action_back(self) -> None:
@@ -760,15 +930,17 @@ class SkillsScreen(Screen):
 
     async def _refresh(self) -> None:
         character = self.app.character
-        items = [
-            ListItem(Static(_skill_label(character, skill)), id=f"skill_{skill.id}")
-            for skill in SKILLS
-        ]
-        await _replace_items(self.query_one("#skill_list", ListView), items)
+        for stat in CORE_STATS:
+            items = [
+                ListItem(Static(_compact_skill_label(character, skill)), id=f"skill_{skill.id}")
+                for skill in SKILLS
+                if skill.stat == stat
+            ]
+            await _replace_items(self.query_one(f"#skill_list_{stat}", ListView), items)
 
 
 class SceneScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("q", "quit_menu", "Menu")]
 
     def __init__(self, scene: Scene) -> None:
         super().__init__()
@@ -898,7 +1070,7 @@ class CombatScreen(Screen):
     only renders CombatState and feeds it the action the player picked.
     """
 
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("q", "quit_menu", "Menu")]
 
     def __init__(self, encounter: Encounter, drop: Drop) -> None:
         super().__init__()
@@ -977,7 +1149,7 @@ MODIFIER_COLUMN = 13
 
 class CorpMapScreen(Screen):
     BINDINGS = [
-        ("q", "quit", "Quit"),
+        ("q", "quit_menu", "Menu"),
         ("escape", "back", "Back"),
         ("up", "move('up')", "Move"),
         ("down", "move('down')", "Move"),
@@ -1131,16 +1303,79 @@ class CorpMapScreen(Screen):
         return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
 
 
+class QuitMenu(ModalScreen):
+    """The `q` menu, overlaid on whatever screen is in play. Opening it is a safe
+    reflex — `q`/`escape` dismiss it back to the game with nothing lost — so the two
+    rows are the only irreversible acts: leave the app, or throw this run away for a
+    fresh one. There is no meta-progression, so Restart is just a new run from scratch."""
+
+    BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
+
+    CSS = """
+    QuitMenu {
+        align: center middle;
+    }
+
+    #quit_dialog {
+        width: auto;
+        height: auto;
+        border: round $accent;
+        padding: 1 2;
+    }
+
+    #quit_dialog ListView {
+        width: 20;
+        height: auto;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Menu"),
+            ListView(
+                ListItem(Static("Quit Game"), id="quit"),
+                ListItem(Static("Restart Game"), id="restart"),
+            ),
+            id="quit_dialog",
+        )
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id == "quit":
+            self.app.exit()
+        elif event.item.id == "restart":
+            self.app.restart_run()
+
+
 class ShadowguyApp(App):
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("q", "quit_menu", "Menu")]
 
     def __init__(self) -> None:
         super().__init__()
+        self._new_run()
+
+    def _new_run(self) -> None:
+        """Fresh run state. No meta-progression, so a restart is just this again — one
+        seat of state, rebuilt from a new rng, that both boot and restart share."""
         self.rng = random.Random()
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+
+    def action_quit_menu(self) -> None:
+        # push, not switch: the menu overlays play and dismisses back to it.
+        self.push_screen(QuitMenu())
+
+    def restart_run(self) -> None:
+        self._new_run()
+        # Tear the whole screen stack down to the base and open on a fresh build —
+        # the QuitMenu that called this, and any game screens under it, all go.
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        self.push_screen(CharacterCreationScreen())
 
     def on_mount(self) -> None:
         self.push_screen(CharacterCreationScreen())
