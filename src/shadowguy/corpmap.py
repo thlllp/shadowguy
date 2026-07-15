@@ -39,6 +39,7 @@ class LocationKind(StrEnum):
     AUTO_DEALER = "auto_dealer"
     PHARMACY = "pharmacy"
     COMPUTER_STORE = "computer_store"
+    HOSPITAL = "hospital"
     APARTMENT = "apartment"
     SAFEHOUSE = "safehouse"
     REAL_ESTATE = "real_estate"
@@ -87,6 +88,7 @@ LOCATION_SKILL = {
     LocationKind.AUTO_DEALER: "deception",
     LocationKind.PHARMACY: "infer",
     LocationKind.COMPUTER_STORE: "hack",
+    LocationKind.HOSPITAL: "infer",
     LocationKind.REAL_ESTATE: "read_the_room",
 }
 if set(LOCATION_SKILL) != set(GENERATED_KINDS):
@@ -422,6 +424,7 @@ LOCATION_SUFFIXES = {
     LocationKind.AUTO_DEALER: ["Auto Dealer", "Motorpool", "Garage", "Chop Shop"],
     LocationKind.PHARMACY: ["Pharmacy", "Chemist", "Drug Store", "Apothecary"],
     LocationKind.COMPUTER_STORE: ["Computer Store", "Chip Shop", "Hardware Outlet", "Rig Emporium"],
+    LocationKind.HOSPITAL: ["Hospital", "Trauma Center", "Emergency Room", "Med Center"],
     LocationKind.REAL_ESTATE: ["Realty", "Properties", "Holdings", "Estate Agency"],
 }
 
@@ -455,6 +458,7 @@ LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
     LocationKind.AUTO_DEALER: ("dealer",),
     LocationKind.PHARMACY: ("pharmacist",),
     LocationKind.COMPUTER_STORE: ("techie",),
+    LocationKind.HOSPITAL: ("trauma surgeon", "triage nurse", "orderly"),
     LocationKind.REAL_ESTATE: ("realtor", "property broker", "landlord"),
 }
 
@@ -496,9 +500,10 @@ if len(CHARACTER_NAMES) < MAX_CHARACTERS_PER_LOCATION:
 Cell = tuple[int, int]
 
 
-# The non-specialty slots in a corp district: the bar everyone drinks in, or a
-# shop — whoever owns the block, the storefront doesn't care.
-FILLER_KINDS = (LocationKind.SOCIAL, *SHOP_KINDS)
+# The non-specialty slots in a corp district: the bar everyone drinks in, the local
+# hospital, or a shop — whoever owns the block, the storefront doesn't care. (Unlike
+# real estate, which is neutral-only, a hospital sits on corp turf fine.)
+FILLER_KINDS = (LocationKind.SOCIAL, LocationKind.HOSPITAL, *SHOP_KINDS)
 
 FILLER_COUNT = LOCATIONS_PER_TERRITORY - SPECIALTY_LOCATIONS
 

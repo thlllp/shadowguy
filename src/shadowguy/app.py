@@ -56,11 +56,13 @@ from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
+    HOSPITAL_COST_PER_HP,
     ITEMS_BY_ID,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
+    heal_at_hospital,
     sell_item,
     sell_price,
     toggle_equip,
@@ -359,6 +361,8 @@ class MainMenu(PanelNav, Screen):
                 return
             if location.kind in SHOP_KINDS:
                 self.app.push_screen(ShopScreen(location))
+            elif location.kind == LocationKind.HOSPITAL:
+                self.app.push_screen(HospitalScreen(location))
             elif location.kind == LocationKind.REAL_ESTATE:
                 self.app.push_screen(RealEstateScreen(location))
             elif location.kind in PLAYER_OWNED_KINDS:
@@ -579,6 +583,54 @@ class RealEstateScreen(Screen):
         character.cash -= price
         add_safehouse(territory)
         self.notify(f"Bought a safehouse in {territory.name} for {price}eb.")
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class HospitalScreen(Screen):
+    """A hospital: pay to restore health (shops.heal_at_hospital, HOSPITAL_COST_PER_HP
+    per point). Heals to full, or as far as cash reaches — the one place health comes
+    back other than a Health Kit, and cheaper per point in exchange for being on-site."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="hospital_info")
+        yield ListView(id="hospital_actions")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        missing = character.max_health - character.health
+        if missing == 0:
+            label = "Fully patched up — nothing to treat."
+        else:
+            label = f"Treat wounds — heal {missing} to full for {missing * HOSPITAL_COST_PER_HP}eb"
+            if character.cash < missing * HOSPITAL_COST_PER_HP:
+                label += " (or as much as you can afford)"
+        await _replace_items(
+            self.query_one("#hospital_actions", ListView), [ListItem(Static(label), id="treat")]
+        )
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id != "treat":
+            return
+        self.notify(heal_at_hospital(self.app.character))
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 

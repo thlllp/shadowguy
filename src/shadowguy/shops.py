@@ -321,6 +321,12 @@ CONSUMABLE_CATALOG: dict[LocationKind, list[Consumable]] = {
 
 CONSUMABLES_BY_ID = {c.id: c for items in CONSUMABLE_CATALOG.values() for c in items}
 
+# What a HOSPITAL (corpmap.LocationKind.HOSPITAL) charges to restore one point of
+# health. Cheaper per point than a portable Health Kit (100eb / 5hp = 20eb/hp above):
+# the trade is that you have to be standing in the hospital to use it, so it's the
+# bulk-heal-in-town option, not the carry-it-into-the-field one.
+HOSPITAL_COST_PER_HP = 10
+
 
 def _equipped_items(inventory: list[InventoryItem]) -> Iterator[Item]:
     return (ITEMS_BY_ID[entry.item_id] for entry in inventory if entry.equipped)
@@ -400,6 +406,21 @@ def use_consumable(character: "Character", index: int) -> str:
     # listed in COMBAT_ONLY_EFFECTS nor given a branch here would otherwise be silently
     # eaten (the item spent, nothing applied).
     raise ValueError(f"consumable effect not handled out of combat: {consumable.effect}")
+
+
+def heal_at_hospital(character: "Character") -> str:
+    """Patch the runner up at a hospital: heal to full, or as far as their cash reaches,
+    at HOSPITAL_COST_PER_HP per point. Never strands a broke runner (they just heal what
+    they can afford). Returns a short message describing what happened."""
+    missing = character.max_health - character.health
+    if missing == 0:
+        return "No wounds to treat."
+    healed = min(missing, character.cash // HOSPITAL_COST_PER_HP)
+    if healed == 0:
+        return "Can't afford treatment."
+    character.adjust_health(healed)
+    character.cash -= healed * HOSPITAL_COST_PER_HP
+    return f"Patched up +{healed} Health for {healed * HOSPITAL_COST_PER_HP}eb."
 
 
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:
