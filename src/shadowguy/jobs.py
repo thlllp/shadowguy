@@ -451,7 +451,10 @@ def generate_job(
     )
     territory = rng.choice(held)
     faction = FACTIONS_BY_ID[territory.owner]
-    location = rng.choice(territory.locations)
+    # Never the runner's own place: if they've bought a safehouse in this corp district,
+    # it's not a job site (and carries none of the LOCATION_SKILL/legwork tables a site
+    # needs). A held district always has its generated locations to pick from.
+    location = rng.choice([loc for loc in territory.locations if loc.kind in GENERATED_KINDS])
     target = rng.choice(TARGETS)
     tier = _tier_for_day(day)
     difficulty_base = DIFFICULTY_BASE[tier]
@@ -597,6 +600,7 @@ LEGWORK_APPROACH_TEXT = {
     LocationKind.AUTO_DEALER: "Chat up the lot staff at {name}",
     LocationKind.PHARMACY: "Pull the register logs at {name}",
     LocationKind.COMPUTER_STORE: "Sift the sales records at {name}",
+    LocationKind.REAL_ESTATE: "Pose as a buyer at {name}",
 }
 if set(LEGWORK_APPROACH_TEXT) != set(GENERATED_KINDS):
     raise ValueError("LEGWORK_APPROACH_TEXT must have exactly one entry per generated LocationKind")
@@ -626,6 +630,10 @@ def generate_legwork_for_job(
 
     choices = []
     for location in territory.locations:
+        # Skip a safehouse the runner owns here — scouting isn't cased against your own
+        # place, and it carries no LOCATION_SKILL entry to roll anyway.
+        if location.kind not in GENERATED_KINDS:
+            continue
         skill = skill_for(LOCATION_SKILL[location.kind])
         approach = LEGWORK_APPROACH_TEXT[location.kind]
         is_site = location.id == job.target_location_id

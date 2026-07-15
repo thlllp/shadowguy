@@ -25,15 +25,19 @@ from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
     OWNER_COLORS,
+    PLAYER_OWNED_KINDS,
     SHOP_KINDS,
     Location,
     LocationKind,
     RenderedMap,
     Territory,
+    add_safehouse,
     generate_corp_map,
+    has_home,
     lodging_cost,
     owner_label,
     render_ascii_map,
+    safehouse_price,
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
@@ -355,8 +359,10 @@ class MainMenu(PanelNav, Screen):
                 return
             if location.kind in SHOP_KINDS:
                 self.app.push_screen(ShopScreen(location))
-            elif location.kind == LocationKind.APARTMENT:
-                self.app.push_screen(ApartmentScreen(location))
+            elif location.kind == LocationKind.REAL_ESTATE:
+                self.app.push_screen(RealEstateScreen(location))
+            elif location.kind in PLAYER_OWNED_KINDS:
+                self.app.push_screen(SafehouseScreen(location))
             return
 
     async def _select_category(self, key: str) -> None:
@@ -493,9 +499,9 @@ class ShopScreen(Screen):
         await self._refresh()
 
 
-class ApartmentScreen(Screen):
-    """The runner's home in the start district. A stub for now — safehouse functions
-    (rest, stash, ...) land here in later steps."""
+class SafehouseScreen(Screen):
+    """A place the runner owns — their starting apartment, or a safehouse they bought.
+    A stub for now: functions (rest, stash, ...) land here in later steps."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
@@ -507,11 +513,74 @@ class ApartmentScreen(Screen):
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(self.location.name)
-        yield Static("Home. Nothing to do here yet.")
+        yield Static("Your place. Nothing to do here yet.")
         yield Footer()
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+
+class RealEstateScreen(Screen):
+    """A real estate office's cross-map listing of safehouses for sale. Buying one adds
+    a safehouse to that district (corpmap.add_safehouse) — a place the runner owns, so
+    lodging there goes free (lodging_cost). Districts the runner already owns a place in
+    drop off the listing (has_home)."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="realestate_info")
+        yield ListView(id="realestate_listings")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        territories = self.app.corp_map.territories
+        items = []
+        for territory_id in self.location.listings:
+            territory = territories[territory_id]
+            if has_home(territory):
+                continue  # already the runner's — not for sale
+            price = safehouse_price(territory)
+            label = f"Safehouse in {territory.name} — {price}eb"
+            if character.cash < price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buy_{territory_id}"))
+        if not items:
+            items.append(ListItem(Static("No properties available."), id="none"))
+        await _replace_items(self.query_one("#realestate_listings", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if not item_id.startswith("buy_"):
+            return
+        territory = self.app.corp_map.territories[item_id.removeprefix("buy_")]
+        character = self.app.character
+        if has_home(territory):
+            return
+        price = safehouse_price(territory)
+        if character.cash < price:
+            return
+        character.cash -= price
+        add_safehouse(territory)
+        self.notify(f"Bought a safehouse in {territory.name} for {price}eb.")
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
 
 
 class InventoryScreen(Screen):

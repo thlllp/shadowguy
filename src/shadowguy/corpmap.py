@@ -40,13 +40,15 @@ class LocationKind(StrEnum):
     PHARMACY = "pharmacy"
     COMPUTER_STORE = "computer_store"
     APARTMENT = "apartment"
+    SAFEHOUSE = "safehouse"
+    REAL_ESTATE = "real_estate"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
 # concept, two consequences: a place the runner owns is injected into a territory
 # rather than rolled onto the map (so it's excluded from GENERATED_KINDS below), and
 # the runner sleeps in it for free (lodging_cost). Add a kind here and it gets both.
-PLAYER_OWNED_KINDS = (LocationKind.APARTMENT,)
+PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 
 # Kinds the world generator rolls onto the map: everything the runner doesn't own.
 # They're a job target for no one, scouted by no one and run by no NPC among the owned
@@ -85,6 +87,7 @@ LOCATION_SKILL = {
     LocationKind.AUTO_DEALER: "deception",
     LocationKind.PHARMACY: "infer",
     LocationKind.COMPUTER_STORE: "hack",
+    LocationKind.REAL_ESTATE: "read_the_room",
 }
 if set(LOCATION_SKILL) != set(GENERATED_KINDS):
     raise ValueError("LOCATION_SKILL must have exactly one entry per generated LocationKind")
@@ -143,6 +146,9 @@ class Location:
     kind: LocationKind
     # Who runs or haunts the place: 1 for a shop (its owner), 1–2 for anywhere else.
     characters: list[LocalCharacter] = field(default_factory=list)
+    # REAL_ESTATE only: the territory ids this office has safehouses for sale in. Its
+    # cross-map portfolio, sampled once at generation (see generate_corp_map).
+    listings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -184,6 +190,12 @@ class CorpMap:
         ]
 
 
+def has_home(territory: Territory) -> bool:
+    """Whether the runner owns a place to sleep in this district — their apartment or a
+    safehouse. Free lodging here, and a real estate office won't sell them another."""
+    return any(loc.kind in PLAYER_OWNED_KINDS for loc in territory.locations)
+
+
 # Nightly lodging when the runner rests in a district where they own no place to
 # sleep: this much Cash per Development level, so a more developed district costs more
 # to bed down in. Charged on rest() — see app.MainMenu's end-of-day handler.
@@ -192,11 +204,36 @@ LODGING_COST_PER_DEVELOPMENT = 5
 
 def lodging_cost(territory: Territory) -> int:
     """What resting in this district costs the runner tonight. Free where they own a
-    place (PLAYER_OWNED_KINDS — a home or safehouse); otherwise
-    LODGING_COST_PER_DEVELOPMENT per Development level."""
-    if any(loc.kind in PLAYER_OWNED_KINDS for loc in territory.locations):
+    place (has_home); otherwise LODGING_COST_PER_DEVELOPMENT per Development level."""
+    if has_home(territory):
         return 0
     return LODGING_COST_PER_DEVELOPMENT * territory.modifiers[TerritoryModifier.DEVELOPMENT]
+
+
+# A safehouse's asking price scales with the district: a flat base, plus a premium for
+# Development and for the territory's value — the nicer the block, the dearer the
+# property, and the more lodging it saves. Bought through a REAL_ESTATE office's
+# cross-map listing (see app.RealEstateScreen); once bought, has_home is true there.
+SAFEHOUSE_BASE_PRICE = 200
+SAFEHOUSE_PRICE_PER_DEVELOPMENT = 75
+SAFEHOUSE_PRICE_PER_VALUE = 50
+
+
+def safehouse_price(territory: Territory) -> int:
+    return (
+        SAFEHOUSE_BASE_PRICE
+        + SAFEHOUSE_PRICE_PER_DEVELOPMENT * territory.modifiers[TerritoryModifier.DEVELOPMENT]
+        + SAFEHOUSE_PRICE_PER_VALUE * territory.value
+    )
+
+
+def add_safehouse(territory: Territory) -> None:
+    """Give the runner a safehouse here — a player-owned place, injected like the
+    apartment (no owner NPC, never generated). Idempotent guard on the caller: a
+    district that already has_home is never offered for sale, so this appends once."""
+    territory.locations.append(
+        Location(id=f"{territory.id}_safehouse", name="Your Safehouse", kind=LocationKind.SAFEHOUSE)
+    )
 
 
 def _owner_tag(owner: str) -> str:
@@ -339,6 +376,10 @@ NEUTRAL_VALUES = (1, 2, 3)
 # it: a start with one connection makes every trip a there-and-back.
 MIN_START_DEGREE = 2
 
+# How many districts a single real estate office has safehouses for sale in. A short
+# portfolio rather than the whole market, so offices differ and the list stays readable.
+REAL_ESTATE_LISTING_COUNT = 4
+
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
@@ -381,6 +422,7 @@ LOCATION_SUFFIXES = {
     LocationKind.AUTO_DEALER: ["Auto Dealer", "Motorpool", "Garage", "Chop Shop"],
     LocationKind.PHARMACY: ["Pharmacy", "Chemist", "Drug Store", "Apothecary"],
     LocationKind.COMPUTER_STORE: ["Computer Store", "Chip Shop", "Hardware Outlet", "Rig Emporium"],
+    LocationKind.REAL_ESTATE: ["Realty", "Properties", "Holdings", "Estate Agency"],
 }
 
 LOCATION_PREFIXES = [
@@ -413,6 +455,7 @@ LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
     LocationKind.AUTO_DEALER: ("dealer",),
     LocationKind.PHARMACY: ("pharmacist",),
     LocationKind.COMPUTER_STORE: ("techie",),
+    LocationKind.REAL_ESTATE: ("realtor", "property broker", "landlord"),
 }
 
 # The most locations of one kind a map can want: the faction whose specialty it is
@@ -750,5 +793,15 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         0,
         Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT),
     )
+
+    # Hand every real estate office a portfolio of districts to sell safehouses in.
+    # Anywhere the runner doesn't already own (i.e. not the start) is fair game; a
+    # district is filtered back out of the listing once bought (see has_home).
+    for_sale = [tid for tid in territories if tid != start.id]
+    for territory in territories.values():
+        for location in territory.locations:
+            if location.kind is LocationKind.REAL_ESTATE:
+                count = min(REAL_ESTATE_LISTING_COUNT, len(for_sale))
+                location.listings = rng.sample(for_sale, k=count)
 
     return CorpMap(territories=territories, player_start_id=ids[start_cell])
