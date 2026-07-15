@@ -428,8 +428,8 @@ class ShopScreen(Screen):
 
     async def _refresh(self) -> None:
         character = self.app.character
-        standing = self._owner_standing()
         owner = self.location.characters[0] if self.location.characters else None
+        standing = character.local_standing_with(owner.id) if owner else 0
         header = self.location.name
         if owner:
             header += f" — {owner.name} ({owner.role}), standing {standing:+d}"
@@ -844,11 +844,10 @@ class ContactsScreen(PanelNav, Screen):
         # Only locals whose regard you've actually moved — same rule as fixers. A
         # character you've never done a gig for isn't a contact, just someone behind
         # a counter. Location captured per-id for the label.
-        loc_by_char = {char.id: loc for loc, char in self.app.corp_map.characters()}
+        map_characters = self.app.corp_map.characters()
+        loc_by_char = {char.id: loc for loc, char in map_characters}
         known_locals = [
-            char
-            for _loc, char in self.app.corp_map.characters()
-            if character.local_standing_with(char.id) != 0
+            char for _loc, char in map_characters if character.local_standing_with(char.id) != 0
         ]
         await self._populate(
             "#locals_list",

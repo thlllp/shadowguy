@@ -357,7 +357,7 @@ ARCHETYPES = [
 # everyone else nothing. Checking the stat rule across the whole *pool* means it
 # holds for every subset the generator can draw. (Gigs are optional and
 # self-selected, so they're allowed to be themed on one stat; see
-# content.GIG_CHEM_TRIAL.)
+# gigs._GIG_TEMPLATES.)
 _PROMPT_FIELDS = {
     "verb": "",
     "faction": "",
