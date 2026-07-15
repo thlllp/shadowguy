@@ -23,7 +23,14 @@ import random
 import uuid
 from dataclasses import dataclass
 
-from shadowguy.corpmap import CorpMap, LocalCharacter, Location, LocationKind, Territory
+from shadowguy.corpmap import (
+    GENERATED_KINDS,
+    CorpMap,
+    LocalCharacter,
+    Location,
+    LocationKind,
+    Territory,
+)
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
 from shadowguy.skills import skill_for
 
@@ -177,10 +184,22 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             _GigApproach("sleight_of_hand", "Swap the failed part", "Quick hands, part swapped, done.", "You strip the socket doing it."),
         ),
     ),
+    LocationKind.REAL_ESTATE: _GigTemplate(
+        titles=("Eviction", "Showing"),
+        prompts=(
+            "{who}, the {role} at {place}, needs a squatter talked out of a unit before a viewing.",
+            "A buyer's getting cold feet on a listing at {place} and {who} wants them warmed back up.",
+        ),
+        approaches=(
+            _GigApproach("read_the_room", "Read what they really want", "You find the angle and close it clean.", "You misjudge them and the deal walks."),
+            _GigApproach("intimidation", "Make staying sound expensive", "One quiet word and the unit's empty by morning.", "They dig in and lawyer up on you."),
+            _GigApproach("deception", "Stage the place to lie", "Fresh paint over the damp and they never look twice.", "The buyer spots the cover-up and bolts."),
+        ),
+    ),
 }
 
-if set(_GIG_TEMPLATES) != set(LocationKind):
-    raise ValueError("_GIG_TEMPLATES must have exactly one entry per LocationKind")
+if set(_GIG_TEMPLATES) != set(GENERATED_KINDS):
+    raise ValueError("_GIG_TEMPLATES must have exactly one entry per generated LocationKind")
 for _template in _GIG_TEMPLATES.values():
     if not _template.approaches:
         raise ValueError("a gig template has no approaches")
