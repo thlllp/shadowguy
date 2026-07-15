@@ -78,19 +78,29 @@ SLOT_CAPACITY: dict[Slot, int] = {
 }
 
 
+# The slots whose items are worn on the body — the only ones that may carry
+# `defense` or `skill_bonuses`. WEAPON's profile is damage/skill, VEHICLE is a
+# ride, and a None (unlimited) slot is a deck; none of them are armor. Keyed off
+# the slot rather than "not weapon and not None" so a future non-wearable slot
+# stays excluded by default.
+WEARABLE_SLOTS: frozenset[Slot] = frozenset(
+    {Slot.HEADWEAR, Slot.FACEWEAR, Slot.TORSO, Slot.LEGS, Slot.BOOTS, Slot.ACCESSORY}
+)
+
+
 @dataclass(frozen=True)
 class Item:
     id: str
     name: str
     price: int
     bonuses: dict[str, int]  # stat name (see character.CORE_STATS) -> bonus applied to that check
-    # None = unlimited (vehicles, chems, cyberdecks aren't worn, so any number
-    # can be equipped at once). Wearables/weapons draw from SLOT_CAPACITY.
+    # None = unlimited (chems, cyberdecks aren't worn, so any number can be
+    # equipped at once). Wearables/weapons/vehicles draw from SLOT_CAPACITY.
     slot: Slot | None = None
     # What the item adds to player_defense() (combat.py) when equipped: 1-8, and
-    # only valid on a wearable slot (not WEAPON, not an unlimited-slot item like a
-    # vehicle or deck). Not restricted to Slot.TORSO — armor is the common case,
-    # but any wearable can carry it.
+    # only valid on a wearable slot (WEARABLE_SLOTS — not WEAPON, not VEHICLE, not
+    # an unlimited-slot item like a deck). Not restricted to Slot.TORSO — armor is
+    # the common case, but any wearable can carry it.
     defense: int = 0
     # The next three are what make a weapon a weapon, and are meaningless (and
     # rejected) on anything else: `skill` is the skill id its attack rolls,
@@ -276,11 +286,11 @@ for _item in ITEMS_BY_ID.values():
         )
     if _item.skill is not None:
         skill_for(_item.skill)
-    if _item.defense and (_is_weapon or _item.slot is None):
+    if _item.defense and _item.slot not in WEARABLE_SLOTS:
         raise ValueError(f"{_item.id}: only a wearable item can have defense")
     if _item.defense and not (1 <= _item.defense <= 8):
         raise ValueError(f"{_item.id}: defense must be 1-8")
-    if _item.skill_bonuses and (_is_weapon or _item.slot is None):
+    if _item.skill_bonuses and _item.slot not in WEARABLE_SLOTS:
         raise ValueError(f"{_item.id}: only a wearable item can have skill_bonuses")
     for _skill_id in _item.skill_bonuses:
         skill_for(_skill_id)
