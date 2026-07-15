@@ -52,11 +52,12 @@ from shadowguy.shops import (
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
-    PAWN_SELL_FRACTION,
     bonus_text,
     buy_consumable,
     buy_item,
+    buy_price,
     sell_item,
+    sell_price,
     toggle_equip,
     use_consumable,
 )
@@ -417,45 +418,62 @@ class ShopScreen(Screen):
     async def on_mount(self) -> None:
         await self._refresh()
 
+    def _owner_standing(self) -> int:
+        """Standing with the shop's owner (its single character). Bends every price
+        here (shops.buy_price/sell_price). Defaults to 0 if the shop somehow has no
+        owner, which is the neutral, no-effect case."""
+        character = self.app.character
+        owner = self.location.characters[0] if self.location.characters else None
+        return character.local_standing_with(owner.id) if owner else 0
+
     async def _refresh(self) -> None:
         character = self.app.character
+        standing = self._owner_standing()
+        owner = self.location.characters[0] if self.location.characters else None
+        header = self.location.name
+        if owner:
+            header += f" — {owner.name} ({owner.role}), standing {standing:+d}"
+        self.query_one("#shop_info", Static).update(header)
         items = []
 
         for item in CATALOG.get(self.location.kind, []):
+            price = buy_price(item.price, standing)
             bonus = bonus_text(item)
-            label = f"Buy {item.name} — {item.price}eb" + (f" ({bonus})" if bonus else "")
-            if character.cash < item.price:
+            label = f"Buy {item.name} — {price}eb" + (f" ({bonus})" if bonus else "")
+            if character.cash < price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buy_{item.id}"))
 
         for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
-            label = f"Buy {consumable.name} — {consumable.price}eb"
-            if character.cash < consumable.price:
+            price = buy_price(consumable.price, standing)
+            label = f"Buy {consumable.name} — {price}eb"
+            if character.cash < price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
 
         if self.location.kind == LocationKind.PAWN:
             for index, entry in enumerate(character.inventory):
                 item = ITEMS_BY_ID[entry.item_id]
-                proceeds = int(item.price * PAWN_SELL_FRACTION)
+                proceeds = sell_price(item.price, standing)
                 items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
 
         await _replace_items(self.query_one("#shop_items", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
+        standing = self._owner_standing()
         item_id = event.item.id
 
         if item_id.startswith("buy_"):
             item = ITEMS_BY_ID[item_id.removeprefix("buy_")]
-            if not buy_item(character, item):
+            if not buy_item(character, item, standing):
                 self.notify(f"Can't afford {item.name}.", severity="warning")
         elif item_id.startswith("buyc_"):
             consumable = CONSUMABLES_BY_ID[item_id.removeprefix("buyc_")]
-            if not buy_consumable(character, consumable):
+            if not buy_consumable(character, consumable, standing):
                 self.notify(f"Can't afford {consumable.name}.", severity="warning")
         elif item_id.startswith("sell_"):
-            sell_item(character, int(item_id.removeprefix("sell_")))
+            sell_item(character, int(item_id.removeprefix("sell_")), standing)
 
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
