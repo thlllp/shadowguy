@@ -31,6 +31,7 @@ from shadowguy.corpmap import (
     RenderedMap,
     Territory,
     generate_corp_map,
+    lodging_cost,
     owner_label,
     render_ascii_map,
 )
@@ -286,6 +287,15 @@ class MainMenu(PanelNav, Screen):
         character = self.app.character
 
         if item_id == "end_day":
+            here = self.app.corp_map.territories[character.location_id]
+            # Lodging for the night, unless the runner owns a place here (their home or
+            # a safehouse — then it's free). Pay what they can: resting must never be
+            # blocked, and cash is kept off negative like everywhere else.
+            cost = lodging_cost(here)
+            if cost:
+                paid = min(cost, character.cash)
+                character.cash -= paid
+                self.notify(f"Paid {paid}eb for lodging in {here.name}.")
             character.rest()
             expire_offers(self.app.fixers, character.day)
             refresh_offers(self.app.fixers, character.day, self.app.corp_map, self.app.rng)

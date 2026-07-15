@@ -42,13 +42,18 @@ class LocationKind(StrEnum):
     APARTMENT = "apartment"
 
 
-# Kinds the world generator never rolls onto the map: the runner's home is injected
-# explicitly into the start territory (see generate_corp_map), and acquired safehouses
-# will be too. They're a job target for no one, scouted by no one and run by no NPC, so
-# the per-kind world tables (LOCATION_SKILL, LOCATION_ROLES, gigs._GIG_TEMPLATES,
-# jobs.LEGWORK_APPROACH_TEXT) carry no entry for them — each guards against GENERATED_KINDS,
-# not the full enum.
-GENERATED_KINDS = tuple(k for k in LocationKind if k != LocationKind.APARTMENT)
+# The runner's own places — their home, and any safehouse they come to hold. One
+# concept, two consequences: a place the runner owns is injected into a territory
+# rather than rolled onto the map (so it's excluded from GENERATED_KINDS below), and
+# the runner sleeps in it for free (lodging_cost). Add a kind here and it gets both.
+PLAYER_OWNED_KINDS = (LocationKind.APARTMENT,)
+
+# Kinds the world generator rolls onto the map: everything the runner doesn't own.
+# They're a job target for no one, scouted by no one and run by no NPC among the owned
+# kinds, so the per-kind world tables (LOCATION_SKILL, LOCATION_ROLES, gigs._GIG_TEMPLATES,
+# jobs.LEGWORK_APPROACH_TEXT) carry no entry for the owned kinds — each guards against
+# GENERATED_KINDS, not the full enum.
+GENERATED_KINDS = tuple(k for k in LocationKind if k not in PLAYER_OWNED_KINDS)
 
 
 # Retail kinds: shops.py's business, but defined here (not there) since
@@ -177,6 +182,21 @@ class CorpMap:
             for location in territory.locations
             for character in location.characters
         ]
+
+
+# Nightly lodging when the runner rests in a district where they own no place to
+# sleep: this much Cash per Development level, so a more developed district costs more
+# to bed down in. Charged on rest() — see app.MainMenu's end-of-day handler.
+LODGING_COST_PER_DEVELOPMENT = 5
+
+
+def lodging_cost(territory: Territory) -> int:
+    """What resting in this district costs the runner tonight. Free where they own a
+    place (PLAYER_OWNED_KINDS — a home or safehouse); otherwise
+    LODGING_COST_PER_DEVELOPMENT per Development level."""
+    if any(loc.kind in PLAYER_OWNED_KINDS for loc in territory.locations):
+        return 0
+    return LODGING_COST_PER_DEVELOPMENT * territory.modifiers[TerritoryModifier.DEVELOPMENT]
 
 
 def _owner_tag(owner: str) -> str:
