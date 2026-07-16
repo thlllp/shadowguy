@@ -39,7 +39,13 @@ from shadowguy.corpmap import (
     render_ascii_map,
     safehouse_price,
 )
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import (
+    CORP_OFFICER_TIERS,
+    FACTIONS,
+    FACTIONS_BY_ID,
+    Faction,
+    officer_dialogue,
+)
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import generate_legwork_for_job
@@ -362,6 +368,10 @@ class MainMenu(PanelNav, Screen):
                 self.app.push_screen(HospitalScreen(location))
             elif location.kind == LocationKind.REAL_ESTATE:
                 self.app.push_screen(RealEstateScreen(location))
+            elif location.kind == LocationKind.CORP_HQ:
+                # The HQ sits in its owner's district, so here.owner is the corp whose
+                # officers (and rep/standing gates) this screen reads.
+                self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[here.owner]))
             elif location.kind in PLAYER_OWNED_KINDS:
                 self.app.push_screen(SafehouseScreen(location))
             return
@@ -639,6 +649,93 @@ class HospitalScreen(Screen):
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
+
+
+def _officer_unlocked(rep: int, standing: int, min_rep: int, min_standing: int | None) -> bool:
+    """Whether an HQ officer will see you. min_standing None is the public lobby — rep-gated
+    only, open even when the corp is hostile (see factions.CORP_OFFICER_TIERS)."""
+    return rep >= min_rep and (min_standing is None or standing >= min_standing)
+
+
+def _officer_gate(min_rep: int, min_standing: int | None) -> str:
+    """What an officer's gate demands, for the locked label / wave-off line."""
+    need = f"rep {min_rep}"
+    if min_standing is not None:
+        need += f", standing {min_standing:+d}"
+    return need
+
+
+class CorpHQScreen(Screen):
+    """A corp's headquarters: talk to its officers, if your reputation opens the door.
+
+    Each officer is a rung on factions.CORP_OFFICER_TIERS; reaching one needs both the
+    street rep and the standing with this corp that its row demands. Talking is flavor
+    only for now — a locked officer shows what you'd need, an unlocked one gives you a
+    line themed on the corp and how it feels about you. Nothing here changes the run yet;
+    it's the hook the corp-side game hangs on.
+    """
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location, faction: Faction) -> None:
+        super().__init__()
+        self.location = location
+        self.faction = faction
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(f"{self.faction.name} — Corporate HQ", id="hq_info")
+        yield ListView(id="hq_officers")
+        yield Static("", id="hq_dialogue")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    def _officers(self):
+        """Pair each officer LocalCharacter with its tier gate — they line up by index,
+        the order _make_officers built them in."""
+        return list(zip(self.location.characters, CORP_OFFICER_TIERS))
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        standing = character.standing_with(self.faction.id)
+        self.query_one("#hq_info", Static).update(
+            f"{self.faction.name} — Corporate HQ  "
+            f"(your rep {character.rep}, standing {standing:+d})"
+        )
+        items = []
+        for officer, (_role, min_rep, min_standing) in self._officers():
+            if _officer_unlocked(character.rep, standing, min_rep, min_standing):
+                label = f"{officer.name} ({officer.role}) — talk"
+            else:
+                label = f"{officer.name} ({officer.role}) — locked (needs {_officer_gate(min_rep, min_standing)})"
+            items.append(ListItem(Static(label), id=f"officer_{officer.id}"))
+        await _replace_items(self.query_one("#hq_officers", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        standing = character.standing_with(self.faction.id)
+        officer_id = event.item.id.removeprefix("officer_")
+        match = next(
+            (pair for pair in self._officers() if pair[0].id == officer_id),
+            None,
+        )
+        if match is None:
+            return
+        officer, (_role, min_rep, min_standing) = match
+        dialogue = self.query_one("#hq_dialogue", Static)
+        if not _officer_unlocked(character.rep, standing, min_rep, min_standing):
+            dialogue.update(
+                f"{officer.name}'s people wave you off — come back with "
+                f"{_officer_gate(min_rep, min_standing)}."
+            )
+            return
+        dialogue.update(officer_dialogue(self.faction, officer.role, standing))
 
 
 class InventoryScreen(Screen):

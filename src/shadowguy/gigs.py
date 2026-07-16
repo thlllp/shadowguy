@@ -308,7 +308,9 @@ def refresh_gigs(
     rng = rng or random.Random()
     for territory in corp_map.territories.values():
         for location in territory.locations:
-            if location.id in gigs or not location.characters:
+            # A corp HQ has characters (its officers) but no gig template — skip it, and
+            # any other injected kind, rather than KeyError in generate_gig.
+            if location.id in gigs or not location.characters or location.kind not in _GIG_TEMPLATES:
                 continue
             character = rng.choice(location.characters)
             gigs[location.id] = generate_gig(day, location, character, territory, rng)

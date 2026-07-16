@@ -3,7 +3,13 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction, FactionSpecialty
+from shadowguy.factions import (
+    CORP_OFFICER_TIERS,
+    FACTIONS,
+    FACTIONS_BY_ID,
+    Faction,
+    FactionSpecialty,
+)
 from shadowguy.skills import skill_for
 
 OWNER_NAMES = {"neutral": "Unclaimed"}
@@ -43,6 +49,7 @@ class LocationKind(StrEnum):
     APARTMENT = "apartment"
     SAFEHOUSE = "safehouse"
     REAL_ESTATE = "real_estate"
+    CORP_HQ = "corp_hq"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -51,12 +58,18 @@ class LocationKind(StrEnum):
 # the runner sleeps in it for free (lodging_cost). Add a kind here and it gets both.
 PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 
-# Kinds the world generator rolls onto the map: everything the runner doesn't own.
-# They're a job target for no one, scouted by no one and run by no NPC among the owned
-# kinds, so the per-kind world tables (LOCATION_SKILL, LOCATION_ROLES, gigs._GIG_TEMPLATES,
-# jobs.LEGWORK_APPROACH_TEXT) carry no entry for the owned kinds — each guards against
-# GENERATED_KINDS, not the full enum.
-GENERATED_KINDS = tuple(k for k in LocationKind if k not in PLAYER_OWNED_KINDS)
+# Kinds injected into specific districts rather than rolled onto the map, and carrying
+# none of the per-kind world tables below: the runner's own places, and each corp's HQ
+# (which has its own officers and screen — see _make_hq / app.CorpHQScreen). The HQ is a
+# corp fixture, not player-owned, so it's a separate group from PLAYER_OWNED_KINDS.
+UNROLLED_KINDS = (*PLAYER_OWNED_KINDS, LocationKind.CORP_HQ)
+
+# Kinds the world generator gives the full per-kind treatment: everything with a real
+# storefront/job surface. They're a job target, scouted on legwork and run by generic
+# NPCs, so the per-kind tables (LOCATION_SKILL, LOCATION_ROLES, gigs._GIG_TEMPLATES,
+# jobs.LEGWORK_APPROACH_TEXT) carry exactly one entry each — every guard checks against
+# GENERATED_KINDS, not the full enum, so the UNROLLED_KINDS above stay out of them.
+GENERATED_KINDS = tuple(k for k in LocationKind if k not in UNROLLED_KINDS)
 
 # Hospitals are placed to a fixed count (generate_corp_map / HOSPITAL_COUNT) rather than
 # rolled in with everything else, so every map has about the same healing access instead
@@ -521,6 +534,9 @@ for _kind, _roles in LOCATION_ROLES.items():
         raise ValueError(f"LOCATION_ROLES[{_kind}] needs at least {_needed} roles")
 if len(CHARACTER_NAMES) < MAX_CHARACTERS_PER_LOCATION:
     raise ValueError("CHARACTER_NAMES too small to name a location's characters")
+# An HQ's officers are one distinct name per CORP_OFFICER_TIERS rank (see _make_officers).
+if len(CHARACTER_NAMES) < len(CORP_OFFICER_TIERS):
+    raise ValueError("CHARACTER_NAMES too small to name an HQ's officers")
 
 Cell = tuple[int, int]
 
@@ -610,6 +626,30 @@ def _make_hospital(territory_id: str, rng: random.Random, used_names: set[str]) 
         name=_unique_location_name(LocationKind.HOSPITAL, rng, used_names),
         kind=LocationKind.HOSPITAL,
         characters=_make_characters(location_id, LocationKind.HOSPITAL, rng),
+    )
+
+
+def _make_officers(location_id: str, rng: random.Random) -> list[LocalCharacter]:
+    """The corporate officers manning an HQ: one per CORP_OFFICER_TIERS rank, in that
+    order, so app.CorpHQScreen can line each up with its rep/standing gate by index.
+    Ids follow the standard location-scoped scheme, though HQ standing isn't moved yet."""
+    names = rng.sample(CHARACTER_NAMES, len(CORP_OFFICER_TIERS))
+    return [
+        LocalCharacter(id=f"{location_id}_p{i}", name=names[i], role=role)
+        for i, (role, _min_rep, _min_standing) in enumerate(CORP_OFFICER_TIERS)
+    ]
+
+
+def _make_hq(territory_id: str, faction: Faction, rng: random.Random) -> Location:
+    """A corp's headquarters — one per faction, injected into a top-value district it owns
+    (see generate_corp_map). Not a rolled kind: it has its own officers and screen rather
+    than the gig/legwork/job treatment. At most one per territory, so the id can't collide."""
+    location_id = f"{territory_id}_hq"
+    return Location(
+        id=location_id,
+        name=f"{faction.name} HQ",
+        kind=LocationKind.CORP_HQ,
+        characters=_make_officers(location_id, rng),
     )
 
 
@@ -813,11 +853,23 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
 
     # Which districts get a hospital, picked up front (about one per TILES_PER_HOSPITAL)
     # so the count roll below can reserve a slot for it. The start is left out — it gets
-    # the apartment, and a district takes only one injected place so its total still caps
-    # at MAX_LOCATIONS_PER_TERRITORY.
+    # the apartment instead.
     elsewhere = [ids[cell] for cell in region if cell != start_cell]
     hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
-    gets_injection = hospital_ids | {start_id}
+
+    # One HQ per corp, seated in one of that corp's highest-value districts — the seat of
+    # power. Chosen up front (like the hospitals) so its district can reserve a slot for
+    # the injected HQ. A district can be drawn for both a hospital and an HQ; the reserve
+    # below counts each, and MAX - MIN (6 - 4) leaves room for the two together — the start
+    # (neutral, so never an HQ; excluded from the hospital draw) never stacks past one.
+    top_value = max(FACTION_VALUE_SPREAD)
+    hq_ids: dict[str, str] = {}
+    for faction_id in faction_ids:
+        top_cells = sorted(
+            cell for cell, owner in owners.items()
+            if owner == faction_id and values[cell] == top_value
+        )
+        hq_ids[ids[rng.choice(top_cells)]] = faction_id
 
     territories = {}
     used_names: set[str] = set()
@@ -825,7 +877,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         x, y = cell
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
-        reserved = 1 if tid in gets_injection else 0
+        reserved = (tid == start_id) + (tid in hospital_ids) + (tid in hq_ids)
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
             id=tid,
@@ -855,6 +907,10 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     # in, so healing access is even on every map — one added to each district chosen above.
     for tid in hospital_ids:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))
+
+    # Seat each corp's HQ in the top-value district chosen above, injected like the hospital.
+    for tid, faction_id in hq_ids.items():
+        territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
 
     # Hand every real estate office a portfolio of districts to sell safehouses in.
     # Anywhere the runner doesn't already own (i.e. not the start) is fair game; a
