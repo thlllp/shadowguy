@@ -191,19 +191,26 @@ class Enemy:
     defense: int  # what your attack roll must beat
     damage: int  # base health off you on a hit, before the attack roll's margin
     toughness: int  # added to the soak roll that mitigates a landed hit
+    # How many tiles away it can attack, in tactical combat only (tactical._enemy_phase).
+    # 1 is arm's length; a gun reaches across the room. Abstract combat has no positions,
+    # so it ignores this — like a positional counterpart to stun_damage.
+    reach: int = 1
     stun_damage: int = 0  # non-lethal stun damage dealt per hit (0 = none)
 
 
-# id, name, health, attack, defense, damage, toughness.
+# id, name, health, attack, defense, damage, toughness, reach.
 # The ladder the tiers draw from: a thug is a nuisance, a chromed enforcer is a
 # death sentence to a runner who brought the wrong build. Tuned against a runner's
 # 15-30 health and DAMAGE_FOR_DELTA in jobs.py — see the balance sim before touching.
+# The armed guards (corp_sec, sec_heavy) shoot; the street muscle and the chromed
+# bruiser close to melee, so a fight still has both something to kite and something
+# that punishes standing still.
 _ENEMY_ROWS = (
-    ("thug", "Street Thug", 4, 1, 9, 2, 1),
-    ("ganger", "Ganger", 5, 2, 10, 2, 2),
-    ("corp_sec", "Corp Sec", 7, 2, 11, 3, 2),
-    ("sec_heavy", "Sec Heavy", 9, 3, 12, 3, 3),
-    ("enforcer", "Chromed Enforcer", 11, 4, 13, 4, 4),
+    ("thug", "Street Thug", 4, 1, 9, 2, 1, 1),
+    ("ganger", "Ganger", 5, 2, 10, 2, 2, 1),
+    ("corp_sec", "Corp Sec", 7, 2, 11, 3, 2, 6),
+    ("sec_heavy", "Sec Heavy", 9, 3, 12, 3, 3, 6),
+    ("enforcer", "Chromed Enforcer", 11, 4, 13, 4, 4, 1),
 )
 
 ENEMIES = [Enemy(*row) for row in _ENEMY_ROWS]

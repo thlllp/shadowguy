@@ -186,9 +186,8 @@ def chebyshev(a: Coord, b: Coord) -> int:
 MELEE_RANGE = 1
 FIREARM_RANGE = 8
 
-# Enemies close to melee for now — ranged enemies are a later attribute on Enemy, not
-# a special case here. Their whole tactical behaviour is "path to the player, then hit."
-ENEMY_RANGE = 1
+# How far an enemy can attack is per-enemy, on combat.Enemy.reach (a guard shoots, street
+# muscle closes) — read by _enemy_phase. There is deliberately no global enemy range.
 
 # Move budget per turn. A constant for now; Agility (or a future ability) raising the
 # player's is the obvious hook, which is why it's a field on the unit, not a global.
@@ -409,26 +408,34 @@ def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
         _begin_player_turn(state)
 
 
+def _can_hit_player(state: TacticalState, enemy: Unit) -> bool:
+    """Whether this enemy has a shot at the player right now: within its `reach` and with a
+    clear line. Melee (reach 1) needs to be adjacent; a guard's gun only needs the sightline."""
+    player = state.player.coord
+    return chebyshev(enemy.coord, player) <= enemy.enemy.reach and has_line_of_sight(
+        state.grid, enemy.coord, player
+    )
+
+
 def _enemy_phase(state: TacticalState, rng: random.Random) -> None:
-    """Each enemy closes to melee via A* (up to its speed), then attacks if in range."""
+    """Each enemy that can't already hit the player closes via A* (up to its speed) until it
+    can, then attacks. A ranged enemy therefore holds its distance — it only advances when it
+    has no shot — while melee has to reach arm's length."""
     for enemy in state.enemies:
         if state.is_over:
             return
-        player_coord = state.player.coord
-        if chebyshev(enemy.coord, player_coord) > ENEMY_RANGE:
+        if not _can_hit_player(state, enemy):
             path = path_between(
-                state.grid, enemy.coord, player_coord, blocked=state.occupied(exclude=enemy)
+                state.grid, enemy.coord, state.player.coord, blocked=state.occupied(exclude=enemy)
             )
             # Path ends on the player's own tile; don't step onto it — stop the step before.
             for step in path[: enemy.speed]:
-                if step == player_coord:
+                if step == state.player.coord:
                     break
                 enemy.coord = step
-                if chebyshev(enemy.coord, player_coord) <= ENEMY_RANGE:
+                if _can_hit_player(state, enemy):
                     break
-        if chebyshev(enemy.coord, player_coord) <= ENEMY_RANGE and has_line_of_sight(
-            state.grid, enemy.coord, player_coord
-        ):
+        if _can_hit_player(state, enemy):
             _enemy_attack(state, enemy, rng)
             _settle(state)
 

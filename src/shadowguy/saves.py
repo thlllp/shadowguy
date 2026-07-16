@@ -37,7 +37,9 @@ SAVE_SUFFIX = ".save"
 # map has none).
 # v7 added tactical-combat stages: scene.Stage gained a `tactical` field, so a pre-v7
 # pickled Stage (inside an accepted job or a gig) lacks the attribute.
-SAVE_VERSION = 7
+# v8 added ranged enemies: combat.Enemy gained a `reach` field, so a pre-v8 pickled
+# Enemy (inside an accepted job's fight stages) lacks the attribute.
+SAVE_VERSION = 8
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
