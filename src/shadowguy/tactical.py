@@ -13,11 +13,23 @@ Coordinates are (x, y) everywhere in this module's public surface. tcod and nump
 callers never deal in it.
 """
 
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 import numpy as np
 import tcod
+
+from shadowguy.character import Character
+from shadowguy.combat import (
+    Enemy,
+    equipped_weapons,
+    player_defense,
+    player_soak,
+    resolve_hit,
+)
+from shadowguy.shops import Item
+from shadowguy.skills import skill_value
 
 Coord = tuple[int, int]  # (x, y)
 
@@ -159,3 +171,301 @@ def step_neighbors(grid: Grid, coord: Coord, blocked: frozenset[Coord] = frozens
         for dx, dy in _STEPS
         if grid.is_walkable((n := (coord[0] + dx, coord[1] + dy))) and n not in blocked
     ]
+
+
+def chebyshev(a: Coord, b: Coord) -> int:
+    """King-move distance — the range metric. Movement is cardinal (see _STEPS), but a
+    unit reaches/attacks the whole 8-cell ring around it, so distance is measured that
+    way: a diagonal neighbour is 'adjacent' for a melee swing though it takes two steps
+    to walk to. LOS/obstruction is separate (has_line_of_sight)."""
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+
+# ---------------------------------------------------------------------------
+# The tactical fight. This is combat.py's resolution *given positions*: every
+# attack is combat.resolve_hit (one hit formula, two surfaces — see its docstring),
+# and cover is nothing more than a raised to-hit difficulty. This layer owns space,
+# turn order and movement; it does not own what winning is worth (that's the
+# Outcome on scene.TacticalStage, wired in a later increment).
+# ---------------------------------------------------------------------------
+
+# A weapon's reach, derived from its skill rather than a new Item field: Firearms is
+# the ranged skill (see CLAUDE.md's Combat section), everything else is arm's length.
+MELEE_RANGE = 1
+FIREARM_RANGE = 8
+
+# Enemies close to melee for now — ranged enemies are a later attribute on Enemy, not
+# a special case here. Their whole tactical behaviour is "path to the player, then hit."
+ENEMY_RANGE = 1
+
+# Move budget per turn. A constant for now; Agility (or a future ability) raising the
+# player's is the obvious hook, which is why it's a field on the unit, not a global.
+PLAYER_SPEED = 4
+ENEMY_SPEED = 4
+
+# Cover raises the to-hit difficulty against a unit hugging it, on the side facing the
+# shooter: a full wall is worth more than a low crate you can shoot over. Added straight
+# to the resolve_hit difficulty (which pool_for_difficulty turns into a bigger dodge
+# pool), so cover is "harder to hit me" in the exact same formula, no special case.
+FULL_COVER = 4
+HALF_COVER = 2
+
+
+class Side(StrEnum):
+    PLAYER = "player"
+    ENEMY = "enemy"
+
+
+class TacticalOutcome(StrEnum):
+    ONGOING = "ongoing"
+    VICTORY = "victory"  # every enemy down
+    ESCAPED = "escaped"  # player left by an exit tile
+    DEAD = "dead"  # player at 0 health
+
+
+@dataclass
+class Unit:
+    """One combatant on the grid. Enemy units carry their combat template (combat.Enemy)
+    and current `health` here; the player's health stays on the Character — the single
+    source of truth combat.py already mutates — so a player Unit's `enemy` is None and its
+    `health` field is unused. `speed` is the per-turn move budget (see PLAYER_SPEED)."""
+
+    id: str
+    name: str
+    side: Side
+    coord: Coord
+    speed: int
+    enemy: Enemy | None = None
+    health: int = 0
+
+    @property
+    def is_enemy(self) -> bool:
+        return self.side is Side.ENEMY
+
+
+@dataclass
+class TacticalState:
+    """A tactical fight in progress. The screen renders this; the functions below advance
+    it. One player turn (move up to `speed`, then one action) then the enemy phase."""
+
+    character: Character
+    grid: Grid
+    units: list[Unit]
+    exits: frozenset[Coord]
+    outcome: TacticalOutcome = TacticalOutcome.ONGOING
+    log: list[str] = field(default_factory=list)
+    moves_left: int = 0
+    acted: bool = False
+
+    @property
+    def player(self) -> Unit:
+        return next(u for u in self.units if u.side is Side.PLAYER)
+
+    @property
+    def enemies(self) -> list[Unit]:
+        """Every enemy still standing."""
+        return [u for u in self.units if u.is_enemy and u.health > 0]
+
+    @property
+    def is_over(self) -> bool:
+        return self.outcome is not TacticalOutcome.ONGOING
+
+    def occupied(self, *, exclude: Unit | None = None) -> frozenset[Coord]:
+        """Cells a unit stands on — what blocks movement and pathing this instant. Living
+        units only: a downed enemy is a corpse you can walk over, not a wall."""
+        return frozenset(
+            u.coord
+            for u in self.units
+            if u is not exclude and (u.side is Side.PLAYER or u.health > 0)
+        )
+
+
+def _sign(n: int) -> int:
+    return (n > 0) - (n < 0)
+
+
+def cover_bonus(grid: Grid, defender: Coord, attacker: Coord) -> int:
+    """How much cover shields `defender` from a shot coming from `attacker`: the to-hit
+    difficulty bonus for a wall (full) or low-cover object (half) sitting in the cell
+    next to the defender on the side facing the attacker. Checks the cardinal steps
+    toward the attacker and takes the best — a unit tucked into a corner gets the wall,
+    not the empty diagonal."""
+    best = 0
+    dx, dy = _sign(attacker[0] - defender[0]), _sign(attacker[1] - defender[1])
+    for step in ((dx, 0), (0, dy)):
+        if step == (0, 0):
+            continue
+        cell = (defender[0] + step[0], defender[1] + step[1])
+        if not grid.in_bounds(cell):
+            continue
+        tile = grid.tile(cell)
+        if tile is Tile.WALL:
+            best = max(best, FULL_COVER)
+        elif tile is Tile.LOW_COVER:
+            best = max(best, HALF_COVER)
+    return best
+
+
+def weapon_range(weapon: Item) -> int:
+    return FIREARM_RANGE if weapon.skill == "firearms" else MELEE_RANGE
+
+
+def start_tactical(
+    character: Character,
+    grid: Grid,
+    player_start: Coord,
+    enemy_placements: list[tuple[Enemy, Coord]],
+    exits: frozenset[Coord] = frozenset(),
+    player_speed: int = PLAYER_SPEED,
+) -> TacticalState:
+    """Set up a fight: place the player and each enemy, then open the player's turn."""
+    units = [Unit(id="player", name=character.name, side=Side.PLAYER, coord=player_start, speed=player_speed)]
+    for index, (enemy, coord) in enumerate(enemy_placements):
+        units.append(
+            Unit(
+                id=f"enemy_{index}",
+                name=enemy.name,
+                side=Side.ENEMY,
+                coord=coord,
+                speed=ENEMY_SPEED,
+                enemy=enemy,
+                health=enemy.health,
+            )
+        )
+    state = TacticalState(character=character, grid=grid, units=units, exits=frozenset(exits))
+    _begin_player_turn(state)
+    return state
+
+
+def _begin_player_turn(state: TacticalState) -> None:
+    state.moves_left = state.player.speed
+    state.acted = False
+
+
+def legal_moves(state: TacticalState) -> list[Coord]:
+    """Where the player may step this instant: one cardinal move into open, unoccupied
+    floor, if they have moves left."""
+    if state.moves_left <= 0 or state.is_over:
+        return []
+    return step_neighbors(state.grid, state.player.coord, blocked=state.occupied(exclude=state.player))
+
+
+def move_player(state: TacticalState, dest: Coord) -> bool:
+    """Take one step. Returns False (spending nothing) if the step isn't legal."""
+    if dest not in legal_moves(state):
+        return False
+    state.player.coord = dest
+    state.moves_left -= 1
+    return True
+
+
+def targets_for(state: TacticalState, weapon: Item) -> list[Unit]:
+    """Enemies the player could hit with this weapon right now: standing, within the
+    weapon's range, and in line of sight."""
+    origin = state.player.coord
+    reach = weapon_range(weapon)
+    return [
+        enemy
+        for enemy in state.enemies
+        if chebyshev(origin, enemy.coord) <= reach and has_line_of_sight(state.grid, origin, enemy.coord)
+    ]
+
+
+def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.Random | None = None) -> None:
+    """Resolve the player's one action: an attack, through combat.resolve_hit, with the
+    target's cover folded into the to-hit difficulty. Spends the action for the turn."""
+    rng = rng or random
+    if state.acted or state.is_over or target not in targets_for(state, weapon):
+        return
+    state.acted = True
+    difficulty = target.enemy.defense + cover_bonus(state.grid, target.coord, state.player.coord)
+    roll, damage = resolve_hit(
+        rng,
+        skill_value(state.character, weapon.skill),
+        0,
+        difficulty,
+        weapon.damage,
+        target.enemy.toughness,
+    )
+    if not roll.result.passed:
+        state.log.append(f"You fire on {target.name} and miss.")
+        return
+    target.health = max(0, target.health - damage)
+    if target.health <= 0:
+        state.log.append(f"You drop {target.name}.")
+    else:
+        state.log.append(f"You hit {target.name} for {damage}.")
+    _settle(state)
+
+
+def leave(state: TacticalState) -> bool:
+    """Walk out — but only from an exit tile. Positional escape: getting to the door *is*
+    the flee, so there's no roll and no parting shot; the risk was crossing the room to
+    reach it. Returns False if the player isn't standing on an exit."""
+    if state.is_over or state.player.coord not in state.exits:
+        return False
+    state.outcome = TacticalOutcome.ESCAPED
+    state.log.append("You slip out.")
+    return True
+
+
+def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
+    """End the player's turn and run the enemy phase, then open the next player turn."""
+    rng = rng or random
+    if state.is_over:
+        return
+    _enemy_phase(state, rng)
+    _settle(state)
+    if not state.is_over:
+        _begin_player_turn(state)
+
+
+def _enemy_phase(state: TacticalState, rng: random.Random) -> None:
+    """Each enemy closes to melee via A* (up to its speed), then attacks if in range."""
+    for enemy in state.enemies:
+        if state.is_over:
+            return
+        player_coord = state.player.coord
+        if chebyshev(enemy.coord, player_coord) > ENEMY_RANGE:
+            path = path_between(
+                state.grid, enemy.coord, player_coord, blocked=state.occupied(exclude=enemy)
+            )
+            # Path ends on the player's own tile; don't step onto it — stop the step before.
+            for step in path[: enemy.speed]:
+                if step == player_coord:
+                    break
+                enemy.coord = step
+                if chebyshev(enemy.coord, player_coord) <= ENEMY_RANGE:
+                    break
+        if chebyshev(enemy.coord, player_coord) <= ENEMY_RANGE and has_line_of_sight(
+            state.grid, enemy.coord, player_coord
+        ):
+            _enemy_attack(state, enemy, rng)
+            _settle(state)
+
+
+def _enemy_attack(state: TacticalState, enemy: Unit, rng: random.Random) -> None:
+    difficulty = player_defense(state.character) + cover_bonus(
+        state.grid, state.player.coord, enemy.coord
+    )
+    roll, damage = resolve_hit(
+        rng, enemy.enemy.attack, 0, difficulty, enemy.enemy.damage, player_soak(state.character)
+    )
+    if not roll.result.passed:
+        state.log.append(f"{enemy.name} swings wide.")
+        return
+    state.character.adjust_health(-damage)
+    state.log.append(f"{enemy.name} hits you for {damage}." if damage else f"{enemy.name} connects, but your armor holds.")
+
+
+def _settle(state: TacticalState) -> None:
+    """Read the board. Death first: a mutual kill still kills you."""
+    if not state.character.is_alive:
+        state.outcome = TacticalOutcome.DEAD
+    elif not state.enemies:
+        state.outcome = TacticalOutcome.VICTORY
+
+
+def player_weapons(state: TacticalState) -> list[Item]:
+    """The weapons the player can attack with this fight — their equipped gear, or fists."""
+    return equipped_weapons(state.character)

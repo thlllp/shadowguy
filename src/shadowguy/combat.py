@@ -35,7 +35,7 @@ resolve_check), and the margin — net successes the attack pool cleared the dod
 pool by — is added on top of the weapon's (or enemy's) base damage, so a clean hit
 costs more than a scraped one. The target then rolls a soak: body + defense
 (armor, or an enemy's toughness) d6, and every success blocks one point of that
-damage. `_resolve_hit` is the one place both halves happen, for both directions of
+damage. `resolve_hit` is the one place both halves happen, for both directions of
 a fight, so a player's attack and an enemy's attack are the same function with the
 roles swapped.
 """
@@ -83,7 +83,7 @@ if not (1 <= UNARMED.concealment <= 5) or not (1 <= UNARMED.stun_damage <= 10):
     raise ValueError("UNARMED must satisfy the same weapon-profile bounds as shops.CATALOG")
 
 # A crit still hits harder — it's whatever margin (net successes) it takes to clear
-# checks.CRITICAL_MARGIN, which feeds straight into the margin _resolve_hit adds to
+# checks.CRITICAL_MARGIN, which feeds straight into the margin resolve_hit adds to
 # base damage. There's no separate multiplier; the margin does that work on its own.
 
 # Bracing (Toughness) adds this much to the soak roll for *every* hit you take that
@@ -277,7 +277,7 @@ def player_defense(character: Character) -> int:
 
 def player_soak(character: Character) -> int:
     """Body + equipped armor's defense: the player's soak pool size (dice rolled to
-    mitigate a landed hit — see _resolve_hit).
+    mitigate a landed hit — see resolve_hit).
 
     Bracing (CombatState.soak) is added on top of this per-round, at the call site
     — it is not part of the character's standing soak, since it clears at round end.
@@ -289,14 +289,14 @@ def _soak_damage(rng: random.Random, base_damage: int, soak_pool: int) -> int:
     """Roll soak_pool d6 and take the successes off base_damage, floored at 0.
 
     The shared tail end of any damage a target takes, whether it followed a to-hit
-    roll (_resolve_hit) or was guaranteed (a flee's parting shot) — the soak isn't
+    roll (resolve_hit) or was guaranteed (a flee's parting shot) — the soak isn't
     opposed by anything, so it doesn't go through the four-tier CheckResult, just a
     plain success count.
     """
     return max(0, base_damage - count_successes(soak_pool, rng))
 
 
-def _resolve_hit(
+def resolve_hit(
     rng: random.Random,
     attacker_stat_value: int,
     attacker_advantage: int,
@@ -310,6 +310,9 @@ def _resolve_hit(
 
     This is the one function both directions of a fight go through, so a player's
     attack and an enemy's attack can never quietly drift into two different formulas.
+    Public (not underscore-private) because tactical.py's grid combat resolves its
+    attacks through it too — same reason: one hit formula, two combat surfaces. A
+    grid attack just passes a to-hit difficulty raised by the target's cover.
     """
     roll = resolve_check(
         stat_value=attacker_stat_value,
@@ -474,7 +477,7 @@ def start_combat(
         state.log.append("They were ready for you.")
         # No BRACE bonus here — it's a free hit before your first action, so there's
         # been no round to brace in yet.
-        roll, damage = _resolve_hit(
+        roll, damage = resolve_hit(
             rng, first.enemy.attack, 0, player_defense(character), first.enemy.damage,
             player_soak(character),
         )
@@ -522,7 +525,7 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     bonus = state.next_attack_bonus
     state.next_attack_bonus = 0
 
-    roll, damage = _resolve_hit(
+    roll, damage = resolve_hit(
         rng,
         skill_value(state.character, weapon.skill),
         bonus,
@@ -661,7 +664,7 @@ def _enemy_turn(state: CombatState, rng: random.Random) -> None:
             fighter.stunned_rounds -= 1
             state.log.append(f"{fighter.enemy.name} is still reeling.")
             continue
-        roll, damage = _resolve_hit(
+        roll, damage = resolve_hit(
             rng, fighter.enemy.attack, 0, defense, fighter.enemy.damage, soak_pool
         )
         if not roll.result.passed:
