@@ -398,6 +398,57 @@ _ARCHETYPE_ROWS = (
             ),
         ),
     ),
+    (
+        # A second specialist job: every beat leads with a strength or body skill —
+        # both map to Solo in SPECIALIST_FOR_STAT, so archetype_specialist() still
+        # reads it as one archetype's contract even though the lead skill itself
+        # varies stage to stage. Where Intrusion is the Netrunner's quiet way through
+        # a system, Wetwork is the Solo's loud way through people: no lock-picking or
+        # ICE, just whoever's standing between you and the job. The other two
+        # approaches on each beat still sit on different stats, same as every other
+        # archetype, so it's a job a Netrunner or Infiltrator can take and bleed
+        # through rather than one they're locked out of.
+        "Wetwork",
+        "strong-arm",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("grapple", 1, "Take the one guard quiet before they clock you"),
+                    ("infer", 0, "Read the rotation and slot into the gap"),
+                    ("intimidation", -2, "Walk up to the checkpoint and dare them to stop you"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You're standing between {target} and everyone paid to keep you from it.",
+                (
+                    ("toughness", 1, "Put them down before they finish reaching for the alarm"),
+                    ("tactics", 0, "Time it to the gap in their coverage"),
+                    ("firearms", -2, "Put them down loud and don't wait to see who noticed"),
+                ),
+            ),
+            (
+                StageType.COMPLICATION,
+                "The muscle they kept in reserve finally shows up.",
+                (
+                    ("lift", 1, "Put them through whatever's nearest and keep moving"),
+                    ("negotiations", 0, "Buy the two seconds you need with a lie"),
+                    ("dodge", -2, "Take the hit meant for you and keep going"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "You have {target}, and the whole floor knows it now.",
+                (
+                    ("toughness", 1, "Walk out the way you came in, like nothing happened"),
+                    ("recon", 0, "You mapped three ways out before you went in; take the second"),
+                    ("dodge", -2, "Break into a dead run and don't look back"),
+                ),
+            ),
+        ),
+    ),
 )
 
 ARCHETYPES = [
