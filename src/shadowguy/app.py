@@ -51,7 +51,7 @@ from shadowguy.factions import (
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import generate_legwork_for_job
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
 from shadowguy.scene import (
     Encounter,
@@ -405,6 +405,8 @@ class MainMenu(PanelNav, Screen):
                 # The HQ sits in its owner's district, so here.owner is the corp whose
                 # officers (and rep/standing gates) this screen reads.
                 self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[here.owner]))
+            elif location.kind == LocationKind.BAR:
+                self.app.push_screen(BarScreen(location))
             elif location.kind in PLAYER_OWNED_KINDS:
                 self.app.push_screen(SafehouseScreen(location))
             return
@@ -575,6 +577,63 @@ class ShopScreen(Screen):
         elif item_id.startswith("sell_"):
             sell_item(character, int(item_id.removeprefix("sell_")), standing)
 
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class BarScreen(Screen):
+    """A bar (LocationKind.BAR): where you hire runners onto your crew. Lists the runners
+    looking for work (runners.RIVAL_RUNNERS) — recruit one for its hire_cost and it joins
+    Character.crew. Assigning crew to a job's roles (with the one-remote-support cap) is a
+    later increment; for now this is the recruiting counter.
+
+    First-slice simplification: the whole roster is available at any bar. Seating runners at
+    particular bars (the way fixers are seated to territories) is the natural next step."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(f"{self.location.name} — ask around for runners looking for work", id="bar_info")
+        yield ListView(id="bar_runners")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        items = []
+        for runner in RIVAL_RUNNERS:
+            tag = f"{runner.name} ({runner.archetype}, rating {runner.rating})"
+            if character.on_crew(runner.id):
+                label = f"{tag} — on your crew"
+            else:
+                label = f"Recruit {tag} — {runner.hire_cost}eb"
+                if character.cash < runner.hire_cost:
+                    label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"runner_{runner.id}"))
+        await _replace_items(self.query_one("#bar_runners", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        runner = RUNNERS_BY_ID[event.item.id.removeprefix("runner_")]
+        if character.on_crew(runner.id):
+            return
+        if character.cash < runner.hire_cost:
+            self.notify(f"Can't cover {runner.name}'s fee.", severity="warning")
+            return
+        character.cash -= runner.hire_cost
+        character.recruit(runner.id)
+        self.notify(f"{runner.name} is on the crew.")
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
@@ -1169,7 +1228,11 @@ class ContactsScreen(PanelNav, Screen):
             self.query_one("#runners_list", ListView),
             RIVAL_RUNNERS,
             id_prefix="runner_",
-            label=lambda runner: f"{runner.name} — {runner.archetype}: {runner.description}",
+            label=lambda runner: (
+                f"{runner.name} — {runner.archetype}"
+                + (" (on your crew)" if character.on_crew(runner.id) else "")
+                + f": {runner.description}"
+            ),
         )
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:

@@ -39,7 +39,7 @@ class LocationKind(StrEnum):
     DATA = "data"
     LAB = "lab"
     DEPOT = "depot"
-    SOCIAL = "social"
+    BAR = "bar"
     PAWN = "pawn"
     WEAPON_SHOP = "weapon_shop"
     AUTO_DEALER = "auto_dealer"
@@ -103,7 +103,7 @@ LOCATION_SKILL = {
     LocationKind.DATA: "hack",
     LocationKind.LAB: "pattern_seeking",
     LocationKind.DEPOT: "stealth",
-    LocationKind.SOCIAL: "read_the_room",
+    LocationKind.BAR: "read_the_room",
     LocationKind.PAWN: "negotiations",
     LocationKind.WEAPON_SHOP: "sight",
     LocationKind.AUTO_DEALER: "deception",
@@ -455,7 +455,7 @@ LOCATION_SUFFIXES = {
     LocationKind.DATA: ["Data Vault", "Server Stack", "Relay Hub", "Net Exchange"],
     LocationKind.LAB: ["Clinic", "Biolab", "Dispensary", "Trauma Ward"],
     LocationKind.DEPOT: ["Depot", "Armory", "Freight Yard", "Loading Dock"],
-    LocationKind.SOCIAL: ["Bar", "Noodle House", "Club", "Pachinko Parlor"],
+    LocationKind.BAR: ["Bar", "Noodle House", "Club", "Pachinko Parlor"],
     LocationKind.PAWN: ["Pawn Shop", "Loan & Trade", "Cash 4 Chrome", "Buy-Sell-Trade"],
     LocationKind.WEAPON_SHOP: ["Gun Shop", "Arms Dealer", "Ironmonger", "Ballistics Outlet"],
     LocationKind.AUTO_DEALER: ["Auto Dealer", "Motorpool", "Garage", "Chop Shop"],
@@ -489,7 +489,7 @@ LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
     LocationKind.DATA: ("netrunner", "data broker", "sysop"),
     LocationKind.LAB: ("ripperdoc", "chemist", "lab tech"),
     LocationKind.DEPOT: ("quartermaster", "dockhand", "fixer's runner"),
-    LocationKind.SOCIAL: ("bartender", "regular", "bouncer", "hustler"),
+    LocationKind.BAR: ("bartender", "regular", "bouncer", "hustler"),
     LocationKind.PAWN: ("pawnbroker",),
     LocationKind.WEAPON_SHOP: ("gunsmith",),
     LocationKind.AUTO_DEALER: ("dealer",),
@@ -543,7 +543,7 @@ Cell = tuple[int, int]
 
 # The non-specialty slots in a corp district: the bar everyone drinks in, or a
 # shop — whoever owns the block, the storefront doesn't care.
-FILLER_KINDS = (LocationKind.SOCIAL, *SHOP_KINDS)
+FILLER_KINDS = (LocationKind.BAR, *SHOP_KINDS)
 
 
 def _filler_pool(owned_kind: LocationKind) -> list[LocationKind]:

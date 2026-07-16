@@ -85,6 +85,9 @@ class Character:
     # once. A fixer's presence on the corp map is hidden until discovered this way
     # — see fixer.discover_fixers_here(), the single place that reveals it.
     discovered_fixers: set[str] = field(default_factory=set)
+    # Runner ids (runners.RUNNERS_BY_ID) the runner has hired at a bar. Assigning them to
+    # a job's roles (with the one-remote-support cap) is a later increment.
+    crew: list[str] = field(default_factory=list)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
@@ -149,6 +152,13 @@ class Character:
 
     def discover_fixer(self, fixer_id: str) -> None:
         self.discovered_fixers.add(fixer_id)
+
+    def on_crew(self, runner_id: str) -> bool:
+        return runner_id in self.crew
+
+    def recruit(self, runner_id: str) -> None:
+        if runner_id not in self.crew:
+            self.crew.append(runner_id)
 
     @property
     def max_health(self) -> int:
