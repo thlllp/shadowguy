@@ -33,7 +33,9 @@ SAVE_SUFFIX = ".save"
 # LocationKinds (a pre-v4 map has neither).
 # v5 added Character.health_kit_used_today (a pre-v5 Character lacks it) and reworked
 # hospitals into daily inpatient stays.
-SAVE_VERSION = 5
+# v6 added corp HQs: the CORP_HQ LocationKind and one HQ location per faction (a pre-v6
+# map has none).
+SAVE_VERSION = 6
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
