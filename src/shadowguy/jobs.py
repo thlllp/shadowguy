@@ -351,6 +351,53 @@ _ARCHETYPE_ROWS = (
             ),
         ),
     ),
+    (
+        # A specialist job: every beat leads with an intelligence skill, which is what
+        # archetype_specialist() reads to call it Netrunner work — and what makes
+        # generate_job keep that lead through the partial draw. The other two approaches
+        # on each beat still sit on different stats, so this is a job a Solo can take and
+        # bleed through, not one they're locked out of.
+        "Intrusion",
+        "breach",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("recon", 1, "Map their netarch from the outside before you touch it"),
+                    ("forgery", 0, "Spoof a contractor's credentials onto the access list"),
+                    ("toughness", -2, "Splice the trunk line by hand and eat the feedback"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You're in their architecture. {target} sits behind black ICE.",
+                (
+                    ("hack", 1, "Break the ICE around it"),
+                    ("sleight_of_hand", 0, "Jack a physical tap straight into the terminal"),
+                    ("blunt", -2, "Pull the drive out of the rack and take it with you"),
+                ),
+            ),
+            (
+                StageType.COMPLICATION,
+                "A trace program wakes up and starts walking back down your connection.",
+                (
+                    ("infer", 1, "Read the trace's shape and stay ahead of it"),
+                    ("listening", 0, "Catch the subroutine's rhythm and time your jumps"),
+                    ("resist_poison", -2, "Tank the neural feedback and keep working"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "You have {target}. Their logs still say you were ever here.",
+                (
+                    ("tinkering", 1, "Scrub the logs and back out the way you came"),
+                    ("stealth", 0, "Pull the tap and walk before the sweep reaches you"),
+                    ("intimidation", -2, "Let them watch you go, and dare them to follow"),
+                ),
+            ),
+        ),
+    ),
 )
 
 ARCHETYPES = [
@@ -445,6 +492,27 @@ if set(SPECIALIST_FOR_STAT) != set(CORE_STATS):
 REMOTE_SKILLS = frozenset({"hack"})
 
 
+def archetype_specialist(archetype: JobArchetype) -> str | None:
+    """The runner archetype this job is *for*, or None if it's generic work.
+
+    Derived from the leads rather than tabulated, for the same reason Scene.roles is: a
+    job every one of whose beats leads with the same specialist doesn't merely suit them,
+    it *is* their contract, and a field saying otherwise could only ever drift from the
+    approaches actually in the table.
+
+    This is what buys the specialist their lane. A generated job draws a subset of each
+    pool (PARTIAL_POOL_SIZE), so a lead can be withheld — fine for generic work, where
+    "which ways in this job happens to have" is the point, but it would make a Netrunner
+    job that offers no netrunning. generate_job keeps the lead for these; the rest of the
+    pool is drawn as normal, so two Intrusions still aren't the same Intrusion.
+    """
+    specialists = {
+        SPECIALIST_FOR_STAT[skill_for(stage.approaches[0].skill).stat]
+        for stage in archetype.stages
+    }
+    return specialists.pop() if len(specialists) == 1 else None
+
+
 def _role_for_stage(job_stage: JobStage) -> Role:
     """The crew position a beat offers, derived from its lead (cleanest) approach: the
     specialist is whoever that skill's stat points to, and the posture is remote if the
@@ -501,6 +569,7 @@ def generate_job(
 ) -> tuple[Scene, JobTiming]:
     rng = rng or random.Random()
     archetype = rng.choice(ARCHETYPES)
+    specialist = archetype_specialist(archetype)
     # The mark is a real corp, hit in a district it actually holds on this run's map.
     held = sorted(
         (t for t in corp_map.territories.values() if t.owner in FACTIONS_BY_ID),
@@ -543,6 +612,14 @@ def generate_job(
         pool = job_stage.approaches
         if rng.random() < FULL_POOL_CHANCE:
             approaches = list(pool)
+        elif specialist is not None:
+            # A specialist job promises its specialist a way through every beat, so the
+            # lead — the approach that makes it their job at all — survives the draw and
+            # only the rest is sampled. Same draw size as any other partial pool.
+            approaches = [
+                pool[0],
+                *sorted(rng.sample(pool[1:], PARTIAL_POOL_SIZE - 1), key=pool.index),
+            ]
         else:
             approaches = sorted(rng.sample(pool, PARTIAL_POOL_SIZE), key=pool.index)
         # Rolled once for the stage: every approach is offset from the same number,
