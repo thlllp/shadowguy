@@ -7,6 +7,7 @@ from shadowguy.checks import CheckResult, resolve_check
 from shadowguy.combat import Enemy
 from shadowguy.factions import standing_shift
 from shadowguy.skills import skill_for, skill_value
+from shadowguy.tactical import Coord, Grid
 
 
 class SceneKind(StrEnum):
@@ -78,14 +79,39 @@ class Encounter:
 
 
 @dataclass
+class TacticalStage:
+    """A tactical-combat fight, as the scene graph sees it — the grid analogue of Encounter.
+
+    Same split, same reason: it lives here, not in tactical.py, because it holds Outcomes
+    and tactical.py must not import scene. tactical.py owns *how the grid fight resolves*;
+    this owns *what winning or slipping out is worth*, through the ordinary Outcome — so a
+    tactical stage pays a job's cash/rep/standing on the same reward path as everything else.
+
+    `escape` is the Outcome for leaving by an exit tile. Losing has no Outcome: you're at
+    0 health, which is death everywhere else in the game.
+    """
+
+    prompt: str
+    grid: Grid
+    player_start: Coord
+    # (enemy template, spawn cell). The live fight (tactical.TacticalState) is rebuilt
+    # from these each time the screen opens, so this stays an immutable template.
+    enemies: tuple[tuple[Enemy, Coord], ...]
+    victory: Outcome
+    escape: Outcome
+    exits: frozenset[Coord] = frozenset()
+
+
+@dataclass
 class Stage:
     id: str
     prompt: str
     choices: list[Choice]
-    # A stage is either a set of choices or a fight, never both — a combat stage's
-    # "choices" are combat.available_actions, which come from the runner's own gear
-    # and skills rather than from the scene.
+    # A stage is a set of choices, a fight, or a tactical map — exactly one, never a
+    # mix (guarded in Scene.__post_init__). A fight's/map's "choices" come from the
+    # runner's own gear and skills (combat.available_actions / the grid), not the scene.
     combat: Encounter | None = None
+    tactical: TacticalStage | None = None
 
 
 @dataclass
@@ -113,19 +139,22 @@ class Scene:
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
-        if self.stages[self.start_stage].combat is not None:
-            # A fight is only ever routed to by a resolved check (that's what decides
+        start = self.stages[self.start_stage]
+        if start.combat is not None or start.tactical is not None:
+            # A fight/map is only ever routed to by a resolved check (that's what decides
             # the drop), so a scene may not *open* on one — the screen would have no
             # check to read and no choices to render.
-            raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight")
+            raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight or tactical map")
         for stage in self.stages.values():
-            if stage.combat is not None:
-                if stage.choices:
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} is a fight, so it cannot also offer choices"
-                    )
-                if not stage.combat.enemies:
-                    raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
+            modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical) if mode)
+            if modes > 1:
+                raise ValueError(
+                    f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, or a tactical map"
+                )
+            if stage.combat is not None and not stage.combat.enemies:
+                raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
+            if stage.tactical is not None and not stage.tactical.enemies:
+                raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
             for choice in stage.choices:
                 skill_for(choice.skill)  # unknown skill id: fail here, not mid-roll
             for outcome in self._stage_outcomes(stage):
@@ -168,6 +197,8 @@ class Scene:
                     yield outcome
         if stage.combat is not None:
             yield from (stage.combat.victory, stage.combat.escape)
+        if stage.tactical is not None:
+            yield from (stage.tactical.victory, stage.tactical.escape)
 
     @property
     def max_cash_loss(self) -> int:

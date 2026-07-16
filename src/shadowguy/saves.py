@@ -35,7 +35,9 @@ SAVE_SUFFIX = ".save"
 # hospitals into daily inpatient stays.
 # v6 added corp HQs: the CORP_HQ LocationKind and one HQ location per faction (a pre-v6
 # map has none).
-SAVE_VERSION = 6
+# v7 added tactical-combat stages: scene.Stage gained a `tactical` field, so a pre-v7
+# pickled Stage (inside an accepted job or a gig) lacks the attribute.
+SAVE_VERSION = 7
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

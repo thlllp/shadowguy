@@ -57,8 +57,23 @@ from shadowguy.scene import (
     Encounter,
     Scene,
     SceneKind,
+    TacticalStage,
     apply_outcome,
     resolve_choice,
+)
+from shadowguy.tactical import (
+    Side,
+    TacticalOutcome,
+    TacticalState,
+    Tile,
+    chebyshev,
+    end_turn,
+    leave,
+    move_player,
+    player_attack,
+    player_weapons,
+    start_tactical,
+    targets_for,
 )
 from shadowguy.shops import (
     CATALOG,
@@ -1279,6 +1294,27 @@ class SceneScreen(Screen):
             self._on_combat_end,
         )
 
+    async def _show_tactical(self, stage) -> None:
+        """Hand a tactical-map stage over to TacticalScreen and resume the scene after.
+        The same handoff as combat — the drop doesn't apply (a tactical fight opens on
+        the player's turn), so unlike _show_combat it reads no _pending_result."""
+        self.stage_id = stage.id
+        self.app.push_screen(TacticalScreen(stage.tactical), self._on_tactical_end)
+
+    async def _on_tactical_end(self, result: TacticalOutcome) -> None:
+        character = self.app.character
+        if result is TacticalOutcome.DEAD:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
+        stage = self._current_stage()
+        # Winning clears the stage (victory.next_stage rejoins the job / carries the last
+        # stage's payout); slipping out by an exit ends the scene there, like a fled fight.
+        outcome = stage.tactical.victory if result is TacticalOutcome.VICTORY else stage.tactical.escape
+        apply_outcome(character, outcome, self.scene)
+        self.query_one(CharacterSheet).refresh()
+        self.query_one("#prompt", Static).update(outcome.text)
+        await self._await_continue(outcome.next_stage, None)
+
     async def _on_combat_end(self, result: CombatOutcome) -> None:
         character = self.app.character
         if result is CombatOutcome.DEAD:
@@ -1332,6 +1368,9 @@ class SceneScreen(Screen):
         stage = self.scene.stages[self._pending_next_stage]
         if stage.combat is not None:
             await self._show_combat(stage)
+            return
+        if stage.tactical is not None:
+            await self._show_tactical(stage)
             return
 
         self.stage_id = self._pending_next_stage
@@ -1420,6 +1459,172 @@ class CombatScreen(Screen):
         action = self.actions[int(event.item.id.removeprefix("action_"))]
         take_turn(self.state, action, self.app.rng)
         await self._refresh()
+
+
+# Terrain glyphs for the tactical map. A view concern, so kept here rather than in
+# tactical.py (which knows tiles, not how they're drawn).
+_TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
+_TAC_END_TEXT = {
+    TacticalOutcome.VICTORY: "You've cleared them out.",
+    TacticalOutcome.ESCAPED: "You slip out.",
+    TacticalOutcome.DEAD: "You're down.",
+}
+# How many log lines the fight scrolls back — the elastic panel, like COMBAT_LOG_LINES.
+TACTICAL_LOG_LINES = 6
+
+
+class TacticalScreen(Screen):
+    """One tactical fight on a grid. Pushed by SceneScreen for a stage with a
+    TacticalStage, dismissed with the TacticalOutcome — the scene, not this screen,
+    decides what winning or slipping out is worth (it owns the TacticalStage's Outcomes).
+    All the rules live in tactical.py; this renders TacticalState and feeds it the
+    move/attack/end-turn the player picked.
+
+    Movement is the arrow keys, so there is deliberately no action ListView to steal
+    them: every action is a footer hotkey instead (see BINDINGS). An attack fires on the
+    nearest in-sight target with the best-reaching weapon — targeting is automatic in
+    this first version; picking a specific target is a later refinement.
+    """
+
+    BINDINGS = [
+        ("up", "move('up')", "Move"),
+        ("down", "move('down')", "Move"),
+        ("left", "move('left')", "Move"),
+        ("right", "move('right')", "Move"),
+        ("f", "fire", "Attack"),
+        ("e", "end_turn", "End turn"),
+        ("l", "leave", "Leave (on exit)"),
+        ("enter", "continue", "Continue"),
+        ("q", "quit_menu", "Menu"),
+    ]
+
+    DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+
+    CSS = """
+    #tac_map { height: 1fr; padding: 0 1; }
+    #tac_status, #tac_log { height: auto; padding: 0 1; }
+    """
+
+    def __init__(self, stage: TacticalStage) -> None:
+        super().__init__()
+        self.stage = stage
+        self.state: TacticalState | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.stage.prompt, id="tac_prompt")
+        yield Static(id="tac_status")
+        yield Static(id="tac_map")
+        yield Static(id="tac_log")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.state = start_tactical(
+            self.app.character,
+            self.stage.grid,
+            self.stage.player_start,
+            list(self.stage.enemies),
+            self.stage.exits,
+        )
+        self._refresh()
+
+    def action_move(self, direction: str) -> None:
+        if self.state.is_over:
+            return
+        dx, dy = self.DIRECTIONS[direction]
+        px, py = self.state.player.coord
+        move_player(self.state, (px + dx, py + dy))
+        self._refresh()
+
+    def action_fire(self) -> None:
+        if self.state.is_over:
+            return
+        shot = self._best_shot()
+        if shot is None:
+            self.notify(
+                "You've already acted this turn." if self.state.acted else "No target in sight and range."
+            )
+            return
+        weapon, target = shot
+        player_attack(self.state, target, weapon, self.app.rng)
+        self._refresh()
+
+    def action_end_turn(self) -> None:
+        if self.state.is_over:
+            return
+        end_turn(self.state, self.app.rng)
+        self._refresh()
+
+    def action_leave(self) -> None:
+        if self.state.is_over:
+            return
+        if not leave(self.state):
+            self.notify("You're not standing on an exit.")
+        self._refresh()
+
+    def action_continue(self) -> None:
+        if self.state.is_over:
+            self.dismiss(self.state.outcome)
+
+    def _best_shot(self):
+        """The attack 'f' fires: the nearest in-sight, in-range enemy, with the
+        best-reaching weapon (nearer first, more damage to break ties). None if the
+        player has no shot — already acted, or nothing in sight and range."""
+        if self.state.acted:
+            return None
+        origin = self.state.player.coord
+        best = None  # (sort_key, weapon, target)
+        for weapon in player_weapons(self.state):
+            for target in targets_for(self.state, weapon):
+                key = (chebyshev(origin, target.coord), -weapon.damage)
+                if best is None or key < best[0]:
+                    best = (key, weapon, target)
+        return None if best is None else (best[1], best[2])
+
+    def _map_text(self) -> Text:
+        state = self.state
+        grid = state.grid
+        glyphs = [[_TAC_TILE[grid.tiles[y][x]] for x in range(grid.width)] for y in range(grid.height)]
+        styles: dict[tuple[int, int], str] = {}
+        for ex, ey in state.exits:
+            if grid.tiles[ey][ex] is Tile.FLOOR:
+                glyphs[ey][ex] = ">"
+                styles[(ey, ex)] = "bold green"
+        for unit in state.units:
+            ux, uy = unit.coord
+            if unit.side is Side.PLAYER:
+                glyphs[uy][ux], styles[(uy, ux)] = "@", "bold cyan"
+            elif unit.health > 0:
+                glyphs[uy][ux], styles[(uy, ux)] = "E", "bold red"
+            else:
+                glyphs[uy][ux], styles[(uy, ux)] = "x", "grey37"
+        text = Text()
+        for y in range(grid.height):
+            for x in range(grid.width):
+                ch = glyphs[y][x]
+                default = "grey30" if ch in ("#", "%") else "grey50"
+                text.append(ch, style=styles.get((y, x), default))
+            text.append("\n")
+        return text
+
+    def _refresh(self) -> None:
+        state = self.state
+        self.query_one(CharacterSheet).refresh()
+        self.query_one("#tac_map", Static).update(self._map_text())
+        self.query_one("#tac_log", Static).update(Text("\n".join(state.log[-TACTICAL_LOG_LINES:])))
+        if state.is_over:
+            self.query_one("#tac_status", Static).update(
+                f"{_TAC_END_TEXT[state.outcome]}  —  press Enter to continue."
+            )
+            return
+        character = self.app.character
+        self.query_one("#tac_status", Static).update(
+            f"HP {character.health}/{character.max_health}   "
+            f"Moves {state.moves_left}/{state.player.speed}   "
+            f"Action {'used' if state.acted else 'ready'}   "
+            f"Enemies left {len(state.enemies)}   (arrows move, f attack, e end turn)"
+        )
 
 
 TRAVEL_STAMINA_COST = 1
