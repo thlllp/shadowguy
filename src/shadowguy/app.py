@@ -66,14 +66,12 @@ from shadowguy.tactical import (
     TacticalOutcome,
     TacticalState,
     Tile,
-    chebyshev,
+    best_shot,
     end_turn,
     leave,
     move_player,
     player_attack,
-    player_weapons,
     start_tactical,
-    targets_for,
 )
 from shadowguy.shops import (
     CATALOG,
@@ -1310,10 +1308,7 @@ class SceneScreen(Screen):
         # Winning clears the stage (victory.next_stage rejoins the job / carries the last
         # stage's payout); slipping out by an exit ends the scene there, like a fled fight.
         outcome = stage.tactical.victory if result is TacticalOutcome.VICTORY else stage.tactical.escape
-        apply_outcome(character, outcome, self.scene)
-        self.query_one(CharacterSheet).refresh()
-        self.query_one("#prompt", Static).update(outcome.text)
-        await self._await_continue(outcome.next_stage, None)
+        await self._finish_fight(outcome)
 
     async def _on_combat_end(self, result: CombatOutcome) -> None:
         character = self.app.character
@@ -1343,13 +1338,16 @@ class SceneScreen(Screen):
         # Winning is a way *past* the stage (victory.next_stage rejoins the job, and on
         # the last stage it carries the payout); running out ends the scene there.
         outcome = stage.combat.victory if result is CombatOutcome.VICTORY else stage.combat.escape
-        apply_outcome(character, outcome, self.scene)
+        await self._finish_fight(outcome)
+
+    async def _finish_fight(self, outcome) -> None:
+        """Apply a fight's winning/slipping-out Outcome and resume the scene — the shared
+        tail of _on_combat_end and _on_tactical_end. result=None on the continue: no check
+        routed us out of a fight, so a chained fight opens even (Drop.NONE) rather than
+        inheriting the drop of the check that opened this one."""
+        apply_outcome(self.app.character, outcome, self.scene)
         self.query_one(CharacterSheet).refresh()
         self.query_one("#prompt", Static).update(outcome.text)
-
-        # result=None: no check routed us out of a fight, so if this outcome ever
-        # chains into another fight, that fight opens even (Drop.NONE) rather than
-        # inheriting the drop of the check that opened the *previous* one.
         await self._await_continue(outcome.next_stage, None)
 
     async def _advance(self) -> None:
@@ -1540,7 +1538,7 @@ class TacticalScreen(Screen):
     def action_fire(self) -> None:
         if self.state.is_over:
             return
-        shot = self._best_shot()
+        shot = best_shot(self.state)
         if shot is None:
             self.notify(
                 "You've already acted this turn." if self.state.acted else "No target in sight and range."
@@ -1566,21 +1564,6 @@ class TacticalScreen(Screen):
     def action_continue(self) -> None:
         if self.state.is_over:
             self.dismiss(self.state.outcome)
-
-    def _best_shot(self):
-        """The attack 'f' fires: the nearest in-sight, in-range enemy, with the
-        best-reaching weapon (nearer first, more damage to break ties). None if the
-        player has no shot — already acted, or nothing in sight and range."""
-        if self.state.acted:
-            return None
-        origin = self.state.player.coord
-        best = None  # (sort_key, weapon, target)
-        for weapon in player_weapons(self.state):
-            for target in targets_for(self.state, weapon):
-                key = (chebyshev(origin, target.coord), -weapon.damage)
-                if best is None or key < best[0]:
-                    best = (key, weapon, target)
-        return None if best is None else (best[1], best[2])
 
     def _map_text(self) -> Text:
         state = self.state

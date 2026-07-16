@@ -116,36 +116,26 @@ def _yx(coord: Coord) -> tuple[int, int]:
     return (y, x)
 
 
-def _fov(grid: Grid, origin: Coord, radius: int) -> np.ndarray:
-    """Symmetric shadowcast FOV as a [y, x] bool array. `radius` 0 is unlimited (tcod's
-    own convention). Symmetric so 'A sees B' iff 'B sees A' — the property a fair fight
-    needs, since one array decides both who the player sees and who can shoot the player.
-
-    Note tcod measures `radius` in Euclidean distance and *excludes* a cell at distance
-    exactly == radius, so a finite radius reads as 'strictly nearer than' rather than
-    'within'. That off-by-one is why range-gating an attack is a separate explicit
-    distance check (see increment 1), not something read off this radius."""
+def _fov(grid: Grid, origin: Coord) -> np.ndarray:
+    """Unlimited symmetric-shadowcast FOV from `origin` as a [y, x] bool array. Symmetric
+    so 'A sees B' iff 'B sees A' — the property a fair fight needs, since one array decides
+    both who the player sees and who can shoot the player. Unlimited (radius 0) because
+    reach is never read off FOV: a weapon's range is a separate explicit distance check
+    (see has_line_of_sight / weapon_range), which also sidesteps tcod's Euclidean-radius
+    off-by-one at the edge."""
     return tcod.map.compute_fov(
-        grid.transparency(), _yx(origin), radius=radius,
+        grid.transparency(), _yx(origin), radius=0,
         algorithm=tcod.constants.FOV_SYMMETRIC_SHADOWCAST,
     )
 
 
-def visible_from(grid: Grid, origin: Coord, radius: int) -> set[Coord]:
-    """Every cell the unit at `origin` can see, walls blocking, out to sight `radius`
-    (0 = unlimited). This is for fog-of-war / 'what the player perceives'; obstruction
-    between two known points is has_line_of_sight, which ignores range entirely."""
-    fov = _fov(grid, origin, radius)
-    return {(x, y) for y in range(grid.height) for x in range(grid.width) if fov[y, x]}
-
-
 def has_line_of_sight(grid: Grid, a: Coord, b: Coord) -> bool:
     """Whether the line from `a` to `b` is unobstructed by walls — can a shot connect,
-    range aside. Uses unlimited-radius FOV so it's a pure obstruction test; a weapon's
-    reach is a separate distance gate the caller applies."""
+    range aside. A pure obstruction test; a weapon's reach is a separate distance gate the
+    caller applies."""
     if a == b:
         return True
-    return bool(_fov(grid, a, radius=0)[_yx(b)])
+    return bool(_fov(grid, a)[_yx(b)])
 
 
 def path_between(
@@ -232,7 +222,6 @@ class Unit:
     source of truth combat.py already mutates — so a player Unit's `enemy` is None and its
     `health` field is unused. `speed` is the per-turn move budget (see PLAYER_SPEED)."""
 
-    id: str
     name: str
     side: Side
     coord: Coord
@@ -318,14 +307,12 @@ def start_tactical(
     player_start: Coord,
     enemy_placements: list[tuple[Enemy, Coord]],
     exits: frozenset[Coord] = frozenset(),
-    player_speed: int = PLAYER_SPEED,
 ) -> TacticalState:
     """Set up a fight: place the player and each enemy, then open the player's turn."""
-    units = [Unit(id="player", name=character.name, side=Side.PLAYER, coord=player_start, speed=player_speed)]
-    for index, (enemy, coord) in enumerate(enemy_placements):
+    units = [Unit(name=character.name, side=Side.PLAYER, coord=player_start, speed=PLAYER_SPEED)]
+    for enemy, coord in enemy_placements:
         units.append(
             Unit(
-                id=f"enemy_{index}",
                 name=enemy.name,
                 side=Side.ENEMY,
                 coord=coord,
@@ -473,6 +460,23 @@ def player_weapons(state: TacticalState) -> list[Item]:
     return equipped_weapons(state.character)
 
 
+def best_shot(state: TacticalState) -> tuple[Item, Unit] | None:
+    """The attack the player takes by default: the nearest in-sight, in-range enemy, with
+    the best-reaching weapon (nearer first, more damage breaks ties). None if there's no
+    shot — already acted, or nothing in sight and range. This is fight *policy*, not view,
+    so it lives here beside targets_for; the screen and any headless driver share it."""
+    if state.acted:
+        return None
+    origin = state.player.coord
+    best = None  # (sort_key, weapon, target)
+    for weapon in player_weapons(state):
+        for target in targets_for(state, weapon):
+            key = (chebyshev(origin, target.coord), -weapon.damage)
+            if best is None or key < best[0]:
+                best = (key, weapon, target)
+    return None if best is None else (best[1], best[2])
+
+
 # ---------------------------------------------------------------------------
 # Procedural maps. A job's tactical fight lands on one of these (see jobs.py). BSP
 # rooms + corridors, some scattered low cover, the player entering one end and the
@@ -570,23 +574,18 @@ def generate_map(
 
         grid = Grid(width=width, height=height, tiles=tiles)
         rooms.sort(key=lambda room: room[0][0])  # left to right
+        cells_by_room = [_room_cells(grid, rect) for _center, rect in rooms]
         player_start = rooms[0][0]
         # Exits: the leftmost floor cells of the entry room — the way the runner came in.
-        entry_cells = sorted(_room_cells(grid, rooms[0][1]))
-        exits = frozenset(entry_cells[:2]) or frozenset({player_start})
+        # The entry room always has floor (its centre is player_start), so this is non-empty.
+        exits = frozenset(sorted(cells_by_room[0])[:2])
 
         # Enemies hold the rooms away from the entry; fall back to any far floor if a
         # small map didn't leave enough.
         reserved = {player_start, *exits}
-        spawn_pool = [
-            cell for _c, rect in rooms[1:] for cell in _room_cells(grid, rect) if cell not in reserved
-        ]
+        spawn_pool = [cell for cells in cells_by_room[1:] for cell in cells if cell not in reserved]
         if len(spawn_pool) < enemy_count:
-            spawn_pool = [
-                cell
-                for cell in (c for _c, rect in rooms for c in _room_cells(grid, rect))
-                if cell not in reserved
-            ]
+            spawn_pool = [cell for cells in cells_by_room for cell in cells if cell not in reserved]
         if len(spawn_pool) < enemy_count:
             continue
         enemy_spawns = rng.sample(spawn_pool, enemy_count)
@@ -594,13 +593,13 @@ def generate_map(
         # Scatter low cover in room interiors, never on anyone's start or an exit, then
         # prove it didn't sever the map before handing it back.
         keep_clear = {player_start, *exits, *enemy_spawns}
-        for _c, rect in rooms:
-            for cell in _room_cells(grid, rect):
+        for cells in cells_by_room:
+            for cell in cells:
                 if cell not in keep_clear and rng.random() < cover_density:
                     tiles[cell[1]][cell[0]] = Tile.LOW_COVER
         if all(
             target == player_start or path_between(grid, player_start, target)
             for target in (*enemy_spawns, *exits)
         ):
-            return TacticalMap(grid, player_start, enemy_spawns, frozenset(exits))
+            return TacticalMap(grid, player_start, enemy_spawns, exits)
     raise RuntimeError("could not generate a playable tactical map")
