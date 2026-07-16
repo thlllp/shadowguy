@@ -39,7 +39,9 @@ SAVE_SUFFIX = ".save"
 # pickled Stage (inside an accepted job or a gig) lacks the attribute.
 # v8 added ranged enemies: combat.Enemy gained a `reach` field, so a pre-v8 pickled
 # Enemy (inside an accepted job's fight stages) lacks the attribute.
-SAVE_VERSION = 8
+# v9 added job crew roles: scene.Scene gained a `roles` field (a pre-v9 pickled Scene,
+# inside an accepted job, lacks it).
+SAVE_VERSION = 9
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

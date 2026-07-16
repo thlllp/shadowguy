@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
@@ -14,6 +14,30 @@ class SceneKind(StrEnum):
     JOB = "job"
     GIG = "gig"
     LEGWORK = "legwork"
+
+
+class Posture(StrEnum):
+    """Where a crew member works a beat from."""
+
+    ON_SITE = "on-site"  # runs in with you — muscle on the exfil, an opener on the approach
+    REMOTE = "remote"  # works it from afar — the netrunner in the car on the objective
+
+
+@dataclass(frozen=True)
+class Role:
+    """A crew position on a job: a beat someone could cover, the kind of specialist who
+    fits it, and whether they'd work it on-site or from afar.
+
+    Plain data on purpose — it holds display strings, not jobs.StageType, so it can live
+    here on the Scene without scene.py importing jobs (which imports scene). jobs.py owns
+    the *derivation* (from each stage's beat and its lead approach's skill); this is just
+    the record. Descriptive for now: recruiting a runner to fill a role comes later, and
+    when it does, `filled_by` (a runner id) is the natural field to add here.
+    """
+
+    beat: str  # the stage's StageType value, as a label ("approach", "objective", ...)
+    specialist: str  # runner archetype that fits ("Netrunner" / "Solo" / "Infiltrator")
+    posture: Posture
 
 
 @dataclass
@@ -135,6 +159,9 @@ class Scene:
     target_fixer_id: str | None = None
     # Which LocalCharacter (corpmap.LocalCharacter.id) a gig's standing reward lands on.
     target_character_id: str | None = None
+    # The crew positions this job offers, one per beat, derived at generation (jobs.py).
+    # Empty for gigs/legwork. Descriptive for now — nothing fills them yet.
+    roles: list[Role] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.start_stage not in self.stages:
