@@ -97,7 +97,7 @@ TACTICAL_FIGHT_CHANCE = 0.35
 _TACTICAL_COVER_BY_KIND = {
     LocationKind.DEPOT: 0.16,
     LocationKind.WEAPON_SHOP: 0.14,
-    LocationKind.SOCIAL: 0.12,
+    LocationKind.BAR: 0.12,
     LocationKind.DATA: 0.05,
 }
 _DEFAULT_COVER_DENSITY = 0.09
@@ -682,7 +682,7 @@ LEGWORK_APPROACH_TEXT = {
     LocationKind.DATA: "Sift the traffic in and out of {name}",
     LocationKind.LAB: "Pull the intake records at {name}",
     LocationKind.DEPOT: "Tail a shift worker out of {name}",
-    LocationKind.SOCIAL: "Work the crowd at {name}",
+    LocationKind.BAR: "Work the crowd at {name}",
     LocationKind.PAWN: "Work the counter for gossip at {name}",
     LocationKind.WEAPON_SHOP: "Tail a shipment out of {name}",
     LocationKind.AUTO_DEALER: "Chat up the lot staff at {name}",

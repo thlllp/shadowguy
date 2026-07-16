@@ -41,7 +41,11 @@ SAVE_SUFFIX = ".save"
 # Enemy (inside an accepted job's fight stages) lacks the attribute.
 # v9 added job crew roles: scene.Scene gained a `roles` field (a pre-v9 pickled Scene,
 # inside an accepted job, lacks it).
-SAVE_VERSION = 9
+# v10 renamed the SOCIAL LocationKind to BAR (a pre-v10 pickled map holds LocationKind
+# .SOCIAL, which no longer exists) and added Character.crew (recruited runners).
+# v11 reshaped Character.crew from a list of runner ids into a list of CrewHire (runner +
+# optional job_id: for-job vs indefinite engagement).
+SAVE_VERSION = 11
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

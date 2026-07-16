@@ -112,7 +112,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             _GigApproach("negotiations", "Talk the dockhands quiet", "A cut buys their blindness. Clean.", "They hold out for more and it turns ugly."),
         ),
     ),
-    LocationKind.SOCIAL: _GigTemplate(
+    LocationKind.BAR: _GigTemplate(
         titles=("Work a Mark", "House Favor"),
         prompts=(
             "{who} the {role} at {place} points you at a mark who's had too much to drink.",
