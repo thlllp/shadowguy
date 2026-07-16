@@ -429,6 +429,14 @@ class MainMenu(PanelNav, Screen):
 class FixerOffersScreen(Screen):
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
 
+    CSS = """
+    #offer_roles {
+        height: auto;
+        border-top: solid $accent;
+        padding: 0 1;
+    }
+    """
+
     def __init__(self, fixer: Fixer) -> None:
         super().__init__()
         self.fixer = fixer
@@ -437,6 +445,8 @@ class FixerOffersScreen(Screen):
         yield Header()
         yield Static(f"{self.fixer.name} — {self.fixer.specialty}", id="fixer_info")
         yield ListView(id="offers")
+        # The highlighted offer's crew roles — the beats it's made of and who fits each.
+        yield Static(id="offer_roles")
         yield Footer()
 
     def action_back(self) -> None:
@@ -453,7 +463,29 @@ class FixerOffersScreen(Screen):
             )
             for offer in self.fixer.offers
         ]
-        await _replace_items(self.query_one("#offers", ListView), items)
+        offers = self.query_one("#offers", ListView)
+        await _replace_items(offers, items)
+        # ListView.index goes None after a clear; re-seat it so the roles panel and the
+        # keyboard both have something highlighted to act on (see Known Textual gotchas).
+        if self.fixer.offers:
+            offers.index = 0
+        self._show_roles(self.fixer.offers[0].id if self.fixer.offers else None)
+
+    def _show_roles(self, offer_id: str | None) -> None:
+        panel = self.query_one("#offer_roles", Static)
+        offer = next((o for o in self.fixer.offers if o.id == offer_id), None)
+        if offer is None or not offer.scene.roles:
+            panel.update("")
+            return
+        lines = ["Crew roles (open — no crew yet):"]
+        lines += [
+            f"  {role.beat.title():13}— {role.specialist}, {role.posture.value}"
+            for role in offer.scene.roles
+        ]
+        panel.update("\n".join(lines))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        self._show_roles(event.item.id if event.item else None)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         offer = next(offer for offer in self.fixer.offers if offer.id == event.item.id)

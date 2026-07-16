@@ -5,10 +5,11 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shadowguy.character import CORE_STATS
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage, TacticalStage
+from shadowguy.scene import Choice, Encounter, Outcome, Posture, Role, Scene, SceneKind, Stage, TacticalStage
 from shadowguy.skills import skill_for
 from shadowguy.tactical import generate_map
 
@@ -423,6 +424,39 @@ for _archetype in ARCHETYPES:
             )
 
 
+# The runner archetype (runners.py) that fits a beat, keyed by the core stat its lead
+# approach rolls: the hack-and-data specialist, the muscle, the finesse operator. A job's
+# roles (Scene.roles) are *derived* from this rather than hand-mapped per beat, so a beat's
+# specialist is always whatever skill actually leads it — an Extraction's grab-the-target
+# objective reads as muscle, a Heist's crack-the-ice one as a netrunner, from the same table.
+SPECIALIST_FOR_STAT = {
+    "intelligence": "Netrunner",
+    "strength": "Solo",
+    "body": "Solo",
+    "agility": "Infiltrator",
+    "perception": "Infiltrator",
+    "cool": "Infiltrator",
+}
+if set(SPECIALIST_FOR_STAT) != set(CORE_STATS):
+    raise ValueError("SPECIALIST_FOR_STAT must map every core stat to a runner archetype")
+
+# Skills a specialist can work from afar — the netrunner in the car. A beat led by one of
+# these is a REMOTE role; every other beat is worked ON_SITE (see scene.Posture).
+REMOTE_SKILLS = frozenset({"hack"})
+
+
+def _role_for_stage(job_stage: JobStage) -> Role:
+    """The crew position a beat offers, derived from its lead (cleanest) approach: the
+    specialist is whoever that skill's stat points to, and the posture is remote if the
+    skill can be worked over the net (REMOTE_SKILLS), else on-site. Derived from the full
+    template pool's lead, not the offer's drawn subset, so a beat's role is the same
+    regardless of which approaches this particular offer happens to include."""
+    lead = job_stage.approaches[0].skill
+    stat = skill_for(lead).stat
+    posture = Posture.REMOTE if lead in REMOTE_SKILLS else Posture.ON_SITE
+    return Role(beat=job_stage.type.value, specialist=SPECIALIST_FOR_STAT[stat], posture=posture)
+
+
 @dataclass
 class JobTiming:
     deadline_day: int | None = None
@@ -633,6 +667,9 @@ def generate_job(
         target_territory_id=territory.id,
         target_location_id=location.id,
         target_fixer_id=fixer_id,
+        # One crew position per beat this job actually has (job_stages, after the optional
+        # complication is rolled), so the roles match the stages the runner will play.
+        roles=[_role_for_stage(job_stage) for job_stage in job_stages],
     )
     return scene, _random_timing(day, rng)
 
