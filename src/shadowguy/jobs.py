@@ -8,8 +8,9 @@ from enum import StrEnum
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage
+from shadowguy.scene import Choice, Encounter, Outcome, Scene, SceneKind, Stage, TacticalStage
 from shadowguy.skills import skill_for
+from shadowguy.tactical import generate_map
 
 TARGETS = [
     "a corp exec's private files",
@@ -81,6 +82,28 @@ AMBUSH_LABEL = "Take them first"
 # other success. Running, though, ends the run of the job entirely (next_stage None) —
 # the contract is blown, and the fixer keeps the money.
 FIGHT_PROMPT = "{faction} security comes down on you at {location}. No more talking."
+
+# Some jobs play their fights out on a grid (tactical.TacticalStage) instead of the
+# abstract round-by-round Encounter — a whole job is one or the other, decided once, so a
+# job reads as either "a contract with muscle on standby" or "a set-piece infiltration"
+# rather than flip-flopping mid-run. The routing is identical either way (the ambush
+# choice and critical failures both point at fight_id); only what sits in that stage differs.
+TACTICAL_FIGHT_CHANCE = 0.35
+
+# A soft theming knob, not a table that must cover every kind: how much low cover a site's
+# fight map gets, by what kind of place it is. A depot is racking and crates; a data floor
+# is open sightlines. Anything unlisted gets the middling default — no import guard needed.
+_TACTICAL_COVER_BY_KIND = {
+    LocationKind.DEPOT: 0.16,
+    LocationKind.WEAPON_SHOP: 0.14,
+    LocationKind.SOCIAL: 0.12,
+    LocationKind.DATA: 0.05,
+}
+_DEFAULT_COVER_DENSITY = 0.09
+
+
+def _cover_density(kind: LocationKind) -> float:
+    return _TACTICAL_COVER_BY_KIND.get(kind, _DEFAULT_COVER_DENSITY)
 
 
 class StageType(StrEnum):
@@ -473,6 +496,9 @@ def generate_job(
     reward_base = int(REWARD_BASE[tier] * (1 + REWARD_PER_EXTRA_STAGE * extra_stages))
     stage_ids = [f"stage_{i}" for i in range(len(job_stages))]
     stages: dict[str, Stage] = {}
+    # Decided once for the whole job (see TACTICAL_FIGHT_CHANCE): every fight in it is
+    # either a grid set-piece or the abstract Encounter, not a mix.
+    is_tactical = rng.random() < TACTICAL_FIGHT_CHANCE
 
     for i, job_stage in enumerate(job_stages):
         is_last = i == len(stage_ids) - 1
@@ -559,17 +585,42 @@ def generate_job(
             ),
             choices=choices,
         )
-        stages[fight_id] = Stage(
-            id=fight_id,
-            prompt="",  # the Encounter carries the prose; a fight stage has no choices
-            choices=[],
-            combat=Encounter(
-                prompt=FIGHT_PROMPT.format(faction=faction.name, location=location.name),
-                enemies=roll_enemies(tier, rng),
-                victory=payout("They stop coming. You finish what you came for."),
-                escape=Outcome(text="You get out with your skin. The job is blown."),
-            ),
-        )
+        # The fight beside every stage, reached by the ambush choice or a critical
+        # failure. Its prose, enemies and both Outcomes are the same whether it's an
+        # abstract Encounter or a grid set-piece — only where they're packaged differs.
+        enemies = roll_enemies(tier, rng)
+        fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
+        fight_victory = payout("They stop coming. You finish what you came for.")
+        fight_escape = Outcome(text="You get out with your skin. The job is blown.")
+        if is_tactical:
+            tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
+            fight = Stage(
+                id=fight_id,
+                prompt="",  # the TacticalStage carries the prose
+                choices=[],
+                tactical=TacticalStage(
+                    prompt=fight_prompt,
+                    grid=tac.grid,
+                    player_start=tac.player_start,
+                    enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
+                    victory=fight_victory,
+                    escape=fight_escape,
+                    exits=tac.exits,
+                ),
+            )
+        else:
+            fight = Stage(
+                id=fight_id,
+                prompt="",  # the Encounter carries the prose; a fight stage has no choices
+                choices=[],
+                combat=Encounter(
+                    prompt=fight_prompt,
+                    enemies=enemies,
+                    victory=fight_victory,
+                    escape=fight_escape,
+                ),
+            )
+        stages[fight_id] = fight
 
     scene = Scene(
         id=job_id,

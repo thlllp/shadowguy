@@ -19,6 +19,8 @@ from enum import StrEnum
 
 import numpy as np
 import tcod
+import tcod.bsp
+import tcod.random
 
 from shadowguy.character import Character
 from shadowguy.combat import (
@@ -469,3 +471,136 @@ def _settle(state: TacticalState) -> None:
 def player_weapons(state: TacticalState) -> list[Item]:
     """The weapons the player can attack with this fight — their equipped gear, or fists."""
     return equipped_weapons(state.character)
+
+
+# ---------------------------------------------------------------------------
+# Procedural maps. A job's tactical fight lands on one of these (see jobs.py). BSP
+# rooms + corridors, some scattered low cover, the player entering one end and the
+# squad holding the other. tcod does the partition (seeded off the caller's rng so a
+# run stays reproducible); the carving/placement/validation is ours.
+# ---------------------------------------------------------------------------
+
+# Sized to sit inside the fight screen at 80x24 without scrolling (see app.TacticalScreen).
+TAC_MAP_WIDTH = 30
+TAC_MAP_HEIGHT = 10
+_BSP_DEPTH = 3
+_ROOM_MIN = 4
+_MAP_GEN_ATTEMPTS = 60
+
+
+@dataclass
+class TacticalMap:
+    """A generated fight map plus where everyone starts — what a TacticalStage is built
+    from. The player enters at `player_start` (near the `exits`, the way back out); the
+    squad holds `enemy_spawns` at the far end."""
+
+    grid: Grid
+    player_start: Coord
+    enemy_spawns: list[Coord]
+    exits: frozenset[Coord]
+
+
+def _carve(tiles: list[list[Tile]], x: int, y: int, tile: Tile = Tile.FLOOR) -> None:
+    """Set a cell if it's in bounds and not on the outer wall ring — the border stays
+    solid so no room or tunnel ever opens onto the edge."""
+    if 0 < x < len(tiles[0]) - 1 and 0 < y < len(tiles) - 1:
+        tiles[y][x] = tile
+
+
+def _carve_room(tiles: list[list[Tile]], x: int, y: int, w: int, h: int) -> None:
+    for j in range(y, y + h):
+        for i in range(x, x + w):
+            _carve(tiles, i, j)
+
+
+def _carve_tunnel(tiles: list[list[Tile]], a: Coord, b: Coord) -> None:
+    """An L-shaped corridor between two room centers: horizontal, then vertical."""
+    (x1, y1), (x2, y2) = a, b
+    for x in range(min(x1, x2), max(x1, x2) + 1):
+        _carve(tiles, x, y1)
+    for y in range(min(y1, y2), max(y1, y2) + 1):
+        _carve(tiles, x2, y)
+
+
+def _room_cells(grid: Grid, rect: tuple[int, int, int, int]) -> list[Coord]:
+    rx, ry, rw, rh = rect
+    return [
+        (x, y)
+        for y in range(ry, ry + rh)
+        for x in range(rx, rx + rw)
+        if grid.in_bounds((x, y)) and grid.tile((x, y)) is Tile.FLOOR
+    ]
+
+
+def generate_map(
+    rng: random.Random,
+    enemy_count: int,
+    width: int = TAC_MAP_WIDTH,
+    height: int = TAC_MAP_HEIGHT,
+    cover_density: float = 0.08,
+) -> TacticalMap:
+    """A connected BSP map with room for `enemy_count` enemies away from the player and at
+    least one exit. Retries until every enemy spawn and exit is reachable from the player
+    start (scattered cover can't wall part of the map off), raising only if it never lands
+    a playable one — the caller can't recover from an unplayable fight, so this must not
+    hand one back."""
+    for _ in range(_MAP_GEN_ATTEMPTS):
+        tiles = [[Tile.WALL] * width for _ in range(height)]
+        bsp = tcod.bsp.BSP(x=1, y=1, width=width - 2, height=height - 2)
+        bsp.split_recursive(
+            depth=_BSP_DEPTH,
+            min_width=_ROOM_MIN,
+            min_height=_ROOM_MIN,
+            max_horizontal_ratio=1.5,
+            max_vertical_ratio=1.5,
+            seed=tcod.random.Random(tcod.random.MERSENNE_TWISTER, seed=rng.getrandbits(31)),
+        )
+        rooms: list[tuple[Coord, tuple[int, int, int, int]]] = []
+        for leaf in bsp.pre_order():
+            if leaf.children:
+                continue
+            rx, ry = leaf.x + 1, leaf.y + 1
+            rw, rh = max(2, leaf.width - 2), max(2, leaf.height - 2)
+            _carve_room(tiles, rx, ry, rw, rh)
+            rooms.append(((rx + rw // 2, ry + rh // 2), (rx, ry, rw, rh)))
+        if len(rooms) < 2:
+            continue
+        for prev, cur in zip(rooms, rooms[1:]):
+            _carve_tunnel(tiles, prev[0], cur[0])
+
+        grid = Grid(width=width, height=height, tiles=tiles)
+        rooms.sort(key=lambda room: room[0][0])  # left to right
+        player_start = rooms[0][0]
+        # Exits: the leftmost floor cells of the entry room — the way the runner came in.
+        entry_cells = sorted(_room_cells(grid, rooms[0][1]))
+        exits = frozenset(entry_cells[:2]) or frozenset({player_start})
+
+        # Enemies hold the rooms away from the entry; fall back to any far floor if a
+        # small map didn't leave enough.
+        reserved = {player_start, *exits}
+        spawn_pool = [
+            cell for _c, rect in rooms[1:] for cell in _room_cells(grid, rect) if cell not in reserved
+        ]
+        if len(spawn_pool) < enemy_count:
+            spawn_pool = [
+                cell
+                for cell in (c for _c, rect in rooms for c in _room_cells(grid, rect))
+                if cell not in reserved
+            ]
+        if len(spawn_pool) < enemy_count:
+            continue
+        enemy_spawns = rng.sample(spawn_pool, enemy_count)
+
+        # Scatter low cover in room interiors, never on anyone's start or an exit, then
+        # prove it didn't sever the map before handing it back.
+        keep_clear = {player_start, *exits, *enemy_spawns}
+        for _c, rect in rooms:
+            for cell in _room_cells(grid, rect):
+                if cell not in keep_clear and rng.random() < cover_density:
+                    tiles[cell[1]][cell[0]] = Tile.LOW_COVER
+        if all(
+            target == player_start or path_between(grid, player_start, target)
+            for target in (*enemy_spawns, *exits)
+        ):
+            return TacticalMap(grid, player_start, enemy_spawns, frozenset(exits))
+    raise RuntimeError("could not generate a playable tactical map")
