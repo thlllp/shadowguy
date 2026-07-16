@@ -579,16 +579,24 @@ def _location_kinds(owner: str, rng: random.Random, count: int) -> list[Location
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
 
 
+def _characters_for_roles(location_id: str, roles: list[str], rng: random.Random) -> list[LocalCharacter]:
+    """One LocalCharacter per role, in that order; ids (the standing key) follow the
+    standard location-scoped scheme and are unique by construction. Shared by
+    _make_characters (a random role subset) and _make_officers (CORP_OFFICER_TIERS'
+    fixed order)."""
+    names = rng.sample(CHARACTER_NAMES, len(roles))
+    return [
+        LocalCharacter(id=f"{location_id}_p{i}", name=names[i], role=role)
+        for i, role in enumerate(roles)
+    ]
+
+
 def _make_characters(location_id: str, kind: LocationKind, rng: random.Random) -> list[LocalCharacter]:
     """One character for a shop (its owner), 1–2 for anywhere else. Names and roles are
     distinct within the location; ids (the standing key) are unique by construction."""
     count = 1 if kind in SHOP_KINDS else rng.randint(1, MAX_CHARACTERS_PER_LOCATION)
-    names = rng.sample(CHARACTER_NAMES, count)
     roles = rng.sample(LOCATION_ROLES[kind], count)
-    return [
-        LocalCharacter(id=f"{location_id}_p{i}", name=names[i], role=roles[i])
-        for i in range(count)
-    ]
+    return _characters_for_roles(location_id, roles, rng)
 
 
 def _unique_location_name(kind: LocationKind, rng: random.Random, used_names: set[str]) -> str:
@@ -630,14 +638,11 @@ def _make_hospital(territory_id: str, rng: random.Random, used_names: set[str]) 
 
 
 def _make_officers(location_id: str, rng: random.Random) -> list[LocalCharacter]:
-    """The corporate officers manning an HQ: one per CORP_OFFICER_TIERS rank, in that
-    order, so app.CorpHQScreen can line each up with its rep/standing gate by index.
-    Ids follow the standard location-scoped scheme, though HQ standing isn't moved yet."""
-    names = rng.sample(CHARACTER_NAMES, len(CORP_OFFICER_TIERS))
-    return [
-        LocalCharacter(id=f"{location_id}_p{i}", name=names[i], role=role)
-        for i, (role, _min_rep, _min_standing) in enumerate(CORP_OFFICER_TIERS)
-    ]
+    """The corporate officers manning an HQ: one per CORP_OFFICER_TIERS rank. app.CorpHQScreen
+    gates each by its own role (factions.officer_unlocked), not by list position, so ids
+    follow the standard location-scoped scheme though HQ standing isn't moved yet."""
+    roles = [role for role, _min_rep, _min_standing in CORP_OFFICER_TIERS]
+    return _characters_for_roles(location_id, roles, rng)
 
 
 def _make_hq(territory_id: str, faction: Faction, rng: random.Random) -> Location:

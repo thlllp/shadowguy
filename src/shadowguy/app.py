@@ -27,6 +27,7 @@ from shadowguy.corpmap import (
     OWNER_COLORS,
     PLAYER_OWNED_KINDS,
     SHOP_KINDS,
+    LocalCharacter,
     Location,
     LocationKind,
     RenderedMap,
@@ -40,11 +41,12 @@ from shadowguy.corpmap import (
     safehouse_price,
 )
 from shadowguy.factions import (
-    CORP_OFFICER_TIERS,
     FACTIONS,
     FACTIONS_BY_ID,
     Faction,
     officer_dialogue,
+    officer_gate,
+    officer_unlocked,
 )
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
 from shadowguy.gigs import refresh_gigs
@@ -85,6 +87,24 @@ async def _replace_items(list_view: ListView, items: list[ListItem], index: int 
     # fresh list) pass the row to keep highlighted — otherwise the cursor snaps to
     # the top and the next `enter` acts on a row the player never selected.
     list_view.index = min(index, len(items) - 1) if items else 0
+
+
+async def _populate_list(
+    list_view: ListView,
+    entries: list,
+    *,
+    id_prefix: str,
+    label,
+    empty_label: str | None = None,
+    empty_id: str = "",
+) -> None:
+    """Render `entries` as ListItems (id `id_prefix + entry.id`, text from `label(entry)`),
+    or a single empty-state row when there are none."""
+    if entries:
+        items = [ListItem(Static(label(entry)), id=f"{id_prefix}{entry.id}") for entry in entries]
+    else:
+        items = [ListItem(Static(empty_label), id=empty_id)] if empty_label else []
+    await _replace_items(list_view, items)
 
 
 class CharacterSheet(Static):
@@ -651,28 +671,15 @@ class HospitalScreen(Screen):
         await self._refresh()
 
 
-def _officer_unlocked(rep: int, standing: int, min_rep: int, min_standing: int | None) -> bool:
-    """Whether an HQ officer will see you. min_standing None is the public lobby — rep-gated
-    only, open even when the corp is hostile (see factions.CORP_OFFICER_TIERS)."""
-    return rep >= min_rep and (min_standing is None or standing >= min_standing)
-
-
-def _officer_gate(min_rep: int, min_standing: int | None) -> str:
-    """What an officer's gate demands, for the locked label / wave-off line."""
-    need = f"rep {min_rep}"
-    if min_standing is not None:
-        need += f", standing {min_standing:+d}"
-    return need
-
-
 class CorpHQScreen(Screen):
     """A corp's headquarters: talk to its officers, if your reputation opens the door.
 
-    Each officer is a rung on factions.CORP_OFFICER_TIERS; reaching one needs both the
-    street rep and the standing with this corp that its row demands. Talking is flavor
-    only for now — a locked officer shows what you'd need, an unlocked one gives you a
-    line themed on the corp and how it feels about you. Nothing here changes the run yet;
-    it's the hook the corp-side game hangs on.
+    Each officer's role is a rung on factions.CORP_OFFICER_TIERS (factions.officer_unlocked
+    gates by role, not list position); reaching one needs both the street rep and the
+    standing with this corp that its role demands. Talking is flavor only for now — a
+    locked officer shows what you'd need, an unlocked one gives you a line themed on the
+    corp and how it feels about you. Nothing here changes the run yet; it's the hook the
+    corp-side game hangs on.
     """
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
@@ -696,11 +703,6 @@ class CorpHQScreen(Screen):
     async def on_mount(self) -> None:
         await self._refresh()
 
-    def _officers(self):
-        """Pair each officer LocalCharacter with its tier gate — they line up by index,
-        the order _make_officers built them in."""
-        return list(zip(self.location.characters, CORP_OFFICER_TIERS))
-
     async def _refresh(self) -> None:
         character = self.app.character
         standing = character.standing_with(self.faction.id)
@@ -708,31 +710,30 @@ class CorpHQScreen(Screen):
             f"{self.faction.name} — Corporate HQ  "
             f"(your rep {character.rep}, standing {standing:+d})"
         )
-        items = []
-        for officer, (_role, min_rep, min_standing) in self._officers():
-            if _officer_unlocked(character.rep, standing, min_rep, min_standing):
-                label = f"{officer.name} ({officer.role}) — talk"
-            else:
-                label = f"{officer.name} ({officer.role}) — locked (needs {_officer_gate(min_rep, min_standing)})"
-            items.append(ListItem(Static(label), id=f"officer_{officer.id}"))
-        await _replace_items(self.query_one("#hq_officers", ListView), items)
+
+        def label(officer: LocalCharacter) -> str:
+            if officer_unlocked(character.rep, standing, officer.role):
+                return f"{officer.name} ({officer.role}) — talk"
+            return f"{officer.name} ({officer.role}) — locked (needs {officer_gate(officer.role)})"
+
+        await _populate_list(
+            self.query_one("#hq_officers", ListView),
+            self.location.characters,
+            id_prefix="officer_",
+            label=label,
+        )
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
         standing = character.standing_with(self.faction.id)
         officer_id = event.item.id.removeprefix("officer_")
-        match = next(
-            (pair for pair in self._officers() if pair[0].id == officer_id),
-            None,
-        )
-        if match is None:
+        officer = next((char for char in self.location.characters if char.id == officer_id), None)
+        if officer is None:
             return
-        officer, (_role, min_rep, min_standing) = match
         dialogue = self.query_one("#hq_dialogue", Static)
-        if not _officer_unlocked(character.rep, standing, min_rep, min_standing):
+        if not officer_unlocked(character.rep, standing, officer.role):
             dialogue.update(
-                f"{officer.name}'s people wave you off — come back with "
-                f"{_officer_gate(min_rep, min_standing)}."
+                f"{officer.name}'s people wave you off — come back with {officer_gate(officer.role)}."
             )
             return
         dialogue.update(officer_dialogue(self.faction, officer.role, standing))
@@ -1079,8 +1080,8 @@ class ContactsScreen(PanelNav, Screen):
         # for isn't a contact yet, just someone you could look up in person (see the
         # Local tab, which is location-gated instead of trust-gated).
         established = [fixer for fixer in self.app.fixers if character.trust_with(fixer.id) > 0]
-        await self._populate(
-            "#fixers_list",
+        await _populate_list(
+            self.query_one("#fixers_list", ListView),
             established,
             id_prefix="fixer_",
             label=lambda fixer: (
@@ -1090,8 +1091,8 @@ class ContactsScreen(PanelNav, Screen):
             empty_label="No established contacts yet.",
             empty_id="no_fixers",
         )
-        await self._populate(
-            "#corps_list",
+        await _populate_list(
+            self.query_one("#corps_list", ListView),
             FACTIONS,
             id_prefix="faction_",
             label=lambda faction: (
@@ -1108,8 +1109,8 @@ class ContactsScreen(PanelNav, Screen):
         known_locals = [
             char for _loc, char in map_characters if character.local_standing_with(char.id) != 0
         ]
-        await self._populate(
-            "#locals_list",
+        await _populate_list(
+            self.query_one("#locals_list", ListView),
             known_locals,
             id_prefix="local_",
             label=lambda char: (
@@ -1119,28 +1120,12 @@ class ContactsScreen(PanelNav, Screen):
             empty_label="No locals know you yet.",
             empty_id="no_locals",
         )
-        await self._populate(
-            "#runners_list",
+        await _populate_list(
+            self.query_one("#runners_list", ListView),
             RIVAL_RUNNERS,
             id_prefix="runner_",
             label=lambda runner: f"{runner.name} — {runner.archetype}: {runner.description}",
         )
-
-    async def _populate(
-        self,
-        list_view_id: str,
-        entries: list,
-        *,
-        id_prefix: str,
-        label,
-        empty_label: str | None = None,
-        empty_id: str = "",
-    ) -> None:
-        if entries:
-            items = [ListItem(Static(label(entry)), id=f"{id_prefix}{entry.id}") for entry in entries]
-        else:
-            items = [ListItem(Static(empty_label), id=empty_id)] if empty_label else []
-        await _replace_items(self.query_one(list_view_id, ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if not event.item.id.startswith("fixer_"):
