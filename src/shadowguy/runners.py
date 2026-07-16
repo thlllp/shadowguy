@@ -6,8 +6,12 @@ that changes that -- you meet them at bars (corpmap.LocationKind.BAR) and pay to
 them on. `archetype` is their specialist and matches jobs.SPECIALIST_FOR_STAT's values
 exactly (Netrunner / Solo / Infiltrator), so a runner slots straight onto the crew role
 their archetype fits. `rating` is how good they are at that specialty -- an effective
-skill_value the run-time crew effect will roll once that increment lands; `hire_cost`
-is the upfront cash to sign them.
+skill_value the run-time crew effect will roll once that increment lands.
+
+Two ways to engage one (see Character.crew / app.BarScreen), each with its own price:
+`daily_cost` is the per-day wage if you keep them on indefinitely (charged every rest),
+and `job_cut` is the fraction of a single job's payout they take if you sign them for
+just that job.
 """
 
 from dataclasses import dataclass
@@ -20,7 +24,8 @@ class RivalRunner:
     archetype: str  # specialist: "Netrunner" / "Solo" / "Infiltrator"
     description: str
     rating: int  # effective skill_value at their specialty (for the run-time crew effect)
-    hire_cost: int  # upfront cash to bring them onto your crew
+    daily_cost: int  # per-day wage when kept on indefinitely (charged each rest)
+    job_cut: float  # fraction of a single job's payout they take when hired for that job
 
 
 RIVAL_RUNNERS = [
@@ -30,7 +35,8 @@ RIVAL_RUNNERS = [
         archetype="Netrunner",
         description="Ghosts through ICE for whoever pays best, and burns a fixer the moment a better offer shows.",
         rating=8,
-        hire_cost=600,
+        daily_cost=60,
+        job_cut=0.25,
     ),
     RivalRunner(
         id="runner_juncture",
@@ -38,7 +44,8 @@ RIVAL_RUNNERS = [
         archetype="Solo",
         description="Muscle for hire, and the reason two fixers on the board stopped taking new jobs this month.",
         rating=8,
-        hire_cost=550,
+        daily_cost=55,
+        job_cut=0.22,
     ),
     RivalRunner(
         id="runner_mireille",
@@ -46,7 +53,8 @@ RIVAL_RUNNERS = [
         archetype="Infiltrator",
         description="Works the same jobs you do, one step ahead or one step behind, never both.",
         rating=7,
-        hire_cost=500,
+        daily_cost=45,
+        job_cut=0.18,
     ),
 ]
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.shops import InventoryItem, equipped_bonus, equipped_skill_bonus, equipped_travel_bonus
 from shadowguy.skills import SKILLS, skill_for
 
@@ -8,6 +9,17 @@ if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
 
 BASE_HEALTH = 10
+
+
+@dataclass
+class CrewHire:
+    """One runner engaged on your crew, and on what terms. `job_id` set = signed for that
+    single accepted job (they take runners.RivalRunner.job_cut of its payout, and the
+    engagement ends when the job does); `job_id` None = kept on indefinitely (charged
+    runners.RivalRunner.daily_cost every rest). A runner has at most one live hire."""
+
+    runner_id: str
+    job_id: str | None = None
 HEALTH_PER_BODY = 5
 BASE_STAMINA = 5
 
@@ -87,7 +99,7 @@ class Character:
     discovered_fixers: set[str] = field(default_factory=set)
     # Runner ids (runners.RUNNERS_BY_ID) the runner has hired at a bar. Assigning them to
     # a job's roles (with the one-remote-support cap) is a later increment.
-    crew: list[str] = field(default_factory=list)
+    crew: list[CrewHire] = field(default_factory=list)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
@@ -154,11 +166,35 @@ class Character:
         self.discovered_fixers.add(fixer_id)
 
     def on_crew(self, runner_id: str) -> bool:
-        return runner_id in self.crew
+        return any(hire.runner_id == runner_id for hire in self.crew)
 
-    def recruit(self, runner_id: str) -> None:
-        if runner_id not in self.crew:
-            self.crew.append(runner_id)
+    def hire_indefinite(self, runner_id: str) -> None:
+        if not self.on_crew(runner_id):
+            self.crew.append(CrewHire(runner_id=runner_id))
+
+    def hire_for_job(self, runner_id: str, job_id: str) -> None:
+        if not self.on_crew(runner_id):
+            self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id))
+
+    def crew_for_job(self, job_id: str) -> list[CrewHire]:
+        return [hire for hire in self.crew if hire.job_id == job_id]
+
+    def pay_crew_wages(self) -> list[str]:
+        """Charge each indefinitely-kept crew member their daily wage on a day turnover.
+        A runner you can't cover walks off. Returns the names who left, for the caller to
+        report. For-job hires aren't on a wage — their cost is the cut, taken at payout."""
+        kept: list[CrewHire] = []
+        left: list[str] = []
+        for hire in self.crew:
+            runner = RUNNERS_BY_ID[hire.runner_id]
+            if hire.job_id is not None or self.cash >= runner.daily_cost:
+                if hire.job_id is None:
+                    self.cash -= runner.daily_cost
+                kept.append(hire)
+            else:
+                left.append(runner.name)
+        self.crew = kept
+        return left
 
     @property
     def max_health(self) -> int:
@@ -247,6 +283,13 @@ class Character:
 
     def remove_job(self, job_scene_id: str) -> None:
         self.accepted_jobs = [job for job in self.accepted_jobs if job.scene.id != job_scene_id]
+        self._discharge_orphan_crew()
+
+    def _discharge_orphan_crew(self) -> None:
+        """Drop any for-job hire whose job is no longer accepted (completed, blown, expired).
+        An indefinite hire (job_id None) is untouched."""
+        active = {job.scene.id for job in self.accepted_jobs}
+        self.crew = [hire for hire in self.crew if hire.job_id is None or hire.job_id in active]
 
     def rest(self) -> None:
         self.day += 1
@@ -255,6 +298,7 @@ class Character:
         self.health_kit_used_today = False
         self.temp_bonuses = {}
         self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
+        self._discharge_orphan_crew()
 
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:

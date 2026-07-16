@@ -582,12 +582,18 @@ class ShopScreen(Screen):
 
 
 class BarScreen(Screen):
-    """A bar (LocationKind.BAR): where you hire runners onto your crew. Lists the runners
-    looking for work (runners.RIVAL_RUNNERS) — recruit one for its hire_cost and it joins
-    Character.crew. Assigning crew to a job's roles (with the one-remote-support cap) is a
-    later increment; for now this is the recruiting counter.
+    """A bar (LocationKind.BAR): where you hire runners onto your crew. Two-level menu —
+    pick a runner (runners.RIVAL_RUNNERS), then the terms:
 
-    First-slice simplification: the whole roster is available at any bar. Seating runners at
+    - **Indefinitely** — they stay on the crew and draw `daily_cost` every rest (miss
+      payroll and they walk; see app.advance_day).
+    - **For a job** — signed to one accepted job for `job_cut` of *that job's* payout,
+      taken when it pays (SceneScreen._take_crew_cut); the engagement ends with the job.
+
+    Neither costs anything upfront — the price is the wage or the cut, paid later. Assigning
+    a hire to a specific role (with the one-remote-support cap) is still a later increment.
+
+    First-slice simplification: the whole roster is hireable at any bar. Seating runners at
     particular bars (the way fixers are seated to territories) is the natural next step."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
@@ -595,46 +601,82 @@ class BarScreen(Screen):
     def __init__(self, location: Location) -> None:
         super().__init__()
         self.location = location
+        # None = showing the roster; a runner id = showing that runner's engagement terms.
+        self.chosen_runner: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Static(f"{self.location.name} — ask around for runners looking for work", id="bar_info")
+        yield Static(id="bar_info")
         yield ListView(id="bar_runners")
         yield Footer()
 
-    def action_back(self) -> None:
-        self.app.pop_screen()
+    async def action_back(self) -> None:
+        # Escape backs out of the terms menu first, then out of the bar.
+        if self.chosen_runner is not None:
+            self.chosen_runner = None
+            await self._refresh()
+        else:
+            self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
 
     async def _refresh(self) -> None:
+        info = self.query_one("#bar_info", Static)
+        if self.chosen_runner is None:
+            info.update(f"{self.location.name} — ask around for runners looking for work")
+            items = self._roster_items()
+        else:
+            runner = RUNNERS_BY_ID[self.chosen_runner]
+            info.update(f"Bring {runner.name} on — on what terms?")
+            items = self._terms_items(runner)
+        await _replace_items(self.query_one("#bar_runners", ListView), items)
+
+    def _roster_items(self) -> list[ListItem]:
         character = self.app.character
         items = []
         for runner in RIVAL_RUNNERS:
             tag = f"{runner.name} ({runner.archetype}, rating {runner.rating})"
-            if character.on_crew(runner.id):
-                label = f"{tag} — on your crew"
-            else:
-                label = f"Recruit {tag} — {runner.hire_cost}eb"
-                if character.cash < runner.hire_cost:
-                    label += " — can't afford"
+            label = f"{tag} — on your crew" if character.on_crew(runner.id) else f"Recruit {tag}"
             items.append(ListItem(Static(label), id=f"runner_{runner.id}"))
-        await _replace_items(self.query_one("#bar_runners", ListView), items)
+        return items
+
+    def _terms_items(self, runner) -> list[ListItem]:
+        items = [
+            ListItem(Static(f"Keep on indefinitely — {runner.daily_cost}eb/day"), id="opt_indef")
+        ]
+        pct = round(runner.job_cut * 100)
+        for job in self.app.character.accepted_jobs:
+            items.append(
+                ListItem(
+                    Static(f"For the job: {job.scene.title} — {pct}% cut of the payout"),
+                    id=f"opt_job_{job.scene.id}",
+                )
+            )
+        items.append(ListItem(Static("Back"), id="opt_back"))
+        return items
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
-        runner = RUNNERS_BY_ID[event.item.id.removeprefix("runner_")]
-        if character.on_crew(runner.id):
+        item_id = event.item.id
+        if self.chosen_runner is None:
+            runner = RUNNERS_BY_ID[item_id.removeprefix("runner_")]
+            if not character.on_crew(runner.id):
+                self.chosen_runner = runner.id
+                await self._refresh()
             return
-        if character.cash < runner.hire_cost:
-            self.notify(f"Can't cover {runner.name}'s fee.", severity="warning")
-            return
-        character.cash -= runner.hire_cost
-        character.recruit(runner.id)
-        self.notify(f"{runner.name} is on the crew.")
-        self.query_one(CharacterSheet).refresh()
+
+        runner = RUNNERS_BY_ID[self.chosen_runner]
+        if item_id == "opt_indef":
+            character.hire_indefinite(runner.id)
+            self.notify(f"{runner.name} is on the crew ({runner.daily_cost}eb/day).")
+        elif item_id.startswith("opt_job_"):
+            job_scene_id = item_id.removeprefix("opt_job_")
+            character.hire_for_job(runner.id, job_scene_id)
+            self.notify(f"{runner.name} signed on for the job.")
+        self.chosen_runner = None
+        await self._refresh()
         await self._refresh()
 
 
@@ -1356,6 +1398,7 @@ class SceneScreen(Screen):
 
         character = self.app.character
         result, outcome = resolve_choice(character, self.scene, choice)
+        self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
 
         prompt = self.query_one("#prompt", Static)
@@ -1441,9 +1484,24 @@ class SceneScreen(Screen):
         routed us out of a fight, so a chained fight opens even (Drop.NONE) rather than
         inheriting the drop of the check that opened this one."""
         apply_outcome(self.app.character, outcome, self.scene)
+        self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
         self.query_one("#prompt", Static).update(outcome.text)
         await self._await_continue(outcome.next_stage, None)
+
+    def _take_crew_cut(self, outcome) -> None:
+        """When a job's final payout lands, each runner signed *for this job* takes their cut
+        of it off the top. Fires only on a JOB's paying end (an outcome that ends the scene
+        with cash) — nothing for gigs, legwork, or a blown/failed finish. The for-job hires
+        are discharged later, when _advance calls Character.remove_job."""
+        if self.scene.kind is not SceneKind.JOB or outcome.next_stage is not None or outcome.cash_delta <= 0:
+            return
+        character = self.app.character
+        for hire in character.crew_for_job(self.scene.id):
+            runner = RUNNERS_BY_ID[hire.runner_id]
+            cut = min(int(runner.job_cut * outcome.cash_delta), character.cash)
+            character.cash -= cut
+            self.notify(f"{runner.name} takes {cut}eb — their cut of the job.")
 
     async def _advance(self) -> None:
         if self._pending_next_stage is None:
@@ -2017,6 +2075,9 @@ class ShadowguyApp(App):
         rest: the MainMenu 'end the day' (paying district lodging) and a HospitalScreen
         stay (paying for care and healing) both call this to actually turn the day over."""
         self.character.rest()
+        # Indefinite crew draw their daily wage on the turnover; anyone you can't cover walks.
+        for name in self.character.pay_crew_wages():
+            self.notify(f"{name} walked off the crew — you missed payroll.", severity="warning")
         expire_offers(self.fixers, self.character.day)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
