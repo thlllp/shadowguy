@@ -1,11 +1,12 @@
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Static
+from textual.containers import ScrollableContainer, Vertical
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
+from shadowguy.combat import CombatOutcome, Drop
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     MODIFIER_MAX,
@@ -14,8 +15,12 @@ from shadowguy.corpmap import (
     owner_label,
     render_ascii_map,
 )
+from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
+
+from . import _menu_css
+from .combat_screen import CombatScreen
 
 TRAVEL_STAMINA_COST = 1
 MODIFIER_COLUMN = 13
@@ -88,6 +93,54 @@ class CorpMapScreen(Screen):
             return
         character.location_id = self.selected_id
         self._refresh()
+        self._maybe_gang_encounter()
+
+    def _maybe_gang_encounter(self) -> None:
+        """On arrival, a gang you're crosswise with may stop you here — a toll to pass, or
+        a fight if you're deep enough in the red (or you refuse). See encounters.py."""
+        character = self.app.character
+        territory = self.app.corp_map.territories[character.location_id]
+        encounter = roll_gang_encounter(character, territory, self.app.rng)
+        if encounter is None:
+            return
+        self._pending_gang = encounter.gang
+        if encounter.toll is None:
+            self._start_gang_fight(encounter.gang)
+        else:
+            self.app.push_screen(GangTollScreen(encounter), self._on_toll)
+
+    def _on_toll(self, paid: bool) -> None:
+        if paid:
+            self.notify(f"You pay off {self._pending_gang.name} and move on.")
+        else:
+            self._start_gang_fight(self._pending_gang)
+
+    def _start_gang_fight(self, gang) -> None:
+        self._gang_encounter = gang_attack(gang, self.app.rng)
+        self.app.push_screen(
+            CombatScreen(self._gang_encounter, Drop.ENEMY), self._on_gang_combat_end
+        )
+
+    def _on_gang_combat_end(self, result: CombatOutcome) -> None:
+        character = self.app.character
+        if result is CombatOutcome.DEAD:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
+        if result is CombatOutcome.KNOCKED_OUT:
+            roll = self.app.rng.randint(1, 6)
+            if roll <= 2:
+                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
+                return
+            character.cash //= 2
+            character.health = 1
+            self.notify("You came to in an alley, lighter a few creds.")
+            return
+        outcome = (
+            self._gang_encounter.victory
+            if result is CombatOutcome.VICTORY
+            else self._gang_encounter.escape
+        )
+        self.notify(outcome.text)
 
     def action_move(self, direction: str) -> None:
         dx, dy = self.DIRECTIONS[direction]
@@ -174,3 +227,40 @@ class CorpMapScreen(Screen):
         if not character.can_afford(TRAVEL_STAMINA_COST):
             return f"Too tired to travel ({TRAVEL_STAMINA_COST} stamina). Rest to move."
         return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
+
+
+class GangTollScreen(ModalScreen):
+    """The shakedown at a gang's turf border: pay to pass, or refuse into a fight.
+    Dismisses True if paid (cash already deducted here), False if refused or the runner
+    can't cover it — the caller (CorpMapScreen._on_toll) turns a False into the fight."""
+
+    BINDINGS = [("escape", "refuse", "Refuse")]
+    CSS = _menu_css("GangTollScreen", "toll_dialog")
+
+    def __init__(self, encounter: GangEncounter) -> None:
+        super().__init__()
+        self.encounter = encounter
+
+    def compose(self) -> ComposeResult:
+        enc = self.encounter
+        can_pay = self.app.character.cash >= enc.toll
+        pay_label = f"Pay {enc.toll}eb" if can_pay else f"Pay {enc.toll}eb — can't cover it"
+        yield Vertical(
+            Static(f"{enc.gang.name} block your way — {enc.toll}eb to pass."),
+            ListView(
+                ListItem(Static(pay_label), id="pay"),
+                ListItem(Static("Refuse — they'll come at you"), id="refuse"),
+            ),
+            id="toll_dialog",
+        )
+
+    def action_refuse(self) -> None:
+        self.dismiss(False)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        if event.item.id == "pay" and character.cash >= self.encounter.toll:
+            character.cash -= self.encounter.toll
+            self.dismiss(True)
+        else:
+            self.dismiss(False)

@@ -106,6 +106,10 @@ class Character:
     # who run/haunt a Location. Moved by that location's gigs (Outcome.local_standing_delta)
     # and read by shop pricing. Direct and one-person, like fixer_trust; no rival effect.
     local_standing: dict[str, int] = field(default_factory=dict)
+    # Standing with a street Gang (gangs.Gang.id), separate from the corp `standing` above.
+    # Nothing moves it into the red yet; when it's there, walking onto that gang's turf
+    # (corpmap.Territory.gang_id) can cost a toll or a fight — see encounters.py.
+    gang_standing: dict[str, int] = field(default_factory=dict)
     # Fixer ids (fixer.Fixer.id) whose location the runner has stood in at least
     # once. A fixer's presence on the corp map is hidden until discovered this way
     # — see fixer.discover_fixers_here(), the single place that reveals it.
@@ -182,6 +186,12 @@ class Character:
 
     def adjust_local_standing(self, character_id: str, delta: int) -> None:
         self._adjust_dict(self.local_standing, character_id, delta)
+
+    def gang_standing_with(self, gang_id: str) -> int:
+        return self.gang_standing.get(gang_id, 0)
+
+    def adjust_gang_standing(self, gang_id: str, delta: int) -> None:
+        self._adjust_dict(self.gang_standing, gang_id, delta)
 
     def discover_fixer(self, fixer_id: str) -> None:
         self.discovered_fixers.add(fixer_id)

@@ -54,7 +54,7 @@ SAVE_SUFFIX = ".save"
 # as v7's `tactical` field) -- a pre-v14 pickled Stage (inside an accepted job) lacks it.
 # v15 added Data Heist / matrix combat: scene.Stage gained a `matrix` field (same shape
 # of break again) -- a pre-v15 pickled Stage lacks it.
-SAVE_VERSION = 15
+SAVE_VERSION = 16
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
