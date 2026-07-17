@@ -17,7 +17,7 @@ from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
 from shadowguy.security import resolve_security_night
 
-from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _replace_items
+from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _replace_items, matrix_warning
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from .scene_screen import SceneScreen
@@ -137,6 +137,7 @@ class MainMenu(PanelNav, Screen):
                     label += " — not yet"
                 elif not character.can_afford(job.scene.stamina_cost):
                     label += " — too tired"
+                label += matrix_warning(character, job.scene)
                 items.append(ListItem(Static(label), id=f"job_{job.id}"))
             # Display-only: a security contract isn't "run" like a job — it progresses
             # by ending the day on-site (see the end_day branch below), so it carries

@@ -8,6 +8,7 @@ from shadowguy.checks import CheckResult
 from shadowguy.combat import CombatOutcome, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
+from shadowguy.matrix import MatrixOutcome
 from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.tactical import TacticalOutcome
@@ -15,6 +16,7 @@ from shadowguy.tactical import TacticalOutcome
 from . import CharacterSheet, _replace_items
 from .burglary_screens import BurglaryWalkResult, BurglaryWalkScreen, EntrancePickScreen
 from .combat_screen import CombatScreen
+from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
 
 
@@ -108,6 +110,21 @@ class SceneScreen(Screen):
             return
         stage = self._current_stage()
         outcome = stage.tactical.victory if result is TacticalOutcome.VICTORY else stage.tactical.escape
+        await self._finish_stage_outcome(outcome)
+
+    async def _show_matrix(self, stage) -> None:
+        self.stage_id = stage.id
+        self.app.push_screen(
+            MatrixScreen(stage.matrix, drop_for_result(self._pending_result)),
+            self._on_matrix_end,
+        )
+
+    async def _on_matrix_end(self, result: MatrixOutcome) -> None:
+        # No death branch: a remote hack ejects, it doesn't kill (see matrix.py). SEIZED
+        # advances/pays like any victory; EJECTED (integrity gone or a jack-out) is the
+        # contract blown, the same escape Outcome a lost meat fight uses.
+        stage = self._current_stage()
+        outcome = stage.matrix.victory if result is MatrixOutcome.SEIZED else stage.matrix.escape
         await self._finish_stage_outcome(outcome)
 
     async def _show_burglary(self, stage) -> None:
@@ -233,6 +250,9 @@ class SceneScreen(Screen):
             return
         if stage.tactical is not None:
             await self._show_tactical(stage)
+            return
+        if stage.matrix is not None:
+            await self._show_matrix(stage)
             return
         if stage.burglary is not None:
             await self._show_burglary(stage)

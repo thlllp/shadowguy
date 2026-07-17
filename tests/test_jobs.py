@@ -163,6 +163,32 @@ def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(
         assert stage.choices
 
 
+@pytest.mark.parametrize("seed", SEEDS)
+def test_data_heist_fights_are_all_matrix_and_it_reads_as_a_netrunner_job(corp_map, seed):
+    rng = random.Random(seed)
+    archetype = rng.choice(ARCHETYPES)
+    if archetype.name != "Data Heist":
+        pytest.skip("not a Data Heist this seed")
+    scene, _timing = generate_job(day=7, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    # A remote hack reads as the Netrunner's contract, worked entirely from afar.
+    assert archetype_specialist(archetype) == "Netrunner"
+    assert scene.has_matrix
+    assert {role.specialist for role in scene.roles} == {"Netrunner"}
+    assert {role.posture.value for role in scene.roles} == {"remote"}
+    # Every fight beside a stage is ICE; no gunmen, no grid, and the non-fight stages
+    # stay ordinary Choice stages.
+    fights = [s for sid, s in scene.stages.items() if sid.endswith("_fight")]
+    assert fights
+    for fight in fights:
+        assert fight.matrix is not None and fight.matrix.ice
+        assert fight.combat is None and fight.tactical is None
+    for sid, stage in scene.stages.items():
+        if sid.endswith("_fight"):
+            continue
+        assert stage.matrix is None
+        assert stage.choices
+
+
 def test_job_timing_no_deadline_never_expires_and_always_available():
     timing = JobTiming()
     assert timing.is_available(1)

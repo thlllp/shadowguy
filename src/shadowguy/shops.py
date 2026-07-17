@@ -475,6 +475,20 @@ def equipped_travel_bonus(inventory: list[InventoryItem]) -> int:
     return sum(item.travel_bonus for item in _equipped_items(inventory))
 
 
+def equipped_deck_rating(inventory: list[InventoryItem]) -> int:
+    """The best equipped cyberdeck's matrix strength, or 0 if the runner is jacking in
+    bare-handed. A cyberdeck is a Slot None item (see Slot / Item.slot: decks aren't
+    worn, so any number can be equipped) — burner_deck, cracked_cyberdeck, zetatech_rig,
+    pawned_deck today — and its rating *is* its Intelligence bonus, the same number that
+    makes a better deck a better hacker. matrix.py reads this the way combat.py reads a
+    weapon's damage: it's the deck, not the skill, that decides what a landed intrusion
+    costs the ICE, so a runner with no deck can still fight in the matrix, just weakly."""
+    return max(
+        (item.bonuses.get("intelligence", 0) for item in _equipped_items(inventory) if item.slot is None),
+        default=0,
+    )
+
+
 def _slot_cost(item: Item) -> int:
     return 2 if item.two_handed else 1
 

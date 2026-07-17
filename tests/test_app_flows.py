@@ -16,10 +16,12 @@ from shadowguy.app import ShadowguyApp
 from shadowguy.combat import ActionKind
 from shadowguy.corpmap import LocationKind
 from shadowguy.jobs import generate_job
+from shadowguy.matrix import MatrixActionKind
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
+from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.menu_screens import TitleMenu
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import ShopScreen
@@ -130,6 +132,53 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
             # Flee always ends the fight (escaped, or dead from a parting shot) --
             # never left ongoing -- and the "Continue" row replaces the action list.
             assert combat_screen.state.is_over
+
+    run(body())
+
+
+def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
+    """A Data Heist's fights are ICE, not gunmen: the guaranteed 'Take them first'
+    ambush on its (ordinary Choice) approach stage must reach a live MatrixScreen, and
+    jacking out (which always works) must cleanly end the run against the ICE."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            scene = None
+            for seed in range(80):
+                candidate, _timing = generate_job(
+                    day=7, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
+                )
+                if candidate.title.startswith("Data Heist"):
+                    scene = candidate
+                    break
+            assert scene is not None, "no Data Heist turned up in 80 seeds"
+            # Its start stage is an ordinary approach Choice list (matrix only replaces
+            # the fights), and its fight beside that stage is a matrix run.
+            start = scene.stages[scene.start_stage]
+            assert start.choices and start.matrix is None
+            assert scene.stages[f"{scene.start_stage}_fight"].matrix is not None
+
+            app.push_screen(SceneScreen(scene))
+            await pilot.pause()
+
+            ambush_index = len(start.choices) - 1  # the ambush is always appended last
+            await pilot.click(f"#choice_{ambush_index}")
+            await pilot.pause()
+            await pilot.click("#choices ListItem")  # click through the "Continue" row
+            await pilot.pause()
+            assert isinstance(app.screen, MatrixScreen)
+
+            matrix_screen = app.screen
+            jack_index = next(
+                i for i, action in enumerate(matrix_screen.actions)
+                if action.kind is MatrixActionKind.JACK_OUT
+            )
+            await pilot.click(f"#action_{jack_index}")
+            await pilot.pause()
+            assert matrix_screen.state.is_over
 
     run(body())
 
