@@ -11,8 +11,10 @@ from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.scene import (
+    BurglaryStage,
     Choice,
     Encounter,
+    Entrance,
     Outcome,
     Posture,
     Role,
@@ -22,7 +24,7 @@ from shadowguy.scene import (
     TacticalStage,
 )
 from shadowguy.skills import skill_for
-from shadowguy.tactical import generate_map
+from shadowguy.tactical import generate_building, generate_map
 
 TARGETS = [
     "a corp exec's private files",
@@ -183,6 +185,13 @@ if sorted(DAMAGE_FOR_DELTA, reverse=True) != sorted(
 ):
     raise ValueError("DAMAGE_FOR_DELTA must hurt more the easier the check gets")
 
+# A guard's sightline catching a burglary's interior walk (scene.BurglaryStage.spotted)
+# costs a flat, modest hit — deliberately on the low end of DAMAGE_FOR_DELTA, since it
+# stacks on top of whatever the entrance check already cost. Getting spotted is the
+# real punishment (it routes to the job's fight stage, same as any critical failure);
+# the health cost alone shouldn't also be as steep as a doubled entrance failure would be.
+BURGLARY_SPOTTED_DAMAGE = 2
+
 
 @dataclass(frozen=True)
 class Approach:
@@ -216,6 +225,13 @@ class JobStage:
     type: StageType
     prompt: str
     approaches: tuple[Approach, ...]
+    # True only for Burglary's APPROACH stage (set at ARCHETYPES construction, see
+    # below, not authored per-row) -- tells generate_job to build this stage as a
+    # scene.BurglaryStage (entrance diagram + interior walk) instead of a plain
+    # Choice list. `approaches` stays meaningful either way: it still feeds each
+    # Entrance's skill/difficulty/flavor and is still subject to the same import-time
+    # pool-size/cross-stat guards below.
+    burglary: bool = False
 
 
 @dataclass
@@ -469,6 +485,57 @@ _ARCHETYPE_ROWS = (
             ),
         ),
     ),
+    (
+        # A generic archetype, same as Heist/Extraction/Sabotage (mixed stat leads,
+        # no specialist). What's actually different is structural, not thematic: the
+        # ARCHETYPES comprehension below flags this row's APPROACH stage burglary=True,
+        # which tells generate_job to build it as a scene.BurglaryStage (an entrance
+        # diagram, then an interior walk) instead of a Choice list -- see jobs.py's
+        # generate_job and screens/burglary_screens.py. The APPROACH row's flavor
+        # strings are deliberately short node captions ("Front Door"), not sentences
+        # like every other row's -- they become the diagram's labels, not a line in a
+        # list, and that's the one place this table departs from the others' voice.
+        "Burglary",
+        "burgle",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("forgery", 1, "Front Door"),
+                    ("stealth", 0, "Back Window"),
+                    ("lift", -2, "Loading Dock"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You're inside. {target} sits behind the vault's last lock.",
+                (
+                    ("hack", 1, "Crack the electronic lock before it screams"),
+                    ("infiltration", 0, "Pick the mechanical backup by hand"),
+                    ("blunt", -2, "Break the vault open with a crowbar"),
+                ),
+            ),
+            (
+                StageType.COMPLICATION,
+                "A motion sensor you missed trips somewhere in the building.",
+                (
+                    ("pattern_seeking", 1, "Spot the sensor's blind arc and thread it"),
+                    ("tinkering", 0, "Kill the sensor's feed before it reports"),
+                    ("grapple", -2, "Catch whoever comes to check it"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "You have {target}. Now you have to be somewhere else.",
+                (
+                    ("dodge", 1, "Slip out the way you came before anyone's the wiser"),
+                    ("deception", 0, "Walk out like you belong there"),
+                    ("short_blade", -2, "Cut past whoever's between you and the street"),
+                ),
+            ),
+        ),
+    ),
 )
 
 ARCHETYPES = [
@@ -480,6 +547,7 @@ ARCHETYPES = [
                 type=stage_type,
                 prompt=prompt,
                 approaches=tuple(Approach(*approach) for approach in approaches),
+                burglary=(name == "Burglary" and stage_type is StageType.APPROACH),
             )
             for stage_type, prompt, approaches in stages
         ),
@@ -708,65 +776,117 @@ def generate_job(
                 fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
             )
 
-        choices = [
-            Choice(
-                label=f"{approach.flavor} ({skill_for(approach.skill).name})",
-                skill=approach.skill,
-                difficulty=difficulty + approach.difficulty_delta,
-                success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
-                failure=Outcome(
-                    text="It gets messy, but you push on.",
-                    health_delta=-approach.failure_damage,
-                    next_stage=next_stage,
-                    # Only the last stage's plain failure ends the job with nothing to
-                    # show for it — everywhere else next_stage carries it on, so this
-                    # is 0 there, same as payout()'s cash/rep/standing.
-                    fixer_trust_delta=JOB_FAILURE_TRUST_HIT if is_last else 0,
-                    rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
-                ),
-                critical_success=_payout(
-                    "Flawless. You walk out with more than you bargained for.",
-                    1.5, 2, next_stage, is_last,
-                ),
-                # The one branch that doesn't just cost health and carry on: you're
-                # made, and they arrive holding the initiative. Note it deals the
-                # *plain* failure damage, not the doubled hit a critical used to
-                # deal: the fight is the critical failure's punishment, and charging
-                # both stacked a double-damage hit under a squad that opens with a
-                # free round — which is a nat-1 killing a light build outright.
-                critical_failure=Outcome(
-                    text="It goes bad, fast. Someone hits the alarm.",
-                    health_delta=-approach.failure_damage,
-                    next_stage=fight_id,
-                ),
+        def _approach_failure(approach: Approach, text: str) -> Outcome:
+            return Outcome(
+                text=text,
+                health_delta=-approach.failure_damage,
+                next_stage=next_stage,
+                # Only the last stage's plain failure ends the job with nothing to
+                # show for it — everywhere else next_stage carries it on, so this
+                # is 0 there, same as _payout()'s cash/rep/standing.
+                fixer_trust_delta=JOB_FAILURE_TRUST_HIT if is_last else 0,
+                rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
             )
-            for approach in approaches
-        ]
-        # Always offered, whatever the pool draw left you: the guaranteed way through.
-        choices.append(
-            Choice(
-                label=f"{AMBUSH_LABEL} ({skill_for(AMBUSH_SKILL).name})",
-                skill=AMBUSH_SKILL,
-                difficulty=AMBUSH_DIFFICULTY,
-                success=Outcome(text="You pick your moment.", next_stage=fight_id),
-                failure=Outcome(text="You move too early.", next_stage=fight_id),
-                critical_failure=Outcome(
-                    text="You walk straight into them.", next_stage=fight_id
-                ),
-            )
-        )
 
-        stages[stage_ids[i]] = Stage(
-            id=stage_ids[i],
-            prompt=job_stage.prompt.format(
-                verb=archetype.verb,
-                faction=faction.name,
-                territory=territory.name,
-                location=location.name,
-                target=target,
-            ),
-            choices=choices,
-        )
+        def _approach_critical_failure(approach: Approach) -> Outcome:
+            # The one branch that doesn't just cost health and carry on: you're
+            # made, and they arrive holding the initiative. Note it deals the
+            # *plain* failure damage, not the doubled hit a critical used to deal:
+            # the fight is the critical failure's punishment, and charging both
+            # stacked a double-damage hit under a squad that opens with a free
+            # round — which is a nat-1 killing a light build outright.
+            return Outcome(
+                text="It goes bad, fast. Someone hits the alarm.",
+                health_delta=-approach.failure_damage,
+                next_stage=fight_id,
+            )
+
+        def _ambush_kwargs() -> dict:
+            # The guaranteed way through, whatever the pool draw left you: forcing
+            # your way in is always loud, so every result routes straight to the
+            # fight — same door AMBUSH_LABEL opens on every other stage.
+            return {
+                "label": f"{AMBUSH_LABEL} ({skill_for(AMBUSH_SKILL).name})",
+                "skill": AMBUSH_SKILL,
+                "difficulty": AMBUSH_DIFFICULTY,
+                "success": Outcome(text="You pick your moment.", next_stage=fight_id),
+                "failure": Outcome(text="You move too early.", next_stage=fight_id),
+                "critical_failure": Outcome(text="You walk straight into them.", next_stage=fight_id),
+            }
+
+        if job_stage.burglary:
+            # A Burglary APPROACH: each approach becomes an Entrance (a diagram node,
+            # not a list row), landing the runner at a distinct spawn in a freshly
+            # generated building — see scene.BurglaryStage and screens/burglary_screens.py.
+            layout = generate_building(rng, entrance_count=len(approaches), cover_density=_cover_density(location.kind))
+            entrances = [
+                Entrance(
+                    label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+                    skill=approach.skill,
+                    difficulty=difficulty + approach.difficulty_delta,
+                    spawn=spawn,
+                    success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
+                    failure=_approach_failure(approach, "It gets messy, but you're in."),
+                    critical_success=_payout(
+                        "Flawless. Nobody even looks up.", 1.5, 2, next_stage, is_last,
+                    ),
+                    critical_failure=_approach_critical_failure(approach),
+                )
+                for approach, spawn in zip(approaches, layout.entrance_spawns, strict=True)
+            ]
+            entrances.append(Entrance(spawn=layout.objective, **_ambush_kwargs()))
+            stages[stage_ids[i]] = Stage(
+                id=stage_ids[i],
+                prompt="",  # the BurglaryStage carries the prose; a burglary stage has no choices
+                choices=[],
+                burglary=BurglaryStage(
+                    prompt=job_stage.prompt.format(
+                        verb=archetype.verb,
+                        faction=faction.name,
+                        territory=territory.name,
+                        location=location.name,
+                        target=target,
+                    ),
+                    entrances=tuple(entrances),
+                    grid=layout.grid,
+                    objective=layout.objective,
+                    spotted=Outcome(
+                        text="A guard's light sweeps across you.",
+                        health_delta=-BURGLARY_SPOTTED_DAMAGE,
+                        next_stage=fight_id,
+                    ),
+                    guards=layout.guards,
+                ),
+            )
+        else:
+            choices = [
+                Choice(
+                    label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+                    skill=approach.skill,
+                    difficulty=difficulty + approach.difficulty_delta,
+                    success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
+                    failure=_approach_failure(approach, "It gets messy, but you push on."),
+                    critical_success=_payout(
+                        "Flawless. You walk out with more than you bargained for.",
+                        1.5, 2, next_stage, is_last,
+                    ),
+                    critical_failure=_approach_critical_failure(approach),
+                )
+                for approach in approaches
+            ]
+            choices.append(Choice(**_ambush_kwargs()))
+
+            stages[stage_ids[i]] = Stage(
+                id=stage_ids[i],
+                prompt=job_stage.prompt.format(
+                    verb=archetype.verb,
+                    faction=faction.name,
+                    territory=territory.name,
+                    location=location.name,
+                    target=target,
+                ),
+                choices=choices,
+            )
         # The fight beside every stage, reached by the ambush choice or a critical
         # failure. Its prose, enemies and both Outcomes are the same whether it's an
         # abstract Encounter or a grid set-piece — only where they're packaged differs.

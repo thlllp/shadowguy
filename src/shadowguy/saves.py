@@ -50,7 +50,9 @@ SAVE_SUFFIX = ".save"
 # old neutral-only rule).
 # v13 added Security contracts (security.py): Character.security_contracts and
 # Fixer.security_offers/max_security_offers (a pre-v13 Character/Fixer lacks all three).
-SAVE_VERSION = 13
+# v14 added Burglary jobs: scene.Stage gained a `burglary` field (same shape of break
+# as v7's `tactical` field) -- a pre-v14 pickled Stage (inside an accepted job) lacks it.
+SAVE_VERSION = 14
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

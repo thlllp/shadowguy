@@ -621,3 +621,128 @@ def generate_map(
         if _verify_map(grid, player_start, enemy_spawns, exits):
             return TacticalMap(grid, player_start, enemy_spawns, exits)
     raise RuntimeError("could not generate a playable tactical map")
+
+
+# ---------------------------------------------------------------------------
+# Burglary buildings. A different shape of generated map from TacticalMap: not one
+# player_start converging enemies onto it, but several candidate entry points (one
+# per Entrance the runner could pick, see scene.BurglaryStage) converging on one
+# objective, with static guards to avoid rather than a squad to fight. Reuses the
+# same BSP room-carving as generate_map (_bsp_rooms already carves the connecting
+# tunnels; nothing here assumes a single entry room the way generate_map's own
+# player_start/exits selection does).
+# ---------------------------------------------------------------------------
+
+# A guard's static sightline is capped the same way combat.Enemy.reach caps an
+# attack's: has_line_of_sight is unlimited-range by design (see _fov's docstring),
+# so an uncapped guard would spot the walker from clear across an open room the
+# instant a sightline cleared -- far harsher than anything else in the game.
+GUARD_SIGHT_RANGE = 4
+
+# Deliberately fixed, not tier-scaled, for a first slice: _bsp_rooms carves a single
+# chain of rooms, so even one guard is nearly unavoidable somewhere between an
+# entrance and the objective. Raise once the base feel is right.
+BURGLARY_GUARD_COUNT = 1
+
+
+@dataclass
+class BuildingLayout:
+    """A generated building interior plus where each entrance leads and where the
+    guards are -- what a BurglaryStage is built from. Unlike TacticalMap (one
+    player_start, many enemy_spawns), a burglary building has several distinct entry
+    points, one per Entrance the runner could pick, all converging on one objective."""
+
+    grid: Grid
+    entrance_spawns: list[Coord]  # one per requested entrance, same order as input
+    objective: Coord
+    guards: tuple[Coord, ...]
+
+
+def generate_building(
+    rng: random.Random,
+    entrance_count: int,
+    cover_density: float = 0.08,
+    width: int = TAC_MAP_WIDTH,
+    height: int = TAC_MAP_HEIGHT,
+) -> BuildingLayout:
+    """A building interior for a Burglary stage: `entrance_count` distinct rooms to
+    spawn into (one per Entrance, in input order) plus one objective room at the far
+    end of the same room chain _bsp_rooms already carves, and up to
+    BURGLARY_GUARD_COUNT guards in whatever rooms are neither. Mirrors generate_map's
+    retry-on-failure shape, but verifies multi-source reachability (every entrance
+    must reach the objective) rather than one player_start reaching many targets --
+    path_between is symmetric on this grid, so that's the only real difference from
+    _verify_map, which is why this doesn't reuse it directly."""
+    for _ in range(_MAP_GEN_ATTEMPTS):
+        tiles = [[Tile.WALL] * width for _ in range(height)]
+        rooms = _bsp_rooms(tiles, width, height, rng)
+        if rooms is None or len(rooms) <= entrance_count:
+            continue
+
+        grid = Grid(width=width, height=height, tiles=tiles)
+        rooms.sort(key=lambda room: room[0][0])
+        cells_by_room = [_room_cells(grid, rect) for _center, rect in rooms]
+
+        # The east-end room is the objective (opposite end from generate_map's
+        # west-end player_start); every other room is a candidate entrance/guard
+        # spot, so "other" is just "everything before it" once rooms are x-sorted.
+        objective = rooms[-1][0]
+        other_indices = list(range(len(rooms) - 1))
+        entrance_indices = rng.sample(other_indices, entrance_count)
+        entrance_spawns = [rooms[i][0] for i in entrance_indices]
+
+        guard_pool = [i for i in other_indices if i not in entrance_indices]
+        guard_indices = rng.sample(guard_pool, min(BURGLARY_GUARD_COUNT, len(guard_pool)))
+        guards = tuple(rooms[i][0] for i in guard_indices)
+
+        keep_clear = {objective, *entrance_spawns, *guards}
+        _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
+
+        if all(path_between(grid, spawn, objective) for spawn in entrance_spawns):
+            return BuildingLayout(grid, entrance_spawns, objective, guards)
+    raise RuntimeError("could not generate a playable burglary building")
+
+
+@dataclass
+class BurglaryWalkState:
+    """A burglary's interior walk in progress -- pure position and hazard tracking,
+    deliberately NOT built on TacticalState: there's no turn structure and no attack
+    resolution, since there's nothing to fight while sneaking. A guard's sightline
+    ends the walk outright (see spotted()) rather than opening a fight in place --
+    screens/burglary_screens.py routes a spotted walk to the job's ordinary fight
+    stage instead, the same door a critical failure or the ambush entrance uses."""
+
+    grid: Grid
+    position: Coord
+    objective: Coord
+    guards: tuple[Coord, ...]
+
+
+def legal_walk_moves(state: BurglaryWalkState) -> list[Coord]:
+    """Where the walker may step: one cardinal move into open floor. No other units
+    to collide with -- a guard is a hazard to avoid, not an obstacle that blocks
+    movement, so nothing is passed as `blocked`."""
+    return step_neighbors(state.grid, state.position)
+
+
+def move_walker(state: BurglaryWalkState, dest: Coord) -> bool:
+    """Take one step. Returns False (moving nowhere) if the step isn't legal."""
+    if dest not in legal_walk_moves(state):
+        return False
+    state.position = dest
+    return True
+
+
+def spotted(state: BurglaryWalkState) -> bool:
+    """Whether any guard has the walker in their sightline right now -- range-capped
+    (GUARD_SIGHT_RANGE), same reason combat.Enemy.reach caps an attack's: unlimited
+    has_line_of_sight alone would spot the walker from clear across an open room."""
+    return any(
+        chebyshev(guard, state.position) <= GUARD_SIGHT_RANGE
+        and has_line_of_sight(state.grid, guard, state.position)
+        for guard in state.guards
+    )
+
+
+def reached_objective(state: BurglaryWalkState) -> bool:
+    return state.position == state.objective
