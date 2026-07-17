@@ -1,4 +1,4 @@
-from textual.widgets import ListItem, ListView, Static
+from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
 from shadowguy.factions import FACTIONS
@@ -74,6 +74,18 @@ PANEL_NAV_BINDINGS = [
 ]
 
 
+def _in_collapsed_section(widget) -> bool:
+    """True if `widget` sits inside a collapsed Collapsible (so it's hidden and can't take
+    focus). Screens with no Collapsible ancestor never report True, so PanelNav is unchanged
+    for them."""
+    node = widget.parent
+    while node is not None:
+        if isinstance(node, Collapsible):
+            return node.collapsed
+        node = node.parent
+    return False
+
+
 class PanelNav:
     PANEL_IDS: tuple[str, ...] = ()
 
@@ -81,7 +93,14 @@ class PanelNav:
         panels = [self.query_one(f"#{pid}", ListView) for pid in self.PANEL_IDS]
         focused = self.focused
         current = next((i for i, panel in enumerate(panels) if panel is focused), 0)
-        panels[(current + step) % len(panels)].focus()
+        # Step over panels tucked inside a collapsed Collapsible — focusing a hidden list
+        # would strand the cursor. Falls through to the plain single step when nothing's
+        # collapsed (the offset-1 candidate is simply the next panel).
+        for offset in range(1, len(panels) + 1):
+            candidate = panels[(current + step * offset) % len(panels)]
+            if not _in_collapsed_section(candidate):
+                candidate.focus()
+                return
 
 
 def _compact_skill_label(character: Character, skill, show_cost: bool = False) -> str:

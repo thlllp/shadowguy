@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual.containers import Grid, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS
 from shadowguy.factions import FACTIONS
@@ -83,8 +83,6 @@ class ContactsScreen(PanelNav, Screen):
     CSS = """
     #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
         height: auto;
-        border-top: solid $accent;
-        padding: 0 1;
     }
 
     #fixers_list, #corps_list, #locals_list, #runners_list {
@@ -95,25 +93,17 @@ class ContactsScreen(PanelNav, Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Vertical(
-            Static("Fixers"),
-            ListView(id="fixers_list"),
-            id="fixers_panel",
+        yield Collapsible(
+            ListView(id="fixers_list"), title="Fixers", collapsed=False, id="fixers_panel"
         )
-        yield Vertical(
-            Static("Corps"),
-            ListView(id="corps_list"),
-            id="corps_panel",
+        yield Collapsible(
+            ListView(id="corps_list"), title="Corps", collapsed=False, id="corps_panel"
         )
-        yield Vertical(
-            Static("Locals"),
-            ListView(id="locals_list"),
-            id="locals_panel",
+        yield Collapsible(
+            ListView(id="locals_list"), title="Locals", collapsed=False, id="locals_panel"
         )
-        yield Vertical(
-            Static("Runners"),
-            ListView(id="runners_list"),
-            id="runners_panel",
+        yield Collapsible(
+            ListView(id="runners_list"), title="Runners", collapsed=False, id="runners_panel"
         )
         yield Footer()
 
