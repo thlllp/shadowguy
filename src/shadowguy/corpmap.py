@@ -902,10 +902,10 @@ class _InjectionPlan:
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
                      values: dict[Cell, int], ids: dict[Cell, str], start_id: str,
                      faction_ids: list[str], rng: random.Random) -> _InjectionPlan:
-    elsewhere = [ids[cell] for cell in region if cell != start_id]
+    elsewhere = [ids[cell] for cell in region if ids[cell] != start_id]
     hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
 
-    neutral_ids = [ids[cell] for cell in region if cell not in owners and cell != start_id]
+    neutral_ids = [ids[cell] for cell in region if cell not in owners and ids[cell] != start_id]
     gang_ids = _place_gangs(neutral_ids, GANGS, rng)
 
     gang_turf: dict[str, list[str]] = {}
