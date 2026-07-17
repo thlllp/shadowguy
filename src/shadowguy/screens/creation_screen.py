@@ -3,7 +3,7 @@ from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
+import shadowguy.archetypes as archetypes
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
 from shadowguy.skills import SKILLS, skill_for
 
@@ -11,12 +11,10 @@ from . import CharacterSheet, PanelNav, PANEL_NAV_BINDINGS, _compact_skill_label
 
 
 class CharacterCreationScreen(PanelNav, Screen):
-    PANEL_IDS = (
-        *(f"arch_card_{archetype.id}" for archetype in ARCHETYPES),
-        *(f"build_list_{stat}" for stat in CORE_STATS),
-        "begin_row",
-    )
-
+    # PANEL_IDS is set per-instance in __init__, not here: archetypes.ARCHETYPES is
+    # lazily validated on first access (see archetypes.py), and a class body runs at
+    # module import time, so building this tuple here would defeat that laziness the
+    # moment this screen module is imported.
     BINDINGS = [
         ("q", "quit_menu", "Menu"),
         ("r", "reset", "Reset build"),
@@ -75,6 +73,14 @@ class CharacterCreationScreen(PanelNav, Screen):
     }
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.PANEL_IDS = (
+            *(f"arch_card_{a.id}" for a in archetypes.ARCHETYPES),
+            *(f"build_list_{stat}" for stat in CORE_STATS),
+            "begin_row",
+        )
+
     def _arch_card(self, archetype) -> ListView:
         card = ListView(
             ListItem(Static(archetype.description), id=f"arch_{archetype.id}"),
@@ -88,7 +94,7 @@ class CharacterCreationScreen(PanelNav, Screen):
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(id="pools")
-        yield Grid(*(self._arch_card(archetype) for archetype in ARCHETYPES), id="arch_grid")
+        yield Grid(*(self._arch_card(a) for a in archetypes.ARCHETYPES), id="arch_grid")
         yield ScrollableContainer(
             Grid(
                 *(
@@ -163,7 +169,7 @@ class CharacterCreationScreen(PanelNav, Screen):
         character = self.app.character
 
         if item_id.startswith("arch_"):
-            archetype = ARCHETYPES_BY_ID[item_id.removeprefix("arch_")]
+            archetype = archetypes.ARCHETYPES_BY_ID[item_id.removeprefix("arch_")]
             character.reset_build()
             archetype.apply(character)
             self.notify(f"{archetype.name} build applied. Press b to begin, r to start over.")

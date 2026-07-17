@@ -5,11 +5,11 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.checks import CheckResult
-from shadowguy.combat import drop_for_result
+from shadowguy.combat import CombatOutcome, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.runners import RUNNERS_BY_ID
-from shadowguy.scene import CombatOutcome, Scene, SceneKind, apply_outcome, resolve_choice
+from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice
 from shadowguy.tactical import TacticalOutcome
 
 from . import CharacterSheet, _replace_items

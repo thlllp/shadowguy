@@ -1,16 +1,36 @@
 """Tests for archetypes lazy-init and preset validation."""
 
+import subprocess
+import sys
+
 import shadowguy.archetypes as archetypes
 from shadowguy.character import Character
 
 
 def test_lazy_init_no_side_effect_on_import():
-    assert archetypes._ARCHETYPES is None
-    assert archetypes._ARCHETYPES_BY_ID is None
+    """Importing the module -- even the whole app -- must not construct ARCHETYPES.
+
+    Checked in a fresh subprocess: within this test process, some other test may
+    have already legitimately driven CharacterCreationScreen (a real access, not an
+    import side effect), which would otherwise taint _ARCHETYPES for the rest of
+    the run regardless of test order.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import shadowguy.app; import shadowguy.archetypes as a; "
+            "assert a._ARCHETYPES is None, a._ARCHETYPES",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_lazy_init_populates_on_access():
-    assert archetypes._ARCHETYPES is None
+    archetypes._ARCHETYPES = None
+    archetypes._ARCHETYPES_BY_ID = None
     _ = archetypes.ARCHETYPES
     assert archetypes._ARCHETYPES is not None
     assert len(archetypes._ARCHETYPES) == 3
