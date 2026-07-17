@@ -16,8 +16,10 @@ from shadowguy.combat import (
     CombatOutcome,
     CombatState,
     Drop,
+    ENEMY_TIERS,
     available_actions,
     drop_for_result,
+    roll_enemies,
     start_combat,
     take_turn,
 )
@@ -55,6 +57,7 @@ from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
 from shadowguy.scene import (
     Encounter,
+    Outcome,
     Scene,
     SceneKind,
     TacticalStage,
@@ -68,6 +71,7 @@ from shadowguy.tactical import (
     Tile,
     best_shot,
     end_turn,
+    generate_map,
     leave,
     move_player,
     player_attack,
@@ -2056,6 +2060,96 @@ class LoadMenu(ModalScreen):
         self.app.load_state(state)
 
 
+class TitleMenu(Screen):
+    """The screen the app opens on, before CharacterCreationScreen. New Game pushes
+    creation the way it always started; Load Game reuses the same LoadMenu the
+    in-run Quit menu uses, so there's one load path, not two."""
+
+    BINDINGS = [("q", "quit_menu", "Menu")]
+    CSS = _menu_css("TitleMenu", "title_dialog")
+
+    OPTIONS = [
+        ("new_game", "New Game"),
+        ("load_game", "Load Game"),
+        ("test", "Test"),
+        ("settings", "Settings"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("Shadowguy"),
+            ListView(*(ListItem(Static(label), id=option_id) for option_id, label in self.OPTIONS)),
+            id="title_dialog",
+        )
+        yield Footer()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id == "new_game":
+            self.app.push_screen(CharacterCreationScreen())
+        elif event.item.id == "load_game":
+            slots = list_saves()
+            if not slots:
+                self.notify("No saved games found.", severity="warning")
+                return
+            self.app.push_screen(LoadMenu(slots))
+        elif event.item.id == "test":
+            self.app.push_screen(TestMenu())
+        elif event.item.id == "settings":
+            self.notify("Settings aren't implemented yet.")
+
+
+class TestMenu(Screen):
+    """Dev-only snapshots of systems normal play doesn't reliably reach — a tactical
+    fight is only ~35% of jobs (jobs.TACTICAL_FIGHT_CHANCE), behind a fixer offer and
+    several stage checks, so this jumps straight to one at a chosen enemy tier. Runs
+    against the same app.character as everything else, but bypasses Scene/apply_outcome
+    entirely (there's no job or gig backing it) and restores health afterward so a test
+    fight can't leave a mark on the run underneath it."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    CSS = _menu_css("TestMenu", "test_dialog")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("Test"),
+            ListView(
+                *(
+                    ListItem(Static(f"Tactical Combat — Tier {tier}"), id=f"tactical_{tier}")
+                    for tier in sorted(ENEMY_TIERS)
+                )
+            ),
+            id="test_dialog",
+        )
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        tier = int(event.item.id.removeprefix("tactical_"))
+        rng = self.app.rng
+        enemies = roll_enemies(tier, rng)
+        tac = generate_map(rng, len(enemies))
+        stage = TacticalStage(
+            prompt=f"Test fight — tier {tier}.",
+            grid=tac.grid,
+            player_start=tac.player_start,
+            enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
+            victory=Outcome(text="Cleared."),
+            escape=Outcome(text="You slip out."),
+            exits=tac.exits,
+        )
+        self.app.push_screen(TacticalScreen(stage), self._on_tactical_end)
+
+    def _on_tactical_end(self, result: TacticalOutcome) -> None:
+        # Sandbox, not a real fight: whatever happened, leave the character clean for
+        # whichever real screen (creation, or a run already in progress) sits under this.
+        self.app.character.health = self.app.character.max_health
+        self.notify(f"Test fight ended: {result.name.title()}.")
+
+
 class ShadowguyApp(App):
     BINDINGS = [("q", "quit_menu", "Menu")]
 
@@ -2135,7 +2229,7 @@ class ShadowguyApp(App):
         self.push_screen(screen)
 
     def on_mount(self) -> None:
-        self.push_screen(CharacterCreationScreen())
+        self.push_screen(TitleMenu())
 
 
 def main() -> None:
