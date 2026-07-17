@@ -45,7 +45,10 @@ SAVE_SUFFIX = ".save"
 # .SOCIAL, which no longer exists) and added Character.crew (recruited runners).
 # v11 reshaped Character.crew from a list of runner ids into a list of CrewHire (runner +
 # optional job_id: for-job vs indefinite engagement).
-SAVE_VERSION = 11
+# v12 grew FIXER_ROSTER (3 street fixers -> 6 street + 3 corp-affiliated) and added
+# Fixer.faction_id (a pre-v12 save's fixers list is the old roster of 3, seated by the
+# old neutral-only rule).
+SAVE_VERSION = 12
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
