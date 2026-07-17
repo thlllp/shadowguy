@@ -221,6 +221,8 @@ def test_pay_crew_wages_charges_indefinite_hires_and_drops_who_you_cant_cover():
 
     specter = RUNNERS_BY_ID["runner_specter"]  # daily_cost 60
     mireille = RUNNERS_BY_ID["runner_mireille"]  # daily_cost 45
+    # Default cool 1 puts Leadership at LEADERSHIP_BASE, so wages are the listed values and
+    # this test stays about the drop logic, not the discount (see test_runners.py).
     c = Character(name="t", cash=50)
     c.hire_indefinite(specter.id)  # can't cover 60
     c.hire_indefinite(mireille.id)  # can cover 45
