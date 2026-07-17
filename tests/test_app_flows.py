@@ -89,12 +89,17 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
             await pilot.pause()
 
             # Find a generated job whose first fight is abstract (not tactical) --
-            # is_tactical is a per-job coin flip, so try a few seeds.
+            # is_tactical is a per-job coin flip, so try a few seeds. Also skip a
+            # Burglary job: its start stage has no `choices` at all (it's a
+            # BurglaryStage, picked via EntrancePickScreen, not #choice_N rows) --
+            # this test is specifically about the plain-Choice-list ambush door.
             scene = None
             for seed in range(30):
                 candidate, _timing = generate_job(
                     day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
                 )
+                if candidate.stages[candidate.start_stage].burglary is not None:
+                    continue
                 fight_id = f"{candidate.start_stage}_fight"
                 if candidate.stages[fight_id].combat is not None:
                     scene = candidate

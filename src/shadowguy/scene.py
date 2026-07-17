@@ -58,6 +58,25 @@ class Outcome:
     next_stage: str | None = None
 
 
+def _outcome_for_result(
+    result: CheckResult,
+    success: Outcome,
+    failure: Outcome,
+    critical_success: Outcome | None,
+    critical_failure: Outcome | None,
+) -> Outcome:
+    """Shared by Choice.outcome_for and Entrance.outcome_for -- same four-way branch,
+    so the two check-shaped types can't quietly drift apart on how a result picks
+    an Outcome."""
+    if result is CheckResult.CRITICAL_SUCCESS:
+        return critical_success or success
+    if result is CheckResult.CRITICAL_FAILURE:
+        return critical_failure or failure
+    if result is CheckResult.SUCCESS:
+        return success
+    return failure
+
+
 @dataclass
 class Choice:
     label: str
@@ -71,13 +90,7 @@ class Choice:
     critical_failure: Outcome | None = None
 
     def outcome_for(self, result: CheckResult) -> Outcome:
-        if result is CheckResult.CRITICAL_SUCCESS:
-            return self.critical_success or self.success
-        if result is CheckResult.CRITICAL_FAILURE:
-            return self.critical_failure or self.failure
-        if result is CheckResult.SUCCESS:
-            return self.success
-        return self.failure
+        return _outcome_for_result(result, self.success, self.failure, self.critical_success, self.critical_failure)
 
 
 @dataclass(frozen=True)
@@ -126,16 +139,64 @@ class TacticalStage:
     exits: frozenset[Coord] = frozenset()
 
 
+@dataclass(frozen=True)
+class Entrance:
+    """One way into a Burglary stage's building -- Choice-shaped (same skill/
+    difficulty/outcome shape as a normal Approach-derived Choice), plus where the
+    interior walk begins in BurglaryStage.grid if this entrance is picked. The check
+    resolves the instant it's picked (resolve_entrance); the walk that follows is
+    spatial risk, not a second roll -- see BurglaryStage."""
+
+    label: str
+    skill: str
+    difficulty: int
+    spawn: Coord
+    success: Outcome
+    failure: Outcome
+    critical_success: Outcome | None = None
+    critical_failure: Outcome | None = None
+
+    def outcome_for(self, result: CheckResult) -> Outcome:
+        return _outcome_for_result(result, self.success, self.failure, self.critical_success, self.critical_failure)
+
+
+@dataclass
+class BurglaryStage:
+    """A job's APPROACH stage, played out as: pick an Entrance (a Choice-shaped
+    check, resolved immediately on pick) on a small diagram, then walk the interior
+    grid from that entrance's spawn to the objective tile, avoiding guard sightlines.
+    Reaching the objective carries the scene to whatever next_stage the entrance's
+    Outcome already set; getting spotted by a guard fires `spotted` instead (which
+    is why `spotted` isn't per-entrance -- it's a hazard of the walk itself, not of
+    how you got in). This is the one place in the game a single stage attempt can
+    apply two Outcomes in sequence (the entrance's, then maybe `spotted`'s) --
+    deliberate, so keep `spotted`'s cost modest, since it stacks on whatever the
+    entrance check already did."""
+
+    prompt: str
+    entrances: tuple[Entrance, ...]
+    grid: Grid
+    objective: Coord
+    spotted: Outcome
+    # Static watcher positions, not combat.Enemy -- nothing to fight while sneaking
+    # past. Walking within one's line of sight ends the walk in `spotted` instead
+    # of at the objective (see tactical.spotted()).
+    guards: tuple[Coord, ...] = ()
+
+
 @dataclass
 class Stage:
     id: str
     prompt: str
     choices: list[Choice]
-    # A stage is a set of choices, a fight, or a tactical map — exactly one, never a
-    # mix (guarded in Scene.__post_init__). A fight's/map's "choices" come from the
-    # runner's own gear and skills (combat.available_actions / the grid), not the scene.
+    # A stage is a set of choices, a fight, a tactical map, or a burglary -- exactly
+    # one, never a mix (guarded in Scene.__post_init__). A fight's/map's "choices"
+    # come from the runner's own gear and skills (combat.available_actions / the
+    # grid), not the scene; a burglary's choices are its Entrances, picked on a
+    # diagram screen rather than a text list.
     combat: Encounter | None = None
     tactical: TacticalStage | None = None
+    burglary: BurglaryStage | None = None
 
 
 @dataclass
@@ -178,17 +239,23 @@ class Scene:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight or tactical map")
 
     def _validate_stage(self, stage: Stage) -> None:
-        modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical) if mode)
+        modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical, stage.burglary) if mode)
         if modes > 1:
             raise ValueError(
-                f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, or a tactical map"
+                f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, "
+                "a tactical map, or a burglary"
             )
         if stage.combat is not None and not stage.combat.enemies:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
         if stage.tactical is not None and not stage.tactical.enemies:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
+        if stage.burglary is not None and not stage.burglary.entrances:
+            raise ValueError(f"{self.id}: stage {stage.id!r} is a burglary with no entrances")
         for choice in stage.choices:
             skill_for(choice.skill)
+        if stage.burglary is not None:
+            for entrance in stage.burglary.entrances:
+                skill_for(entrance.skill)
 
     def _validate_outcome(self, stage: Stage, outcome: Outcome) -> None:
         if outcome.next_stage is not None and outcome.next_stage not in self.stages:
@@ -232,6 +299,17 @@ class Scene:
             yield from (stage.combat.victory, stage.combat.escape)
         if stage.tactical is not None:
             yield from (stage.tactical.victory, stage.tactical.escape)
+        if stage.burglary is not None:
+            for entrance in stage.burglary.entrances:
+                for outcome in (
+                    entrance.success,
+                    entrance.failure,
+                    entrance.critical_success,
+                    entrance.critical_failure,
+                ):
+                    if outcome is not None:
+                        yield outcome
+            yield stage.burglary.spotted
 
     @property
     def max_cash_loss(self) -> int:
@@ -288,5 +366,21 @@ def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[
         advantage=advantage,
     )
     outcome = choice.outcome_for(roll.result)
+    apply_outcome(character, outcome, scene)
+    return roll.result, outcome
+
+
+def resolve_entrance(character: Character, scene: Scene, entrance: Entrance) -> tuple[CheckResult, Outcome]:
+    """Same shape as resolve_choice, for a BurglaryStage's Entrance -- the entrance
+    check resolves (and applies its Outcome) the instant it's picked, before any
+    interior walk. Only next_stage's actual effect (the scene advancing) waits on
+    the walk; see screens/burglary_screens.py and SceneScreen._on_entrance_picked."""
+    advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.JOB else 0
+    roll = resolve_check(
+        stat_value=skill_value(character, entrance.skill),
+        difficulty=entrance.difficulty,
+        advantage=advantage,
+    )
+    outcome = entrance.outcome_for(roll.result)
     apply_outcome(character, outcome, scene)
     return roll.result, outcome

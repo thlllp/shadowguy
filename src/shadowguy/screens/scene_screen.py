@@ -9,10 +9,11 @@ from shadowguy.combat import CombatOutcome, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.runners import RUNNERS_BY_ID
-from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice
+from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.tactical import TacticalOutcome
 
 from . import CharacterSheet, _replace_items
+from .burglary_screens import BurglaryWalkResult, BurglaryWalkScreen, EntrancePickScreen
 from .combat_screen import CombatScreen
 from .tactical_screen import TacticalScreen
 
@@ -39,6 +40,10 @@ class SceneScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
+        stage = self._current_stage()
+        if stage.burglary is not None:
+            await self._show_burglary(stage)
+            return
         await self._show_stage()
 
     def _current_stage(self):
@@ -103,7 +108,64 @@ class SceneScreen(Screen):
             return
         stage = self._current_stage()
         outcome = stage.tactical.victory if result is TacticalOutcome.VICTORY else stage.tactical.escape
-        await self._finish_fight(outcome)
+        await self._finish_stage_outcome(outcome)
+
+    async def _show_burglary(self, stage) -> None:
+        self.stage_id = stage.id
+        self.app.push_screen(EntrancePickScreen(stage.burglary), self._on_entrance_picked)
+
+    async def _on_entrance_picked(self, chosen_index: int) -> None:
+        stage = self._current_stage()
+        entrance = stage.burglary.entrances[chosen_index]
+        character = self.app.character
+        result, outcome = resolve_entrance(character, self.scene, entrance)
+        self._take_crew_cut(outcome)
+        self.query_one(CharacterSheet).refresh()
+
+        prompt = self.query_one("#prompt", Static)
+        prompt.update(f"{result.name}: {outcome.text}")
+        if result in (CheckResult.CRITICAL_SUCCESS, CheckResult.CRITICAL_FAILURE):
+            flash = "green" if result is CheckResult.CRITICAL_SUCCESS else "red"
+            prompt.styles.background = Color.parse(flash)
+            prompt.styles.animate("background", value=Color(0, 0, 0, 0), duration=0.6)
+
+        if not character.is_alive:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
+
+        # An entrance's check resolves (and applies, via resolve_entrance above)
+        # immediately, same as any Choice -- but a critical failure or the
+        # always-fights ambush routes straight to the fight, skipping the walk
+        # entirely, the same door every other stage's critical failure uses.
+        # outcome is already applied, so this is a plain advance (_await_continue),
+        # not a re-apply (_finish_stage_outcome would double-apply it).
+        target = self.scene.stages[outcome.next_stage]
+        if target.combat is not None or target.tactical is not None:
+            await self._await_continue(outcome.next_stage, result)
+            return
+
+        # Stash what to resume with once the walk ends -- the same _pending_*
+        # fields _await_continue always uses, not a burglary-only duplicate.
+        self._pending_next_stage = outcome.next_stage
+        self._pending_result = result
+        self.app.push_screen(
+            BurglaryWalkScreen(stage.burglary, entrance.spawn),
+            self._on_burglary_walk_end,
+        )
+
+    async def _on_burglary_walk_end(self, result: BurglaryWalkResult) -> None:
+        if result is BurglaryWalkResult.SPOTTED:
+            # A fresh Outcome, never applied yet -- same shape as a fight ending.
+            # A guard's sightline finding you is exactly what a critical failure
+            # represents everywhere else, so it hands the enemy the same drop
+            # (see combat.drop_for_result) rather than an even, undeserved fight.
+            stage = self._current_stage()
+            await self._finish_stage_outcome(stage.burglary.spotted, result=CheckResult.CRITICAL_FAILURE)
+            return
+        # Reached the objective -- the entrance check's Outcome (health/cash/rep/etc)
+        # already applied at pick time; only stage advancement waited on the walk,
+        # so this is a plain advance, not a re-apply.
+        await self._await_continue(self._pending_next_stage, self._pending_result)
 
     async def _on_combat_end(self, result: CombatOutcome) -> None:
         character = self.app.character
@@ -133,14 +195,18 @@ class SceneScreen(Screen):
 
         stage = self._current_stage()
         outcome = stage.combat.victory if result is CombatOutcome.VICTORY else stage.combat.escape
-        await self._finish_fight(outcome)
+        await self._finish_stage_outcome(outcome)
 
-    async def _finish_fight(self, outcome) -> None:
-        apply_outcome(self.app.character, outcome, self.scene)
+    async def _finish_stage_outcome(self, outcome, result: CheckResult | None = None) -> None:
+        character = self.app.character
+        apply_outcome(character, outcome, self.scene)
+        if not character.is_alive:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
         self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
         self.query_one("#prompt", Static).update(outcome.text)
-        await self._await_continue(outcome.next_stage, None)
+        await self._await_continue(outcome.next_stage, result)
 
     def _take_crew_cut(self, outcome) -> None:
         if self.scene.kind is not SceneKind.JOB or outcome.next_stage is not None or outcome.cash_delta <= 0:
@@ -167,6 +233,9 @@ class SceneScreen(Screen):
             return
         if stage.tactical is not None:
             await self._show_tactical(stage)
+            return
+        if stage.burglary is not None:
+            await self._show_burglary(stage)
             return
 
         self.stage_id = self._pending_next_stage

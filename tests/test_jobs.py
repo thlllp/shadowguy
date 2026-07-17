@@ -57,6 +57,13 @@ def test_generated_job_last_non_fight_stage_carries_the_payout(corp_map, seed):
         assert choice.success.standing_delta == JOB_STANDING_HIT
 
 
+def _stage_options(stage):
+    """A stage's real approaches, whichever mode it's in: a plain Choice list, or a
+    BurglaryStage's Entrances. Choice and Entrance share label/skill/failure, so
+    callers can treat the two uniformly rather than branching per test."""
+    return list(stage.burglary.entrances) if stage.burglary is not None else list(stage.choices)
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_generated_job_stage_approaches_have_distinct_stats(corp_map, seed):
     """Every stage's drawn approach pool must sit on different core stats -- the
@@ -65,8 +72,8 @@ def test_generated_job_stage_approaches_have_distinct_stats(corp_map, seed):
     for sid, stage in scene.stages.items():
         if sid.endswith("_fight"):
             continue
-        non_ambush = [c for c in stage.choices if not c.label.startswith(AMBUSH_LABEL)]
-        stats = [skill_for(c.skill).stat for c in non_ambush]
+        non_ambush = [o for o in _stage_options(stage) if not o.label.startswith(AMBUSH_LABEL)]
+        stats = [skill_for(o.skill).stat for o in non_ambush]
         assert len(set(stats)) == len(stats)
 
 
@@ -76,7 +83,7 @@ def test_generated_job_ambush_choice_present_on_every_non_fight_stage(corp_map, 
     for sid, stage in scene.stages.items():
         if sid.endswith("_fight"):
             continue
-        labels = [c.label for c in stage.choices]
+        labels = [o.label for o in _stage_options(stage)]
         assert any(label.startswith(AMBUSH_LABEL) for label in labels)
 
 
@@ -86,11 +93,11 @@ def test_generated_job_approach_damage_matches_damage_for_delta_curve(corp_map, 
     for sid, stage in scene.stages.items():
         if sid.endswith("_fight"):
             continue
-        for choice in stage.choices:
-            if choice.label.startswith(AMBUSH_LABEL):
+        for option in _stage_options(stage):
+            if option.label.startswith(AMBUSH_LABEL):
                 continue
             # failure.health_delta is negative failure_damage from DAMAGE_FOR_DELTA.
-            assert -choice.failure.health_delta in DAMAGE_FOR_DELTA.values()
+            assert -option.failure.health_delta in DAMAGE_FOR_DELTA.values()
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -134,6 +141,26 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
         stats = {skill_for(c.skill).stat for c in non_ambush}
         specialists = {SPECIALIST_FOR_STAT[stat] for stat in stats}
         assert specialist in specialists
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(corp_map, seed):
+    rng = random.Random(seed)
+    archetype = rng.choice(ARCHETYPES)
+    if archetype.name != "Burglary":
+        pytest.skip("not a Burglary job this seed")
+    scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    # APPROACH is always the first stage kept (only COMPLICATION can be dropped),
+    # so it's always stage_0.
+    approach = scene.stages["stage_0"]
+    assert approach.burglary is not None
+    assert approach.choices == []
+    assert len(approach.burglary.entrances) >= 3  # drawn approaches (>=2) + the ambush entry
+    for sid, stage in scene.stages.items():
+        if sid in ("stage_0", "stage_0_fight") or sid.endswith("_fight"):
+            continue
+        assert stage.burglary is None
+        assert stage.choices
 
 
 def test_job_timing_no_deadline_never_expires_and_always_available():
