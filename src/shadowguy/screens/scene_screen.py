@@ -9,7 +9,8 @@ from shadowguy.combat import CombatOutcome, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.matrix import MatrixOutcome
-from shadowguy.runners import RUNNERS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID, recruit_cut
+from shadowguy.skills import skill_value
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.tactical import TacticalOutcome
 
@@ -229,9 +230,10 @@ class SceneScreen(Screen):
         if self.scene.kind is not SceneKind.JOB or outcome.next_stage is not None or outcome.cash_delta <= 0:
             return
         character = self.app.character
+        leadership = skill_value(character, "leadership")
         for hire in character.crew_for_job(self.scene.id):
             runner = RUNNERS_BY_ID[hire.runner_id]
-            cut = min(int(runner.job_cut * outcome.cash_delta), character.cash)
+            cut = min(int(recruit_cut(runner, leadership) * outcome.cash_delta), character.cash)
             character.cash -= cut
             self.notify(f"{runner.name} takes {cut}eb — their cut of the job.")
 

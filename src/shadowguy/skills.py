@@ -77,7 +77,7 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
     "cool": [
         ("forgery", "Forgery", "Faking documents and IDs"),
         ("deception", "Deception", "Lying convincingly"),
-        ("seduction", "Seduction", "Charming or manipulating through attraction"),
+        ("leadership", "Leadership", "Rallying people to your crew and holding their loyalty"),
         ("negotiations", "Negotiations", "Striking favorable deals"),
         ("intimidation", "Intimidation", "Coercing through fear"),
     ],

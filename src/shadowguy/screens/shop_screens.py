@@ -12,7 +12,8 @@ from shadowguy.corpmap import (
 from shadowguy.factions import FACTIONS_BY_ID, Faction, officer_dialogue, officer_gate, officer_unlocked
 from shadowguy.fixer import Fixer
 from shadowguy.security import SecurityContract
-from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, recruit_cut, recruit_wage
+from shadowguy.skills import skill_value
 from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
@@ -252,10 +253,12 @@ class BarScreen(Screen):
         return items
 
     def _terms_items(self, runner) -> list[ListItem]:
+        leadership = skill_value(self.app.character, "leadership")
+        wage = recruit_wage(runner, leadership)
         items = [
-            ListItem(Static(f"Keep on indefinitely — {runner.daily_cost}eb/day"), id="opt_indef")
+            ListItem(Static(f"Keep on indefinitely — {wage}eb/day"), id="opt_indef")
         ]
-        pct = round(runner.job_cut * 100)
+        pct = round(recruit_cut(runner, leadership) * 100)
         for job in self.app.character.accepted_jobs:
             items.append(
                 ListItem(

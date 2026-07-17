@@ -1,14 +1,14 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from shadowguy.runners import RUNNERS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
 from shadowguy.shops import (
     InventoryItem,
     equipped_bonus,
     equipped_skill_bonus,
     equipped_travel_bonus,
 )
-from shadowguy.skills import SKILLS, skill_for
+from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
@@ -206,11 +206,13 @@ class Character:
         report. For-job hires aren't on a wage — their cost is the cut, taken at payout."""
         kept: list[CrewHire] = []
         left: list[str] = []
+        leadership = skill_value(self, "leadership")
         for hire in self.crew:
             runner = RUNNERS_BY_ID[hire.runner_id]
-            if hire.job_id is not None or self.cash >= runner.daily_cost:
+            wage = recruit_wage(runner, leadership)
+            if hire.job_id is not None or self.cash >= wage:
                 if hire.job_id is None:
-                    self.cash -= runner.daily_cost
+                    self.cash -= wage
                 kept.append(hire)
             else:
                 left.append(runner.name)
