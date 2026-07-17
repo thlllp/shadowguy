@@ -53,9 +53,18 @@ JOB_STANDING_HIT = -2
 
 # Trust gained with the fixer who sent you, on a completed job — the other half of
 # JOB_STANDING_HIT: the corp you hit likes you less, the fixer who profits off it
-# likes you more. Same trigger (the final stage's success/critical-success), same
-# "botched or abandoned jobs cost nothing" rule as standing.
+# likes you more. Same trigger (the final stage's success/critical-success) as standing.
 FIXER_TRUST_GAIN = 2
+
+# The other direction: a job that ends without paying out — the last stage's plain
+# failure, or fleeing any fight the job routed you into — costs the fixer's trust and a
+# point of street rep. A merely costly stage doesn't trigger this (failure carries the
+# job on to its next stage, see DAMAGE_FOR_DELTA); only a job that ends with nothing to
+# show for it does. Kept separate from FIXER_TRUST_GAIN/JOB_STANDING_HIT rather than
+# just negating them: this is a flat penalty for wasting the fixer's and the street's
+# time, not a reversal of the completed-job reward.
+JOB_FAILURE_TRUST_HIT = -1
+JOB_FAILURE_REP_HIT = -1
 
 # Every stage carries a fight beside it, reachable two ways — and which way you got
 # there is the whole difference between the two (combat.drop_for_result reads it off
@@ -702,6 +711,11 @@ def generate_job(
                     text="It gets messy, but you push on.",
                     health_delta=-approach.failure_damage,
                     next_stage=next_stage,
+                    # Only the last stage's plain failure ends the job with nothing to
+                    # show for it — everywhere else next_stage carries it on, so this
+                    # is 0 there, same as payout()'s cash/rep/standing.
+                    fixer_trust_delta=JOB_FAILURE_TRUST_HIT if is_last else 0,
+                    rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
                 ),
                 critical_success=payout(
                     "Flawless. You walk out with more than you bargained for.",
@@ -753,7 +767,11 @@ def generate_job(
         enemies = roll_enemies(tier, rng)
         fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
         fight_victory = payout("They stop coming. You finish what you came for.")
-        fight_escape = Outcome(text="You get out with your skin. The job is blown.")
+        fight_escape = Outcome(
+            text="You get out with your skin. The job is blown.",
+            fixer_trust_delta=JOB_FAILURE_TRUST_HIT,
+            rep_delta=JOB_FAILURE_REP_HIT,
+        )
         if is_tactical:
             tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
             fight = Stage(

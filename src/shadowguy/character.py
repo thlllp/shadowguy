@@ -59,6 +59,13 @@ if set(SKILL_RANK_COST) != set(range(STARTING_SKILL_RANK + 1, MAX_SKILL_RANK + 1
 CORE_STATS = ("body", "strength", "agility", "perception", "intelligence", "cool")
 STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep"}
 
+# Unlike health (floored at 0 — there's no such thing as negative health), rep can go
+# into the red: a blown job or gig now costs it (see scene.apply_outcome, jobs.py's
+# fight_escape/last-stage failure, gigs._build_choice), so a runner who keeps failing
+# can burn through their good name and come out the other side owing one. -10 is the
+# bottom of that hole, not zero — the street still remembers you, just badly.
+REP_FLOOR = -10
+
 # The guard lives here, not in skills.py: skills.py has to stay import-free of
 # this module (character -> shops -> corpmap -> skills), so this is the only
 # place that can see both tables. A skill tied to a stat that doesn't exist
@@ -212,6 +219,9 @@ class Character:
 
     def adjust_health(self, delta: int) -> None:
         self.health = max(0, min(self.max_health, self.health + delta))
+
+    def adjust_rep(self, delta: int) -> None:
+        self.rep = max(REP_FLOOR, self.rep + delta)
 
     def can_afford(self, cost: int) -> bool:
         return self.stamina >= cost

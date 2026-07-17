@@ -256,9 +256,9 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
     # cover (Scene.max_cash_loss), so a losing outcome always has the cash to take.
     # Flooring here instead would hand a broke runner every loss for free.
     character.cash += outcome.cash_delta
-    # Floored like health. A botched gig can burn rep you earned, but 0 is being a
-    # nobody and there is nothing below that — the street can't owe you a bad name.
-    character.rep = max(0, character.rep + outcome.rep_delta)
+    # Floored, like health, but not at 0: a blown job or gig can now push rep
+    # negative (see character.REP_FLOOR) rather than stopping at "nobody."
+    character.adjust_rep(outcome.rep_delta)
     if outcome.advantage_delta:
         banks_advantage_for = scene.prepares_for if scene.kind == SceneKind.LEGWORK else None
         if not banks_advantage_for:

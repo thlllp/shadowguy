@@ -43,12 +43,19 @@ if len(GIG_DIFFICULTY) != len(GIG_CASH):
     raise ValueError("GIG_DIFFICULTY and GIG_CASH must cover the same tiers")
 
 # A crit pays ~1.6x and a point of rep; a plain success pays cash and one point of the
-# character's standing. Botching costs health, and a critical botch sours the character
-# on you (the one place a gig moves standing the wrong way).
+# character's standing. A plain botch never costs health — the stamina spent attempting
+# it (Scene.stamina_cost, paid upfront whether it lands or not) is the whole price of a
+# clean miss — but it does cost a point of standing with the character who owns the gig
+# and a point of street rep. A critical botch is a plain one gone actually wrong (you
+# hurt yourself doing something stupid, not just missed): it costs the same standing hit,
+# a point more rep, and GIG_CRIT_FAIL_DAMAGE health on top — the one place a gig still
+# touches health at all.
 GIG_CRIT_MULT = 1.6
 GIG_STANDING_GAIN = 1
-GIG_FAIL_DAMAGE = -3
-GIG_CRIT_FAIL_DAMAGE = -6
+GIG_FAIL_STANDING_HIT = -1
+GIG_FAIL_REP_HIT = -1
+GIG_CRIT_FAIL_DAMAGE = -3
+GIG_CRIT_FAIL_REP_HIT = -2
 # The most approaches one gig can offer; the real count is 1..this, drawn per gig.
 GIG_MAX_APPROACHES = 3
 
@@ -234,7 +241,11 @@ def _build_choice(approach: _GigApproach, difficulty: int, cash: int) -> Choice:
             cash_delta=cash,
             local_standing_delta=GIG_STANDING_GAIN,
         ),
-        failure=Outcome(text=approach.failure, health_delta=GIG_FAIL_DAMAGE),
+        failure=Outcome(
+            text=approach.failure,
+            local_standing_delta=GIG_FAIL_STANDING_HIT,
+            rep_delta=GIG_FAIL_REP_HIT,
+        ),
         critical_success=Outcome(
             text=f"{approach.success} {_CRIT_SUCCESS_TAG}",
             cash_delta=int(cash * GIG_CRIT_MULT),
@@ -244,7 +255,8 @@ def _build_choice(approach: _GigApproach, difficulty: int, cash: int) -> Choice:
         critical_failure=Outcome(
             text=f"{approach.failure} {_CRIT_FAIL_TAG}",
             health_delta=GIG_CRIT_FAIL_DAMAGE,
-            local_standing_delta=-1,
+            local_standing_delta=GIG_FAIL_STANDING_HIT,
+            rep_delta=GIG_CRIT_FAIL_REP_HIT,
         ),
     )
 
