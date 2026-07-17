@@ -15,9 +15,9 @@ uv run shadowguy
 
 You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 32 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
 
-From there you work. **Gigs** are quick single-scene street work, runnable wherever you're standing, owned by a local who'll think better of you for it. **Jobs** come from fixers, are aimed at a real corp's real building on the real map, and have to be run *on site* — so an accepted job is a place you have to travel to, and a scheduled one means being in the right district on the right day. **Legwork** scouts a job beforehand to bank an advantage on its first check.
+From there you work. **Gigs** are quick single-scene street work, runnable wherever you're standing, owned by a local who'll think better of you for it. **Jobs** come from fixers, are aimed at a real corp's real building on the real map, and have to be run *on site* — so an accepted job is a place you have to travel to, and a scheduled one means being in the right district on the right day. **Legwork** scouts a job beforehand to bank an advantage on its first check. **Security contracts** are the inverse of a heist: a fixer signs you to guard a corp for several nights, and you work them by ending the day on-site — steady pay and free lodging, but they pin you to one district.
 
-Every job stage offers several ways through — a clean approach, a middling one, and an easy one that bleeds — plus the option to just take them first. The approaches in a stage always sit on different stats, so every build has *a* way through, but rarely the same way. Botch badly enough and you go loud, which drops you into a fight you didn't choose.
+Every job stage offers several ways through — a clean approach, a middling one, and an easy one that bleeds — plus the option to just take them first. The approaches in a stage always sit on different stats, so every build has *a* way through, but rarely the same way. Some jobs open on a **burglary**: pick an entrance off a building diagram, then sneak the interior past guard sightlines to the objective. Botch badly enough — or get spotted — and you go loud, which drops you into a fight you didn't choose.
 
 Cash goes on gear, chems, weapons, a vehicle (free travel moves), and eventually property. Health does not come back on its own: you pay for days in a hospital ward. Sleeping costs lodging unless you own a place in the district, so buying a safehouse pays for itself.
 
@@ -30,9 +30,11 @@ Death is permanent. No meta-progression between runs.
 | **Checks** | An opposed d6 dice pool. Roll `skill_value + advantage` dice, count 5s and 6s; the opposition rolls against you. Net successes decide it; a gap of 3+ either way is a critical. |
 | **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span all six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit. Running always works; the roll only decides what it costs you. |
 | **Tactical** | ~35% of jobs play their fights on a generated grid instead: tcod FOV and A*, cover as a raised to-hit difficulty, firearms that kite and melee that has to close. Reach an exit to leave, no roll. |
+| **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
 | **Corp map** | 38 districts, generated fresh each run and always connected. Three rival corps hold equal territory by construction. Each district has locations — shops, bars, data hubs, clinics, a corp HQ — that jobs, gigs and legwork all hang off. |
 | **Standing** | Four separate relationships: street `rep`, per-corp `standing` (hit one corp and its rivals warm to you), per-fixer trust, and per-person local standing that bends shop prices and unlocks stock. |
 | **Crew** | Hire runners at a bar — indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. |
+| **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
 | **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
 
 ## Controls
@@ -60,11 +62,12 @@ src/shadowguy/
   skills.py       Skill table (32 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
   combat.py       Round-based combat: enemy roster, the six-stat action set, shared resolve_hit
-  tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation
-  scene.py        Scene/Stage/Choice/Outcome/Encounter/TacticalStage data model
+  tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation; also burglary buildings
+  scene.py        Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage data model
   jobs.py         Procedural job generation, stage templates, timing, per-job legwork
   gigs.py         Per-location gig generation from per-kind templates
-  fixer.py        Fixer roster, job offers, refresh/expiry
+  fixer.py        Fixer roster, job offers, security offers, refresh/expiry
+  security.py     Multi-night security contract generation and nightly resolution (not Scene-based)
   runners.py      Hireable NPC runners (crew)
   factions.py     Rival corps, standing rules, HQ officer ladder
   corpmap.py      Procedural territory map (38 nodes), ASCII renderer, locations, property/lodging
@@ -75,9 +78,11 @@ src/shadowguy/
 
 ## Development
 
-There's no test suite. Verification means driving the code directly: a throwaway script over a few thousand seeds for generators, and Textual's `async with app.run_test() as pilot:` for screens. Anything asserting on a check outcome has to seed the module-level `random` — `app.rng` doesn't control the dice.
+There's a `pytest` suite under `tests/`, run alongside `ruff` in CI on every push and PR. Generators are checked by sweeping a range of seeds and asserting invariants (a map that merely *looks* plausible can be quietly unfair); screens are driven headlessly with Textual's `async with app.run_test() as pilot:`; and a check outcome is pinned either by a fixed-face `random.Random` subclass or by seeding the module-level `random` — `app.rng` doesn't control the dice.
 
 ```bash
+uv sync
+uv run pytest -q
 uvx ruff check src/
 ```
 
