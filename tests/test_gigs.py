@@ -91,7 +91,7 @@ def test_refresh_gigs_fills_every_eligible_location_exactly_once(corp_map, seed)
         location
         for territory in corp_map.territories.values()
         for location in territory.locations
-        if location.characters and location.kind != "corp_hq"
+        if location.characters and location.kind not in ("corp_hq", "gang_den")
     ]
     assert len(gigs) == len(eligible)
 
@@ -119,3 +119,19 @@ def test_refresh_gigs_skips_corp_hq():
     }
     assert hq_ids  # every faction has one
     assert not (hq_ids & set(gigs))
+
+
+def test_refresh_gigs_skips_gang_den():
+    """A gang's den has characters (its soldier and lieutenant) but no gig template --
+    refresh_gigs must skip it explicitly rather than KeyError in generate_gig."""
+    corp_map_ = generate_corp_map(FACTIONS, random.Random(2))
+    gigs: dict[str, object] = {}
+    refresh_gigs(corp_map_, gigs, day=1, rng=random.Random(2))
+    den_ids = {
+        location.id
+        for territory in corp_map_.territories.values()
+        for location in territory.locations
+        if location.kind == "gang_den"
+    }
+    assert den_ids  # every gang has one
+    assert not (den_ids & set(gigs))

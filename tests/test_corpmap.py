@@ -13,6 +13,8 @@ import pytest
 
 from shadowguy.corpmap import (
     FACTION_VALUE_SPREAD,
+    GANG_TURF_MAX,
+    GANG_TURF_MIN,
     MIN_START_DEGREE,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
@@ -20,6 +22,7 @@ from shadowguy.corpmap import (
     has_home,
 )
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.gangs import GANG_RANKS, GANGS, GANGS_BY_ID
 
 SEEDS = range(200)
 
@@ -81,6 +84,23 @@ def test_every_faction_holds_equal_total_value(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
+def test_every_gang_holds_turf_in_range(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    counts = Counter(t.gang_id for t in corp_map.territories.values() if t.gang_id)
+    for gang in GANGS:
+        assert GANG_TURF_MIN <= counts[gang.id] <= GANG_TURF_MAX
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_gang_turf_is_unclaimed_and_never_the_start(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for territory in corp_map.territories.values():
+        if territory.gang_id:
+            assert territory.owner == "neutral"
+            assert territory.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_player_start_is_neutral(seed):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
     start = corp_map.territories[corp_map.player_start_id]
@@ -100,6 +120,35 @@ def test_player_start_has_apartment(seed):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
     start = corp_map.territories[corp_map.player_start_id]
     assert has_home(start)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_each_gang_has_exactly_one_den_on_its_own_turf(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    dens = {}
+    for territory in corp_map.territories.values():
+        for location in territory.locations:
+            if location.kind == "gang_den":
+                assert territory.gang_id is not None
+                assert location.name == f"{GANGS_BY_ID[territory.gang_id].name} Safehouse"
+                dens[territory.gang_id] = location
+    assert set(dens) == {gang.id for gang in GANGS}
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_gang_den_is_staffed_with_both_ranks(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    dens = [
+        location
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == "gang_den"
+    ]
+    assert dens
+    for den in dens:
+        assert {member.role for member in den.characters} == set(GANG_RANKS)
+        names = {member.name for member in den.characters}
+        assert len(names) == len(den.characters)
 
 
 @pytest.mark.parametrize("seed", SEEDS)

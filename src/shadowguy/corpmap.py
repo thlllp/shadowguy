@@ -10,6 +10,7 @@ from shadowguy.factions import (
     Faction,
     FactionSpecialty,
 )
+from shadowguy.gangs import GANG_RANKS, GANGS, GANGS_BY_ID, Gang
 from shadowguy.skills import skill_for
 
 OWNER_NAMES = {"neutral": "Unclaimed"}
@@ -50,6 +51,7 @@ class LocationKind(StrEnum):
     SAFEHOUSE = "safehouse"
     REAL_ESTATE = "real_estate"
     CORP_HQ = "corp_hq"
+    GANG_DEN = "gang_den"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -59,10 +61,11 @@ class LocationKind(StrEnum):
 PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 
 # Kinds injected into specific districts rather than rolled onto the map, and carrying
-# none of the per-kind world tables below: the runner's own places, and each corp's HQ
-# (which has its own officers and screen — see _make_hq / app.CorpHQScreen). The HQ is a
-# corp fixture, not player-owned, so it's a separate group from PLAYER_OWNED_KINDS.
-UNROLLED_KINDS = (*PLAYER_OWNED_KINDS, LocationKind.CORP_HQ)
+# none of the per-kind world tables below: the runner's own places, each corp's HQ
+# (which has its own officers and screen — see _make_hq / app.CorpHQScreen), and each
+# gang's den (see _make_gang_den). Neither the HQ nor a den is player-owned, so they're
+# a separate group from PLAYER_OWNED_KINDS.
+UNROLLED_KINDS = (*PLAYER_OWNED_KINDS, LocationKind.CORP_HQ, LocationKind.GANG_DEN)
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
 # storefront/job surface. They're a job target, scouted on legwork and run by generic
@@ -185,6 +188,9 @@ class Territory:
     connections: list[str] = field(default_factory=list)
     locations: list[Location] = field(default_factory=list)
     modifiers: dict[TerritoryModifier, int] = field(default_factory=dict)
+    # A gang's presence, unlike owner: it doesn't claim the ground (owner stays
+    # "neutral" here), just operates on it. See GANG_TURF_MIN/MAX and _place_gangs.
+    gang_id: str | None = None
 
 
 @dataclass
@@ -394,6 +400,12 @@ TERRITORIES_PER_FACTION = 6
 FACTION_VALUE_SPREAD = (3, 3, 2, 2, 1, 1)
 
 NEUTRAL_VALUES = (1, 2, 3)
+
+# A gang doesn't grow a contiguous bloc like a corp faction (_grow_blocs) — it's a
+# scattered presence, GANG_TURF_MIN..MAX unclaimed territories drawn at random, never
+# the corp blocs and never the player's own start (see _place_gangs).
+GANG_TURF_MIN = 2
+GANG_TURF_MAX = 3
 
 # The runner starts on unclaimed ground at the rim of the map. Demand a way out of
 # it: a start with one connection makes every trip a there-and-back.
@@ -658,6 +670,28 @@ def _make_hq(territory_id: str, faction: Faction, rng: random.Random) -> Locatio
     )
 
 
+def _make_gang_members(location_id: str, rng: random.Random) -> list[LocalCharacter]:
+    """The two ranks manning a gang's den: one per GANG_RANKS tier. app.py has no
+    gate or screen for them yet (contrast _make_officers/CORP_OFFICER_TIERS) — they're
+    just people you'll find there."""
+    return _characters_for_roles(location_id, list(GANG_RANKS), rng)
+
+
+def _make_gang_den(territory_id: str, gang: Gang, rng: random.Random) -> Location:
+    """A gang's safehouse — one per gang, seated in one of its own turf districts (see
+    generate_corp_map). Not a rolled kind: it's manned (GANG_RANKS) but has no screen of
+    its own yet. A gang's den territory is unique to it (see _place_gangs), so the id
+    can't collide.
+    """
+    location_id = f"{territory_id}_gang_den"
+    return Location(
+        id=location_id,
+        name=f"{gang.name} Safehouse",
+        kind=LocationKind.GANG_DEN,
+        characters=_make_gang_members(location_id, rng),
+    )
+
+
 def _clamp(level: int) -> int:
     return max(0, min(MODIFIER_MAX, level))
 
@@ -822,6 +856,25 @@ def _grow_blocs(
     return owners
 
 
+def _place_gangs(neutral_ids: list[str], gangs: list[Gang], rng: random.Random) -> dict[str, str]:
+    """Scatter each gang's presence across GANG_TURF_MIN..MAX unclaimed territories.
+
+    Drawn without replacement across every gang, so a territory hosts at most one
+    gang's presence and gangs can't crowd each other out of the same blocks. Unlike
+    _grow_blocs, there's no contiguity requirement — a gang isn't a bloc, just a
+    handful of places it operates.
+    """
+    pool = list(neutral_ids)
+    rng.shuffle(pool)
+    gang_ids: dict[str, str] = {}
+    for gang in gangs:
+        size = rng.randint(GANG_TURF_MIN, GANG_TURF_MAX)
+        turf, pool = pool[:size], pool[size:]
+        for tid in turf:
+            gang_ids[tid] = gang.id
+    return gang_ids
+
+
 MAX_GENERATION_ATTEMPTS = 100
 
 
@@ -829,6 +882,9 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     faction_ids = [f.id for f in factions]
     if len(faction_ids) * TERRITORIES_PER_FACTION + 1 > TERRITORY_COUNT:
         raise ValueError("not enough territories to give every faction a full bloc")
+    neutral_count = TERRITORY_COUNT - len(faction_ids) * TERRITORIES_PER_FACTION - 1
+    if len(GANGS) * GANG_TURF_MAX > neutral_count:
+        raise ValueError("not enough unclaimed territory to give every gang turf")
 
     for _ in range(MAX_GENERATION_ATTEMPTS):
         region = _grow_region(rng)
@@ -862,6 +918,21 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     elsewhere = [ids[cell] for cell in region if cell != start_cell]
     hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
 
+    # Gang turf: scattered across unclaimed ground only — never a corp bloc, never the
+    # player's own start (see GANG_TURF_MIN/MAX and _place_gangs).
+    neutral_ids = [ids[cell] for cell in region if cell not in owners and cell != start_cell]
+    gang_ids = _place_gangs(neutral_ids, GANGS, rng)
+
+    # One safehouse per gang, seated in one of its own turf districts — chosen up front
+    # (like the hospitals/HQ) so its district can reserve a slot for the injected den.
+    # Gang turf is always neutral and never the start, so a den can stack with a hospital
+    # on the same district but never with the start or an HQ — the existing MAX - MIN
+    # (6 - 4) headroom already covers two reservations stacking on one district.
+    gang_turf: dict[str, list[str]] = {}
+    for tid, gang_id in gang_ids.items():
+        gang_turf.setdefault(gang_id, []).append(tid)
+    den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
+
     # One HQ per corp, seated in one of that corp's highest-value districts — the seat of
     # power. Chosen up front (like the hospitals) so its district can reserve a slot for
     # the injected HQ. A district can be drawn for both a hospital and an HQ; the reserve
@@ -882,7 +953,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         x, y = cell
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
-        reserved = (tid == start_id) + (tid in hospital_ids) + (tid in hq_ids)
+        reserved = (tid == start_id) + (tid in hospital_ids) + (tid in hq_ids) + (tid in den_ids)
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
             id=tid,
@@ -898,6 +969,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             ),
             locations=_make_locations(tid, owner, rng, used_names, count),
             modifiers=_make_modifiers(owner, values[cell], rng),
+            gang_id=gang_ids.get(tid),
         )
 
     # The runner's home: a fixed, player-owned place in the start district, injected
@@ -916,6 +988,10 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     # Seat each corp's HQ in the top-value district chosen above, injected like the hospital.
     for tid, faction_id in hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
+
+    # Seat each gang's den in the turf district chosen above, injected the same way.
+    for tid, gang_id in den_ids.items():
+        territories[tid].locations.append(_make_gang_den(tid, GANGS_BY_ID[gang_id], rng))
 
     # Hand every real estate office a portfolio of districts to sell safehouses in.
     # Anywhere the runner doesn't already own (i.e. not the start) is fair game; a
