@@ -10,6 +10,7 @@ from shadowguy.corpmap import CorpMap
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.scene import Scene
+from shadowguy.security import SecurityContract, generate_security_contract
 
 if TYPE_CHECKING:
     from shadowguy.character import Character
@@ -60,6 +61,12 @@ class Fixer:
     # today — a fixer's own affiliation is independent of which corp their offers
     # target — it's flavor plus a hook for a future "your corp contact" feature.
     faction_id: str | None = None
+    # Multi-night Security contracts this fixer can broker (security.py) — a
+    # different shape of work from `offers`: no Scene, no stages, just a nightly
+    # presence-gated check. Kept as a separate list/cap rather than folded into
+    # `offers` since FixerOffersScreen has to render and accept them differently.
+    max_security_offers: int = 1
+    security_offers: list[SecurityContract] = field(default_factory=list)
 
 
 def _seat(
@@ -135,3 +142,12 @@ def refresh_offers(
                     offered_day=day,
                 )
             )
+
+
+def refresh_security_offers(
+    fixers: list[Fixer], day: int, corp_map: CorpMap, rng: random.Random | None = None
+) -> None:
+    rng = resolve_rng(rng)
+    for fixer in fixers:
+        while len(fixer.security_offers) < fixer.max_security_offers:
+            fixer.security_offers.append(generate_security_contract(day, corp_map, fixer.id, rng))

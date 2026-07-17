@@ -15,6 +15,7 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
+from shadowguy.security import resolve_security_night
 
 from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _replace_items
 from .corp_map_screen import CorpMapScreen
@@ -137,6 +138,20 @@ class MainMenu(PanelNav, Screen):
                 elif not character.can_afford(job.scene.stamina_cost):
                     label += " — too tired"
                 items.append(ListItem(Static(label), id=f"job_{job.id}"))
+            # Display-only: a security contract isn't "run" like a job — it progresses
+            # by ending the day on-site (see the end_day branch below), so it carries
+            # no stamina cost or travel-gated action here.
+            for contract in character.security_contracts:
+                faction = FACTIONS_BY_ID[contract.faction_id]
+                territory = self.app.corp_map.territories[contract.territory_id]
+                label = (
+                    f"Security contract — {faction.name} at {territory.name} "
+                    f"({contract.nights_completed}/{contract.nights_total} nights, "
+                    f"{contract.nightly_pay}eb/night)"
+                )
+                if character.location_id != contract.territory_id:
+                    label += f" — travel to {territory.name} to stand watch"
+                items.append(ListItem(Static(label), id=f"security_info_{contract.id}"))
 
         if self.selected_category == "legwork":
             for job in character.accepted_jobs:
@@ -170,7 +185,10 @@ class MainMenu(PanelNav, Screen):
                 if fixer.location_id == character.location_id:
                     items.append(
                         ListItem(
-                            Static(f"  {fixer.name} — {fixer.specialty} ({len(fixer.offers)} jobs available)"),
+                            Static(
+                                f"  {fixer.name} — {fixer.specialty} "
+                                f"({len(fixer.offers)} jobs, {len(fixer.security_offers)} security available)"
+                            ),
                             id=f"local_fixer_{fixer.id}",
                         )
                     )
@@ -186,9 +204,45 @@ class MainMenu(PanelNav, Screen):
         item_id = event.item.id
         character = self.app.character
 
+        if item_id.startswith("security_info_"):
+            return
+
         if item_id == "end_day":
-            here = self.app.corp_map.territories[character.location_id]
-            cost = lodging_cost(here)
+            here_id = character.location_id
+            here = self.app.corp_map.territories[here_id]
+            # Computed before any resolution/removal below: a contract that completes
+            # tonight must still count toward tonight's free lodging, since it was
+            # active here when the night started.
+            active_here = [c for c in character.security_contracts if c.territory_id == here_id]
+            for contract in active_here:
+                result = resolve_security_night(character, contract, self.app.rng)
+                if result.blown:
+                    self.notify(
+                        f"Security contract at {here.name} blown — you're compromised.",
+                        severity="error",
+                    )
+                    character.remove_security_contract(contract.id)
+                elif result.completed:
+                    self.notify(
+                        f"Security contract at {here.name} complete — {result.pay + result.bonus}eb paid."
+                    )
+                    character.remove_security_contract(contract.id)
+                elif result.pay:
+                    self.notify(
+                        f"Stood watch at {here.name} — paid {result.pay}eb "
+                        f"({contract.nights_completed}/{contract.nights_total} nights)."
+                    )
+                else:
+                    self.notify(
+                        f"Rough night at {here.name} — no pay "
+                        f"({contract.nights_completed}/{contract.nights_total} nights)."
+                    )
+            for contract in character.security_contracts:
+                if contract.territory_id != here_id:
+                    elsewhere = self.app.corp_map.territories[contract.territory_id]
+                    self.notify(f"Not on-site for the {elsewhere.name} contract tonight — no progress.")
+
+            cost = 0 if active_here else lodging_cost(here)
             if cost:
                 paid = min(cost, character.cash)
                 character.cash -= paid

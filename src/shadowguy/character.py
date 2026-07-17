@@ -12,6 +12,7 @@ from shadowguy.skills import SKILLS, skill_for
 
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
+    from shadowguy.security import SecurityContract
 
 BASE_HEALTH = 10
 
@@ -113,6 +114,10 @@ class Character:
     # a job's roles (with the one-remote-support cap) is a later increment.
     crew: list[CrewHire] = field(default_factory=list)
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
+    # Accepted multi-night guard contracts (security.py) — a standing engagement, not
+    # a Scene: resolved one night at a time by MainMenu's end-day handler while
+    # location_id matches a contract's territory_id, not by "running" it like a job.
+    security_contracts: list["SecurityContract"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
     inventory: list[InventoryItem] = field(default_factory=list)
@@ -303,6 +308,12 @@ class Character:
     def remove_job(self, job_scene_id: str) -> None:
         self.accepted_jobs = [job for job in self.accepted_jobs if job.scene.id != job_scene_id]
         self._discharge_orphan_crew()
+
+    def accept_security_contract(self, contract: "SecurityContract") -> None:
+        self.security_contracts.append(contract)
+
+    def remove_security_contract(self, contract_id: str) -> None:
+        self.security_contracts = [c for c in self.security_contracts if c.id != contract_id]
 
     def _discharge_orphan_crew(self) -> None:
         """Drop any for-job hire whose job is no longer accepted (completed, blown, expired).

@@ -136,7 +136,8 @@ class ContactsScreen(PanelNav, Screen):
             id_prefix="fixer_",
             label=lambda fixer: (
                 f"{fixer.name} — {fixer.specialty} "
-                f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs available)"
+                f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs, "
+                f"{len(fixer.security_offers)} security available)"
             ),
             empty_label="No established contacts yet.",
             empty_id="no_fixers",
