@@ -23,10 +23,35 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.menu_screens import TitleMenu
+from shadowguy.gangs import GANGS
+from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.screens.info_screens import ContactsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import ShopScreen
 from textual.widgets import Collapsible, ListView
+
+
+class ForcedChance(random.Random):
+    """A Random whose random() is fixed, so the flat gang-encounter chance can be forced
+    to fire; randint/choice still work for the enemy roll."""
+
+    def __init__(self, value: float) -> None:
+        super().__init__(0)
+        self._value = value
+
+    def random(self) -> float:
+        return self._value
+
+
+def _stage_gang_turf(app, standing: int) -> str:
+    """Put a gang on a territory bordering the runner, sour the runner's standing to
+    `standing`, and return that territory id. Force the encounter chance to always fire."""
+    start_id = app.character.location_id
+    neighbor_id = app.corp_map.territories[start_id].connections[0]
+    app.corp_map.territories[neighbor_id].gang_id = GANGS[0].id
+    app.character.adjust_gang_standing(GANGS[0].id, standing)
+    app.rng = ForcedChance(0.0)
+    return neighbor_id
 
 
 def run(coro):
@@ -285,5 +310,80 @@ def test_contacts_panel_nav_skips_a_collapsed_section():
             screen.action_focus_panel(1)
             await pilot.pause()
             assert screen.focused is screen.query_one("#locals_list", ListView)
+
+    run(body())
+
+
+def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_cash():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            neighbor_id = _stage_gang_turf(app, standing=-2)  # toll band
+            app.character.cash = 1000
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            app.screen.selected_id = neighbor_id
+            app.screen._refresh()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            # Arrived on the turf and got stopped for a toll.
+            assert app.character.location_id == neighbor_id
+            assert isinstance(app.screen, GangTollScreen)
+
+            await pilot.click("#pay")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+            assert app.character.cash == 1000 - 70  # toll_for(-2)
+
+    run(body())
+
+
+def test_toll_the_runner_cant_cover_falls_through_to_a_fight():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            neighbor_id = _stage_gang_turf(app, standing=-2)  # toll band, 70eb
+            app.character.cash = 10  # can't cover the toll
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            app.screen.selected_id = neighbor_id
+            app.screen._refresh()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, GangTollScreen)
+
+            # Trying to pay what you can't cover drops you into the fight instead.
+            await pilot.click("#pay")
+            await pilot.pause()
+            assert isinstance(app.screen, CombatScreen)
+            assert app.character.cash == 10  # nothing taken
+
+    run(body())
+
+
+def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            neighbor_id = _stage_gang_turf(app, standing=-5)  # attack band
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            app.screen.selected_id = neighbor_id
+            app.screen._refresh()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.character.location_id == neighbor_id
+            assert isinstance(app.screen, CombatScreen)
 
     run(body())
