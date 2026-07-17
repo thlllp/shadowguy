@@ -49,8 +49,8 @@ from shadowguy.factions import (
     officer_unlocked,
 )
 from shadowguy.fixer import Fixer, create_fixers, discover_fixers_here, expire_offers, refresh_offers
-from shadowguy.gigs import refresh_gigs
-from shadowguy.jobs import generate_legwork_for_job
+from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT, refresh_gigs
+from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT, generate_legwork_for_job
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.saves import SaveSlot, list_saves, load_game, save_game
 from shadowguy.scene import (
@@ -1464,10 +1464,16 @@ class SceneScreen(Screen):
             character.health = 1
             msg = "Most of your creds are gone." if roll <= 4 else "At least you're alive."
             self.notify("You came to in an alley. " + msg)
-            # The job/gig is blown — pop back to MainMenu.
+            # The job/gig is blown — pop back to MainMenu. This bypasses apply_outcome
+            # (there's no Outcome for waking up in an alley), so the same failure
+            # penalty jobs.py/gigs.py apply on a blown scene has to be repeated here.
             if self.scene.kind == SceneKind.JOB:
+                character.adjust_fixer_trust(self.scene.target_fixer_id, JOB_FAILURE_TRUST_HIT)
+                character.adjust_rep(JOB_FAILURE_REP_HIT)
                 character.remove_job(self.scene.id)
             elif self.scene.kind == SceneKind.GIG:
+                character.adjust_local_standing(self.scene.target_character_id, GIG_FAIL_STANDING_HIT)
+                character.adjust_rep(GIG_FAIL_REP_HIT)
                 self.app.location_gigs.pop(self.scene.target_location_id, None)
             self.app.pop_screen()
             return

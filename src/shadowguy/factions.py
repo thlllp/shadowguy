@@ -45,9 +45,11 @@ FACTIONS_BY_ID = {faction.id: faction for faction in FACTIONS}
 # one per faction). A rank ladder: each higher officer needs BOTH more street rep AND
 # more standing with that corp to get past — the exec suite is for a runner the corp both
 # knows (rep) and trusts (standing). Rows are (role, min_rep, min_standing). The ground-floor
-# reception has min_standing None — the lobby is public, open even to a runner the corp is
-# hostile to (negative standing), who gets the cold shoulder rather than the door (see
-# officer_dialogue). Talking is flavor only for now.
+# reception has min_standing None — it doesn't care how this *corp* feels about you
+# (negative standing still gets the cold shoulder rather than the door, see
+# officer_dialogue) — but it does care whether the street knows your name at all: min_rep
+# 0 means a runner whose rep has gone negative (a blown job or gig costs rep now — see
+# character.REP_FLOOR) gets turned away even from the lobby. Talking is flavor only for now.
 CORP_OFFICER_TIERS = (
     ("receptionist", 0, None),
     ("operations manager", 5, 3),
