@@ -2,8 +2,21 @@ from textual.widgets import ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
 from shadowguy.factions import FACTIONS
+from shadowguy.matrix import matrix_readiness
+from shadowguy.scene import Scene
 from shadowguy.shops import ITEMS_BY_ID
 from shadowguy.skills import skill_value
+
+
+def matrix_warning(character: Character, scene: Scene) -> str:
+    """The heads-up a Data Heist offer/row shows a runner who isn't kitted for the matrix
+    — "⚠ needs a cyberdeck and more Hack skill" — or "" when the scene has no matrix stage
+    or the runner is ready. Advisory only: the job is still offered and acceptable (see
+    matrix.matrix_readiness), this just warns before they bleed against ICE they can't touch."""
+    if not scene.has_matrix:
+        return ""
+    missing = matrix_readiness(character)
+    return f" ⚠ needs {' and '.join(missing)}" if missing else ""
 
 
 async def _replace_items(list_view: ListView, items: list[ListItem], index: int = 0) -> None:

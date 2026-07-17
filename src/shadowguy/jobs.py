@@ -10,11 +10,13 @@ from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
+from shadowguy.matrix import ICE_TIERS, roll_ice
 from shadowguy.scene import (
     BurglaryStage,
     Choice,
     Encounter,
     Entrance,
+    MatrixStage,
     Outcome,
     Posture,
     Role,
@@ -43,6 +45,10 @@ REWARD_BASE = (250, 450, 700)
 # not KeyError inside a fixer's offer refresh.
 if len(DIFFICULTY_BASE) != len(REWARD_BASE) or set(ENEMY_TIERS) != set(range(len(DIFFICULTY_BASE))):
     raise ValueError("DIFFICULTY_BASE, REWARD_BASE and combat.ENEMY_TIERS must cover the same tiers")
+# matrix.ICE_TIERS is the third fight-population table (see combat.ENEMY_TIERS above) — a
+# matrix job's fights draw from it by the same day tier, so it has to span the same tiers.
+if set(ICE_TIERS) != set(range(len(DIFFICULTY_BASE))):
+    raise ValueError("matrix.ICE_TIERS must cover the same tiers as DIFFICULTY_BASE")
 
 # How much harder the last stage of a job is than the first. Spread across however
 # many stages the job turned out to have, so the arc is the same shape whether it
@@ -105,6 +111,12 @@ AMBUSH_LABEL = "Take them first"
 # other success. Running, though, ends the run of the job entirely (next_stage None) —
 # the contract is blown, and the fixer keeps the money.
 FIGHT_PROMPT = "{faction} security comes down on you at {location}. No more talking."
+
+# The matrix counterpart of FIGHT_PROMPT, for a Data Heist (archetype.matrix): the fight
+# beside every stage is ICE in {faction}'s architecture, not muscle in the hallway,
+# because a remote hack never puts a body in the building. Same routing (the ambush and a
+# critical failure both point at fight_id); only what sits in the stage differs.
+MATRIX_FIGHT_PROMPT = "{faction}'s ICE closes on your signal in the {location} node. Breach or burn."
 
 # Some jobs play their fights out on a grid (tactical.TacticalStage) instead of the
 # abstract round-by-round Encounter — a whole job is one or the other, decided once, so a
@@ -239,6 +251,12 @@ class JobArchetype:
     name: str
     verb: str
     stages: tuple[JobStage, ...]
+    # True only for Data Heist (set at ARCHETYPES construction, not authored per-row) --
+    # a whole-job property, unlike JobStage.burglary's per-stage one: it makes *every*
+    # fight beside a stage a scene.MatrixStage (a fight against ICE, resolved in matrix.py)
+    # instead of gunmen, and suppresses the tactical/abstract roll for the job. A remote
+    # hack has no body in the building, so there's nobody to meet in meatspace.
+    matrix: bool = False
 
 
 # name, verb, then one row per stage: (StageType, prompt, approach pool).
@@ -536,6 +554,59 @@ _ARCHETYPE_ROWS = (
             ),
         ),
     ),
+    (
+        # A second Netrunner specialist (every beat leads with `hack`, so
+        # archetype_specialist() reads Netrunner and pins the lead through the partial
+        # draw, same as Intrusion). What's structurally different is the ARCHETYPES
+        # comprehension below flags the *whole* archetype matrix=True: this is a remote
+        # hack, so the fight beside every stage is ICE (a scene.MatrixStage, resolved in
+        # matrix.py) rather than muscle, and losing one is ejection -> the contract
+        # blown, never death (see generate_job and screens/matrix_screen.py). Where
+        # Intrusion is netrunning that resolves as ordinary checks and meat fights, a
+        # Data Heist's signature is that its fights *are* matrix combat. It's shown to
+        # every build, with a cyberdeck/Hack warning (matrix.matrix_readiness) rather
+        # than a lockout: a non-hacker can take it and bleed against the ICE.
+        "Data Heist",
+        "crack",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("hack", 1, "Slip through a seam in the perimeter ICE"),
+                    ("stealth", 0, "Ghost past the watchdogs on a spoofed handshake"),
+                    ("toughness", -2, "Brute-force the gateway and eat the feedback"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You're inside their architecture. {target} sits behind the datastore's black ICE.",
+                (
+                    ("hack", 1, "Peel the black ICE apart, layer by layer"),
+                    ("infiltration", 0, "Pick the datastore's logical locks by hand"),
+                    ("blunt", -2, "Crash the node and rip the data as it falls"),
+                ),
+            ),
+            (
+                StageType.COMPLICATION,
+                "A tracer program wakes and starts walking back up your connection.",
+                (
+                    ("hack", 1, "Loop the tracer back on itself"),
+                    ("dodge", 0, "Bounce your signal through a dozen dead relays"),
+                    ("resist_poison", -2, "Tank the neural feedback and keep working"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "You have {target}. Their logs still say you were never here.",
+                (
+                    ("hack", 1, "Scrub the logs and back out clean"),
+                    ("deception", 0, "Leave a false trail pointing at a rival crew"),
+                    ("acrobatics", -2, "Yank the jack and ride the dumpshock out"),
+                ),
+            ),
+        ),
+    ),
 )
 
 ARCHETYPES = [
@@ -551,6 +622,7 @@ ARCHETYPES = [
             )
             for stage_type, prompt, approaches in stages
         ),
+        matrix=(name == "Data Heist"),
     )
     for name, verb, stages in _ARCHETYPE_ROWS
 ]
@@ -739,8 +811,10 @@ def generate_job(
     stage_ids = [f"stage_{i}" for i in range(len(job_stages))]
     stages: dict[str, Stage] = {}
     # Decided once for the whole job (see TACTICAL_FIGHT_CHANCE): every fight in it is
-    # either a grid set-piece or the abstract Encounter, not a mix.
-    is_tactical = rng.random() < TACTICAL_FIGHT_CHANCE
+    # either a grid set-piece or the abstract Encounter, not a mix. A matrix job (Data
+    # Heist) is neither — all its fights are ICE — so it doesn't roll this at all (and the
+    # short-circuit keeps it from consuming an rng draw a non-matrix job would).
+    is_tactical = not archetype.matrix and rng.random() < TACTICAL_FIGHT_CHANCE
 
     for i, job_stage in enumerate(job_stages):
         is_last = i == len(stage_ids) - 1
@@ -888,16 +962,32 @@ def generate_job(
                 choices=choices,
             )
         # The fight beside every stage, reached by the ambush choice or a critical
-        # failure. Its prose, enemies and both Outcomes are the same whether it's an
-        # abstract Encounter or a grid set-piece — only where they're packaged differs.
-        enemies = roll_enemies(tier, rng)
-        fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
+        # failure. Both Outcomes are the same whether it's an abstract Encounter, a grid
+        # set-piece, or an ICE run — only where they're packaged (and who turns up)
+        # differs. A matrix job fields ICE and no gunmen, so roll_enemies isn't called
+        # for it (nobody's in the building), and its "escape" is being ejected.
         fight_victory = _payout("They stop coming. You finish what you came for.", 1.0, 1, next_stage, is_last)
         fight_escape = Outcome(
             text="You get out with your skin. The job is blown.",
             fixer_trust_delta=JOB_FAILURE_TRUST_HIT,
             rep_delta=JOB_FAILURE_REP_HIT,
         )
+        if archetype.matrix:
+            fight = Stage(
+                id=fight_id,
+                prompt="",  # the MatrixStage carries the prose; a fight stage has no choices
+                choices=[],
+                matrix=MatrixStage(
+                    prompt=MATRIX_FIGHT_PROMPT.format(faction=faction.name, location=location.name),
+                    ice=roll_ice(tier, rng),
+                    victory=_payout("You seize the data and the ICE goes dark.", 1.0, 1, next_stage, is_last),
+                    escape=fight_escape,
+                ),
+            )
+            stages[fight_id] = fight
+            continue
+        enemies = roll_enemies(tier, rng)
+        fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
         if is_tactical:
             tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
             fight = Stage(

@@ -302,6 +302,27 @@ A **fourth kind of stage**, and the second to break the "text list of Choices" m
 
 **Not yet balance-simulated**: guard count, sight range, and `jobs.BURGLARY_SPOTTED_DAMAGE` are first-slice numbers, easy tuning knobs rather than the product of a seed-sweep sim the way `DAMAGE_FOR_DELTA`/`TACTICAL_FIGHT_CHANCE` are. Re-run one before leaning on them.
 
+### Data Heist & matrix combat (`shadowguy/matrix.py`, `scene.MatrixStage`, `shadowguy/jobs.py`, `screens/matrix_screen.py`)
+
+**Data Heist** is the sixth `jobs.ARCHETYPES` entry and a second Netrunner specialist beside Intrusion — but where Intrusion is netrunning that *resolves as ordinary checks and meat fights*, a Data Heist's signature is that its fights **are matrix combat**. It's a **remote** hack: the netrunner jacks in from outside and never puts a body in the building, so `_role_for_stage` marks every beat `REMOTE` and `Scene.roles` falls out all-Netrunner/all-remote without a special case (every stage leads `hack`, and `hack` is the lone member of `jobs.REMOTE_SKILLS`).
+
+**Matrix combat is a third *fight surface*, not a third stage type's worth of new pipeline.** Abstract `Encounter`, tactical grid, and now the matrix are the three things a job's `{stage}_fight` can hold; `scene.MatrixStage` is the ICE analogue of `Encounter`/`TacticalStage` (lives in `scene.py` because it holds `Outcome`s; `matrix.py` mustn't import `scene`), routed to by an ordinary `next_stage`, and `Stage.matrix` joins the "exactly one mode" guard in `Scene.__post_init__`. Which surface a job uses is decided once: `archetype.matrix` (a *whole-job* flag, unlike `JobStage.burglary`'s per-stage one) makes **every** fight a `MatrixStage` and suppresses the `is_tactical` roll — a remote hack has nobody to meet in meatspace, so `roll_enemies` is never called for it.
+
+**It is a genuinely parallel subsystem (`matrix.py`), not a reskin of `combat.py` — but it still shares the one thing everything shares.** Every roll goes through `checks.resolve_check`, and a landed intrusion is sized by `combat.resolve_hit` (the public hit primitive `tactical.py` already reuses — *one hit formula, now three surfaces*). What's deliberately *not* shared:
+
+- **Integrity, not health.** The runner's matrix HP (`player_integrity` = `BASE_INTEGRITY + INTEGRITY_PER_INT * stat("intelligence")`, gear-included — a better deck buys resilience) is a **per-fight pool on `MatrixState`**, never touching `Character.health`. Running it dry doesn't kill you — it **ejects** you (`MatrixOutcome.EJECTED`). **There is no death in the matrix**: a remote hack can't kill the runner, so losing blows the contract (the same blown-job `escape` Outcome a lost meat fight uses) but never the run. `scene_screen._on_matrix_end` has no death branch, and `SceneScreen` maps `SEIZED`→victory / `EJECTED`→escape.
+- **Intelligence's actions, not the six-stat spread.** The matrix is the Hacker's arena *on purpose* (unlike meat combat, whose spread exists so no build is locked out of a round): **Breach** rolls `hack` (damage from the deck), **Harden** rolls `tinkering` (combat's brace), **Analyze** rolls `infer` (combat's read), **Jack out** always works with no roll (the escape valve — *a fight is never a cage*). A non-hacker can fight here but bleeds; that's the point.
+
+**Weapons-are-damage-skills-are-the-hit, ported: the deck is the weapon.** `skill_value("hack")` decides whether an intrusion lands; `shops.equipped_deck_rating` decides what it costs the ICE (`player_attack_damage` = `DECK_BASE_DAMAGE + rating`, or `BARE_JACK_DAMAGE` bare). **No new `Item` field or `Slot` was added** — a cyberdeck is already a `slot=None` item (the codebase reserved that: "a None slot is a deck"), and a deck's rating *is* its Intelligence bonus, so the four existing decks (`burner_deck`/`cracked_cyberdeck`/`zetatech_rig`/`pawned_deck`) work unchanged. If you add a non-deck `slot=None` `Item`, `equipped_deck_rating` will read it as a deck — that convention is now load-bearing.
+
+**The `drop` reuses `combat.drop_for_result`**: breaching cleanly (the ambush) buys a free ICE round; a critical failure hands the ICE a free bite (one program, not the whole datastore — same reason `combat`'s enemy drop is one opener). The shared ambush (`AMBUSH_LABEL`, "Take them first (Tactics)") still routes into the matrix fight unchanged; it reads slightly off against ICE and is the obvious thing to theme per-archetype later.
+
+**Shown to all builds, warned not locked.** A Data Heist appears on every runner's `FixerOffersScreen`/`MainMenu` (CLAUDE's rule: a specialist job *guarantees a lane, doesn't lock anyone out*), but a scene with a matrix stage (`Scene.has_matrix`) shows **"⚠ needs a cyberdeck / more Hack skill"** via `screens.matrix_warning` → `matrix.matrix_readiness` when the runner has no equipped deck or `hack` below `MIN_READY_HACK` (5). Advisory only — an under-kitted runner can still accept and bleed against the ICE.
+
+**Not yet balance-simulated — first-slice numbers, and swingier than intended.** `BASE_INTEGRITY`/`INTEGRITY_PER_INT`, the `_ICE_ROWS`/`ICE_TIERS` roster, `FIREWALL_BASE`, the deck-damage constants, and `MIN_READY_HACK` are all hand-set. On a naive always-attack policy at tier 2, a decked hacker (Int 6 + `zetatech_rig`, `hack` rank 4) seizes **~100%** and a deckless Int-1 runner is ejected **~99%** — the design intent ("the matrix is the hacker's arena") is realized, but the decked hacker is currently near-*invulnerable* (firewall scales off `infer`, which the deck's Int bonus also lifts), which makes a matrix ambush an almost free "take them first" for a real netrunner. Re-run a presets×tiers sim before leaning on any of it, the way `combat.py`/`tactical.py` numbers were earned. `matrix.py` is otherwise a leaf like `combat.py` (imports `character`/`checks`/`combat`/`shops`/`skills`, never `scene`).
+
+**Deferred, with room left**: the on-site variant (a hacker embedded with the muscle running *smaller* matrix runs mid-job) that boots you out **painfully** — a health cost — instead of blowing the run. That's an eject-cost constant and a caller flag away, not a second engine, which is why loss already funnels through a single `MatrixOutcome.EJECTED` rather than a die-here branch. See Faction standing / Fixers for the patterns its stakes would reuse.
+
 ### Faction standing (`shadowguy/factions.py`, `shadowguy/scene.py`, `shadowguy/character.py`)
 
 The first real runner→corp coupling: what you do in Runner mode changes how the corps feel about you.
@@ -428,10 +449,12 @@ src/shadowguy/
   combat.py      Enemy roster, rounds, the six-stat action set, Drop/CombatOutcome, shared resolve_hit; imports no scene
   tactical.py    grid combat: Grid/Tile, tcod FOV+A*, turn engine (reuses combat.resolve_hit), BSP generate_map;
                  also generate_building/BurglaryWalkState (Burglary jobs, no combat); imports no scene
-  scene.py       Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/Role data model,
-                 resolve_choice()/resolve_entrance(), apply_outcome()
+  matrix.py      matrix combat (Data Heist): ICE roster, integrity pool (not health), Int-family actions,
+                 SEIZED/EJECTED (no death); reuses combat.resolve_hit; leaf, imports no scene
+  scene.py       Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/MatrixStage/Role data
+                 model, resolve_choice()/resolve_entrance(), apply_outcome()
   content.py     unwired example job/legwork scenes (worked examples of the Scene data model)
-  jobs.py        procedural job generation + timing (JobTiming) + per-job legwork generator
+  jobs.py        procedural job generation + timing (JobTiming) + per-job legwork generator; matrix=Data Heist
   gigs.py        procedural per-Location gig generation (per-kind templates), owned by a LocalCharacter; refresh_gigs
   fixer.py       Fixer/JobOffer persistent roster, offer refresh/expiry; also Fixer.security_offers
   security.py    procedural multi-night Security contract generation + nightly resolution (not Scene-based)
@@ -442,19 +465,19 @@ src/shadowguy/
   corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ per faction,
                  one GANG_DEN per gang; lodging_cost/has_home/add_safehouse/safehouse_price (property + rest)
   shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
-                 buy/sell/equip, standing-scaled pricing, hospital_stay
+                 buy/sell/equip, standing-scaled pricing, hospital_stay, equipped_deck_rating (matrix)
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
   app.py         Textual App: CharacterCreationScreen (start) + MainMenu + FixerOffersScreen + SceneScreen
-                 + CombatScreen + TacticalScreen + EntrancePickScreen/BurglaryWalkScreen + CorpMapScreen
-                 + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen + RealEstateScreen + SafehouseScreen
-                 + ContactsScreen + InventoryScreen/SkillsScreen + QuitMenu/LoadMenu
+                 + CombatScreen + TacticalScreen + MatrixScreen + EntrancePickScreen/BurglaryWalkScreen
+                 + CorpMapScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen + RealEstateScreen
+                 + SafehouseScreen + ContactsScreen + InventoryScreen/SkillsScreen + QuitMenu/LoadMenu
 ```
 
 `saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change.
 
 ### Verifying changes
 
-There **is** a real test suite now (`tests/`, 13 files, `pytest>=8` in `pyproject.toml`'s `dev` dependency group) exercised by CI (`.github/workflows/tests.yml`, on every push/PR to `master`) — `uv run pytest -q` runs it, `uvx ruff check src/` lints, both in CI. Guideline §4 still applies; the established conventions:
+There **is** a real test suite now (`tests/`, 14 files, `pytest>=8` in `pyproject.toml`'s `dev` dependency group) exercised by CI (`.github/workflows/tests.yml`, on every push/PR to `master`) — `uv run pytest -q` runs it, `uvx ruff check src/` lints, both in CI. Guideline §4 still applies; the established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm, see `tests/test_jobs.py`/`tests/test_corpmap.py`/`tests/test_security.py`/`tests/test_burglary_gen.py`) over a module-scoped fixture (e.g. `generate_corp_map(FACTIONS, random.Random(0))`), asserting invariants rather than exact values. That's how the corp map's "always connected, every faction equal in count and value" guarantee is checked; a map that merely *looks* plausible can be quietly unfair. This caught a real bug once already: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep, since only some seeds happened to double-place a hospital and a den on the start cell.
 - **Forcing an exact `CheckResult` branch** — `tests/test_checks.py` establishes the pattern: a small `random.Random` subclass whose `randint` always returns a fixed face (`AlwaysSix`/`AlwaysOne`) or a call-counted mix, so a dice-pool roll can be pinned to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically rather than searching for a lucky seed. Reused in `tests/test_security.py` to test every branch of `resolve_security_night`.

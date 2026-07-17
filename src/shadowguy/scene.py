@@ -6,6 +6,7 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
 from shadowguy.combat import Enemy
 from shadowguy.factions import standing_shift
+from shadowguy.matrix import Ice
 from shadowguy.skills import skill_for, skill_value
 from shadowguy.tactical import Coord, Grid
 
@@ -184,19 +185,43 @@ class BurglaryStage:
     guards: tuple[Coord, ...] = ()
 
 
+@dataclass(frozen=True)
+class MatrixStage:
+    """A matrix fight, as the scene graph sees it — the ICE analogue of Encounter.
+
+    Same split, same reason as Encounter/TacticalStage: it lives here, not in matrix.py,
+    because it holds Outcomes and matrix.py must not import scene. matrix.py owns *how the
+    ICE fight resolves*; this owns *what seizing the data or being ejected is worth*,
+    through the ordinary Outcome — so a Data Heist's matrix stage pays its cash/rep/
+    standing on the same reward path as every other stage.
+
+    `victory` is seizing the data (every ICE down); `escape` is being ejected — integrity
+    gone, or a voluntary jack-out. Unlike Encounter/TacticalStage, ejection is the *only*
+    way to lose: a remote hack can't kill you, so there's no death branch to leave
+    Outcome-less.
+    """
+
+    prompt: str
+    ice: tuple[Ice, ...]
+    victory: Outcome
+    escape: Outcome
+
+
 @dataclass
 class Stage:
     id: str
     prompt: str
     choices: list[Choice]
-    # A stage is a set of choices, a fight, a tactical map, or a burglary -- exactly
-    # one, never a mix (guarded in Scene.__post_init__). A fight's/map's "choices"
-    # come from the runner's own gear and skills (combat.available_actions / the
-    # grid), not the scene; a burglary's choices are its Entrances, picked on a
-    # diagram screen rather than a text list.
+    # A stage is a set of choices, a fight, a tactical map, a burglary, or a matrix
+    # fight -- exactly one, never a mix (guarded in Scene.__post_init__). A
+    # fight's/map's "choices" come from the runner's own gear and skills
+    # (combat.available_actions / matrix.available_matrix_actions / the grid), not the
+    # scene; a burglary's choices are its Entrances, picked on a diagram screen rather
+    # than a text list.
     combat: Encounter | None = None
     tactical: TacticalStage | None = None
     burglary: BurglaryStage | None = None
+    matrix: MatrixStage | None = None
 
 
 @dataclass
@@ -235,15 +260,19 @@ class Scene:
         if self.start_stage not in self.stages:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
         start = self.stages[self.start_stage]
-        if start.combat is not None or start.tactical is not None:
-            raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight or tactical map")
+        if start.combat is not None or start.tactical is not None or start.matrix is not None:
+            raise ValueError(
+                f"{self.id}: start_stage {self.start_stage!r} cannot be a fight, tactical map, or matrix run"
+            )
 
     def _validate_stage(self, stage: Stage) -> None:
-        modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical, stage.burglary) if mode)
+        modes = sum(
+            1 for mode in (stage.choices, stage.combat, stage.tactical, stage.burglary, stage.matrix) if mode
+        )
         if modes > 1:
             raise ValueError(
                 f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, "
-                "a tactical map, or a burglary"
+                "a tactical map, a burglary, or a matrix run"
             )
         if stage.combat is not None and not stage.combat.enemies:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
@@ -251,6 +280,8 @@ class Scene:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
         if stage.burglary is not None and not stage.burglary.entrances:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a burglary with no entrances")
+        if stage.matrix is not None and not stage.matrix.ice:
+            raise ValueError(f"{self.id}: stage {stage.id!r} is a matrix run with no ICE")
         for choice in stage.choices:
             skill_for(choice.skill)
         if stage.burglary is not None:
@@ -299,6 +330,8 @@ class Scene:
             yield from (stage.combat.victory, stage.combat.escape)
         if stage.tactical is not None:
             yield from (stage.tactical.victory, stage.tactical.escape)
+        if stage.matrix is not None:
+            yield from (stage.matrix.victory, stage.matrix.escape)
         if stage.burglary is not None:
             for entrance in stage.burglary.entrances:
                 for outcome in (
@@ -310,6 +343,12 @@ class Scene:
                     if outcome is not None:
                         yield outcome
             yield stage.burglary.spotted
+
+    @property
+    def has_matrix(self) -> bool:
+        """Whether any stage is a matrix fight — a Data Heist (jobs.py). What the UI reads
+        to decide a job needs the cyberdeck/Hack warning (see screens.matrix_warning)."""
+        return any(stage.matrix is not None for stage in self.stages.values())
 
     @property
     def max_cash_loss(self) -> int:

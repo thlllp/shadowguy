@@ -28,7 +28,7 @@ from shadowguy.shops import (
     sell_price,
 )
 
-from . import CharacterSheet, _populate_list, _replace_items
+from . import CharacterSheet, _populate_list, _replace_items, matrix_warning
 
 
 class FixerOffersScreen(Screen):
@@ -71,9 +71,13 @@ class FixerOffersScreen(Screen):
         )
 
     async def _refresh(self) -> None:
+        character = self.app.character
         items = [
             ListItem(
-                Static(f"{offer.scene.title} ({offer.scene.stamina_cost} stamina) — {offer.timing.label}"),
+                Static(
+                    f"{offer.scene.title} ({offer.scene.stamina_cost} stamina) — {offer.timing.label}"
+                    f"{matrix_warning(character, offer.scene)}"
+                ),
                 id=offer.id,
             )
             for offer in self.fixer.offers
