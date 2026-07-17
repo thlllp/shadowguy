@@ -23,6 +23,7 @@ import random
 import uuid
 from dataclasses import dataclass
 
+from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.corpmap import (
     GENERATED_KINDS,
     CorpMap,
@@ -34,9 +35,8 @@ from shadowguy.corpmap import (
 from shadowguy.scene import Choice, Outcome, Scene, SceneKind, Stage
 from shadowguy.skills import skill_for
 
-# Tier scales gig difficulty and pay with the day, same cadence as jobs (_tier_for_day).
-# Kept local rather than imported so gigs.py stands on its own; the two tables are
-# guarded against each other at import.
+# Tier scales gig difficulty and pay with the day, same cadence as jobs.
+# The shared formula lives in checks.day_tier; only the tier count differs per domain.
 GIG_DIFFICULTY = (11, 13, 15)
 GIG_CASH = (80, 110, 150)
 if len(GIG_DIFFICULTY) != len(GIG_CASH):
@@ -227,7 +227,7 @@ for _template in _GIG_TEMPLATES.values():
 
 
 def _gig_tier(day: int) -> int:
-    return min(len(GIG_CASH) - 1, (day - 1) // 3)
+    return day_tier(day, len(GIG_CASH))
 
 
 def _build_choice(approach: _GigApproach, difficulty: int, cash: int) -> Choice:
@@ -271,7 +271,7 @@ def generate_gig(
     """A single-stage gig at `location`, owned by `character`, whose reward moves that
     character's standing. Offers a random 1..GIG_MAX_APPROACHES subset of the kind's
     approaches, so two gigs of the same kind rarely want the same skill."""
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     template = _GIG_TEMPLATES[location.kind]
     tier = _gig_tier(day)
     difficulty = GIG_DIFFICULTY[tier]
@@ -317,7 +317,7 @@ def refresh_gigs(
     """Fill every location that has characters but no live gig with a fresh one, owned by
     a random one of its characters. Idempotent: a location that already has a gig is left
     alone, so this can run every day advance without churning existing offers."""
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     for territory in corp_map.territories.values():
         for location in territory.locations:
             # A corp HQ has characters (its officers) but no gig template — skip it, and

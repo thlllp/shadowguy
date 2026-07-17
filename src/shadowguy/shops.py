@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from shadowguy.checks import resolve_rng
 from shadowguy.corpmap import SHOP_KINDS, LocationKind
 from shadowguy.skills import skill_for
 
@@ -330,6 +331,15 @@ CATALOG: dict[LocationKind, list[Item]] = {
 
 ITEMS_BY_ID = {item.id: item for items in CATALOG.values() for item in items}
 
+# Weapon-profile bounds. Shared with combat.py (via import) so the hand-built UNARMED
+# stays in sync with the catalog — any edit to these constants updates both sides.
+MIN_WEAPON_CONCEALMENT = 1
+MAX_WEAPON_CONCEALMENT = 5
+MIN_WEAPON_DAMAGE = 4
+MAX_WEAPON_DAMAGE = 10
+MIN_STUN_DAMAGE = 1
+MAX_STUN_DAMAGE = 10
+
 # Import-time guard, same pattern as corpmap.py's own tuning-constant checks:
 # a shop LocationKind with no catalog would silently show an empty shop
 # (ShopScreen's CATALOG.get(..., [])) instead of a clear failure.
@@ -354,14 +364,16 @@ for _item in ITEMS_BY_ID.values():
     _has_stun = bool(_item.stun_damage)
     if _is_weapon and (
         _item.skill is None
-        or not (1 <= _item.concealment <= 5)
+        or not (MIN_WEAPON_CONCEALMENT <= _item.concealment <= MAX_WEAPON_CONCEALMENT)
         or not (_has_lethal or _has_stun)
-        or (_has_lethal and not (4 <= _item.damage <= 10))
-        or (_has_stun and not (1 <= _item.stun_damage <= 10))
+        or (_has_lethal and not (MIN_WEAPON_DAMAGE <= _item.damage <= MAX_WEAPON_DAMAGE))
+        or (_has_stun and not (MIN_STUN_DAMAGE <= _item.stun_damage <= MAX_STUN_DAMAGE))
     ):
         raise ValueError(
-            f"{_item.id}: a Slot.WEAPON item needs a skill, 1-5 concealment,"
-            " and either 4-10 damage or 1-10 stun_damage (or both)"
+            f"{_item.id}: a Slot.WEAPON item needs a skill,"
+            f" {MIN_WEAPON_CONCEALMENT}-{MAX_WEAPON_CONCEALMENT} concealment,"
+            f" and either {MIN_WEAPON_DAMAGE}-{MAX_WEAPON_DAMAGE} damage"
+            f" or {MIN_STUN_DAMAGE}-{MAX_STUN_DAMAGE} stun_damage (or both)"
         )
     if not _is_weapon and (
         _item.skill is not None or _item.damage or _item.stun_damage or _item.concealment
@@ -544,7 +556,7 @@ def hospital_stay(character: "Character", rng: random.Random | None = None) -> s
     if character.cash < HOSPITAL_STAY_COST:
         return None
     character.cash -= HOSPITAL_STAY_COST
-    roll = (rng or random).randint(1, 6)
+    roll = resolve_rng(rng).randint(1, 6)
     before = character.health
     character.adjust_health(roll + character.body)
     return f"A day in the ward: +{character.health - before} Health for {HOSPITAL_STAY_COST}eb."

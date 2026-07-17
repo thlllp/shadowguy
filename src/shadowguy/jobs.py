@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from shadowguy.character import CORE_STATS
+from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
@@ -612,7 +613,7 @@ class JobTiming:
 
 
 def _tier_for_day(day: int) -> int:
-    return min(len(DIFFICULTY_BASE) - 1, (day - 1) // 3)
+    return day_tier(day, len(DIFFICULTY_BASE))
 
 
 def _random_timing(day: int, rng: random.Random) -> JobTiming:
@@ -627,7 +628,7 @@ def _random_timing(day: int, rng: random.Random) -> JobTiming:
 def generate_job(
     day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
 ) -> tuple[Scene, JobTiming]:
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     archetype = rng.choice(ARCHETYPES)
     specialist = archetype_specialist(archetype)
     # The mark is a real corp, hit in a district it actually holds on this run's map.
@@ -859,7 +860,7 @@ LEGWORK_FIGHT_PROMPT = "Two of {faction}'s people peel off the corner. They've s
 def generate_legwork_for_job(
     job: Scene, corp_map: CorpMap, rng: random.Random | None = None
 ) -> Scene:
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     territory = corp_map.territories[job.target_territory_id]
     faction = FACTIONS_BY_ID[job.target_faction_id]
 

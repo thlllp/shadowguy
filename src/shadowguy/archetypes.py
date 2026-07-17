@@ -5,14 +5,9 @@ points the player would otherwise spend by hand on CharacterCreationScreen.
 `apply()` spends them through Character.spend_stat_point/spend_skill_point rather
 than assigning fields, so a preset is subject to the rank cap and the rank-cost
 curve exactly like a hand-built runner — it cannot buy something the player
-couldn't. `_check_affordable` proves at import that each one spends its pools to
-exactly zero, so an unaffordable preset is a startup error, not a broken run.
-
-Every one of the 30 skills is now rolled by something (jobs.ARCHETYPES' approaches,
-corpmap.LOCATION_SKILL for legwork, and the gigs in content.py), so a preset can
-spend anywhere without the points being dead. These three still buy narrow: a preset
-is meant to read as an archetype, not as a hedge. The breadth they give up is the
-reason each one has job stages it has to bleed through — see jobs._ARCHETYPE_ROWS.
+couldn't. Validation is deferred to first access of ARCHETYPES / ARCHETYPES_BY_ID,
+so an unaffordable preset still fails early (the creation screen is the first thing
+the game uses) but importing the module alone doesn't construct a Character.
 
 (Not to be confused with jobs.JobArchetype, which is a template for a *job*.)
 """
@@ -71,24 +66,39 @@ _ARCHETYPE_ROWS = (
     ),
 )
 
-ARCHETYPES = [
-    Archetype(id=id_, name=name, description=description, stats=stats, skills=skills)
-    for id_, name, description, stats, skills in _ARCHETYPE_ROWS
-]
-ARCHETYPES_BY_ID = {archetype.id: archetype for archetype in ARCHETYPES}
+_ARCHETYPES: list[Archetype] | None = None
+_ARCHETYPES_BY_ID: dict[str, Archetype] | None = None
 
 
-def _check_affordable() -> None:
-    """Every preset must spend both pools to exactly zero, at import."""
-    for archetype in ARCHETYPES:
-        character = Character(name="_check")
-        archetype.apply(character)  # raises if a buy is refused
-        if character.stat_points or character.skill_points:
-            raise ValueError(
-                f"{archetype.id}: leaves {character.stat_points} stat / "
-                f"{character.skill_points} skill points unspent; presets must spend "
-                f"all {STARTING_STAT_POINTS} and {STARTING_SKILL_POINTS}"
-            )
+def _init() -> None:
+    global _ARCHETYPES, _ARCHETYPES_BY_ID
+    if _ARCHETYPES is not None:
+        return
+    _ARCHETYPES = [
+        Archetype(id=id_, name=name, description=description, stats=stats, skills=skills)
+        for id_, name, description, stats, skills in _ARCHETYPE_ROWS
+    ]
+    _ARCHETYPES_BY_ID = {archetype.id: archetype for archetype in _ARCHETYPES}
+    for archetype in _ARCHETYPES:
+        _validate_preset(archetype)
 
 
-_check_affordable()
+def _validate_preset(archetype: Archetype) -> None:
+    character = Character(name="_check")
+    archetype.apply(character)
+    if character.stat_points or character.skill_points:
+        raise ValueError(
+            f"{archetype.id}: leaves {character.stat_points} stat / "
+            f"{character.skill_points} skill points unspent; presets must spend "
+            f"all {STARTING_STAT_POINTS} and {STARTING_SKILL_POINTS}"
+        )
+
+
+def __getattr__(name: str):
+    if name == "ARCHETYPES":
+        _init()
+        return _ARCHETYPES
+    if name == "ARCHETYPES_BY_ID":
+        _init()
+        return _ARCHETYPES_BY_ID
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

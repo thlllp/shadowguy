@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from shadowguy.checks import resolve_rng
 from shadowguy.corpmap import CorpMap
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.scene import Scene
@@ -47,7 +48,7 @@ def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[F
     Seated on neutral ground only, and never the player's own start tile — a
     fixer is a street-level contact, not a plant inside a corp's own turf, and
     the start tile is guaranteed reachable day one either way."""
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     candidates = [
         territory.id
         for territory in corp_map.territories.values()
@@ -77,7 +78,7 @@ def expire_offers(fixers: list[Fixer], day: int) -> None:
 def refresh_offers(
     fixers: list[Fixer], day: int, corp_map: CorpMap, rng: random.Random | None = None
 ) -> None:
-    rng = rng or random.Random()
+    rng = resolve_rng(rng)
     for fixer in fixers:
         while len(fixer.offers) < fixer.max_offers:
             scene, timing = generate_job(day, corp_map, fixer.id, rng)

@@ -151,23 +151,27 @@ class Character:
     def consume_advantage(self, job_id: str) -> int:
         return self.advantage.pop(job_id, 0)
 
+    @staticmethod
+    def _adjust_dict(d: dict[str, int], key: str, delta: int) -> None:
+        d[key] = d.get(key, 0) + delta
+
     def standing_with(self, faction_id: str) -> int:
         return self.standing.get(faction_id, 0)
 
     def adjust_standing(self, faction_id: str, delta: int) -> None:
-        self.standing[faction_id] = self.standing_with(faction_id) + delta
+        self._adjust_dict(self.standing, faction_id, delta)
 
     def trust_with(self, fixer_id: str) -> int:
         return self.fixer_trust.get(fixer_id, 0)
 
     def adjust_fixer_trust(self, fixer_id: str, delta: int) -> None:
-        self.fixer_trust[fixer_id] = self.trust_with(fixer_id) + delta
+        self._adjust_dict(self.fixer_trust, fixer_id, delta)
 
     def local_standing_with(self, character_id: str) -> int:
         return self.local_standing.get(character_id, 0)
 
     def adjust_local_standing(self, character_id: str, delta: int) -> None:
-        self.local_standing[character_id] = self.local_standing_with(character_id) + delta
+        self._adjust_dict(self.local_standing, character_id, delta)
 
     def discover_fixer(self, fixer_id: str) -> None:
         self.discovered_fixers.add(fixer_id)

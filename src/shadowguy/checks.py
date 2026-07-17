@@ -80,7 +80,7 @@ def resolve_check(
     advantage: int = 0,
     rng: random.Random | None = None,
 ) -> CheckRoll:
-    rng = rng or random
+    rng = resolve_rng(rng)
     pool = max(0, stat_value + advantage)
     opposing_pool = pool_for_difficulty(difficulty)
     successes = count_successes(pool, rng)
@@ -104,3 +104,11 @@ def resolve_check(
         opposing_pool=opposing_pool,
         advantage=advantage,
     )
+
+
+def day_tier(day: int, tier_count: int) -> int:
+    return min(tier_count - 1, (day - 1) // 3)
+
+
+def resolve_rng(rng: random.Random | None) -> random.Random:
+    return rng or random

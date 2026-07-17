@@ -23,6 +23,7 @@ import tcod.bsp
 import tcod.random
 
 from shadowguy.character import Character
+from shadowguy.checks import resolve_rng
 from shadowguy.combat import (
     Enemy,
     equipped_weapons,
@@ -362,7 +363,7 @@ def targets_for(state: TacticalState, weapon: Item) -> list[Unit]:
 def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.Random | None = None) -> None:
     """Resolve the player's one action: an attack, through combat.resolve_hit, with the
     target's cover folded into the to-hit difficulty. Spends the action for the turn."""
-    rng = rng or random
+    rng = resolve_rng(rng)
     if state.acted or state.is_over or target not in targets_for(state, weapon):
         return
     state.acted = True
@@ -399,7 +400,7 @@ def leave(state: TacticalState) -> bool:
 
 def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
     """End the player's turn and run the enemy phase, then open the next player turn."""
-    rng = rng or random
+    rng = resolve_rng(rng)
     if state.is_over:
         return
     _enemy_phase(state, rng)

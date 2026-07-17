@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
-from shadowguy.checks import CheckResult, CheckRoll, count_successes, resolve_check
+from shadowguy.checks import CheckResult, resolve_rng, CheckRoll, count_successes, resolve_check
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -53,6 +53,10 @@ from shadowguy.shops import (
     Consumable,
     EffectKind,
     Item,
+    MAX_STUN_DAMAGE,
+    MAX_WEAPON_CONCEALMENT,
+    MIN_STUN_DAMAGE,
+    MIN_WEAPON_CONCEALMENT,
     Slot,
     equipped_defense,
 )
@@ -79,7 +83,9 @@ UNARMED = Item(
     stun_damage=4,
     concealment=5,  # nothing to search or confiscate
 )
-if not (1 <= UNARMED.concealment <= 5) or not (1 <= UNARMED.stun_damage <= 10):
+if not (MIN_WEAPON_CONCEALMENT <= UNARMED.concealment <= MAX_WEAPON_CONCEALMENT) or not (
+    MIN_STUN_DAMAGE <= UNARMED.stun_damage <= MAX_STUN_DAMAGE
+):
     raise ValueError("UNARMED must satisfy the same weapon-profile bounds as shops.CATALOG")
 
 # A crit still hits harder — it's whatever margin (net successes) it takes to clear
@@ -216,7 +222,7 @@ _ENEMY_ROWS = (
 ENEMIES = [Enemy(*row) for row in _ENEMY_ROWS]
 ENEMIES_BY_ID = {enemy.id: enemy for enemy in ENEMIES}
 
-# Job tier (jobs._tier_for_day) -> who turns up, and how many. The count is the real
+# Day tier (checks.day_tier) -> who turns up, and how many. The count is the real
 # difficulty lever, not the stats: two gangers is a far worse round than one Corp Sec,
 # because every one of them swings at you every round.
 ENEMY_TIERS: dict[int, tuple[list[str], tuple[int, int]]] = {
@@ -479,7 +485,7 @@ def start_combat(
         # of them — a whole squad's round landing on top of the critical failure's own
         # damage, before the runner has taken a single action, is a nat-1 killing a
         # light build outright, and that fight was never chosen.
-        rng = rng or random
+        rng = resolve_rng(rng)
         first = state.fighters[0]
         state.log.append("They were ready for you.")
         # No BRACE bonus here — it's a free hit before your first action, so there's
@@ -697,7 +703,7 @@ def _settle(state: CombatState) -> None:
 
 def take_turn(state: CombatState, action: Action, rng: random.Random | None = None) -> None:
     """Resolve one full round: your action, then theirs."""
-    rng = rng or random
+    rng = resolve_rng(rng)
     if state.is_over:
         return
 

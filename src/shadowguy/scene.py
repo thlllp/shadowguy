@@ -164,47 +164,53 @@ class Scene:
     roles: list[Role] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self._validate_start_stage()
+        for stage in self.stages.values():
+            self._validate_stage(stage)
+            for outcome in self._stage_outcomes(stage):
+                self._validate_outcome(stage, outcome)
+
+    def _validate_start_stage(self) -> None:
         if self.start_stage not in self.stages:
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} is not a known stage")
         start = self.stages[self.start_stage]
         if start.combat is not None or start.tactical is not None:
-            # A fight/map is only ever routed to by a resolved check (that's what decides
-            # the drop), so a scene may not *open* on one — the screen would have no
-            # check to read and no choices to render.
             raise ValueError(f"{self.id}: start_stage {self.start_stage!r} cannot be a fight or tactical map")
-        for stage in self.stages.values():
-            modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical) if mode)
-            if modes > 1:
-                raise ValueError(
-                    f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, or a tactical map"
-                )
-            if stage.combat is not None and not stage.combat.enemies:
-                raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
-            if stage.tactical is not None and not stage.tactical.enemies:
-                raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
-            for choice in stage.choices:
-                skill_for(choice.skill)  # unknown skill id: fail here, not mid-roll
-            for outcome in self._stage_outcomes(stage):
-                if outcome.next_stage is not None and outcome.next_stage not in self.stages:
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} references unknown next_stage {outcome.next_stage!r}"
-                    )
-                if outcome.advantage_delta and (self.kind != SceneKind.LEGWORK or self.prepares_for is None):
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} banks advantage but the scene is not legwork prep"
-                    )
-                if outcome.standing_delta and self.target_faction_id is None:
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
-                    )
-                if outcome.fixer_trust_delta and self.target_fixer_id is None:
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} moves fixer trust but the scene has no target fixer"
-                    )
-                if outcome.local_standing_delta and self.target_character_id is None:
-                    raise ValueError(
-                        f"{self.id}: stage {stage.id!r} moves local standing but the scene has no target character"
-                    )
+
+    def _validate_stage(self, stage: Stage) -> None:
+        modes = sum(1 for mode in (stage.choices, stage.combat, stage.tactical) if mode)
+        if modes > 1:
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, or a tactical map"
+            )
+        if stage.combat is not None and not stage.combat.enemies:
+            raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
+        if stage.tactical is not None and not stage.tactical.enemies:
+            raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
+        for choice in stage.choices:
+            skill_for(choice.skill)
+
+    def _validate_outcome(self, stage: Stage, outcome: Outcome) -> None:
+        if outcome.next_stage is not None and outcome.next_stage not in self.stages:
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} references unknown next_stage {outcome.next_stage!r}"
+            )
+        if outcome.advantage_delta and (self.kind != SceneKind.LEGWORK or self.prepares_for is None):
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} banks advantage but the scene is not legwork prep"
+            )
+        if outcome.standing_delta and self.target_faction_id is None:
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} moves standing but the scene has no target faction"
+            )
+        if outcome.fixer_trust_delta and self.target_fixer_id is None:
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} moves fixer trust but the scene has no target fixer"
+            )
+        if outcome.local_standing_delta and self.target_character_id is None:
+            raise ValueError(
+                f"{self.id}: stage {stage.id!r} moves local standing but the scene has no target character"
+            )
 
     @staticmethod
     def _stage_outcomes(stage: Stage) -> Iterable[Outcome]:
