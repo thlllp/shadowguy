@@ -15,6 +15,7 @@ from shadowguy.corpmap import (
     render_ascii_map,
 )
 from shadowguy.fixer import discover_fixers_here
+from shadowguy.gangs import GANGS_BY_ID
 
 
 TRAVEL_STAMINA_COST = 1
@@ -146,8 +147,9 @@ class CorpMapScreen(Screen):
             None,
         )
         fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
+        gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
         self.query_one("#territory_info", Static).update(
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{fixer_suffix}\n"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}\n"
             f"Borders: {borders}\n"
             f"Locations: {locations}\n"
             f"{self._travel_hint(t, here, character)}"

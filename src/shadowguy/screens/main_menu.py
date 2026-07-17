@@ -6,6 +6,7 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from shadowguy.corpmap import PLAYER_OWNED_KINDS, SHOP_KINDS, LocationKind, lodging_cost, owner_label
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.factions import FACTIONS_BY_ID
+from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
 
@@ -136,9 +137,10 @@ class MainMenu(PanelNav, Screen):
         if self.selected_category == "local":
             corp_map = self.app.corp_map
             here = corp_map.territories[character.location_id]
+            gang_suffix = f", gang: {GANGS_BY_ID[here.gang_id].name}" if here.gang_id else ""
             items.append(
                 ListItem(
-                    Static(f"{here.name} — {owner_label(here.owner)}"),
+                    Static(f"{here.name} — {owner_label(here.owner)}{gang_suffix}"),
                     id="local_district",
                 )
             )
