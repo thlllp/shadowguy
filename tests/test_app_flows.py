@@ -23,8 +23,10 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.menu_screens import TitleMenu
+from shadowguy.screens.info_screens import ContactsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import ShopScreen
+from textual.widgets import Collapsible, ListView
 
 
 def run(coro):
@@ -243,5 +245,45 @@ def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
             await pilot.press("enter")
             await pilot.pause()
             assert app.character.location_id == neighbor_id
+
+    run(body())
+
+
+def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+
+            panels = {
+                pid: app.screen.query_one(f"#{pid}", Collapsible)
+                for pid in ("fixers_panel", "corps_panel", "locals_panel", "runners_panel")
+            }
+            assert len(panels) == 4
+            assert all(not panel.collapsed for panel in panels.values())
+
+    run(body())
+
+
+def test_contacts_panel_nav_skips_a_collapsed_section():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+
+            screen = app.screen
+            # Collapse the middle "Corps" panel; stepping right off Fixers should land on
+            # Locals (skipping the hidden Corps list), not on the collapsed Corps list.
+            screen.query_one("#corps_panel", Collapsible).collapsed = True
+            await pilot.pause()
+            screen.query_one("#fixers_list", ListView).focus()
+            await pilot.pause()
+            screen.action_focus_panel(1)
+            await pilot.pause()
+            assert screen.focused is screen.query_one("#locals_list", ListView)
 
     run(body())
