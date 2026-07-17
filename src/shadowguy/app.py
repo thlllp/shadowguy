@@ -6,7 +6,7 @@ from textual.screen import Screen
 from shadowguy.character import Character
 from shadowguy.corpmap import generate_corp_map
 from shadowguy.factions import FACTIONS
-from shadowguy.fixer import create_fixers, expire_offers, refresh_offers
+from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
 from shadowguy.gigs import refresh_gigs
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
@@ -28,6 +28,7 @@ class ShadowguyApp(App):
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+        refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         self.location_gigs: dict[str, Scene] = {}
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
@@ -37,6 +38,7 @@ class ShadowguyApp(App):
             self.notify(f"{name} walked off the crew — you missed payroll.", severity="warning")
         expire_offers(self.fixers, self.character.day)
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+        refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:

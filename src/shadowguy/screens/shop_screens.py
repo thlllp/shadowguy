@@ -9,8 +9,9 @@ from shadowguy.corpmap import (
     has_home,
     safehouse_price,
 )
-from shadowguy.factions import Faction, officer_dialogue, officer_gate, officer_unlocked
+from shadowguy.factions import FACTIONS_BY_ID, Faction, officer_dialogue, officer_gate, officer_unlocked
 from shadowguy.fixer import Fixer
+from shadowguy.security import SecurityContract
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.shops import (
     CATALOG,
@@ -58,6 +59,17 @@ class FixerOffersScreen(Screen):
     async def on_mount(self) -> None:
         await self._refresh()
 
+    def _security_label(self, contract: SecurityContract) -> str:
+        corp_map = self.app.corp_map
+        faction = FACTIONS_BY_ID[contract.faction_id]
+        territory = corp_map.territories[contract.territory_id]
+        location = next(loc for loc in territory.locations if loc.id == contract.location_id)
+        return (
+            f"Security — {faction.name} at {location.name} ({territory.name}) — "
+            f"{contract.nights_total} nights, {contract.nightly_pay}eb/night "
+            f"+ {contract.completion_bonus}eb bonus"
+        )
+
     async def _refresh(self) -> None:
         items = [
             ListItem(
@@ -66,14 +78,20 @@ class FixerOffersScreen(Screen):
             )
             for offer in self.fixer.offers
         ]
+        items += [
+            ListItem(Static(self._security_label(contract)), id=contract.id)
+            for contract in self.fixer.security_offers
+        ]
         offers = self.query_one("#offers", ListView)
         await _replace_items(offers, items)
-        if self.fixer.offers:
+        first_id = items[0].id if items else None
+        if items:
             offers.index = 0
-        self._show_roles(self.fixer.offers[0].id if self.fixer.offers else None)
+        self._show_roles(first_id)
 
     def _show_roles(self, offer_id: str | None) -> None:
         panel = self.query_one("#offer_roles", Static)
+        # Security contracts have no Scene, so no roles to show — clear the panel.
         offer = next((o for o in self.fixer.offers if o.id == offer_id), None)
         if offer is None or not offer.scene.roles:
             panel.update("")
@@ -89,7 +107,14 @@ class FixerOffersScreen(Screen):
         self._show_roles(event.item.id if event.item else None)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        offer = next(offer for offer in self.fixer.offers if offer.id == event.item.id)
+        item_id = event.item.id
+        if item_id.startswith("security_"):
+            contract = next(c for c in self.fixer.security_offers if c.id == item_id)
+            self.app.character.accept_security_contract(contract)
+            self.fixer.security_offers = [c for c in self.fixer.security_offers if c.id != item_id]
+            await self._refresh()
+            return
+        offer = next(offer for offer in self.fixer.offers if offer.id == item_id)
         self.app.character.accept_job(offer)
         self.fixer.offers = [o for o in self.fixer.offers if o.id != offer.id]
         await self._refresh()

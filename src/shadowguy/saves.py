@@ -48,7 +48,9 @@ SAVE_SUFFIX = ".save"
 # v12 grew FIXER_ROSTER (3 street fixers -> 6 street + 3 corp-affiliated) and added
 # Fixer.faction_id (a pre-v12 save's fixers list is the old roster of 3, seated by the
 # old neutral-only rule).
-SAVE_VERSION = 12
+# v13 added Security contracts (security.py): Character.security_contracts and
+# Fixer.security_offers/max_security_offers (a pre-v13 Character/Fixer lacks all three).
+SAVE_VERSION = 13
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
