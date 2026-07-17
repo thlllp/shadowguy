@@ -44,6 +44,12 @@ class MainMenu(PanelNav, Screen):
     ]
 
     CSS = """
+    #stats_panel {
+        height: auto;
+        border: solid $accent;
+        padding: 0 1;
+    }
+
     #sidebar {
         width: 20;
         border: solid $accent;
@@ -52,6 +58,8 @@ class MainMenu(PanelNav, Screen):
 
     #main_panel {
         width: 1fr;
+        border: solid $accent;
+        padding: 0 1;
     }
     """
 
@@ -72,9 +80,10 @@ class MainMenu(PanelNav, Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Vertical(CharacterSheet(self.app.character), id="stats_panel")
         yield Horizontal(
             Vertical(ListView(id="categories"), id="sidebar"),
-            Vertical(CharacterSheet(self.app.character), ListView(id="activities"), id="main_panel"),
+            Vertical(ListView(id="activities"), id="main_panel"),
         )
         yield Footer()
 
