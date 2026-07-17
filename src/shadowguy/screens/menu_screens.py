@@ -9,6 +9,8 @@ from shadowguy.scene import Outcome, TacticalStage
 from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import _menu_css
+from .creation_screen import CharacterCreationScreen
+from .tactical_screen import TacticalScreen
 
 
 class QuitMenu(ModalScreen):
@@ -106,7 +108,6 @@ class TitleMenu(Screen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "new_game":
-            from .creation_screen import CharacterCreationScreen
             self.app.push_screen(CharacterCreationScreen())
         elif event.item.id == "load_game":
             slots = list_saves()
@@ -155,7 +156,6 @@ class TestMenu(Screen):
             escape=Outcome(text="You slip out."),
             exits=tac.exits,
         )
-        from .tactical_screen import TacticalScreen
         self.app.push_screen(TacticalScreen(stage), self._on_tactical_end)
 
     def _on_tactical_end(self, result: TacticalOutcome) -> None:

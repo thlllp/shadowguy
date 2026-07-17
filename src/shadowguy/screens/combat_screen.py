@@ -9,7 +9,6 @@ from shadowguy.scene import Encounter
 
 from . import CharacterSheet, _replace_items
 
-
 COMBAT_LOG_LINES = 8
 
 

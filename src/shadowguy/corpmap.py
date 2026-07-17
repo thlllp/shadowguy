@@ -833,7 +833,7 @@ def _grow_blocs(
     seeds = rng.sample(available, k=len(faction_ids))
     owners: dict[Cell, str] = {}
     blocs: dict[str, set[Cell]] = {}
-    for faction_id, seed in zip(faction_ids, seeds):
+    for faction_id, seed in zip(faction_ids, seeds, strict=True):
         owners[seed] = faction_id
         blocs[faction_id] = {seed}
 
@@ -878,6 +878,53 @@ def _place_gangs(neutral_ids: list[str], gangs: list[Gang], rng: random.Random) 
 MAX_GENERATION_ATTEMPTS = 100
 
 
+def _assign_values(owners: dict[Cell, str], region: list[Cell], faction_ids: list[str], rng: random.Random) -> dict[Cell, int]:
+    values: dict[Cell, int] = {}
+    for faction_id in faction_ids:
+        bloc = sorted(cell for cell, owner in owners.items() if owner == faction_id)
+        spread = list(FACTION_VALUE_SPREAD)
+        rng.shuffle(spread)
+        values.update(zip(bloc, spread, strict=True))
+    for cell in region:
+        if cell not in owners:
+            values[cell] = rng.choice(NEUTRAL_VALUES)
+    return values
+
+
+@dataclass
+class _InjectionPlan:
+    hospital_ids: set[str]
+    hq_ids: dict[str, str]
+    den_ids: dict[str, str]
+    gang_ids: dict[str, str]
+
+
+def _plan_injections(region: list[Cell], owners: dict[Cell, str],
+                     values: dict[Cell, int], ids: dict[Cell, str], start_id: str,
+                     faction_ids: list[str], rng: random.Random) -> _InjectionPlan:
+    elsewhere = [ids[cell] for cell in region if cell != start_id]
+    hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
+
+    neutral_ids = [ids[cell] for cell in region if cell not in owners and cell != start_id]
+    gang_ids = _place_gangs(neutral_ids, GANGS, rng)
+
+    gang_turf: dict[str, list[str]] = {}
+    for tid, gang_id in gang_ids.items():
+        gang_turf.setdefault(gang_id, []).append(tid)
+    den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
+
+    top_value = max(FACTION_VALUE_SPREAD)
+    hq_ids: dict[str, str] = {}
+    for faction_id in faction_ids:
+        top_cells = sorted(
+            cell for cell, owner in owners.items()
+            if owner == faction_id and values[cell] == top_value
+        )
+        hq_ids[ids[rng.choice(top_cells)]] = faction_id
+
+    return _InjectionPlan(hospital_ids=hospital_ids, hq_ids=hq_ids, den_ids=den_ids, gang_ids=gang_ids)
+
+
 def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     faction_ids = [f.id for f in factions]
     if len(faction_ids) * TERRITORIES_PER_FACTION + 1 > TERRITORY_COUNT:
@@ -896,111 +943,42 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     else:
         raise RuntimeError("could not lay out contiguous faction blocs")
 
-    # start_cell is left out of owners, so the loop below gives it a neutral value
-    # just like any other unclaimed district.
-    values: dict[Cell, int] = {}
-    for faction_id in faction_ids:
-        bloc = sorted(cell for cell, owner in owners.items() if owner == faction_id)
-        spread = list(FACTION_VALUE_SPREAD)
-        rng.shuffle(spread)
-        values.update(zip(bloc, spread))
-    for cell in region:
-        if cell not in owners:
-            values[cell] = rng.choice(NEUTRAL_VALUES)
-
+    values = _assign_values(owners, region, faction_ids, rng)
     names = rng.sample(DISTRICT_NAMES, k=len(region))
-    ids = {cell: name.lower() for cell, name in zip(region, names)}
+    ids = {cell: name.lower() for cell, name in zip(region, names, strict=True)}
     start_id = ids[start_cell]
-
-    # Which districts get a hospital, picked up front (about one per TILES_PER_HOSPITAL)
-    # so the count roll below can reserve a slot for it. The start is left out — it gets
-    # the apartment instead.
-    elsewhere = [ids[cell] for cell in region if cell != start_cell]
-    hospital_ids = set(rng.sample(elsewhere, HOSPITAL_COUNT))
-
-    # Gang turf: scattered across unclaimed ground only — never a corp bloc, never the
-    # player's own start (see GANG_TURF_MIN/MAX and _place_gangs).
-    neutral_ids = [ids[cell] for cell in region if cell not in owners and cell != start_cell]
-    gang_ids = _place_gangs(neutral_ids, GANGS, rng)
-
-    # One safehouse per gang, seated in one of its own turf districts — chosen up front
-    # (like the hospitals/HQ) so its district can reserve a slot for the injected den.
-    # Gang turf is always neutral and never the start, so a den can stack with a hospital
-    # on the same district but never with the start or an HQ — the existing MAX - MIN
-    # (6 - 4) headroom already covers two reservations stacking on one district.
-    gang_turf: dict[str, list[str]] = {}
-    for tid, gang_id in gang_ids.items():
-        gang_turf.setdefault(gang_id, []).append(tid)
-    den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
-
-    # One HQ per corp, seated in one of that corp's highest-value districts — the seat of
-    # power. Chosen up front (like the hospitals) so its district can reserve a slot for
-    # the injected HQ. A district can be drawn for both a hospital and an HQ; the reserve
-    # below counts each, and MAX - MIN (6 - 4) leaves room for the two together — the start
-    # (neutral, so never an HQ; excluded from the hospital draw) never stacks past one.
-    top_value = max(FACTION_VALUE_SPREAD)
-    hq_ids: dict[str, str] = {}
-    for faction_id in faction_ids:
-        top_cells = sorted(
-            cell for cell, owner in owners.items()
-            if owner == faction_id and values[cell] == top_value
-        )
-        hq_ids[ids[rng.choice(top_cells)]] = faction_id
+    plan = _plan_injections(region, owners, values, ids, start_id, faction_ids, rng)
 
     territories = {}
     used_names: set[str] = set()
-    for cell, name in zip(region, names):
+    for cell, name in zip(region, names, strict=True):
         x, y = cell
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
-        reserved = (tid == start_id) + (tid in hospital_ids) + (tid in hq_ids) + (tid in den_ids)
+        reserved = (tid == start_id) + (tid in plan.hospital_ids) + (tid in plan.hq_ids) + (tid in plan.den_ids)
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
-            id=tid,
-            name=name,
-            x=x,
-            y=y,
-            owner=owner,
-            value=values[cell],
-            connections=sorted(
-                ids[other]
-                for other in region
-                if frozenset((cell, other)) in edges
-            ),
+            id=tid, name=name, x=x, y=y, owner=owner, value=values[cell],
+            connections=sorted(ids[other] for other in region if frozenset((cell, other)) in edges),
             locations=_make_locations(tid, owner, rng, used_names, count),
             modifiers=_make_modifiers(owner, values[cell], rng),
-            gang_id=gang_ids.get(tid),
+            gang_id=plan.gang_ids.get(tid),
         )
 
-    # The runner's home: a fixed, player-owned place in the start district, injected
-    # rather than rolled (see GENERATED_KINDS). No owner NPC — it's the runner's own.
     start = territories[start_id]
-    start.locations.insert(
-        0,
-        Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT),
-    )
+    start.locations.insert(0, Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT))
 
-    # Hospitals to a fixed density (about one per TILES_PER_HOSPITAL) rather than rolled
-    # in, so healing access is even on every map — one added to each district chosen above.
-    for tid in hospital_ids:
+    for tid in plan.hospital_ids:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))
-
-    # Seat each corp's HQ in the top-value district chosen above, injected like the hospital.
-    for tid, faction_id in hq_ids.items():
+    for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
-
-    # Seat each gang's den in the turf district chosen above, injected the same way.
-    for tid, gang_id in den_ids.items():
+    for tid, gang_id in plan.den_ids.items():
         territories[tid].locations.append(_make_gang_den(tid, GANGS_BY_ID[gang_id], rng))
 
-    # Hand every real estate office a portfolio of districts to sell safehouses in.
-    # Anywhere the runner doesn't already own (i.e. not the start) is fair game; a
-    # district is filtered back out of the listing once bought (see has_home).
     for_sale = [tid for tid in territories if tid != start.id]
     for territory in territories.values():
         for location in territory.locations:
             if location.kind is LocationKind.REAL_ESTATE:
-                count = min(REAL_ESTATE_LISTING_COUNT, len(for_sale))
-                location.listings = rng.sample(for_sale, k=count)
+                location.listings = rng.sample(for_sale, k=min(REAL_ESTATE_LISTING_COUNT, len(for_sale)))
 
     return CorpMap(territories=territories, player_start_id=ids[start_cell])

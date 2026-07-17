@@ -17,7 +17,6 @@ from shadowguy.corpmap import (
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 
-
 TRAVEL_STAMINA_COST = 1
 MODIFIER_COLUMN = 13
 

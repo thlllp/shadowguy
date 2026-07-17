@@ -2,7 +2,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from shadowguy.runners import RUNNERS_BY_ID
-from shadowguy.shops import InventoryItem, equipped_bonus, equipped_skill_bonus, equipped_travel_bonus
+from shadowguy.shops import (
+    InventoryItem,
+    equipped_bonus,
+    equipped_skill_bonus,
+    equipped_travel_bonus,
+)
 from shadowguy.skills import SKILLS, skill_for
 
 if TYPE_CHECKING:

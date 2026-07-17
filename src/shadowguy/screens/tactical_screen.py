@@ -17,7 +17,6 @@ from shadowguy.tactical import (
 
 from . import CharacterSheet
 
-
 _TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _TAC_END_TEXT = {
     TacticalOutcome.VICTORY: "You've cleared them out.",

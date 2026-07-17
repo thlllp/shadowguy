@@ -2,10 +2,16 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.corpmap import Location, LocationKind
+from shadowguy.corpmap import (
+    Location,
+    LocationKind,
+    add_safehouse,
+    has_home,
+    safehouse_price,
+)
 from shadowguy.factions import Faction, officer_dialogue, officer_gate, officer_unlocked
 from shadowguy.fixer import Fixer
-from shadowguy.runners import RUNNERS_BY_ID, RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
@@ -301,8 +307,6 @@ class RealEstateScreen(Screen):
         items = []
         for territory_id in self.location.listings:
             territory = territories[territory_id]
-            from shadowguy.corpmap import has_home, safehouse_price
-
             if has_home(territory):
                 continue
             price = safehouse_price(territory)
@@ -315,8 +319,6 @@ class RealEstateScreen(Screen):
         await _replace_items(self.query_one("#realestate_listings", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        from shadowguy.corpmap import add_safehouse, has_home, safehouse_price
-
         item_id = event.item.id
         if not item_id.startswith("buy_"):
             return

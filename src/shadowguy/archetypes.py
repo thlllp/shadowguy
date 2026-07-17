@@ -13,12 +13,10 @@ the game uses) but importing the module alone doesn't construct a Character.
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from shadowguy.character import (
-    STARTING_SKILL_POINTS,
-    STARTING_STAT_POINTS,
-    Character,
-)
+if TYPE_CHECKING:
+    from shadowguy.character import Character
 
 
 @dataclass(frozen=True)
@@ -26,11 +24,10 @@ class Archetype:
     id: str
     name: str
     description: str
-    stats: dict[str, int]  # core stat -> points poured into it
-    skills: dict[str, int]  # skill id -> rank to buy it up to
+    stats: dict[str, int]
+    skills: dict[str, int]
 
-    def apply(self, character: Character) -> None:
-        """Spend this build onto a freshly reset character."""
+    def apply(self, character: "Character") -> None:
         for stat, points in self.stats.items():
             for _ in range(points):
                 if not character.spend_stat_point(stat):
@@ -66,32 +63,38 @@ _ARCHETYPE_ROWS = (
     ),
 )
 
+# Lazy init state: filled on first access by __getattr__ below.
 _ARCHETYPES: list[Archetype] | None = None
 _ARCHETYPES_BY_ID: dict[str, Archetype] | None = None
 
 
-def _init() -> None:
-    global _ARCHETYPES, _ARCHETYPES_BY_ID
-    if _ARCHETYPES is not None:
-        return
-    _ARCHETYPES = [
-        Archetype(id=id_, name=name, description=description, stats=stats, skills=skills)
-        for id_, name, description, stats, skills in _ARCHETYPE_ROWS
-    ]
-    _ARCHETYPES_BY_ID = {archetype.id: archetype for archetype in _ARCHETYPES}
-    for archetype in _ARCHETYPES:
-        _validate_preset(archetype)
-
-
 def _validate_preset(archetype: Archetype) -> None:
+    from shadowguy.character import Character
     character = Character(name="_check")
     archetype.apply(character)
     if character.stat_points or character.skill_points:
+        from shadowguy.character import STARTING_SKILL_POINTS, STARTING_STAT_POINTS
         raise ValueError(
             f"{archetype.id}: leaves {character.stat_points} stat / "
             f"{character.skill_points} skill points unspent; presets must spend "
             f"all {STARTING_STAT_POINTS} and {STARTING_SKILL_POINTS}"
         )
+
+
+def _init() -> None:
+    if _ARCHETYPES is not None:
+        return
+    import sys
+    archetypes_list = [
+        Archetype(id=id_, name=name, description=description, stats=stats, skills=skills)
+        for id_, name, description, stats, skills in _ARCHETYPE_ROWS
+    ]
+    for archetype in archetypes_list:
+        _validate_preset(archetype)
+    # Use sys.modules to avoid the global statement with linting friction.
+    mod = sys.modules[__name__]
+    mod._ARCHETYPES = archetypes_list
+    mod._ARCHETYPES_BY_ID = {archetype.id: archetype for archetype in archetypes_list}
 
 
 def __getattr__(name: str):

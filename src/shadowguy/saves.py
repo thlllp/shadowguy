@@ -19,7 +19,7 @@ single file — a corrupt or stale save only fails when you actually pick it.
 
 import pickle
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +75,7 @@ def save_game(state: dict[str, Any], day: int, now: datetime | None = None) -> S
     """Pickle `state` to a new file auto-named `day{N}_{timestamp}`. `now` is a seam for
     tests; production passes nothing and gets the wall clock."""
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    now = now or datetime.now()
+    now = now or datetime.now(timezone.utc)
     path = SAVE_DIR / f"day{day}_{now:{_TIMESTAMP_FORMAT}}{SAVE_SUFFIX}"
     payload = {"version": SAVE_VERSION, "state": state}
     with path.open("wb") as handle:
@@ -112,7 +112,7 @@ def _slot_from_path(path: Path) -> SaveSlot | None:
     try:
         day_part, ts_part = path.stem.split("_", 1)
         day = int(day_part.removeprefix("day"))
-        saved_at = datetime.strptime(ts_part, _TIMESTAMP_FORMAT)
+        saved_at = datetime.strptime(ts_part, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
     return SaveSlot(path, day, saved_at)

@@ -10,7 +10,17 @@ from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.scene import Choice, Encounter, Outcome, Posture, Role, Scene, SceneKind, Stage, TacticalStage
+from shadowguy.scene import (
+    Choice,
+    Encounter,
+    Outcome,
+    Posture,
+    Role,
+    Scene,
+    SceneKind,
+    Stage,
+    TacticalStage,
+)
 from shadowguy.skills import skill_for
 from shadowguy.tactical import generate_map
 
@@ -688,18 +698,14 @@ def generate_job(
         ramp = round(STAGE_DIFFICULTY_RAMP * i / (len(job_stages) - 1)) if i else 0
         difficulty = difficulty_base + ramp + rng.randint(-1, 2)
 
-        # The payout rides on however you get past the *last* stage — talked, sneaked
-        # or fought — so it's written once here and handed to both the success outcomes
-        # and the fight's victory. A second reward path would be a second thing to
-        # retune every time REWARD_BASE moves.
-        def payout(text: str, multiplier: float = 1.0, rep: int = 1) -> Outcome:
+        def _payout(text: str, multiplier: float, rep: int, ns: str | None, last: bool) -> Outcome:
             return Outcome(
                 text=text,
-                next_stage=next_stage,
-                cash_delta=int(reward_base * multiplier) if is_last else 0,
-                rep_delta=rep if is_last else 0,
-                standing_delta=JOB_STANDING_HIT if is_last else 0,
-                fixer_trust_delta=FIXER_TRUST_GAIN if is_last else 0,
+                next_stage=ns,
+                cash_delta=int(reward_base * multiplier) if last else 0,
+                rep_delta=rep if last else 0,
+                standing_delta=JOB_STANDING_HIT if last else 0,
+                fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
             )
 
         choices = [
@@ -707,7 +713,7 @@ def generate_job(
                 label=f"{approach.flavor} ({skill_for(approach.skill).name})",
                 skill=approach.skill,
                 difficulty=difficulty + approach.difficulty_delta,
-                success=payout("It goes clean."),
+                success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
                 failure=Outcome(
                     text="It gets messy, but you push on.",
                     health_delta=-approach.failure_damage,
@@ -718,10 +724,9 @@ def generate_job(
                     fixer_trust_delta=JOB_FAILURE_TRUST_HIT if is_last else 0,
                     rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
                 ),
-                critical_success=payout(
+                critical_success=_payout(
                     "Flawless. You walk out with more than you bargained for.",
-                    multiplier=1.5,
-                    rep=2,
+                    1.5, 2, next_stage, is_last,
                 ),
                 # The one branch that doesn't just cost health and carry on: you're
                 # made, and they arrive holding the initiative. Note it deals the
@@ -767,7 +772,7 @@ def generate_job(
         # abstract Encounter or a grid set-piece — only where they're packaged differs.
         enemies = roll_enemies(tier, rng)
         fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
-        fight_victory = payout("They stop coming. You finish what you came for.")
+        fight_victory = _payout("They stop coming. You finish what you came for.", 1.0, 1, next_stage, is_last)
         fight_escape = Outcome(
             text="You get out with your skin. The job is blown.",
             fixer_trust_delta=JOB_FAILURE_TRUST_HIT,

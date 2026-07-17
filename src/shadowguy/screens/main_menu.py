@@ -3,14 +3,32 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.corpmap import PLAYER_OWNED_KINDS, SHOP_KINDS, LocationKind, lodging_cost, owner_label
-from shadowguy.fixer import discover_fixers_here
+from shadowguy.corpmap import (
+    PLAYER_OWNED_KINDS,
+    SHOP_KINDS,
+    LocationKind,
+    lodging_cost,
+    owner_label,
+)
 from shadowguy.factions import FACTIONS_BY_ID
+from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
 
-from . import CharacterSheet, PanelNav, PANEL_NAV_BINDINGS, _replace_items
+from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _replace_items
+from .corp_map_screen import CorpMapScreen
+from .info_screens import ContactsScreen, InventoryScreen, SkillsScreen
+from .scene_screen import SceneScreen
+from .shop_screens import (
+    BarScreen,
+    CorpHQScreen,
+    FixerOffersScreen,
+    HospitalScreen,
+    RealEstateScreen,
+    SafehouseScreen,
+    ShopScreen,
+)
 
 
 class MainMenu(PanelNav, Screen):
@@ -60,19 +78,15 @@ class MainMenu(PanelNav, Screen):
         yield Footer()
 
     def action_corp_map(self) -> None:
-        from .corp_map_screen import CorpMapScreen
         self.app.push_screen(CorpMapScreen())
 
     def action_inventory(self) -> None:
-        from .info_screens import InventoryScreen
         self.app.push_screen(InventoryScreen())
 
     def action_skills(self) -> None:
-        from .info_screens import SkillsScreen
         self.app.push_screen(SkillsScreen())
 
     def action_contacts(self) -> None:
-        from .info_screens import ContactsScreen
         self.app.push_screen(ContactsScreen())
 
     async def on_mount(self) -> None:
@@ -165,9 +179,6 @@ class MainMenu(PanelNav, Screen):
         await _replace_items(self.query_one("#activities", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        from .scene_screen import SceneScreen
-        from .shop_screens import BarScreen, CorpHQScreen, FixerOffersScreen, HospitalScreen, RealEstateScreen, SafehouseScreen, ShopScreen
-
         if event.list_view.id == "categories":
             await self._select_category(event.item.id.removeprefix("cat_"))
             return
@@ -250,20 +261,12 @@ class MainMenu(PanelNav, Screen):
 
     async def _select_category(self, key: str) -> None:
         if key == "contacts":
-            from .info_screens import ContactsScreen
             self.app.push_screen(ContactsScreen())
-            return
-        if key == "map":
-            from .corp_map_screen import CorpMapScreen
+        elif key == "map":
             self.app.push_screen(CorpMapScreen())
-            return
-        if key == "gear":
-            from .info_screens import InventoryScreen
+        elif key == "gear":
             self.app.push_screen(InventoryScreen())
-            return
-        if key == "skills":
-            from .info_screens import SkillsScreen
+        elif key == "skills":
             self.app.push_screen(SkillsScreen())
-            return
         self.selected_category = key
         await self._refresh()

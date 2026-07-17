@@ -7,7 +7,14 @@ import shadowguy.archetypes as archetypes
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
 from shadowguy.skills import SKILLS, skill_for
 
-from . import CharacterSheet, PanelNav, PANEL_NAV_BINDINGS, _compact_skill_label, _replace_items
+from . import (
+    PANEL_NAV_BINDINGS,
+    CharacterSheet,
+    PanelNav,
+    _compact_skill_label,
+    _replace_items,
+)
+from .main_menu import MainMenu
 
 
 class CharacterCreationScreen(PanelNav, Screen):
@@ -128,7 +135,6 @@ class CharacterCreationScreen(PanelNav, Screen):
         if self._unspent():
             self.notify("Spend every point before the run starts.", severity="warning")
             return
-        from .main_menu import MainMenu
         self.app.switch_screen(MainMenu())
 
     def _update_pools(self) -> None:

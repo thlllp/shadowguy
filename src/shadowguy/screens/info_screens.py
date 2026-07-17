@@ -6,17 +6,24 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from shadowguy.character import CORE_STATS
 from shadowguy.factions import FACTIONS
 from shadowguy.runners import RIVAL_RUNNERS
-from shadowguy.shops import CONSUMABLES_BY_ID, ITEMS_BY_ID, bonus_text, toggle_equip, use_consumable
+from shadowguy.shops import (
+    CONSUMABLES_BY_ID,
+    ITEMS_BY_ID,
+    bonus_text,
+    toggle_equip,
+    use_consumable,
+)
 from shadowguy.skills import SKILLS
 
 from . import (
+    PANEL_NAV_BINDINGS,
     CharacterSheet,
     PanelNav,
-    PANEL_NAV_BINDINGS,
     _compact_skill_label,
     _populate_list,
     _replace_items,
 )
+from .shop_screens import FixerOffersScreen
 
 
 class InventoryScreen(Screen):
@@ -177,7 +184,6 @@ class ContactsScreen(PanelNav, Screen):
         fixer_id = event.item.id.removeprefix("fixer_")
         fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
         if fixer is not None:
-            from .shop_screens import FixerOffersScreen
             self.app.push_screen(FixerOffersScreen(fixer))
 
 

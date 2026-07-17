@@ -13,6 +13,8 @@ from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice
 from shadowguy.tactical import TacticalOutcome
 
 from . import CharacterSheet, _replace_items
+from .combat_screen import CombatScreen
+from .tactical_screen import TacticalScreen
 
 
 class SceneScreen(Screen):
@@ -84,8 +86,6 @@ class SceneScreen(Screen):
         self.awaiting_continue = True
 
     async def _show_combat(self, stage) -> None:
-        from .combat_screen import CombatScreen
-
         self.stage_id = stage.id
         self.app.push_screen(
             CombatScreen(stage.combat, drop_for_result(self._pending_result)),
@@ -93,8 +93,6 @@ class SceneScreen(Screen):
         )
 
     async def _show_tactical(self, stage) -> None:
-        from .tactical_screen import TacticalScreen
-
         self.stage_id = stage.id
         self.app.push_screen(TacticalScreen(stage.tactical), self._on_tactical_end)
 

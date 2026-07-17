@@ -45,18 +45,24 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
-from shadowguy.checks import CheckResult, resolve_rng, CheckRoll, count_successes, resolve_check
+from shadowguy.checks import (
+    CheckResult,
+    CheckRoll,
+    count_successes,
+    resolve_check,
+    resolve_rng,
+)
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
-    Consumable,
-    EffectKind,
-    Item,
     MAX_STUN_DAMAGE,
     MAX_WEAPON_CONCEALMENT,
     MIN_STUN_DAMAGE,
     MIN_WEAPON_CONCEALMENT,
+    Consumable,
+    EffectKind,
+    Item,
     Slot,
     equipped_defense,
 )
@@ -701,12 +707,14 @@ def _settle(state: CombatState) -> None:
         state.outcome = CombatOutcome.VICTORY
 
 
-def take_turn(state: CombatState, action: Action, rng: random.Random | None = None) -> None:
-    """Resolve one full round: your action, then theirs."""
-    rng = resolve_rng(rng)
-    if state.is_over:
-        return
+def _tick_cooldowns(state: CombatState) -> None:
+    for weapon_id in list(state.weapon_cooldowns):
+        state.weapon_cooldowns[weapon_id] -= 1
+        if state.weapon_cooldowns[weapon_id] <= 0:
+            del state.weapon_cooldowns[weapon_id]
 
+
+def _perform_action(state: CombatState, action: Action, rng: random.Random) -> None:
     if action.kind is ActionKind.ATTACK:
         _attack(state, action, rng)
     elif action.kind is ActionKind.BRACE:
@@ -720,18 +728,19 @@ def take_turn(state: CombatState, action: Action, rng: random.Random | None = No
     elif action.kind is ActionKind.FLEE:
         _flee(state, rng)
 
+
+def take_turn(state: CombatState, action: Action, rng: random.Random | None = None) -> None:
+    rng = resolve_rng(rng)
+    if state.is_over:
+        return
+
+    _perform_action(state, action, rng)
     _settle(state)
     if state.is_over:
         return
 
     _enemy_turn(state, rng)
     _settle(state)
-    # Soak was bought for the round that just resolved, not the next one.
     state.soak = 0
-    # Weapon cooldowns tick down at round end, so a weapon fired this round
-    # stays unavailable through the cooldown's full duration.
-    for weapon_id in list(state.weapon_cooldowns):
-        state.weapon_cooldowns[weapon_id] -= 1
-        if state.weapon_cooldowns[weapon_id] <= 0:
-            del state.weapon_cooldowns[weapon_id]
+    _tick_cooldowns(state)
 

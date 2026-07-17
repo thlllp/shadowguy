@@ -544,6 +544,53 @@ def _room_cells(grid: Grid, rect: tuple[int, int, int, int]) -> list[Coord]:
     ]
 
 
+def _bsp_rooms(tiles: list[list[Tile]], width: int, height: int, rng: random.Random) -> list[tuple[Coord, tuple[int, int, int, int]]] | None:
+    """Carve BSP rooms and corridors into tiles. Returns room list or None."""
+    bsp = tcod.bsp.BSP(x=1, y=1, width=width - 2, height=height - 2)
+    bsp.split_recursive(
+        depth=_BSP_DEPTH, min_width=_ROOM_MIN, min_height=_ROOM_MIN,
+        max_horizontal_ratio=1.5, max_vertical_ratio=1.5,
+        seed=tcod.random.Random(tcod.random.MERSENNE_TWISTER, seed=rng.getrandbits(31)),
+    )
+    rooms: list[tuple[Coord, tuple[int, int, int, int]]] = []
+    for leaf in bsp.pre_order():
+        if leaf.children:
+            continue
+        rx, ry = leaf.x + 1, leaf.y + 1
+        rw, rh = max(2, leaf.width - 2), max(2, leaf.height - 2)
+        _carve_room(tiles, rx, ry, rw, rh)
+        rooms.append(((rx + rw // 2, ry + rh // 2), (rx, ry, rw, rh)))
+    if len(rooms) < 2:
+        return None
+    for prev, cur in zip(rooms, rooms[1:]):
+        _carve_tunnel(tiles, prev[0], cur[0])
+    return rooms
+
+
+def _pick_spawns(cells_by_room: list[list[Coord]], enemy_count: int, reserved: set[Coord], rng: random.Random) -> list[Coord] | None:
+    """Pick enemy spawn cells away from the entry room; fall back to all rooms."""
+    spawn_pool = [cell for cells in cells_by_room[1:] for cell in cells if cell not in reserved]
+    if len(spawn_pool) < enemy_count:
+        spawn_pool = [cell for cells in cells_by_room for cell in cells if cell not in reserved]
+    if len(spawn_pool) < enemy_count:
+        return None
+    return rng.sample(spawn_pool, enemy_count)
+
+
+def _scatter_cover(tiles: list[list[Tile]], cells_by_room: list[list[Coord]], keep_clear: set[Coord], rng: random.Random, density: float) -> None:
+    for cells in cells_by_room:
+        for cell in cells:
+            if cell not in keep_clear and rng.random() < density:
+                tiles[cell[1]][cell[0]] = Tile.LOW_COVER
+
+
+def _verify_map(grid: Grid, player_start: Coord, enemy_spawns: list[Coord], exits: frozenset[Coord]) -> bool:
+    return all(
+        target == player_start or path_between(grid, player_start, target)
+        for target in (*enemy_spawns, *exits)
+    )
+
+
 def generate_map(
     rng: random.Random,
     enemy_count: int,
@@ -551,63 +598,26 @@ def generate_map(
     height: int = TAC_MAP_HEIGHT,
     cover_density: float = 0.08,
 ) -> TacticalMap:
-    """A connected BSP map with room for `enemy_count` enemies away from the player and at
-    least one exit. Retries until every enemy spawn and exit is reachable from the player
-    start (scattered cover can't wall part of the map off), raising only if it never lands
-    a playable one — the caller can't recover from an unplayable fight, so this must not
-    hand one back."""
     for _ in range(_MAP_GEN_ATTEMPTS):
         tiles = [[Tile.WALL] * width for _ in range(height)]
-        bsp = tcod.bsp.BSP(x=1, y=1, width=width - 2, height=height - 2)
-        bsp.split_recursive(
-            depth=_BSP_DEPTH,
-            min_width=_ROOM_MIN,
-            min_height=_ROOM_MIN,
-            max_horizontal_ratio=1.5,
-            max_vertical_ratio=1.5,
-            seed=tcod.random.Random(tcod.random.MERSENNE_TWISTER, seed=rng.getrandbits(31)),
-        )
-        rooms: list[tuple[Coord, tuple[int, int, int, int]]] = []
-        for leaf in bsp.pre_order():
-            if leaf.children:
-                continue
-            rx, ry = leaf.x + 1, leaf.y + 1
-            rw, rh = max(2, leaf.width - 2), max(2, leaf.height - 2)
-            _carve_room(tiles, rx, ry, rw, rh)
-            rooms.append(((rx + rw // 2, ry + rh // 2), (rx, ry, rw, rh)))
-        if len(rooms) < 2:
+        rooms = _bsp_rooms(tiles, width, height, rng)
+        if rooms is None:
             continue
-        for prev, cur in zip(rooms, rooms[1:]):
-            _carve_tunnel(tiles, prev[0], cur[0])
 
         grid = Grid(width=width, height=height, tiles=tiles)
-        rooms.sort(key=lambda room: room[0][0])  # left to right
+        rooms.sort(key=lambda room: room[0][0])
         cells_by_room = [_room_cells(grid, rect) for _center, rect in rooms]
         player_start = rooms[0][0]
-        # Exits: the leftmost floor cells of the entry room — the way the runner came in.
-        # The entry room always has floor (its centre is player_start), so this is non-empty.
         exits = frozenset(sorted(cells_by_room[0])[:2])
 
-        # Enemies hold the rooms away from the entry; fall back to any far floor if a
-        # small map didn't leave enough.
         reserved = {player_start, *exits}
-        spawn_pool = [cell for cells in cells_by_room[1:] for cell in cells if cell not in reserved]
-        if len(spawn_pool) < enemy_count:
-            spawn_pool = [cell for cells in cells_by_room for cell in cells if cell not in reserved]
-        if len(spawn_pool) < enemy_count:
+        enemy_spawns = _pick_spawns(cells_by_room, enemy_count, reserved, rng)
+        if enemy_spawns is None:
             continue
-        enemy_spawns = rng.sample(spawn_pool, enemy_count)
 
-        # Scatter low cover in room interiors, never on anyone's start or an exit, then
-        # prove it didn't sever the map before handing it back.
         keep_clear = {player_start, *exits, *enemy_spawns}
-        for cells in cells_by_room:
-            for cell in cells:
-                if cell not in keep_clear and rng.random() < cover_density:
-                    tiles[cell[1]][cell[0]] = Tile.LOW_COVER
-        if all(
-            target == player_start or path_between(grid, player_start, target)
-            for target in (*enemy_spawns, *exits)
-        ):
+        _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
+
+        if _verify_map(grid, player_start, enemy_spawns, exits):
             return TacticalMap(grid, player_start, enemy_spawns, exits)
     raise RuntimeError("could not generate a playable tactical map")
