@@ -27,13 +27,14 @@ from shadowguy.matrix import (
     move_to,
     player_attack_damage,
     player_integrity,
+    render_matrix_network,
     roll_ice,
     start_matrix,
     start_matrix_run,
     take_matrix_turn,
     take_run_turn,
 )
-from shadowguy.shops import PROGRAMS_BY_ID, InventoryItem
+from shadowguy.shops import PROGRAMS_BY_ID, STOLEN_DATASHARD_ID, InventoryItem
 
 SEEDS = range(150)
 
@@ -274,13 +275,15 @@ def test_generated_network_connections_are_symmetric(tier, seed):
 
 @pytest.mark.parametrize("tier", TIERS)
 @pytest.mark.parametrize("seed", SEEDS)
-def test_generated_network_node_count_is_in_tier_range_plus_optional_cpu(tier, seed):
-    (low, high), _ic_density, _cpu_chance = MATRIX_NETWORK_TIERS[tier]
+def test_generated_network_node_count_is_in_tier_range_plus_optional_extras(tier, seed):
+    (low, high), _ic_density, _cpu_chance, _cache_chance = MATRIX_NETWORK_TIERS[tier]
     network = generate_matrix_network(tier, random.Random(seed))
-    non_cpu = sum(1 for n in network.nodes.values() if n.role is not MatrixNodeRole.CPU)
-    assert low <= non_cpu <= high
+    extras = (MatrixNodeRole.CPU, MatrixNodeRole.CACHE)
+    core = sum(1 for n in network.nodes.values() if n.role not in extras)
+    assert low <= core <= high
     has_cpu = any(n.role is MatrixNodeRole.CPU for n in network.nodes.values())
-    assert len(network.nodes) == non_cpu + (1 if has_cpu else 0)
+    has_cache = any(n.role is MatrixNodeRole.CACHE for n in network.nodes.values())
+    assert len(network.nodes) == core + (1 if has_cpu else 0) + (1 if has_cache else 0)
 
 
 @pytest.mark.parametrize("tier", TIERS)
@@ -303,24 +306,53 @@ def test_generated_network_cpu_only_ever_connects_to_data(tier, seed):
         assert cpu.connections == (network.data_id,)
 
 
+def test_cache_node_only_spawns_at_the_tier_it_is_configured_for():
+    # Tier 0/2 have cache_chance 0.0 today -- assert that stays true rather than
+    # assuming it, so a future retune of the table can't silently reintroduce cache
+    # nodes on a tier nothing else in this test file expects them on.
+    for tier in TIERS:
+        _range, _ic_density, _cpu_chance, cache_chance = MATRIX_NETWORK_TIERS[tier]
+        if cache_chance == 0.0:
+            for seed in SEEDS:
+                network = generate_matrix_network(tier, random.Random(seed))
+                assert not any(n.role is MatrixNodeRole.CACHE for n in network.nodes.values())
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_cache_node_when_present_hangs_off_an_ordinary_waypoint_and_is_guarded(seed):
+    network = generate_matrix_network(1, random.Random(seed))
+    cache = next((n for n in network.nodes.values() if n.role is MatrixNodeRole.CACHE), None)
+    if cache is None:
+        return
+    assert cache.ice is not None
+    assert len(cache.connections) == 1
+    (attach_point,) = cache.connections
+    assert network.nodes[attach_point].role in (MatrixNodeRole.SLAVE, MatrixNodeRole.IC)
+
+
 # --- MatrixRunState navigation ------------------------------------------------
 
 WEAK_ICE = ICE_BY_ID["watchdog"]
 TOUGH_ICE = ICE_BY_ID["black_ice"]
 
 
-def _hand_built_network(data_ice=WEAK_ICE, with_cpu=False):
+def _hand_built_network(data_ice=WEAK_ICE, with_cpu=False, with_cache=False):
     """entry -- slave -- ic -- data (-- cpu, optionally): a small, fixed network for
-    testing navigation mechanics directly, rather than relying on generation."""
+    testing navigation mechanics directly, rather than relying on generation. cache
+    (optional) hangs off slave, same as a generated one hangs off any ordinary
+    waypoint — not off the data/cpu end of the spine."""
     data_connections = ("ic", "cpu") if with_cpu else ("ic",)
+    slave_connections = ("entry", "ic", "cache") if with_cache else ("entry", "ic")
     nodes = {
         "entry": MatrixNode(id="entry", role=MatrixNodeRole.ENTRY, connections=("slave",)),
-        "slave": MatrixNode(id="slave", role=MatrixNodeRole.SLAVE, connections=("entry", "ic")),
+        "slave": MatrixNode(id="slave", role=MatrixNodeRole.SLAVE, connections=slave_connections),
         "ic": MatrixNode(id="ic", role=MatrixNodeRole.IC, connections=("slave", "data"), ice=WEAK_ICE),
         "data": MatrixNode(id="data", role=MatrixNodeRole.DATA, connections=data_connections, ice=data_ice),
     }
     if with_cpu:
         nodes["cpu"] = MatrixNode(id="cpu", role=MatrixNodeRole.CPU, connections=("data",), ice=TOUGH_ICE)
+    if with_cache:
+        nodes["cache"] = MatrixNode(id="cache", role=MatrixNodeRole.CACHE, connections=("slave",), ice=WEAK_ICE)
     return MatrixNetwork(nodes=nodes, entry_id="entry", data_id="data")
 
 
@@ -436,6 +468,34 @@ def test_cpu_node_is_reachable_and_optional_after_data_clears():
     assert extract(run) is True
 
 
+def test_clearing_a_cache_node_grants_a_sellable_item_and_never_gates_the_run():
+    char = _ready_char()
+    run = start_matrix_run(char, _hand_built_network(with_cache=True), Drop.NONE, random.Random(9))
+    move_to(run, "slave", random.Random(9))
+    assert move_to(run, "cache", random.Random(9)) is True
+    assert run.in_fight
+    assert not any(entry.item_id == STOLEN_DATASHARD_ID for entry in char.inventory)
+    _clear_node(run, random.Random(9))
+    assert not run.is_over  # a cache is side loot, not a stage in reaching/extracting data
+    assert any(entry.item_id == STOLEN_DATASHARD_ID for entry in char.inventory)
+    # unequipped: it's junk to sell, not gear -- and mustn't be picked up as "the"
+    # active deck by shops.active_deck_entry (slot=None is that convention's whole
+    # signal, so an equipped, bonus-less item would silently look like one).
+    got = next(entry for entry in char.inventory if entry.item_id == STOLEN_DATASHARD_ID)
+    assert got.equipped is False
+
+
+def test_jacking_out_after_a_cache_still_keeps_the_loot():
+    char = _ready_char()
+    run = start_matrix_run(char, _hand_built_network(with_cache=True), Drop.NONE, random.Random(9))
+    move_to(run, "slave", random.Random(9))
+    move_to(run, "cache", random.Random(9))
+    _clear_node(run, random.Random(9))
+    jack_out(run)
+    assert run.outcome is MatrixOutcome.EJECTED  # the job itself is blown...
+    assert any(entry.item_id == STOLEN_DATASHARD_ID for entry in char.inventory)  # ...loot isn't
+
+
 def test_ejection_from_a_non_final_node_ends_the_whole_run():
     run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(6))
     move_to(run, "slave", random.Random(6))
@@ -464,3 +524,72 @@ def test_connected_nodes_reflects_current_position():
     assert {n.id for n in connected_nodes(run)} == {"slave"}
     move_to(run, "slave", random.Random(8))
     assert {n.id for n in connected_nodes(run)} == {"entry", "ic"}
+
+
+# --- render_matrix_network -----------------------------------------------------
+
+
+def test_render_marks_current_node_and_spine_connectors():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    text = render_matrix_network(run)
+    lines = text.splitlines()
+    assert len(lines) == 1  # no cpu: everything sits in one row
+    assert "@[entry ENTRY]" in lines[0]
+    # entry->slave->ic->data is the guaranteed chain, so every consecutive pair
+    # must render as an adjacent, connected pair of columns.
+    assert "[entry ENTRY]" in lines[0] and lines[0].index("[entry") < lines[0].index("[slave")
+    assert lines[0].index("[slave") < lines[0].index("[ic")
+    assert lines[0].index("[ic") < lines[0].index("[data")
+
+
+def test_render_reflects_cleared_and_guarded_status():
+    run = start_matrix_run(_ready_char(), _hand_built_network(), Drop.NONE, random.Random(1))
+    move_to(run, "slave", random.Random(1))
+    move_to(run, "ic", random.Random(1))
+    _clear_node(run, random.Random(1))
+    text = render_matrix_network(run)
+    assert "@[ic IC clear]" in text
+    assert "[data DATA guard]" in text  # not yet visited: still guarded, not cleared
+
+
+def test_render_draws_a_connector_between_data_and_its_cpu_detour():
+    # cpu's only neighbour is data, so the barycenter layout lines it up in data's
+    # row one column over -- a straight connector, not floating disconnected.
+    run = start_matrix_run(_char(), _hand_built_network(with_cpu=True), Drop.NONE, random.Random(0))
+    text = render_matrix_network(run)
+    data_line = next(line for line in text.splitlines() if "[data" in line and "[cpu" in line)
+    assert data_line.index("[data") < data_line.index("[cpu")
+    assert "-" in data_line[data_line.index("]", data_line.index("[data")) : data_line.index("[cpu")]
+
+
+def test_render_spreads_a_branch_across_rows_in_the_same_column():
+    network = MatrixNetwork(
+        entry_id="entry",
+        data_id="data",
+        nodes={
+            "entry": MatrixNode(id="entry", role=MatrixNodeRole.ENTRY, connections=("a", "b")),
+            "a": MatrixNode(id="a", role=MatrixNodeRole.SLAVE, connections=("entry", "data")),
+            "b": MatrixNode(id="b", role=MatrixNodeRole.SLAVE, connections=("entry", "data")),
+            "data": MatrixNode(id="data", role=MatrixNodeRole.DATA, connections=("a", "b"), ice=WEAK_ICE),
+        },
+    )
+    run = start_matrix_run(_char(), network, Drop.NONE, random.Random(0))
+    text = render_matrix_network(run)
+    lines = text.splitlines()
+    # entry forks into two siblings one hop away -- they can't both sit in entry's
+    # row, so the diagram must be more than one line tall to show the fork at all.
+    assert len(lines) > 1
+    a_line = next(line for line in lines if "[a " in line)
+    b_line = next(line for line in lines if "[b " in line)
+    assert a_line != b_line
+
+
+@pytest.mark.parametrize("tier", MATRIX_NETWORK_TIERS.keys())
+@pytest.mark.parametrize("seed", SEEDS)
+def test_render_never_crashes_and_shows_every_node_on_a_generated_network(tier, seed):
+    network = generate_matrix_network(tier, random.Random(seed))
+    run = start_matrix_run(_char(), network, Drop.NONE, random.Random(seed))
+    text = render_matrix_network(run)
+    for node_id in network.nodes:
+        assert f"[{node_id} " in text
+    assert text.count("@[") == 1
