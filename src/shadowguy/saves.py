@@ -58,7 +58,11 @@ SAVE_SUFFIX = ".save"
 # lacks the key).
 # v18 added cyberdeck programs: Character.owned_programs and InventoryItem.
 # installed_programs (a pre-v18 pickled Character/InventoryItem lacks both).
-SAVE_VERSION = 18
+# v19 reshaped matrix combat from a flat ICE pool to a node network:
+# scene.MatrixStage.ice (tuple[Ice, ...]) became .network (a matrix.MatrixNetwork)
+# -- a pre-v19 pickled MatrixStage (inside an accepted Data Heist job) has the old
+# field, not the new one.
+SAVE_VERSION = 19
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -1,4 +1,5 @@
 import random
+from collections import deque
 
 import pytest
 
@@ -8,18 +9,29 @@ from shadowguy.matrix import (
     BARE_JACK_DAMAGE,
     ICE_BY_ID,
     ICE_TIERS,
+    MATRIX_NETWORK_TIERS,
     MIN_READY_HACK,
     MatrixActionKind,
+    MatrixNetwork,
+    MatrixNode,
+    MatrixNodeRole,
     MatrixOutcome,
     available_matrix_actions,
+    connected_nodes,
+    extract,
     firewall_defense,
     firewall_soak,
+    generate_matrix_network,
+    jack_out,
     matrix_readiness,
+    move_to,
     player_attack_damage,
     player_integrity,
     roll_ice,
     start_matrix,
+    start_matrix_run,
     take_matrix_turn,
+    take_run_turn,
 )
 from shadowguy.shops import PROGRAMS_BY_ID, InventoryItem
 
@@ -223,3 +235,232 @@ def test_the_matrix_belongs_to_the_hacker():
 def test_matrix_fight_always_terminates_and_leaves_one_outcome(seed):
     outcome = _run(_char(intelligence=3, hack_rank=2, deck_id="cracked_cyberdeck"), seed, tier=1)
     assert outcome in (MatrixOutcome.SEIZED, MatrixOutcome.EJECTED)
+
+
+# --- generate_matrix_network -------------------------------------------------
+
+TIERS = sorted(MATRIX_NETWORK_TIERS)
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_network_is_connected_with_a_distinct_entry_and_data(tier, seed):
+    network = generate_matrix_network(tier, random.Random(seed))
+    assert network.entry_id in network.nodes
+    assert network.data_id in network.nodes
+    assert network.entry_id != network.data_id
+    assert network.nodes[network.entry_id].role is MatrixNodeRole.ENTRY
+    assert network.nodes[network.data_id].role is MatrixNodeRole.DATA
+
+    seen = {network.entry_id}
+    queue = deque([network.entry_id])
+    while queue:
+        current = queue.popleft()
+        for neighbor in network.nodes[current].connections:
+            if neighbor not in seen:
+                seen.add(neighbor)
+                queue.append(neighbor)
+    assert seen == set(network.nodes)
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_network_connections_are_symmetric(tier, seed):
+    network = generate_matrix_network(tier, random.Random(seed))
+    for node in network.nodes.values():
+        for other_id in node.connections:
+            assert node.id in network.nodes[other_id].connections
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_network_node_count_is_in_tier_range_plus_optional_cpu(tier, seed):
+    (low, high), _ic_density, _cpu_chance = MATRIX_NETWORK_TIERS[tier]
+    network = generate_matrix_network(tier, random.Random(seed))
+    non_cpu = sum(1 for n in network.nodes.values() if n.role is not MatrixNodeRole.CPU)
+    assert low <= non_cpu <= high
+    has_cpu = any(n.role is MatrixNodeRole.CPU for n in network.nodes.values())
+    assert len(network.nodes) == non_cpu + (1 if has_cpu else 0)
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_network_ice_only_on_guarded_roles(tier, seed):
+    network = generate_matrix_network(tier, random.Random(seed))
+    for node in network.nodes.values():
+        if node.role in (MatrixNodeRole.ENTRY, MatrixNodeRole.SLAVE):
+            assert node.ice is None
+        else:
+            assert node.ice is not None
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_network_cpu_only_ever_connects_to_data(tier, seed):
+    network = generate_matrix_network(tier, random.Random(seed))
+    cpu = next((n for n in network.nodes.values() if n.role is MatrixNodeRole.CPU), None)
+    if cpu is not None:
+        assert cpu.connections == (network.data_id,)
+
+
+# --- MatrixRunState navigation ------------------------------------------------
+
+WEAK_ICE = ICE_BY_ID["watchdog"]
+TOUGH_ICE = ICE_BY_ID["black_ice"]
+
+
+def _hand_built_network(data_ice=WEAK_ICE, with_cpu=False):
+    """entry -- slave -- ic -- data (-- cpu, optionally): a small, fixed network for
+    testing navigation mechanics directly, rather than relying on generation."""
+    data_connections = ("ic", "cpu") if with_cpu else ("ic",)
+    nodes = {
+        "entry": MatrixNode(id="entry", role=MatrixNodeRole.ENTRY, connections=("slave",)),
+        "slave": MatrixNode(id="slave", role=MatrixNodeRole.SLAVE, connections=("entry", "ic")),
+        "ic": MatrixNode(id="ic", role=MatrixNodeRole.IC, connections=("slave", "data"), ice=WEAK_ICE),
+        "data": MatrixNode(id="data", role=MatrixNodeRole.DATA, connections=data_connections, ice=data_ice),
+    }
+    if with_cpu:
+        nodes["cpu"] = MatrixNode(id="cpu", role=MatrixNodeRole.CPU, connections=("data",), ice=TOUGH_ICE)
+    return MatrixNetwork(nodes=nodes, entry_id="entry", data_id="data")
+
+
+def _ready_char():
+    return _char(intelligence=6, hack_rank=6, deck_id="zetatech_rig")
+
+
+def _clear_node(run, rng, max_rounds=50):
+    """Always-attack the current node's guardian down (or bail after max_rounds, so a
+    broken invariant fails the test instead of hanging it)."""
+    rounds = 0
+    while run.in_fight and rounds < max_rounds:
+        attack = next(
+            a for a in available_matrix_actions(run.character, run.fight.program_uses)
+            if a.kind is MatrixActionKind.ATTACK
+        )
+        take_run_turn(run, attack, rng)
+        rounds += 1
+
+
+def test_start_matrix_run_enters_the_unguarded_entry_node():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    assert run.current_node_id == "entry"
+    assert run.fight is None
+    assert not run.in_fight
+
+
+def test_move_to_refuses_a_non_adjacent_node():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    assert move_to(run, "data", random.Random(0)) is False
+    assert run.current_node_id == "entry"
+
+
+def test_move_through_a_slave_node_is_free_no_fight():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    assert move_to(run, "slave", random.Random(0)) is True
+    assert run.current_node_id == "slave"
+    assert run.fight is None
+
+
+def test_moving_into_an_ic_node_opens_a_fight_via_the_existing_engine():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    move_to(run, "slave", random.Random(0))
+    assert move_to(run, "ic", random.Random(0)) is True
+    assert run.in_fight
+    assert run.fight.ices[0].ice is WEAK_ICE
+
+
+def test_move_to_refuses_while_a_guardian_is_up():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(0))
+    move_to(run, "slave", random.Random(0))
+    move_to(run, "ic", random.Random(0))
+    assert move_to(run, "slave", random.Random(0)) is False
+    assert run.current_node_id == "ic"
+
+
+def test_clearing_a_non_final_node_does_not_end_the_run():
+    run = start_matrix_run(_ready_char(), _hand_built_network(), Drop.NONE, random.Random(1))
+    move_to(run, "slave", random.Random(1))
+    move_to(run, "ic", random.Random(1))
+    _clear_node(run, random.Random(1))
+    assert not run.is_over
+    assert "ic" in run.cleared_node_ids
+    assert not run.in_fight
+
+
+def test_integrity_carries_across_node_engagements_not_refilled():
+    run = start_matrix_run(_ready_char(), _hand_built_network(), Drop.NONE, random.Random(2))
+    move_to(run, "slave", random.Random(2))
+    move_to(run, "ic", random.Random(2))
+    _clear_node(run, random.Random(2))
+    integrity_after_ic = run.fight.integrity
+    max_integrity_after_ic = run.fight.max_integrity
+    move_to(run, "data", random.Random(2))
+    assert run.fight.integrity == integrity_after_ic
+    assert run.fight.max_integrity == max_integrity_after_ic
+
+
+def test_clearing_the_data_node_does_not_auto_win():
+    run = start_matrix_run(_ready_char(), _hand_built_network(), Drop.NONE, random.Random(3))
+    move_to(run, "slave", random.Random(3))
+    move_to(run, "ic", random.Random(3))
+    _clear_node(run, random.Random(3))
+    move_to(run, "data", random.Random(3))
+    _clear_node(run, random.Random(3))
+    assert not run.is_over
+    assert run.can_extract
+
+
+def test_extract_refuses_before_data_is_cleared_and_succeeds_after():
+    run = start_matrix_run(_ready_char(), _hand_built_network(), Drop.NONE, random.Random(4))
+    assert extract(run) is False
+    move_to(run, "slave", random.Random(4))
+    move_to(run, "ic", random.Random(4))
+    _clear_node(run, random.Random(4))
+    move_to(run, "data", random.Random(4))
+    _clear_node(run, random.Random(4))
+    assert extract(run) is True
+    assert run.outcome is MatrixOutcome.SEIZED
+
+
+def test_cpu_node_is_reachable_and_optional_after_data_clears():
+    run = start_matrix_run(_ready_char(), _hand_built_network(with_cpu=True), Drop.NONE, random.Random(5))
+    move_to(run, "slave", random.Random(5))
+    move_to(run, "ic", random.Random(5))
+    _clear_node(run, random.Random(5))
+    move_to(run, "data", random.Random(5))
+    _clear_node(run, random.Random(5))
+    assert move_to(run, "cpu", random.Random(5)) is True
+    assert run.in_fight
+    _clear_node(run, random.Random(5))
+    assert not run.is_over  # visiting CPU never auto-wins either
+    assert extract(run) is True
+
+
+def test_ejection_from_a_non_final_node_ends_the_whole_run():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(6))
+    move_to(run, "slave", random.Random(6))
+    move_to(run, "ic", random.Random(6))
+    assert run.in_fight
+    run.fight.integrity = 0  # force it deterministically rather than chase the odds
+    harden = next(
+        a for a in available_matrix_actions(run.character, run.fight.program_uses)
+        if a.kind is MatrixActionKind.HARDEN
+    )
+    take_run_turn(run, harden, random.Random(6))
+    assert run.is_over
+    assert run.outcome is MatrixOutcome.EJECTED
+
+
+def test_jack_out_ends_the_run_even_with_no_active_fight():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(7))
+    assert run.fight is None
+    jack_out(run)
+    assert run.is_over
+    assert run.outcome is MatrixOutcome.EJECTED
+
+
+def test_connected_nodes_reflects_current_position():
+    run = start_matrix_run(_char(), _hand_built_network(), Drop.NONE, random.Random(8))
+    assert {n.id for n in connected_nodes(run)} == {"slave"}
+    move_to(run, "slave", random.Random(8))
+    assert {n.id for n in connected_nodes(run)} == {"entry", "ic"}

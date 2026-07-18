@@ -134,6 +134,106 @@ def roll_ice(tier: int, rng: random.Random) -> tuple[Ice, ...]:
     return tuple(ICE_BY_ID[rng.choice(pool)] for _ in range(rng.randint(low, high)))
 
 
+def _roll_one_ice(tier: int, rng: random.Random) -> Ice:
+    """One ICE from a tier's pool — roll_ice's single-guardian counterpart, for a
+    matrix network's per-node assignment rather than one flat fight's whole roster."""
+    pool, _count_range = ICE_TIERS[tier]
+    return ICE_BY_ID[rng.choice(pool)]
+
+
+class MatrixNodeRole(StrEnum):
+    ENTRY = "entry"  # where you jack in; never guarded
+    SLAVE = "slave"  # waypoint, no fight
+    IC = "ic"  # guarded; must clear it to pass
+    DATA = "data"  # the objective
+    CPU = "cpu"  # optional, harder, reachable once DATA is cleared
+
+
+@dataclass(frozen=True)
+class MatrixNode:
+    """One stop in a matrix run's node network — the ICE analogue of
+    corpmap.Territory, much smaller and generated fresh per fight rather than
+    persistent. `ice` is the guardian that must be cleared to pass; None for
+    ENTRY/SLAVE, which are never guarded."""
+
+    id: str
+    role: MatrixNodeRole
+    connections: tuple[str, ...]
+    ice: Ice | None = None
+
+
+@dataclass(frozen=True)
+class MatrixNetwork:
+    nodes: dict[str, MatrixNode]
+    entry_id: str
+    data_id: str
+
+
+# tier -> ((node count low, high), IC density among non-ENTRY/DATA/CPU nodes, CPU
+# attach chance). First-slice numbers, not balance-simulated — see CLAUDE.md's
+# convention for flagging that.
+MATRIX_NETWORK_TIERS: dict[int, tuple[tuple[int, int], float, float]] = {
+    0: ((5, 6), 0.35, 0.4),
+    1: ((6, 8), 0.45, 0.5),
+    2: ((7, 9), 0.55, 0.6),
+}
+
+if MATRIX_NETWORK_TIERS.keys() != ICE_TIERS.keys():
+    raise ValueError("MATRIX_NETWORK_TIERS must cover the same tiers as ICE_TIERS")
+
+# Chance of an extra edge between any two nodes beyond the guaranteed spine —
+# corpmap.EXTRA_EDGE_CHANCE's role, here: branches and loops instead of one corridor.
+EXTRA_NODE_EDGE_CHANCE = 0.2
+
+
+def generate_matrix_network(tier: int, rng: random.Random) -> MatrixNetwork:
+    """A small connected node graph for one matrix run: a guaranteed ENTRY-to-DATA
+    spine (so, unlike tactical.py's BSP rooms, reachability never needs a retry
+    loop), a few extra edges for branching, and — by a flat chance, not a guarantee,
+    for variety — one CPU node hanging off DATA: an optional, tougher detour past
+    the objective."""
+    (low, high), ic_density, cpu_chance = MATRIX_NETWORK_TIERS[tier]
+    node_count = rng.randint(low, high)
+    ids = [f"node_{i}" for i in range(node_count)]
+    connections: dict[str, set[str]] = {node_id: set() for node_id in ids}
+
+    for a, b in zip(ids, ids[1:], strict=False):
+        connections[a].add(b)
+        connections[b].add(a)
+    for i, a in enumerate(ids):
+        for b in ids[i + 1 :]:
+            if b not in connections[a] and rng.random() < EXTRA_NODE_EDGE_CHANCE:
+                connections[a].add(b)
+                connections[b].add(a)
+
+    entry_id, data_id = ids[0], ids[-1]
+    roles = {entry_id: MatrixNodeRole.ENTRY, data_id: MatrixNodeRole.DATA}
+    for node_id in ids[1:-1]:
+        roles[node_id] = MatrixNodeRole.IC if rng.random() < ic_density else MatrixNodeRole.SLAVE
+
+    if rng.random() < cpu_chance:
+        cpu_id = f"node_{node_count}"
+        ids.append(cpu_id)
+        connections[cpu_id] = {data_id}
+        connections[data_id].add(cpu_id)
+        roles[cpu_id] = MatrixNodeRole.CPU
+
+    nodes = {}
+    for node_id in ids:
+        role = roles[node_id]
+        if role in (MatrixNodeRole.IC, MatrixNodeRole.DATA):
+            ice = _roll_one_ice(tier, rng)
+        elif role is MatrixNodeRole.CPU:
+            ice = _roll_one_ice(min(tier + 1, max(ICE_TIERS)), rng)
+        else:
+            ice = None
+        nodes[node_id] = MatrixNode(
+            id=node_id, role=role, connections=tuple(sorted(connections[node_id])), ice=ice
+        )
+
+    return MatrixNetwork(nodes=nodes, entry_id=entry_id, data_id=data_id)
+
+
 def _installed_programs(character: Character) -> list[Program]:
     """Programs live on the active deck (shops.active_deck_entry) — the same one
     equipped_deck_rating's number comes from, since a matrix fight only ever rides on
@@ -276,6 +376,11 @@ class MatrixState:
     # program id -> charges left this fight, seeded in start_matrix from each installed
     # action-program's uses_per_fight. Per-fight like integrity, not persisted.
     program_uses: dict[str, int] = field(default_factory=dict)
+    # Whether clearing every ice here wins the whole run (True by default, so a
+    # direct start_matrix() call — every existing caller and test — behaves exactly
+    # as before). MatrixRunState sets this False on every node except the DATA one,
+    # via engage_node, so clearing a mid-network guardian doesn't end the run early.
+    is_final_node: bool = True
 
     @property
     def standing(self) -> list[IceFighter]:
@@ -320,6 +425,24 @@ def start_matrix(
         _ice_bite(state, first, rng, harden=0)
         _settle(state)
     return state
+
+
+def engage_node(
+    state: MatrixState, ices: tuple[Ice, ...], is_final_node: bool, rng: random.Random | None = None
+) -> None:
+    """Swap in a fresh node's guardian(s) on an already-open MatrixState. Integrity,
+    program_uses and the log all carry over — unlike start_matrix, nothing is reset,
+    because a matrix run's integrity is a run-wide resource, not refilled between
+    nodes (see MatrixRunState). `outcome` does reset to ONGOING: a prior node
+    resolving SEIZED (is_final_node was True there) must not block this one's fight
+    from ever starting — only EJECTED should ever end a run, and that's checked
+    before engage_node is ever called again (see MatrixRunState._settle_run/move_to).
+    No drop: only the very first node engaged in a run plays out an ambush/critical-
+    failure opening bite (see start_matrix_run)."""
+    state.ices = [IceFighter(ice=ice, integrity=ice.integrity) for ice in ices]
+    state.is_final_node = is_final_node
+    state.outcome = MatrixOutcome.ONGOING
+    state.log.append("ICE lights up ahead.")
 
 
 def _damage_ice(state: MatrixState, fighter: IceFighter, damage: int) -> None:
@@ -428,12 +551,15 @@ def _ice_phase(state: MatrixState, rng: random.Random) -> None:
 
 def _settle(state: MatrixState) -> None:
     """Read the board after a turn. Ejection (integrity gone) beats seizing: if the last
-    intrusion drops the last ICE but a bite already put you at 0, you're still out."""
+    intrusion drops the last ICE but a bite already put you at 0, you're still out.
+    Clearing every ice here only ends the whole run in SEIZED when this is the final
+    node (MatrixState.is_final_node) — a mid-network guardian falling just clears
+    that node; MatrixRunState reads state.standing itself to notice and move on."""
     if state.integrity <= 0:
         state.outcome = MatrixOutcome.EJECTED
         if "jack" not in (state.log[-1] if state.log else ""):
             state.log.append("Your integrity fails. You're forced out.")
-    elif not state.standing:
+    elif not state.standing and state.is_final_node:
         state.outcome = MatrixOutcome.SEIZED
 
 
@@ -464,3 +590,127 @@ def take_matrix_turn(state: MatrixState, action: MatrixAction, rng: random.Rando
     _ice_phase(state, rng)
     _settle(state)
     state.soak = 0
+
+
+@dataclass
+class MatrixRunState:
+    """A node-network crawl in progress: navigation wrapped around the persistent
+    per-node engagement (MatrixState) that start_matrix_run/move_to swap fresh
+    guardians into via engage_node. integrity/program charges/log carry across
+    nodes — pushing deeper into the network is a real cost, not a free reset."""
+
+    character: Character
+    network: MatrixNetwork
+    current_node_id: str
+    cleared_node_ids: set[str] = field(default_factory=set)
+    fight: MatrixState | None = None  # the live per-node engagement, if any
+    outcome: MatrixOutcome = MatrixOutcome.ONGOING
+    run_log: list[str] = field(default_factory=list)
+
+    @property
+    def is_over(self) -> bool:
+        return self.outcome is not MatrixOutcome.ONGOING
+
+    @property
+    def in_fight(self) -> bool:
+        """True while a node's guardian is still up and blocking movement."""
+        return self.fight is not None and bool(self.fight.standing)
+
+    @property
+    def current_node(self) -> MatrixNode:
+        return self.network.nodes[self.current_node_id]
+
+    @property
+    def can_extract(self) -> bool:
+        return self.network.data_id in self.cleared_node_ids
+
+
+def connected_nodes(run: MatrixRunState) -> list[MatrixNode]:
+    """The nodes reachable from wherever the runner is standing right now."""
+    return [run.network.nodes[node_id] for node_id in run.current_node.connections]
+
+
+def _settle_run(run: MatrixRunState) -> None:
+    """Read the active node fight and fold its result into the run: an ejection
+    always ends the whole run; a cleared node (its guardian down) is banked, and —
+    only for the DATA node — offers up a win the player still has to choose to take
+    (see extract())."""
+    if run.fight is None:
+        return
+    if run.fight.outcome is MatrixOutcome.EJECTED:
+        run.outcome = MatrixOutcome.EJECTED
+        return
+    if not run.fight.standing:
+        run.cleared_node_ids.add(run.current_node_id)
+
+
+def _enter_node(run: MatrixRunState, node_id: str, drop: Drop, rng: random.Random | None) -> None:
+    run.current_node_id = node_id
+    node = run.network.nodes[node_id]
+    if node.ice is None or node_id in run.cleared_node_ids:
+        run.run_log.append(f"You're clear at {node.id} ({node.role.value}).")
+        return
+    is_final = node.role is MatrixNodeRole.DATA
+    if run.fight is None:
+        run.fight = start_matrix(run.character, (node.ice,), drop, rng)
+        run.fight.is_final_node = is_final
+    else:
+        engage_node(run.fight, (node.ice,), is_final, rng)
+    run.run_log.append(f"ICE lights up at {node.id}.")
+    _settle_run(run)
+
+
+def start_matrix_run(
+    character: Character, network: MatrixNetwork, drop: Drop = Drop.NONE, rng: random.Random | None = None
+) -> MatrixRunState:
+    """Jack in. Enters the network's entry node — never guarded, so this never
+    triggers a fight; drop only ever matters for whichever node ends up engaged
+    first."""
+    run = MatrixRunState(character=character, network=network, current_node_id=network.entry_id)
+    _enter_node(run, network.entry_id, drop, rng)
+    return run
+
+
+def move_to(run: MatrixRunState, node_id: str, rng: random.Random | None = None) -> bool:
+    """Attempt to move onto a connected node. Refuses (no state change, returns
+    False) if the run is already over, a guardian is still blocking movement, or
+    node_id isn't actually reachable from here."""
+    if run.is_over or run.in_fight:
+        return False
+    if node_id not in run.current_node.connections:
+        return False
+    _enter_node(run, node_id, Drop.NONE, rng)
+    return True
+
+
+def take_run_turn(run: MatrixRunState, action: MatrixAction, rng: random.Random | None = None) -> None:
+    """Delegate one round to the active node engagement (take_matrix_turn,
+    unchanged), then fold the result into the run."""
+    if run.is_over or run.fight is None or run.fight.is_over:
+        return
+    take_matrix_turn(run.fight, action, rng)
+    _settle_run(run)
+
+
+def jack_out(run: MatrixRunState) -> None:
+    """Bail on the whole run, right now — always works, the same 'never a cage' law
+    JACK_OUT already keeps inside a node fight (MatrixActionKind.JACK_OUT). This is
+    the navigation-mode equivalent: a node fight might not even be open yet (still
+    crossing SLAVE relays), so there's nothing to route a JACK_OUT MatrixAction
+    through."""
+    run.outcome = MatrixOutcome.EJECTED
+    run.run_log.append("You yank the jack and drop the connection. The run is blown.")
+
+
+def extract(run: MatrixRunState) -> bool:
+    """End the run a winner, on the player's terms — the only way SEIZED actually
+    fires. Refuses until the DATA node has been cleared: clearing it alone doesn't
+    auto-win (see _settle's is_final_node gate), which is what leaves CPU
+    (explicitly a detour *past* the objective) reachable at all. No partial credit
+    otherwise — jacking out before extracting still blows the run, even with DATA
+    already cleared."""
+    if run.is_over or run.in_fight or not run.can_extract:
+        return False
+    run.outcome = MatrixOutcome.SEIZED
+    run.run_log.append("You pull out clean, data in hand.")
+    return True

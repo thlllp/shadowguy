@@ -16,7 +16,7 @@ from shadowguy.app import ShadowguyApp
 from shadowguy.combat import ActionKind
 from shadowguy.corpmap import LocationKind
 from shadowguy.jobs import generate_job
-from shadowguy.matrix import MatrixActionKind
+from shadowguy.matrix import MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
@@ -165,8 +165,10 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
 
 def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
     """A Data Heist's fights are ICE, not gunmen: the guaranteed 'Take them first'
-    ambush on its (ordinary Choice) approach stage must reach a live MatrixScreen, and
-    jacking out (which always works) must cleanly end the run against the ICE."""
+    ambush on its (ordinary Choice) approach stage must reach a live MatrixScreen
+    (starting in navigation mode, at the network's entry node), and jacking out
+    (which always works, even before any node fight has opened) must cleanly end
+    the run."""
 
     async def body():
         app = ShadowguyApp()
@@ -199,13 +201,20 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
             assert isinstance(app.screen, MatrixScreen)
 
             matrix_screen = app.screen
-            jack_index = next(
-                i for i, action in enumerate(matrix_screen.actions)
-                if action.kind is MatrixActionKind.JACK_OUT
-            )
-            await pilot.click(f"#action_{jack_index}")
+            # The entry node is never guarded, so this opens in navigation mode --
+            # "Jack out" is always one of its rows, fight or no fight. It's always
+            # the last row, and a big network can push it below the viewport, so
+            # navigate to it by keyboard (which scrolls it into view) rather than
+            # clicking a raw screen offset.
+            assert not matrix_screen.run.in_fight
+            actions_list = matrix_screen.query_one("#actions", ListView)
+            jack_index = next(i for i, item in enumerate(actions_list.children) if item.id == "jack_out")
+            for _ in range(jack_index):
+                await pilot.press("down")
+            await pilot.press("enter")
             await pilot.pause()
-            assert matrix_screen.state.is_over
+            assert matrix_screen.run.is_over
+            assert matrix_screen.run.outcome is MatrixOutcome.EJECTED
 
     run(body())
 

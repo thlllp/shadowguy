@@ -180,7 +180,7 @@ def test_data_heist_fights_are_all_matrix_and_it_reads_as_a_netrunner_job(corp_m
     fights = [s for sid, s in scene.stages.items() if sid.endswith("_fight")]
     assert fights
     for fight in fights:
-        assert fight.matrix is not None and fight.matrix.ice
+        assert fight.matrix is not None and fight.matrix.network.nodes
         assert fight.combat is None and fight.tactical is None
     for sid, stage in scene.stages.items():
         if sid.endswith("_fight"):
