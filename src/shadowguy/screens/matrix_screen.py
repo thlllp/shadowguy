@@ -5,20 +5,32 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.combat import Drop
-from shadowguy.matrix import available_matrix_actions, start_matrix, take_matrix_turn
+from shadowguy.matrix import (
+    available_matrix_actions,
+    connected_nodes,
+    extract,
+    jack_out,
+    move_to,
+    player_integrity,
+    start_matrix_run,
+    take_run_turn,
+)
 from shadowguy.scene import MatrixStage
 
 from . import CharacterSheet, _replace_items
 
 MATRIX_LOG_LINES = 8
+NAV_LOG_LINES = 3
 
 
 class MatrixScreen(Screen):
-    """A matrix fight against ICE — the netrunner's CombatScreen. Same shape (an action
-    list, an enemy panel, a log), but the runner's integrity is a per-fight pool, not the
-    Character.health the CharacterSheet shows, so it gets its own status line. Dismisses
-    with a matrix.MatrixOutcome (SEIZED / EJECTED); SceneScreen maps those onto the
-    MatrixStage's victory/escape Outcomes."""
+    """A matrix run against a node network — the netrunner's CombatScreen/
+    TacticalScreen. Two modes sharing one layout: navigating the network (move
+    between connected nodes, extract once the data node is cleared, jack out any
+    time) and fighting a node's guardian (the same action-list/log shape every
+    other fight screen uses). Dismisses with a matrix.MatrixOutcome (SEIZED /
+    EJECTED); SceneScreen maps those onto the MatrixStage's victory/escape
+    Outcomes — unchanged from before this screen went node-based."""
 
     BINDINGS = [("q", "quit_menu", "Menu")]
 
@@ -26,8 +38,11 @@ class MatrixScreen(Screen):
         super().__init__()
         self.stage = stage
         self.drop = drop
-        self.state = None
+        self.run = None
         self.actions = []
+        # One-shot: true for exactly one refresh after a node's guardian falls, so
+        # the player sees the kill before the screen snaps back to navigation.
+        self._show_cleared_continue = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -43,45 +58,108 @@ class MatrixScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.state = start_matrix(self.app.character, self.stage.ice, self.drop, self.app.rng)
+        self.run = start_matrix_run(self.app.character, self.stage.network, self.drop, self.app.rng)
         await self._refresh()
+
+    def _integrity_text(self) -> Text:
+        run = self.run
+        if run.fight is not None:
+            return Text(f"Integrity: {run.fight.integrity}/{run.fight.max_integrity}")
+        full = player_integrity(self.app.character)
+        return Text(f"Integrity: {full}/{full}")
 
     def _ice_text(self) -> Text:
         lines = []
-        for fighter in self.state.ices:
+        for fighter in self.run.fight.ices:
             if not fighter.is_standing:
                 lines.append(f"  {fighter.ice.name}: dark")
             else:
                 lines.append(f"  {fighter.ice.name}: {fighter.integrity}/{fighter.ice.integrity}")
         return Text("\n".join(lines))
 
-    async def _refresh(self) -> None:
-        state = self.state
-        self.query_one(CharacterSheet).refresh()
-        self.query_one("#integrity", Static).update(
-            Text(f"Integrity: {state.integrity}/{state.max_integrity}")
-        )
-        self.query_one("#ice", Static).update(self._ice_text())
-        self.query_one("#matrix_log", Static).update(Text("\n".join(state.log[-MATRIX_LOG_LINES:])))
+    def _network_text(self) -> Text:
+        run = self.run
+        lines = []
+        for node in run.network.nodes.values():
+            marker = "@" if node.id == run.current_node_id else " "
+            if node.id in run.cleared_node_ids:
+                status = " [cleared]"
+            elif node.ice is not None:
+                status = " [guarded]"
+            else:
+                status = ""
+            lines.append(f"{marker} {node.id} ({node.role.value}){status} -> {', '.join(node.connections)}")
+        return Text("\n".join(lines))
 
-        if state.is_over:
+    def _navigation_rows(self) -> list[ListItem]:
+        run = self.run
+        rows = [
+            ListItem(Static(f"Move to {node.id} ({node.role.value})"), id=f"move_{node.id}")
+            for node in connected_nodes(run)
+        ]
+        if run.can_extract:
+            rows.append(ListItem(Static("Extract with the data"), id="extract"))
+        rows.append(ListItem(Static("Jack out (blow the run)"), id="jack_out"))
+        return rows
+
+    async def _refresh(self) -> None:
+        run = self.run
+        self.query_one(CharacterSheet).refresh()
+        self.query_one("#integrity", Static).update(self._integrity_text())
+
+        in_fight_view = run.in_fight or self._show_cleared_continue
+        if in_fight_view:
+            self.query_one("#ice", Static).update(self._ice_text())
+            self.query_one("#matrix_log", Static).update(Text("\n".join(run.fight.log[-MATRIX_LOG_LINES:])))
+        else:
+            self.query_one("#ice", Static).update(self._network_text())
+            # Fewer lines than fight mode: the network map itself already eats rows
+            # (up to ~10 for a big network), and navigation log lines are terse.
+            self.query_one("#matrix_log", Static).update(Text("\n".join(run.run_log[-NAV_LOG_LINES:])))
+
+        if run.is_over or self._show_cleared_continue:
             self.actions = []
             await _replace_items(
                 self.query_one("#actions", ListView), [ListItem(Static("Continue"), id="done")]
             )
             return
 
-        self.actions = available_matrix_actions(self.app.character, state.program_uses)
-        await _replace_items(
-            self.query_one("#actions", ListView),
-            [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],
-        )
+        if run.in_fight:
+            self.actions = available_matrix_actions(self.app.character, run.fight.program_uses)
+            rows = [
+                ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)
+            ]
+        else:
+            self.actions = []
+            rows = self._navigation_rows()
+        await _replace_items(self.query_one("#actions", ListView), rows)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if self.state.is_over:
-            self.dismiss(self.state.outcome)
+        run = self.run
+
+        if run.is_over:
+            self.dismiss(run.outcome)
             return
 
-        action = self.actions[int(event.item.id.removeprefix("action_"))]
-        take_matrix_turn(self.state, action, self.app.rng)
+        if self._show_cleared_continue:
+            self._show_cleared_continue = False
+            await self._refresh()
+            return
+
+        item_id = event.item.id
+
+        if run.in_fight:
+            action = self.actions[int(item_id.removeprefix("action_"))]
+            take_run_turn(run, action, self.app.rng)
+            if not run.is_over and not run.in_fight:
+                self._show_cleared_continue = True
+            await self._refresh()
+            return
+
+        if item_id == "jack_out":
+            jack_out(run)
+        elif item_id == "extract":
+            extract(run)
+        elif item_id.startswith("move_"):
+            move_to(run, item_id.removeprefix("move_"), self.app.rng)
         await self._refresh()

@@ -6,7 +6,7 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
 from shadowguy.combat import Enemy
 from shadowguy.factions import standing_shift
-from shadowguy.matrix import Ice
+from shadowguy.matrix import MatrixNetwork
 from shadowguy.skills import skill_for, skill_value
 from shadowguy.tactical import Coord, Grid
 
@@ -195,14 +195,15 @@ class MatrixStage:
     through the ordinary Outcome — so a Data Heist's matrix stage pays its cash/rep/
     standing on the same reward path as every other stage.
 
-    `victory` is seizing the data (every ICE down); `escape` is being ejected — integrity
-    gone, or a voluntary jack-out. Unlike Encounter/TacticalStage, ejection is the *only*
-    way to lose: a remote hack can't kill you, so there's no death branch to leave
-    Outcome-less.
+    `victory` is seizing the data — reaching and clearing the network's DATA node and
+    then choosing to extract (matrix.extract); `escape` is being ejected — integrity
+    gone, or a voluntary jack-out, from any node. Unlike Encounter/TacticalStage,
+    ejection is the *only* way to lose: a remote hack can't kill you, so there's no
+    death branch to leave Outcome-less.
     """
 
     prompt: str
-    ice: tuple[Ice, ...]
+    network: MatrixNetwork
     victory: Outcome
     escape: Outcome
 
@@ -280,8 +281,8 @@ class Scene:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a tactical map with nobody in it")
         if stage.burglary is not None and not stage.burglary.entrances:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a burglary with no entrances")
-        if stage.matrix is not None and not stage.matrix.ice:
-            raise ValueError(f"{self.id}: stage {stage.id!r} is a matrix run with no ICE")
+        if stage.matrix is not None and not stage.matrix.network.nodes:
+            raise ValueError(f"{self.id}: stage {stage.id!r} is a matrix run with no nodes")
         for choice in stage.choices:
             skill_for(choice.skill)
         if stage.burglary is not None:

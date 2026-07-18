@@ -4,7 +4,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
-from shadowguy.matrix import ICE_TIERS, MatrixOutcome, roll_ice
+from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import MatrixStage, Outcome, TacticalStage
 from shadowguy.tactical import TacticalOutcome, generate_map
@@ -175,10 +175,10 @@ class TestMenu(Screen):
         self.notify(f"Test fight ended: {result.name.title()}.")
 
     def _start_matrix(self, tier: int) -> None:
-        ice = roll_ice(tier, self.app.rng)
+        network = generate_matrix_network(tier, self.app.rng)
         stage = MatrixStage(
             prompt=f"Test breach — tier {tier}.",
-            ice=ice,
+            network=network,
             victory=Outcome(text="You seize the data."),
             escape=Outcome(text="You're ejected."),
         )

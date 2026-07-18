@@ -10,7 +10,7 @@ from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
 from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.matrix import ICE_TIERS, roll_ice
+from shadowguy.matrix import ICE_TIERS, generate_matrix_network
 from shadowguy.scene import (
     BurglaryStage,
     Choice,
@@ -979,7 +979,7 @@ def generate_job(
                 choices=[],
                 matrix=MatrixStage(
                     prompt=MATRIX_FIGHT_PROMPT.format(faction=faction.name, location=location.name),
-                    ice=roll_ice(tier, rng),
+                    network=generate_matrix_network(tier, rng),
                     victory=_payout("You seize the data and the ICE goes dark.", 1.0, 1, next_stage, is_last),
                     escape=fight_escape,
                 ),
