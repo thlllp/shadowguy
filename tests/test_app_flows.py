@@ -25,7 +25,7 @@ from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.menu_screens import TitleMenu
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.screens.info_screens import ContactsScreen
+from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import ShopScreen
 from textual.widgets import Collapsible, ListView
@@ -248,6 +248,59 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             await pilot.pause()
             assert len(app.character.inventory) == before_items + 1
             assert app.character.cash < before_cash
+
+    run(body())
+
+
+def test_buy_deck_and_program_then_install_via_inventory_screen():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            store_location = None
+            store_territory_id = None
+            for territory in app.corp_map.territories.values():
+                for location in territory.locations:
+                    if location.kind == LocationKind.COMPUTER_STORE:
+                        store_location = location
+                        store_territory_id = territory.id
+                        break
+                if store_location:
+                    break
+            assert store_location is not None
+            app.character.location_id = store_territory_id
+            app.character.cash = 1_000_000
+
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_local")
+            await pilot.pause()
+            await pilot.click(f"#local_{store_location.id}")
+            await pilot.pause()
+            assert isinstance(app.screen, ShopScreen)
+
+            await pilot.click("#buy_burner_deck")
+            await pilot.pause()
+            assert len(app.character.inventory) == 1
+            deck_index = 0
+
+            await pilot.click("#buyp_backup_battery")
+            await pilot.pause()
+            assert "backup_battery" in app.character.owned_programs
+            assert app.character.inventory[deck_index].installed_programs == []
+
+            app.screen.action_back()
+            await pilot.pause()
+            assert isinstance(app.screen, MainMenu)
+
+            await pilot.click("#cat_gear")
+            await pilot.pause()
+            assert isinstance(app.screen, InventoryScreen)
+
+            await pilot.click(f"#install_{deck_index}_backup_battery")
+            await pilot.pause()
+            assert app.character.inventory[deck_index].installed_programs == ["backup_battery"]
 
     run(body())
 

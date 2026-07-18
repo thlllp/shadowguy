@@ -12,6 +12,8 @@ from shadowguy.matrix import (
     MatrixActionKind,
     MatrixOutcome,
     available_matrix_actions,
+    firewall_defense,
+    firewall_soak,
     matrix_readiness,
     player_attack_damage,
     player_integrity,
@@ -19,17 +21,21 @@ from shadowguy.matrix import (
     start_matrix,
     take_matrix_turn,
 )
-from shadowguy.shops import InventoryItem
+from shadowguy.shops import PROGRAMS_BY_ID, InventoryItem
 
 SEEDS = range(150)
 
+PASSIVE_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0 and p.integrity_bonus)
+DAMAGE_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.action_damage)
+SKIP_ICE_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.action_skip_ice)
 
-def _char(intelligence=1, hack_rank=1, deck_id=None):
+
+def _char(intelligence=1, hack_rank=1, deck_id=None, installed_programs=()):
     c = Character(name="T", location_id="start")
     c.intelligence = intelligence
     c.skill_ranks["hack"] = hack_rank
     if deck_id is not None:
-        c.inventory.append(InventoryItem(deck_id, equipped=True))
+        c.inventory.append(InventoryItem(deck_id, equipped=True, installed_programs=list(installed_programs)))
     return c
 
 
@@ -70,6 +76,84 @@ def test_actions_always_offer_attack_and_jack_out():
     assert attack.skill == "hack"
     jack = next(a for a in actions if a.kind is MatrixActionKind.JACK_OUT)
     assert jack.skill is None  # the one action that isn't a check
+
+
+# --- cyberdeck programs --------------------------------------------------
+
+
+def test_passive_program_bonuses_fold_into_the_base_formulas():
+    bare = _char(intelligence=1, deck_id="burner_deck")
+    equipped = _char(intelligence=1, deck_id="burner_deck", installed_programs=[PASSIVE_PROGRAM.id])
+    assert player_integrity(equipped) == player_integrity(bare) + PASSIVE_PROGRAM.integrity_bonus
+    firewall_program = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0 and p.firewall_bonus)
+    with_firewall = _char(deck_id="burner_deck", installed_programs=[firewall_program.id])
+    assert firewall_defense(with_firewall) == firewall_defense(bare) + firewall_program.firewall_bonus
+    soak_program = next((p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0 and p.soak_bonus), None)
+    if soak_program is not None:
+        with_soak = _char(deck_id="burner_deck", installed_programs=[soak_program.id])
+        assert firewall_soak(with_soak) == firewall_soak(bare) + soak_program.soak_bonus
+    damage_program = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0 and p.damage_bonus)
+    with_damage = _char(deck_id="burner_deck", installed_programs=[damage_program.id])
+    assert player_attack_damage(with_damage) == player_attack_damage(bare) + damage_program.damage_bonus
+
+
+def test_passive_program_only_counts_on_the_active_deck():
+    """A program installed on a *stowed* deck instance doesn't count -- only the best
+    equipped deck's programs matter (matrix.active_deck_entry)."""
+    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[PASSIVE_PROGRAM.id])
+    c.inventory[0].equipped = False
+    assert player_integrity(c) == player_integrity(_char(intelligence=1))
+
+
+def test_action_program_appears_in_available_actions_with_uses_remaining():
+    c = _char(deck_id="burner_deck", installed_programs=[DAMAGE_PROGRAM.id])
+    actions = available_matrix_actions(c)
+    program_action = next(a for a in actions if a.kind is MatrixActionKind.PROGRAM)
+    assert program_action.program is DAMAGE_PROGRAM
+    assert str(DAMAGE_PROGRAM.uses_per_fight) in program_action.label
+
+
+def test_action_program_hidden_once_charges_are_spent():
+    c = _char(deck_id="burner_deck", installed_programs=[DAMAGE_PROGRAM.id])
+    exhausted = {DAMAGE_PROGRAM.id: 0}
+    actions = available_matrix_actions(c, exhausted)
+    assert not any(a.kind is MatrixActionKind.PROGRAM for a in actions)
+
+
+def test_passive_program_never_offered_as_an_action():
+    c = _char(deck_id="burner_deck", installed_programs=[PASSIVE_PROGRAM.id])
+    actions = available_matrix_actions(c)
+    assert not any(a.kind is MatrixActionKind.PROGRAM for a in actions)
+
+
+def test_damage_program_deals_guaranteed_no_roll_damage():
+    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[DAMAGE_PROGRAM.id])
+    state = start_matrix(c, roll_ice(0, random.Random(0)), Drop.NONE, random.Random(0))
+    target = state.standing[0]
+    before = target.integrity
+    action = next(a for a in available_matrix_actions(c, state.program_uses) if a.kind is MatrixActionKind.PROGRAM)
+    take_matrix_turn(state, action, random.Random(0))
+    assert target.integrity == max(0, before - DAMAGE_PROGRAM.action_damage)
+    assert state.program_uses[DAMAGE_PROGRAM.id] == 0
+
+
+def test_skip_ice_program_grants_a_free_round_via_ice_skip_rounds():
+    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[SKIP_ICE_PROGRAM.id])
+    state = start_matrix(c, roll_ice(0, random.Random(0)), Drop.NONE, random.Random(0))
+    assert state.ice_skip_rounds == 0
+    action = next(a for a in available_matrix_actions(c, state.program_uses) if a.kind is MatrixActionKind.PROGRAM)
+    take_matrix_turn(state, action, random.Random(0))
+    assert state.program_uses[SKIP_ICE_PROGRAM.id] == 0
+    # take_matrix_turn runs the ICE phase in the same call, so the free round it granted
+    # is spent by the time we check -- what proves the skip worked is that no ICE bite
+    # landed this round: integrity is untouched.
+    assert state.integrity == state.max_integrity
+
+
+def test_deckless_runner_gets_no_program_actions():
+    c = _char()  # no deck at all
+    actions = available_matrix_actions(c)
+    assert not any(a.kind is MatrixActionKind.PROGRAM for a in actions)
 
 
 # --- roster / tiers ---------------------------------------------------------

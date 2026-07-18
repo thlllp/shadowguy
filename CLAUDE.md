@@ -324,6 +324,10 @@ A **fourth kind of stage**, and the second to break the "text list of Choices" m
 
 **Deferred, with room left**: the on-site variant (a hacker embedded with the muscle running *smaller* matrix runs mid-job) that boots you out **painfully** — a health cost — instead of blowing the run. That's an eject-cost constant and a caller flag away, not a second engine, which is why loss already funnels through a single `MatrixOutcome.EJECTED` rather than a die-here branch. See Faction standing / Fixers for the patterns its stakes would reuse.
 
+**Cyberdeck programs (`shops.Program`, `Item.program_slots`)** are the netrunner's loadout, the matrix's answer to combat's equipped weapons. A deck (still the `slot is None` convention) carries `program_slots` capacity; `Program.uses_per_fight` is what tells a passive buff from an active ability apart — **derived, not tabulated**, the same principle `jobs.archetype_specialist()` uses, so a program can't drift into claiming both shapes at once (enforced at import: passive fields zeroed on an action program and vice versa, and an action program sets exactly one of `action_damage`/`action_skip_ice`). Acquisition is two decoupled steps, not one: `shops.buy_program` only adds to `Character.owned_programs` (a set, mirrors `discovered_fixers`'s shape), and `shops.install_program`/`uninstall_program` move an owned program onto/off a *specific* deck `InventoryItem`'s `installed_programs` — free, no skill check, so a program can be moved between decks the runner owns without buying it twice.
+
+Only the runner's **active deck** matters — `shops.active_deck_entry`, the same best-rated-equipped-deck lookup `equipped_deck_rating` already made (refactored to share it, rather than scanning twice) — because a matrix fight only ever rides on one deck. A passive program's bonus (`integrity_bonus`/`firewall_bonus`/`soak_bonus`/`damage_bonus`) folds straight into the corresponding base formula (`player_integrity`, etc.); an action program shows up as a `MatrixActionKind.PROGRAM` row (mirrors `combat.Action.weapon` — the `MatrixAction` carries which `Program`) alongside the four fixed actions, gated on remaining charges (`MatrixState.program_uses`, seeded fresh each fight in `start_matrix`, like integrity itself). `available_matrix_actions` takes that dict as an optional second arg — **exactly `combat.available_actions(character, cooldowns=None)`'s shape** — so every pre-existing call site kept working unmodified; only `MatrixScreen` needed to start passing it. A damage program lands with **no roll** (the point of spending a charge is a guaranteed hit, unlike the ordinary Hack-rolled attack); a skip-ICE program just increments `ice_skip_rounds`, the same field a clean breach (`Drop.PLAYER`) already grants a free round through — no second skip mechanism invented for it.
+
 ### Faction standing (`shadowguy/factions.py`, `shadowguy/scene.py`, `shadowguy/character.py`)
 
 The first real runner→corp coupling: what you do in Runner mode changes how the corps feel about you.
@@ -457,7 +461,8 @@ An `Item` carries more than a flat stat bonus:
 ```
 src/shadowguy/
   character.py   Character dataclass: core stats, health, skill ranks/points, advantage bank,
-                 faction standing, local_standing, gang_standing, crew, inventory, accepted_jobs, security_contracts
+                 faction standing, local_standing, gang_standing, crew, inventory, owned_programs,
+                 accepted_jobs, security_contracts
   archetypes.py  Enforcer/Hacker/Infiltrator creation presets; apply() spends via Character's own methods
   checks.py      resolve_check(): opposed d6 pool; pool_for_difficulty() converts legacy DCs
   skills.py      Skill table (32 skills), skill_value(), skill_for(); leaf module, imports nothing
@@ -465,7 +470,8 @@ src/shadowguy/
   tactical.py    grid combat: Grid/Tile, tcod FOV+A*, turn engine (reuses combat.resolve_hit), BSP generate_map;
                  also generate_building/BurglaryWalkState (Burglary jobs, no combat); imports no scene
   matrix.py      matrix combat (Data Heist): ICE roster, integrity pool (not health), Int-family actions,
-                 SEIZED/EJECTED (no death); reuses combat.resolve_hit; leaf, imports no scene
+                 cyberdeck Program bonuses/action slots, SEIZED/EJECTED (no death);
+                 reuses combat.resolve_hit; leaf, imports no scene
   scene.py       Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/MatrixStage/Role data
                  model, resolve_choice()/resolve_entrance(), apply_outcome()
   content.py     unwired example job/legwork scenes (worked examples of the Scene data model)
@@ -485,7 +491,8 @@ src/shadowguy/
                  one GANG_DEN per gang; lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
                  claim_territory (rivals.py's expansion mutator)
   shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
-                 buy/sell/equip, standing-scaled pricing, hospital_stay, equipped_deck_rating (matrix)
+                 Program catalog (cyberdeck program_slots, buy/install/uninstall_program), buy/sell/equip,
+                 standing-scaled pricing, hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
   app.py         Textual App: CharacterCreationScreen (start) + MainMenu + FixerOffersScreen + SceneScreen
                  + CombatScreen + TacticalScreen + MatrixScreen + EntrancePickScreen/BurglaryWalkScreen

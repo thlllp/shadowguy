@@ -56,7 +56,9 @@ SAVE_SUFFIX = ".save"
 # of break again) -- a pre-v15 pickled Stage lacks it.
 # v17 added rival AI actions (rivals.py): ShadowguyApp.rival_actions (a pre-v17 save
 # lacks the key).
-SAVE_VERSION = 17
+# v18 added cyberdeck programs: Character.owned_programs and InventoryItem.
+# installed_programs (a pre-v18 pickled Character/InventoryItem lacks both).
+SAVE_VERSION = 18
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

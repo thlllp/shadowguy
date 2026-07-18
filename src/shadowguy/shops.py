@@ -146,6 +146,10 @@ class Item:
     # Short flavor tag shown in parentheses on shop/inventory listings, e.g.
     # "old tech" for a pre-war pipe pistol. Empty string = no tag.
     tag: str = ""
+    # How many Programs a cyberdeck can carry into the matrix at once. Only
+    # meaningful when slot is None (the "a None slot is a deck" convention
+    # equipped_deck_rating already relies on) — enforced at import.
+    program_slots: int = 0
 
 
 @dataclass
@@ -153,6 +157,10 @@ class InventoryItem:
     item_id: str
     # Only equipped items contribute their bonus (see equipped_bonus below).
     equipped: bool = True
+    # Program ids installed on this specific deck instance (only meaningful
+    # when the item is a deck — see Item.program_slots). A player can own
+    # several decks; each carries its own loadout.
+    installed_programs: list[str] = field(default_factory=list)
 
 
 def bonus_text(item: Item) -> str:
@@ -298,13 +306,34 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     # Persistent +body gear moved out in favor of the consumables below.
     LocationKind.PHARMACY: [],
     LocationKind.COMPUTER_STORE: [
-        ("burner_deck", "Burner Deck", 200, {"intelligence": 1}, None),
-        ("cracked_cyberdeck", "Cracked Cyberdeck", 500, {"intelligence": 2}, None),
-        ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None),
+        # id, name, price, bonuses, slot(None=deck), defense, skill, damage, concealment,
+        # two_handed, skill_bonuses, travel_bonus, min_standing, recharge_rounds,
+        # stun_damage, tag, program_slots (a deck's matrix-program capacity).
+        ("burner_deck", "Burner Deck", 200, {"intelligence": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
+        (
+            "cracked_cyberdeck",
+            "Cracked Cyberdeck",
+            500,
+            {"intelligence": 2},
+            None,
+            0,
+            None,
+            0,
+            0,
+            False,
+            {},
+            0,
+            0,
+            0,
+            0,
+            "",
+            2,
+        ),
+        ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
     ],
     LocationKind.PAWN: [
         ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "blunt", 4, 5),
-        ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None),
+        ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
         # Tier 2 — the pawnbroker keeps the interesting finds under the counter.
         (
@@ -402,6 +431,10 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: recharge_rounds is only valid on a Slot.WEAPON item")
     if _item.recharge_rounds < 0:
         raise ValueError(f"{_item.id}: recharge_rounds must be >= 0")
+    if _item.program_slots and _item.slot is not None:
+        raise ValueError(f"{_item.id}: program_slots is only valid on a deck (slot is None)")
+    if _item.program_slots < 0:
+        raise ValueError(f"{_item.id}: program_slots must be >= 0")
 
 
 # id, name, price, effect, amount, stat, min_standing
@@ -448,6 +481,69 @@ for _c in CONSUMABLES_BY_ID.values():
     if _c.min_standing < 0:
         raise ValueError(f"{_c.id}: min_standing must be >= 0")
 
+
+@dataclass(frozen=True)
+class Program:
+    """Software installed on a cyberdeck's program_slots, for use in matrix.py fights.
+
+    uses_per_fight is what tells passive from active apart, derived rather than a
+    separate kind field: 0 means the bonus fields below apply continuously while
+    installed on the runner's active deck (matrix.active_deck_entry); >0 means it
+    instead grants a MatrixAction usable that many times per fight, described by the
+    action_* fields. A program is exactly one or the other, enforced at import.
+    """
+
+    id: str
+    name: str
+    price: int
+    uses_per_fight: int = 0
+    # Passive-only (meaningful when uses_per_fight == 0):
+    integrity_bonus: int = 0
+    firewall_bonus: int = 0
+    soak_bonus: int = 0
+    damage_bonus: int = 0
+    # Action-only (meaningful when uses_per_fight > 0): exactly one of these is set.
+    action_damage: int = 0  # guaranteed, no-roll damage dealt to the target ICE
+    action_skip_ice: bool = False  # this round's ICE phase is skipped entirely
+    min_standing: int = 0
+    tag: str = ""
+
+
+# id, name, price, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
+# damage_bonus, action_damage, action_skip_ice, min_standing, tag. First-slice catalog,
+# not yet balance-simulated — see CLAUDE.md's convention for flagging that.
+_PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
+    LocationKind.COMPUTER_STORE: [
+        ("backup_battery", "Backup Battery", 150, 0, 3, 0, 0, 0, 0, False, 0, "passive"),
+        ("overclock_patch", "Overclock Patch", 180, 0, 0, 0, 0, 1, 0, False, 0, "passive"),
+        ("black_dawn_suite", "Black Dawn Suite", 200, 0, 0, 1, 0, 0, 0, False, 0, "passive"),
+        ("icebreaker_daemon", "Icebreaker Daemon", 250, 1, 0, 0, 0, 0, 4, False, 0, "1 use"),
+        ("ghost_protocol", "Ghost Protocol", 220, 1, 0, 0, 0, 0, 0, True, 0, "1 use"),
+    ],
+}
+
+PROGRAM_CATALOG: dict[LocationKind, list[Program]] = {
+    kind: [Program(*row) for row in rows] for kind, rows in _PROGRAM_ROWS.items()
+}
+
+PROGRAMS_BY_ID = {p.id: p for programs in PROGRAM_CATALOG.values() for p in programs}
+
+for _p in PROGRAMS_BY_ID.values():
+    if _p.min_standing < 0:
+        raise ValueError(f"{_p.id}: min_standing must be >= 0")
+    if _p.uses_per_fight < 0:
+        raise ValueError(f"{_p.id}: uses_per_fight must be >= 0")
+    _passive_fields = (_p.integrity_bonus, _p.firewall_bonus, _p.soak_bonus, _p.damage_bonus)
+    _action_fields = (_p.action_damage, _p.action_skip_ice)
+    if _p.uses_per_fight == 0:
+        if any(_action_fields):
+            raise ValueError(f"{_p.id}: a passive program (uses_per_fight=0) can't set action_* fields")
+    else:
+        if any(_passive_fields):
+            raise ValueError(f"{_p.id}: an action program (uses_per_fight>0) can't set passive bonus fields")
+        if sum(bool(f) for f in _action_fields) != 1:
+            raise ValueError(f"{_p.id}: an action program must set exactly one of action_damage/action_skip_ice")
+
 # A HOSPITAL (corpmap.LocationKind.HOSPITAL) heals over time, not on the spot: each day
 # you check in you pay this — the same as a nice district's lodging (LODGING per point of
 # Development, ~4 on a good block) — and heal 1d6 + Body. Slow but the only real bulk
@@ -475,6 +571,25 @@ def equipped_travel_bonus(inventory: list[InventoryItem]) -> int:
     return sum(item.travel_bonus for item in _equipped_items(inventory))
 
 
+def active_deck_entry(inventory: list[InventoryItem]) -> tuple[InventoryItem, Item] | None:
+    """The equipped deck with the best Intelligence bonus (ties: first found), or None if
+    the runner has no deck equipped. This is *which* deck equipped_deck_rating's number
+    comes from, and — since a matrix fight only ever rides on one deck — the one whose
+    installed_programs (Item.program_slots) actually matter this fight."""
+    best: tuple[InventoryItem, Item] | None = None
+    best_rating = -1
+    for entry in inventory:
+        if not entry.equipped:
+            continue
+        item = ITEMS_BY_ID[entry.item_id]
+        if item.slot is not None:
+            continue
+        rating = item.bonuses.get("intelligence", 0)
+        if rating > best_rating:
+            best, best_rating = (entry, item), rating
+    return best
+
+
 def equipped_deck_rating(inventory: list[InventoryItem]) -> int:
     """The best equipped cyberdeck's matrix strength, or 0 if the runner is jacking in
     bare-handed. A cyberdeck is a Slot None item (see Slot / Item.slot: decks aren't
@@ -483,10 +598,65 @@ def equipped_deck_rating(inventory: list[InventoryItem]) -> int:
     makes a better deck a better hacker. matrix.py reads this the way combat.py reads a
     weapon's damage: it's the deck, not the skill, that decides what a landed intrusion
     costs the ICE, so a runner with no deck can still fight in the matrix, just weakly."""
-    return max(
-        (item.bonuses.get("intelligence", 0) for item in _equipped_items(inventory) if item.slot is None),
-        default=0,
-    )
+    entry = active_deck_entry(inventory)
+    return entry[1].bonuses.get("intelligence", 0) if entry else 0
+
+
+def installed_programs_for(entry: InventoryItem) -> list[Program]:
+    """Resolve entry.installed_programs to their Program objects, skipping unknown ids."""
+    return [PROGRAMS_BY_ID[pid] for pid in entry.installed_programs if pid in PROGRAMS_BY_ID]
+
+
+def free_program_slots(item: Item, entry: InventoryItem) -> int:
+    """How many more programs this deck can fit. Each program costs exactly one slot —
+    no slot_cost weighting, the ask was capacity, not a second economy."""
+    return item.program_slots - len(entry.installed_programs)
+
+
+def buy_program(character: "Character", program_id: str, standing: int = 0) -> str:
+    """Buy a Program into the runner's owned pool (Character.owned_programs) — not
+    installed on any deck yet. Installing is a separate, free step (install_program),
+    so a program can be moved between decks the runner owns without buying it twice."""
+    program = PROGRAMS_BY_ID[program_id]
+    if standing < program.min_standing:
+        return f"{program.name} isn't available to you yet."
+    if program_id in character.owned_programs:
+        return f"Already own {program.name}."
+    price = buy_price(program.price, standing)
+    if character.cash < price:
+        return f"Can't afford {program.name} ({price}eb)."
+    character.cash -= price
+    character.owned_programs.add(program_id)
+    return f"Bought {program.name} for {price}eb."
+
+
+def install_program(character: "Character", inventory_index: int, program_id: str) -> str:
+    """Install an owned Program onto inventory[inventory_index] (must be a deck with a
+    free slot). Free and instant — capacity is the only gate, no skill check."""
+    if program_id not in character.owned_programs:
+        return "You don't own that program."
+    entry = character.inventory[inventory_index]
+    item = ITEMS_BY_ID[entry.item_id]
+    if item.program_slots <= 0:
+        return f"{item.name} can't run programs."
+    program = PROGRAMS_BY_ID[program_id]
+    if program_id in entry.installed_programs:
+        return f"{program.name} is already installed on {item.name}."
+    if free_program_slots(item, entry) <= 0:
+        return f"{item.name} has no free program slots."
+    entry.installed_programs.append(program_id)
+    return f"Installed {program.name} on {item.name}."
+
+
+def uninstall_program(character: "Character", inventory_index: int, program_id: str) -> str:
+    """Pull a Program off inventory[inventory_index]. Free either way — it stays in the
+    owned pool, ready to install on a different deck."""
+    entry = character.inventory[inventory_index]
+    if program_id not in entry.installed_programs:
+        return "Not installed there."
+    entry.installed_programs.remove(program_id)
+    item = ITEMS_BY_ID[entry.item_id]
+    return f"Uninstalled {PROGRAMS_BY_ID[program_id].name} from {item.name}."
 
 
 def _slot_cost(item: Item) -> int:
