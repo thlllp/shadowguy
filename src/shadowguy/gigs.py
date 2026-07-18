@@ -188,7 +188,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("hack", "Recover the drive", "You pull the data back from the dead.", "The drive stays dead and takes the fee with it."),
             _GigApproach("tinkering", "Reflow the board", "Clean solder, and it boots first try.", "You cook a trace and make it worse."),
-            _GigApproach("sleight_of_hand", "Swap the failed part", "Quick hands, part swapped, done.", "You strip the socket doing it."),
+            _GigApproach("tinkering", "Swap the failed part", "Quick hands, part swapped, done.", "You strip the socket doing it."),
         ),
     ),
     LocationKind.HOSPITAL: _GigTemplate(
