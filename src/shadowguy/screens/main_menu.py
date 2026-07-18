@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corpmap import (
     PLAYER_OWNED_KINDS,
@@ -17,7 +17,14 @@ from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
 from shadowguy.security import resolve_security_night
 
-from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _replace_items, matrix_warning
+from . import (
+    PANEL_NAV_BINDINGS,
+    CharacterSheet,
+    PanelNav,
+    _populate_list,
+    _replace_items,
+    matrix_warning,
+)
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from .scene_screen import SceneScreen
@@ -33,7 +40,6 @@ from .shop_screens import (
 
 
 class MainMenu(PanelNav, Screen):
-    PANEL_IDS = ("categories", "activities")
     BINDINGS = [
         ("q", "quit_menu", "Menu"),
         ("m", "corp_map", "Corp Map (preview)"),
@@ -61,6 +67,14 @@ class MainMenu(PanelNav, Screen):
         border: solid $accent;
         padding: 0 1;
     }
+
+    #local_locations_panel, #local_fixers_panel {
+        height: auto;
+    }
+
+    #local_locations, #local_fixers {
+        height: auto;
+    }
     """
 
     CATEGORIES = [
@@ -78,12 +92,29 @@ class MainMenu(PanelNav, Screen):
         super().__init__()
         self.selected_category = self.CATEGORIES[0][0]
 
+    @property
+    def PANEL_IDS(self) -> tuple[str, ...]:
+        # local_locations/local_fixers only exist (visibly) for the "local" category —
+        # keep them out of the cycle otherwise, so left/right never focuses a hidden panel.
+        if self.selected_category == "local":
+            return ("categories", "local_locations", "local_fixers", "activities")
+        return ("categories", "activities")
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(CharacterSheet(self.app.character), id="stats_panel")
         yield Horizontal(
             Vertical(ListView(id="categories"), id="sidebar"),
-            Vertical(ListView(id="activities"), id="main_panel"),
+            Vertical(
+                ListView(id="activities"),
+                Collapsible(
+                    ListView(id="local_locations"), title="Locations", collapsed=False, id="local_locations_panel"
+                ),
+                Collapsible(
+                    ListView(id="local_fixers"), title="Fixers", collapsed=False, id="local_fixers_panel"
+                ),
+                id="main_panel",
+            ),
         )
         yield Footer()
 
@@ -183,25 +214,28 @@ class MainMenu(PanelNav, Screen):
                     id="local_district",
                 )
             )
-            for location in here.locations:
-                items.append(
-                    ListItem(
-                        Static(f"  {location.name} ({location.kind})"),
-                        id=f"local_{location.id}",
-                    )
-                )
+            await _populate_list(
+                self.query_one("#local_locations", ListView),
+                here.locations,
+                id_prefix="local_",
+                label=lambda location: f"{location.name} ({location.kind})",
+            )
             discover_fixers_here(self.app.fixers, character)
-            for fixer in self.app.fixers:
-                if fixer.location_id == character.location_id:
-                    items.append(
-                        ListItem(
-                            Static(
-                                f"  {fixer.name} — {fixer.specialty} "
-                                f"({len(fixer.offers)} jobs, {len(fixer.security_offers)} security available)"
-                            ),
-                            id=f"local_fixer_{fixer.id}",
-                        )
-                    )
+            fixers_here = [f for f in self.app.fixers if f.location_id == character.location_id]
+            await _populate_list(
+                self.query_one("#local_fixers", ListView),
+                fixers_here,
+                id_prefix="local_fixer_",
+                label=lambda fixer: (
+                    f"{fixer.name} — {fixer.specialty} "
+                    f"({len(fixer.offers)} jobs, {len(fixer.security_offers)} security available)"
+                ),
+                empty_label="No fixer seated here.",
+                empty_id="no_local_fixers",
+            )
+
+        self.query_one("#local_locations_panel").display = self.selected_category == "local"
+        self.query_one("#local_fixers_panel").display = self.selected_category == "local"
 
         items.append(ListItem(Static("End the day (rest)"), id="end_day"))
         await _replace_items(self.query_one("#activities", ListView), items)

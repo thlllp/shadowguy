@@ -314,6 +314,74 @@ def test_contacts_panel_nav_skips_a_collapsed_section():
     run(body())
 
 
+def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_local")
+            await pilot.pause()
+
+            panels = {
+                pid: app.screen.query_one(f"#{pid}", Collapsible)
+                for pid in ("local_locations_panel", "local_fixers_panel")
+            }
+            assert len(panels) == 2
+            assert all(not panel.collapsed for panel in panels.values())
+
+    run(body())
+
+
+def test_local_panels_are_only_visible_on_the_local_category():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            screen = app.screen
+
+            # Default category is "gig" -- the local-only panels start hidden.
+            assert screen.query_one("#local_locations_panel").display is False
+            assert screen.query_one("#local_fixers_panel").display is False
+
+            await pilot.click("#cat_local")
+            await pilot.pause()
+            assert screen.query_one("#local_locations_panel").display is True
+            assert screen.query_one("#local_fixers_panel").display is True
+
+            await pilot.click("#cat_job")
+            await pilot.pause()
+            assert screen.query_one("#local_locations_panel").display is False
+            assert screen.query_one("#local_fixers_panel").display is False
+
+    run(body())
+
+
+def test_local_panel_nav_skips_a_collapsed_section():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_local")
+            await pilot.pause()
+
+            screen = app.screen
+            screen.query_one("#local_locations_panel", Collapsible).collapsed = True
+            await pilot.pause()
+            screen.query_one("#categories", ListView).focus()
+            await pilot.pause()
+            screen.action_focus_panel(1)
+            await pilot.pause()
+            assert screen.focused is screen.query_one("#local_fixers", ListView)
+
+    run(body())
+
+
 def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_cash():
     async def body():
         app = ShadowguyApp()
