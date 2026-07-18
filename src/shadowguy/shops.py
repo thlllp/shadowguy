@@ -358,7 +358,19 @@ CATALOG: dict[LocationKind, list[Item]] = {
     kind: [Item(*row) for row in rows] for kind, rows in _CATALOG_ROWS.items()
 }
 
-ITEMS_BY_ID = {item.id: item for items in CATALOG.values() for item in items}
+# Loot-only items: never stocked in any shop's buy catalog (ShopScreen only ever
+# lists CATALOG.get(location.kind, []), never ITEMS_BY_ID directly), but still
+# resolvable through ITEMS_BY_ID so the existing Pawn Shop sell_item flow can price
+# and sell them exactly like anything else. Today just matrix.py's optional
+# CACHE-node reward — a matrix run grants one straight into inventory, unequipped,
+# on top of (and independent from) whatever the run's own Outcome pays out.
+STOLEN_DATASHARD_ID = "stolen_datashard"
+_LOOT_ROWS: list[tuple] = [
+    (STOLEN_DATASHARD_ID, "Stolen Datashard", 180, {}),
+]
+LOOT_ITEMS = [Item(*row) for row in _LOOT_ROWS]
+
+ITEMS_BY_ID = {item.id: item for items in (*CATALOG.values(), LOOT_ITEMS) for item in items}
 
 # Weapon-profile bounds. Shared with combat.py (via import) so the hand-built UNARMED
 # stays in sync with the catalog — any edit to these constants updates both sides.

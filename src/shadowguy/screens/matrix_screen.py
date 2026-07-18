@@ -1,6 +1,6 @@
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
@@ -12,6 +12,7 @@ from shadowguy.matrix import (
     jack_out,
     move_to,
     player_integrity,
+    render_matrix_network,
     start_matrix_run,
     take_run_turn,
 )
@@ -34,6 +35,18 @@ class MatrixScreen(Screen):
 
     BINDINGS = [("q", "quit_menu", "Menu")]
 
+    CSS = """
+    #network_scroll {
+        height: auto;
+        max-height: 6;
+        overflow-x: auto;
+    }
+
+    #network_scroll #ice {
+        width: auto;
+    }
+    """
+
     def __init__(self, stage: MatrixStage, drop: Drop) -> None:
         super().__init__()
         self.stage = stage
@@ -50,7 +63,7 @@ class MatrixScreen(Screen):
         yield Vertical(
             Static(self.stage.prompt, id="prompt"),
             Static(id="integrity"),
-            Static(id="ice"),
+            ScrollableContainer(Static(id="ice"), id="network_scroll", can_focus=False),
             Static(id="matrix_log"),
             ListView(id="actions"),
             id="matrix_body",
@@ -78,18 +91,7 @@ class MatrixScreen(Screen):
         return Text("\n".join(lines))
 
     def _network_text(self) -> Text:
-        run = self.run
-        lines = []
-        for node in run.network.nodes.values():
-            marker = "@" if node.id == run.current_node_id else " "
-            if node.id in run.cleared_node_ids:
-                status = " [cleared]"
-            elif node.ice is not None:
-                status = " [guarded]"
-            else:
-                status = ""
-            lines.append(f"{marker} {node.id} ({node.role.value}){status} -> {', '.join(node.connections)}")
-        return Text("\n".join(lines))
+        return Text(render_matrix_network(self.run))
 
     def _navigation_rows(self) -> list[ListItem]:
         run = self.run

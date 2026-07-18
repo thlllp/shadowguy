@@ -46,13 +46,21 @@ integrity itself.
 """
 
 import random
+from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import Drop, resolve_hit
-from shadowguy.shops import Program, active_deck_entry, equipped_deck_rating, installed_programs_for
+from shadowguy.shops import (
+    STOLEN_DATASHARD_ID,
+    InventoryItem,
+    Program,
+    active_deck_entry,
+    equipped_deck_rating,
+    installed_programs_for,
+)
 from shadowguy.skills import skill_value
 
 # The runner's matrix hit points, rebuilt each fight from Intelligence (gear included,
@@ -147,6 +155,7 @@ class MatrixNodeRole(StrEnum):
     IC = "ic"  # guarded; must clear it to pass
     DATA = "data"  # the objective
     CPU = "cpu"  # optional, harder, reachable once DATA is cleared
+    CACHE = "cache"  # optional side loot hanging off a waypoint; gates nothing, pays an item
 
 
 @dataclass(frozen=True)
@@ -169,13 +178,16 @@ class MatrixNetwork:
     data_id: str
 
 
-# tier -> ((node count low, high), IC density among non-ENTRY/DATA/CPU nodes, CPU
-# attach chance). First-slice numbers, not balance-simulated — see CLAUDE.md's
-# convention for flagging that.
-MATRIX_NETWORK_TIERS: dict[int, tuple[tuple[int, int], float, float]] = {
-    0: ((5, 6), 0.35, 0.4),
-    1: ((6, 8), 0.45, 0.5),
-    2: ((7, 9), 0.55, 0.6),
+# tier -> ((node count low, high), IC density among non-ENTRY/DATA/CPU/CACHE nodes,
+# CPU attach chance, CACHE attach chance). First-slice numbers, not
+# balance-simulated — see CLAUDE.md's convention for flagging that. CACHE is
+# deliberately zero outside tier 1: a small side-loot chance for the early-mid-game
+# band (days 4-6 — see jobs._tier_for_day/checks.day_tier), not a mechanic every
+# run leans on.
+MATRIX_NETWORK_TIERS: dict[int, tuple[tuple[int, int], float, float, float]] = {
+    0: ((5, 6), 0.35, 0.4, 0.0),
+    1: ((6, 8), 0.45, 0.5, 0.15),
+    2: ((7, 9), 0.55, 0.6, 0.0),
 }
 
 if MATRIX_NETWORK_TIERS.keys() != ICE_TIERS.keys():
@@ -189,10 +201,12 @@ EXTRA_NODE_EDGE_CHANCE = 0.2
 def generate_matrix_network(tier: int, rng: random.Random) -> MatrixNetwork:
     """A small connected node graph for one matrix run: a guaranteed ENTRY-to-DATA
     spine (so, unlike tactical.py's BSP rooms, reachability never needs a retry
-    loop), a few extra edges for branching, and — by a flat chance, not a guarantee,
-    for variety — one CPU node hanging off DATA: an optional, tougher detour past
-    the objective."""
-    (low, high), ic_density, cpu_chance = MATRIX_NETWORK_TIERS[tier]
+    loop), a few extra edges for branching, one CPU node hanging off DATA by a flat
+    chance (an optional, tougher detour past the objective), and — tier 1 only,
+    today, by a much smaller flat chance — one CACHE node hanging off an ordinary
+    waypoint instead: side loot (see _settle_run) that pays off in an item whether
+    or not the run itself is ever won, rather than a detour past the objective."""
+    (low, high), ic_density, cpu_chance, cache_chance = MATRIX_NETWORK_TIERS[tier]
     node_count = rng.randint(low, high)
     ids = [f"node_{i}" for i in range(node_count)]
     connections: dict[str, set[str]] = {node_id: set() for node_id in ids}
@@ -218,10 +232,22 @@ def generate_matrix_network(tier: int, rng: random.Random) -> MatrixNetwork:
         connections[data_id].add(cpu_id)
         roles[cpu_id] = MatrixNodeRole.CPU
 
+    if rng.random() < cache_chance:
+        # Any ordinary waypoint works — unlike CPU, a cache isn't meant to gate
+        # behind the objective, just be a side risk on the way through.
+        attach_to = rng.choice(
+            [node_id for node_id, role in roles.items() if role in (MatrixNodeRole.SLAVE, MatrixNodeRole.IC)]
+        )
+        cache_id = f"node_{len(ids)}"
+        ids.append(cache_id)
+        connections[cache_id] = {attach_to}
+        connections[attach_to].add(cache_id)
+        roles[cache_id] = MatrixNodeRole.CACHE
+
     nodes = {}
     for node_id in ids:
         role = roles[node_id]
-        if role in (MatrixNodeRole.IC, MatrixNodeRole.DATA):
+        if role in (MatrixNodeRole.IC, MatrixNodeRole.DATA, MatrixNodeRole.CACHE):
             ice = _roll_one_ice(tier, rng)
         elif role is MatrixNodeRole.CPU:
             ice = _roll_one_ice(min(tier + 1, max(ICE_TIERS)), rng)
@@ -630,11 +656,156 @@ def connected_nodes(run: MatrixRunState) -> list[MatrixNode]:
     return [run.network.nodes[node_id] for node_id in run.current_node.connections]
 
 
+# Shorter than corpmap.CONNECTOR_WIDTH (6): node labels ("@[node_3 IC guard]") run
+# shorter than territory labels, so the connector can too.
+MATRIX_CONNECTOR_WIDTH = 4
+
+
+def _matrix_node_label(node: MatrixNode, current_id: str, cleared_ids: set[str]) -> str:
+    marker = "@" if node.id == current_id else " "
+    parts = [node.id, node.role.value.upper()]
+    if node.id in cleared_ids:
+        parts.append("clear")
+    elif node.ice is not None:
+        parts.append("guard")
+    return f"{marker}[{' '.join(parts)}]"
+
+
+def _nearest_free_row(preferred: int, used: set[int]) -> int:
+    """The row closest to `preferred` that isn't already taken in this column —
+    lets a single-parent node land exactly on its parent's row (the common case),
+    and only nudges an actual fork's second child to the next-nearest lane rather
+    than discarding the target row's absolute value the way a plain re-rank
+    (0, 1, 2, ... per column) would."""
+    if preferred not in used:
+        return preferred
+    offset = 1
+    while True:
+        if preferred + offset not in used:
+            return preferred + offset
+        if preferred - offset not in used:
+            return preferred - offset
+        offset += 1
+
+
+def _matrix_network_layout(network: MatrixNetwork) -> dict[str, tuple[int, int]]:
+    """Column = shortest-hop distance from entry (a Sugiyama-style layered layout,
+    the graph-drawing counterpart to corpmap's territories, which carry real x/y
+    instead of needing one derived). A branch (two nodes both reachable in the same
+    number of hops) lands in the same column at different rows rather than being
+    squashed onto one line — over a few hundred generated networks, ~90% have at
+    least one such branch, so a single-row rendering was hiding most of the
+    network's real shape.
+
+    Row is a running "lane" a node keeps for the rest of the diagram, not a value
+    re-ranked from scratch per column: a node's preferred row is the (rounded)
+    average row of its already-placed neighbours in earlier columns, and it takes
+    the nearest free row to that if the exact one is already spoken for in this
+    column. Re-ranking to 0, 1, 2, ... per column (the first cut at this) forgot
+    the parent's absolute row past the second column, so most nodes rendered with
+    no connector to anything — this keeps a single-parent chain in the same lane
+    all the way across, and only spreads an actual fork onto nearby lanes."""
+    distances: dict[str, int] = {network.entry_id: 0}
+    queue: deque[str] = deque([network.entry_id])
+    while queue:
+        node_id = queue.popleft()
+        for neighbor in network.nodes[node_id].connections:
+            if neighbor not in distances:
+                distances[neighbor] = distances[node_id] + 1
+                queue.append(neighbor)
+
+    columns: dict[int, list[str]] = {}
+    for node_id, col in distances.items():
+        columns.setdefault(col, []).append(node_id)
+
+    row_of: dict[str, int] = {network.entry_id: 0}
+    for col in sorted(columns):
+        if col == 0:
+            continue
+
+        def barycenter(node_id: str) -> float:
+            placed = [row_of[nb] for nb in network.nodes[node_id].connections if nb in row_of]
+            return sum(placed) / len(placed) if placed else 0.0
+
+        used_rows: set[int] = set()
+        for node_id in sorted(columns[col], key=barycenter):
+            row = _nearest_free_row(round(barycenter(node_id)), used_rows)
+            used_rows.add(row)
+            row_of[node_id] = row
+
+    # Rows were assigned as free-floating ints (a fork can push a lane negative),
+    # so compact them to consecutive 0..n-1 for the grid — this only relabels
+    # lanes, it can't change which nodes share one, so alignment survives it.
+    lanes = sorted(set(row_of.values()))
+    lane_index = {lane: i for i, lane in enumerate(lanes)}
+    return {node_id: (distances[node_id], lane_index[row_of[node_id]]) for node_id in network.nodes}
+
+
+def render_matrix_network(run: MatrixRunState) -> str:
+    """ASCII node diagram for a matrix run — corpmap.render_ascii_map's shape ported
+    to MatrixNetwork, so a run reads with the same at-a-glance "where am I in the
+    structure" feel as the corp map. See _matrix_network_layout for how a node
+    without corpmap's persistent x/y gets a grid position. A connection between
+    nodes that don't end up grid-adjacent (same row, next column, or same column,
+    next row) just doesn't draw a line — it's still a legal move, the diagram only
+    shows the edges its layout happens to align, the same simplification corpmap's
+    own renderer accepts for ties that aren't grid-adjacent."""
+    network = run.network
+    positions = _matrix_network_layout(network)
+    by_pos = {pos: node_id for node_id, pos in positions.items()}
+    max_col = max(c for c, _ in positions.values())
+    max_row = max(r for _, r in positions.values())
+
+    def label(node_id: str) -> str:
+        return _matrix_node_label(network.nodes[node_id], run.current_node_id, run.cleared_node_ids)
+
+    col_width = {}
+    for col in range(max_col + 1):
+        labels = [label(nid) for (c, _), nid in by_pos.items() if c == col]
+        col_width[col] = (max(len(text) for text in labels) if labels else 0) + 2
+
+    col_offset = {}
+    offset = 0
+    for col in range(max_col + 1):
+        col_offset[col] = offset
+        offset += col_width[col] + MATRIX_CONNECTOR_WIDTH
+    total_width = offset - MATRIX_CONNECTOR_WIDTH
+
+    lines: list[str] = []
+    for row in range(max_row + 1):
+        cells = []
+        for col in range(max_col + 1):
+            node_id = by_pos.get((col, row))
+            text = label(node_id) if node_id else ""
+            right_id = by_pos.get((col + 1, row))
+            linked = bool(node_id and right_id and right_id in network.nodes[node_id].connections)
+            is_last_col = col == max_col
+            padded = text.ljust(col_width[col], "-" if linked else " ")
+            connector = "-" * MATRIX_CONNECTOR_WIDTH if linked else " " * MATRIX_CONNECTOR_WIDTH
+            cells.append(padded + ("" if is_last_col else connector))
+        lines.append("".join(cells).rstrip())
+
+        if row == max_row:
+            continue
+        connector_line = [" "] * total_width
+        for col in range(max_col + 1):
+            node_id = by_pos.get((col, row))
+            below_id = by_pos.get((col, row + 1))
+            if node_id and below_id and below_id in network.nodes[node_id].connections:
+                connector_line[col_offset[col] + 1] = "|"
+        lines.append("".join(connector_line).rstrip())
+
+    return "\n".join(lines)
+
+
 def _settle_run(run: MatrixRunState) -> None:
     """Read the active node fight and fold its result into the run: an ejection
     always ends the whole run; a cleared node (its guardian down) is banked, and —
     only for the DATA node — offers up a win the player still has to choose to take
-    (see extract())."""
+    (see extract()). Clearing a CACHE node pays out immediately, straight onto
+    Character.inventory rather than through an Outcome — it's side loot, kept
+    whether the run itself is later seized or blown, not part of the job's own
+    payout path."""
     if run.fight is None:
         return
     if run.fight.outcome is MatrixOutcome.EJECTED:
@@ -642,6 +813,10 @@ def _settle_run(run: MatrixRunState) -> None:
         return
     if not run.fight.standing:
         run.cleared_node_ids.add(run.current_node_id)
+        node = run.network.nodes[run.current_node_id]
+        if node.role is MatrixNodeRole.CACHE:
+            run.character.inventory.append(InventoryItem(STOLEN_DATASHARD_ID, equipped=False))
+            run.run_log.append("You skim a stray cache of corp data — worth selling later.")
 
 
 def _enter_node(run: MatrixRunState, node_id: str, drop: Drop, rng: random.Random | None) -> None:
