@@ -54,11 +54,13 @@ SAVE_SUFFIX = ".save"
 # as v7's `tactical` field) -- a pre-v14 pickled Stage (inside an accepted job) lacks it.
 # v15 added Data Heist / matrix combat: scene.Stage gained a `matrix` field (same shape
 # of break again) -- a pre-v15 pickled Stage lacks it.
-SAVE_VERSION = 16
+# v17 added rival AI actions (rivals.py): ShadowguyApp.rival_actions (a pre-v17 save
+# lacks the key).
+SAVE_VERSION = 17
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
-STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers", "location_gigs"})
+STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions"})
 
 
 @dataclass(frozen=True)

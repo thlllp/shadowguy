@@ -336,6 +336,18 @@ Today only a *completed* job moves standing (`jobs.JOB_STANDING_HIT` = -2, on th
 
 **Room left for territory effects:** `Scene.target_territory_id` records *where* a job hit, not just who. Nothing consumes it yet beyond flavor. A job that should also move territory control belongs as a new `Outcome` field applied in `apply_outcome` alongside `standing_delta`, keyed off `target_territory_id` — don't invent a second effect pipeline.
 
+### Rival AI (`shadowguy/rivals.py`)
+
+Faction standing (above) is the player's actions moving the corps; `rivals.py` is the other direction — the world's other actors getting a turn of their own. A parallel resolution module like `security.py`/`encounters.py`, not a `Scene`: `resolve_rival_day` is called once per day from `app.advance_day()`, the same tick that pays crew wages and refreshes gigs/offers, and returns a `RivalAction` (`kind`, `actor_id`, `day`, `territory_id`) for every actor that acted.
+
+**Factions do something real: territory pressure.** Each day, every `factions.FACTIONS` corp gets one roll (`EXPANSION_CHANCE`, a flat first-slice number, not balance-simulated) at claiming one *neutral* territory bordering its own ground (`_expansion_candidates`, a `>=`-strict miss like `encounters.GANG_ENCOUNTER_CHANCE`'s convention). Deliberately scoped to neutral ground only — taking a *rival* faction's territory is a bigger mechanic (contest resolution, standing/rep fallout) left for later, so today's expansion can never touch another corp's or the player-adjacent conflict layer. Two exclusions, both permanent: gang turf (`Territory.gang_id` set) and the player's own start territory (`corp_map.player_start_id`) — the same reservation `_grow_blocs` honors at generation time (a faction never seeds or expands onto `start_cell`), carried into the runtime rule so the player's home turf can never be swallowed later either.
+
+Claiming is `corpmap.claim_territory(territory, faction_id, rng)`: flips `owner`, reseeds `modifiers` through the same `_corp_modifiers` generation uses (neutral ground's flat Unrest-`MODIFIER_MAX` profile no longer describes corp-held ground), and clears `gang_id` — a corp moving in displaces whatever street presence was there. `value` is left untouched (the corp hasn't built the block up yet) and **locations are not regenerated** — a claimed territory keeps whatever shops/bar/etc. it rolled at generation; re-rolling specialty locations or HQ eligibility on ownership change is out of scope for this slice. `CorpMapScreen` needs no wiring for this to show up: it's a fresh screen instance each time it's pushed and reads `Territory.owner` live, so the next time the player opens the corp map it already reflects overnight claims.
+
+**Independent runners are still an inert stub.** Every `runners.RIVAL_RUNNERS` (the hireable roster — Specter, Juncture, Mireille) gets a `RivalAction` too, *except* while on the player's `Character.crew` (`on_crew`) — indefinite and for-job hires both count as engaged, since either way they're working for the player that day, not freelancing on their own. Their action carries no `territory_id` and has no other effect yet; nothing here gives them a decision beyond "did they act." `ShadowguyApp.rival_actions` holds the latest day's list (overwritten, not accumulated — nothing reads history yet), part of the save bundle (`saves.STATE_KEYS`, `SAVE_VERSION` 17).
+
+**Still deliberately inert past that:** no UI surfaces a faction's claim (no `notify()`), and independent runners have no decision logic of their own — the natural next steps are a runner AI (taking their own jobs) and a way for the player to actually *see* a corp's expansion, neither bundled in here.
+
 ### Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
 The Corp-mode board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (38) `Territory` nodes on a `GRID_COLS`×`GRID_ROWS` (8×6) grid, picked as one contiguous blob, wired by a random spanning tree (so the map is always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops/flanking routes. The grid is deliberately larger than `TERRITORY_COUNT` — the leftover cells are the holes that stop the blob degenerating into a solid rectangle.
@@ -466,8 +478,12 @@ src/shadowguy/
   factions.py    rival corp Factions (id/name/specialty); HQ officer ladder (rep+standing) + dialogue
   gangs.py       street Gangs (id/name/description) that hold no territory; GANG_RANKS (soldier/lieutenant)
                  staffing a den; leaf module — turf placement and den staffing live in corpmap.py
+  rivals.py      daily-action pipeline: resolve_rival_day() lets every Faction push onto bordering
+                 neutral territory (claim_territory) and gives every independent (not-hired)
+                 RivalRunner a stub turn, each day-advance (not Scene-based)
   corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ per faction,
-                 one GANG_DEN per gang; lodging_cost/has_home/add_safehouse/safehouse_price (property + rest)
+                 one GANG_DEN per gang; lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
+                 claim_territory (rivals.py's expansion mutator)
   shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
                  buy/sell/equip, standing-scaled pricing, hospital_stay, equipped_deck_rating (matrix)
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes

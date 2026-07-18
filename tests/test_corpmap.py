@@ -16,8 +16,12 @@ from shadowguy.corpmap import (
     GANG_TURF_MAX,
     GANG_TURF_MIN,
     MIN_START_DEGREE,
+    MODIFIER_MAX,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
+    Territory,
+    TerritoryModifier,
+    claim_territory,
     generate_corp_map,
     has_home,
 )
@@ -189,3 +193,31 @@ def test_generate_corp_map_raises_if_factions_dont_fit():
     too_many = FACTIONS + [FACTIONS[0]] * 10
     with pytest.raises(ValueError):
         generate_corp_map(too_many, random.Random(0))
+
+
+def test_claim_territory_flips_owner_and_reseeds_modifiers():
+    """claim_territory (rivals.py's expansion mutator) must overwrite the neutral
+    modifier profile with a corp-shaped one, not just flip owner."""
+    territory = Territory(
+        id="t1",
+        name="Testville",
+        x=0,
+        y=0,
+        owner="neutral",
+        value=2,
+        modifiers={
+            TerritoryModifier.SECURITY: 1,
+            TerritoryModifier.SURVEILLANCE: 0,
+            TerritoryModifier.UNREST: MODIFIER_MAX,
+            TerritoryModifier.DEVELOPMENT: 1,
+            TerritoryModifier.RESTRICTED: 0,
+        },
+        gang_id="gang_test",
+    )
+    claim_territory(territory, "faction_ironclad", random.Random(0))
+    assert territory.owner == "faction_ironclad"
+    assert territory.gang_id is None
+    assert territory.value == 2  # left as-is
+    # Corp-shaped modifiers: Restricted is squeezed (2..MODIFIER_MAX), unlike
+    # neutral ground's flat 0 — the clearest tell the profile actually changed.
+    assert territory.modifiers[TerritoryModifier.RESTRICTED] >= 2
