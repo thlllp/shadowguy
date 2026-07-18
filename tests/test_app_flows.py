@@ -22,6 +22,10 @@ from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
+
+# TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
+# in a warning) to collect it as a test class, since its name starts with "Test".
+from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
 from shadowguy.screens.menu_screens import TitleMenu
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
@@ -152,7 +156,9 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
 
             combat_screen = app.screen
             flee_index = next(
-                i for i, action in enumerate(combat_screen.actions) if action.kind is ActionKind.FLEE
+                i
+                for i, action in enumerate(combat_screen.actions)
+                if action.kind is ActionKind.FLEE
             )
             await pilot.click(f"#action_{flee_index}")
             await pilot.pause()
@@ -200,12 +206,43 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
 
             matrix_screen = app.screen
             jack_index = next(
-                i for i, action in enumerate(matrix_screen.actions)
+                i
+                for i, action in enumerate(matrix_screen.actions)
                 if action.kind is MatrixActionKind.JACK_OUT
             )
             await pilot.click(f"#action_{jack_index}")
             await pilot.pause()
             assert matrix_screen.state.is_over
+
+    run(body())
+
+
+def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, TitleMenu)
+
+            await pilot.click("#test")
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
+            await pilot.click("#matrix_0")
+            await pilot.pause()
+            assert isinstance(app.screen, MatrixScreen)
+
+            matrix_screen = app.screen
+            jack_index = next(
+                i
+                for i, action in enumerate(matrix_screen.actions)
+                if action.kind is MatrixActionKind.JACK_OUT
+            )
+            await pilot.click(f"#action_{jack_index}")
+            await pilot.pause()
+            assert matrix_screen.state.is_over
+            await pilot.click("#actions ListItem")  # click through the "Continue" row
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
 
     run(body())
 
@@ -300,7 +337,9 @@ def test_buy_deck_and_program_then_install_via_inventory_screen():
 
             await pilot.click(f"#install_{deck_index}_backup_battery")
             await pilot.pause()
-            assert app.character.inventory[deck_index].installed_programs == ["backup_battery"]
+            assert app.character.inventory[deck_index].installed_programs == [
+                "backup_battery"
+            ]
 
     run(body())
 
@@ -337,7 +376,12 @@ def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
 
             panels = {
                 pid: app.screen.query_one(f"#{pid}", Collapsible)
-                for pid in ("fixers_panel", "corps_panel", "locals_panel", "runners_panel")
+                for pid in (
+                    "fixers_panel",
+                    "corps_panel",
+                    "locals_panel",
+                    "runners_panel",
+                )
             }
             assert len(panels) == 4
             assert all(not panel.collapsed for panel in panels.values())

@@ -3,13 +3,15 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.combat import ENEMY_TIERS, roll_enemies
+from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
+from shadowguy.matrix import ICE_TIERS, MatrixOutcome, roll_ice
 from shadowguy.saves import SaveSlot, list_saves, load_game
-from shadowguy.scene import Outcome, TacticalStage
+from shadowguy.scene import MatrixStage, Outcome, TacticalStage
 from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import _menu_css
 from .creation_screen import CharacterCreationScreen
+from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
 
 
@@ -133,7 +135,11 @@ class TestMenu(Screen):
                 *(
                     ListItem(Static(f"Tactical Combat — Tier {tier}"), id=f"tactical_{tier}")
                     for tier in sorted(ENEMY_TIERS)
-                )
+                ),
+                *(
+                    ListItem(Static(f"Matrix Combat — Tier {tier}"), id=f"matrix_{tier}")
+                    for tier in sorted(ICE_TIERS)
+                ),
             ),
             id="test_dialog",
         )
@@ -143,7 +149,13 @@ class TestMenu(Screen):
         self.app.pop_screen()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        tier = int(event.item.id.removeprefix("tactical_"))
+        item_id = event.item.id
+        if item_id.startswith("tactical_"):
+            self._start_tactical(int(item_id.removeprefix("tactical_")))
+        elif item_id.startswith("matrix_"):
+            self._start_matrix(int(item_id.removeprefix("matrix_")))
+
+    def _start_tactical(self, tier: int) -> None:
         rng = self.app.rng
         enemies = roll_enemies(tier, rng)
         tac = generate_map(rng, len(enemies))
@@ -161,3 +173,16 @@ class TestMenu(Screen):
     def _on_tactical_end(self, result: TacticalOutcome) -> None:
         self.app.character.health = self.app.character.max_health
         self.notify(f"Test fight ended: {result.name.title()}.")
+
+    def _start_matrix(self, tier: int) -> None:
+        ice = roll_ice(tier, self.app.rng)
+        stage = MatrixStage(
+            prompt=f"Test breach — tier {tier}.",
+            ice=ice,
+            victory=Outcome(text="You seize the data."),
+            escape=Outcome(text="You're ejected."),
+        )
+        self.app.push_screen(MatrixScreen(stage, Drop.NONE), self._on_matrix_end)
+
+    def _on_matrix_end(self, result: MatrixOutcome) -> None:
+        self.notify(f"Test breach ended: {result.name.title()}.")
