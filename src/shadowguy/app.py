@@ -8,6 +8,7 @@ from shadowguy.corpmap import generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
 from shadowguy.gigs import refresh_gigs
+from shadowguy.rivals import RivalAction, resolve_rival_day
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.creation_screen import CharacterCreationScreen
@@ -31,6 +32,7 @@ class ShadowguyApp(App):
         refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         self.location_gigs: dict[str, Scene] = {}
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+        self.rival_actions: list[RivalAction] = []
 
     def advance_day(self) -> None:
         self.character.rest()
@@ -40,6 +42,7 @@ class ShadowguyApp(App):
         refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+        self.rival_actions = resolve_rival_day(self.character, self.corp_map, self.character.day, self.rng)
 
     def action_quit_menu(self) -> None:
         self.push_screen(QuitMenu())
@@ -55,6 +58,7 @@ class ShadowguyApp(App):
             "character": self.character,
             "fixers": self.fixers,
             "location_gigs": self.location_gigs,
+            "rival_actions": self.rival_actions,
         }
         return save_game(state, self.character.day)
 
@@ -64,6 +68,7 @@ class ShadowguyApp(App):
         location_gigs = state["location_gigs"]
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
         self.location_gigs = location_gigs
+        self.rival_actions = state["rival_actions"]
         unspent = self.character.stat_points + self.character.skill_points
         self._reopen(CharacterCreationScreen() if unspent else MainMenu())
 

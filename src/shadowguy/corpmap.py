@@ -265,6 +265,17 @@ def add_safehouse(territory: Territory) -> None:
     )
 
 
+def claim_territory(territory: Territory, faction_id: str, rng: random.Random) -> None:
+    """A faction moves onto previously-neutral ground: flips ownership and reseeds
+    modifiers the way any corp-held district gets them (_corp_modifiers) — neutral
+    ground's modifiers (flat Unrest MODIFIER_MAX, no Security/Surveillance) no longer
+    describe it under new ownership. A gang's presence doesn't survive a corp moving in.
+    territory.value is left as-is: the corp hasn't built the block up yet."""
+    territory.owner = faction_id
+    territory.modifiers = _corp_modifiers(territory.value, rng)
+    territory.gang_id = None
+
+
 def _owner_tag(owner: str) -> str:
     if owner in OWNER_TAGS:
         return OWNER_TAGS[owner]
