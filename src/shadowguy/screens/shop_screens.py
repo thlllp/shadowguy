@@ -20,10 +20,12 @@ from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
+    PROGRAM_CATALOG,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
+    buy_program,
     hospital_stay,
     sell_item,
     sell_price,
@@ -179,6 +181,17 @@ class ShopScreen(Screen):
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
 
+        for program in PROGRAM_CATALOG.get(self.location.kind, []):
+            if program.min_standing > standing:
+                continue
+            price = buy_price(program.price, standing)
+            label = f"Buy {program.name} — {price}eb"
+            if program.id in character.owned_programs:
+                label += " — owned"
+            elif character.cash < price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buyp_{program.id}"))
+
         if self.location.kind == LocationKind.PAWN:
             for index, entry in enumerate(character.inventory):
                 item = ITEMS_BY_ID[entry.item_id]
@@ -200,6 +213,8 @@ class ShopScreen(Screen):
             consumable = CONSUMABLES_BY_ID[item_id.removeprefix("buyc_")]
             if not buy_consumable(character, consumable, standing):
                 self.notify(f"Can't afford {consumable.name}.", severity="warning")
+        elif item_id.startswith("buyp_"):
+            self.notify(buy_program(character, item_id.removeprefix("buyp_"), standing))
         elif item_id.startswith("sell_"):
             sell_item(character, int(item_id.removeprefix("sell_")), standing)
 

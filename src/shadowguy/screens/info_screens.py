@@ -9,8 +9,12 @@ from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
+    PROGRAMS_BY_ID,
     bonus_text,
+    install_program,
+    installed_programs_for,
     toggle_equip,
+    uninstall_program,
     use_consumable,
 )
 from shadowguy.skills import SKILLS
@@ -57,6 +61,30 @@ class InventoryScreen(Screen):
             consumable = CONSUMABLES_BY_ID[item_id]
             items.append(ListItem(Static(f"Use {consumable.name}"), id=f"use_{index}"))
 
+        character = self.app.character
+        for index, entry in enumerate(character.inventory):
+            item = ITEMS_BY_ID[entry.item_id]
+            if item.program_slots <= 0:
+                continue
+            installed = installed_programs_for(entry)
+            names = ", ".join(p.name for p in installed) if installed else "none"
+            items.append(
+                ListItem(
+                    Static(f"{item.name} — programs: {names} ({len(installed)}/{item.program_slots} slots)"),
+                    id=f"deck_info_{index}",
+                )
+            )
+            for program_id in entry.installed_programs:
+                program = PROGRAMS_BY_ID[program_id]
+                items.append(
+                    ListItem(Static(f"  Uninstall {program.name} from {item.name}"), id=f"uninstall_{index}_{program_id}")
+                )
+            for program_id in sorted(character.owned_programs - set(entry.installed_programs)):
+                program = PROGRAMS_BY_ID[program_id]
+                items.append(
+                    ListItem(Static(f"  Install {program.name} on {item.name}"), id=f"install_{index}_{program_id}")
+                )
+
         await _replace_items(self.query_one("#inventory_items", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -71,6 +99,12 @@ class InventoryScreen(Screen):
         elif item_id.startswith("use_"):
             index = int(item_id.removeprefix("use_"))
             self.notify(use_consumable(character, index))
+        elif item_id.startswith("install_"):
+            index_str, program_id = item_id.removeprefix("install_").split("_", 1)
+            self.notify(install_program(character, int(index_str), program_id))
+        elif item_id.startswith("uninstall_"):
+            index_str, program_id = item_id.removeprefix("uninstall_").split("_", 1)
+            self.notify(uninstall_program(character, int(index_str), program_id))
 
         self.query_one(CharacterSheet).refresh()
         await self._refresh()

@@ -6,16 +6,23 @@ from shadowguy.shops import (
     CATALOG,
     ITEMS_BY_ID,
     PAWN_SELL_FRACTION,
+    PROGRAMS_BY_ID,
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
     Slot,
+    active_deck_entry,
     buy_consumable,
     buy_item,
     buy_price,
+    buy_program,
+    free_program_slots,
+    install_program,
+    installed_programs_for,
     sell_item,
     sell_price,
     slot_usage,
     toggle_equip,
+    uninstall_program,
     use_consumable,
 )
 from shadowguy.shops import CONSUMABLES_BY_ID
@@ -171,3 +178,119 @@ def test_use_consumable_heal_capped_once_per_day():
     message = use_consumable(c, 0)
     assert "today" in message.lower()
     assert c.consumables == [heal.id]  # second kit not spent
+
+
+# --- cyberdeck programs ---
+
+ONE_SLOT_DECK = ITEMS_BY_ID["burner_deck"]
+TWO_SLOT_DECK = ITEMS_BY_ID["cracked_cyberdeck"]
+PASSIVE_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0)
+ACTION_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight > 0)
+
+
+def _char_with_deck(deck=ONE_SLOT_DECK, cash=100_000):
+    c = Character(name="t", cash=cash)
+    assert buy_item(c, deck)
+    return c
+
+
+def test_buy_program_adds_to_owned_pool_and_charges_cash():
+    c = _char_with_deck()
+    before = c.cash
+    message = buy_program(c, PASSIVE_PROGRAM.id)
+    assert PASSIVE_PROGRAM.id in c.owned_programs
+    assert c.cash == before - buy_price(PASSIVE_PROGRAM.price, 0)
+    assert PASSIVE_PROGRAM.name in message
+
+
+def test_buy_program_does_not_install_it_on_any_deck():
+    c = _char_with_deck()
+    buy_program(c, PASSIVE_PROGRAM.id)
+    assert c.inventory[0].installed_programs == []
+
+
+def test_buy_program_refuses_if_already_owned():
+    c = _char_with_deck()
+    buy_program(c, PASSIVE_PROGRAM.id)
+    before = c.cash
+    message = buy_program(c, PASSIVE_PROGRAM.id)
+    assert c.cash == before
+    assert "already own" in message.lower()
+
+
+def test_buy_program_refuses_when_cannot_afford():
+    c = Character(name="t", cash=0)
+    message = buy_program(c, PASSIVE_PROGRAM.id)
+    assert PASSIVE_PROGRAM.id not in c.owned_programs
+    assert "afford" in message.lower()
+
+
+def test_active_deck_entry_picks_best_rated_equipped_deck():
+    c = _char_with_deck(ONE_SLOT_DECK)
+    assert buy_item(c, TWO_SLOT_DECK)  # cracked_cyberdeck: +2 int > burner_deck's +1
+    entry, item = active_deck_entry(c.inventory)
+    assert item.id == TWO_SLOT_DECK.id
+    assert entry is c.inventory[1]
+
+
+def test_active_deck_entry_none_without_an_equipped_deck():
+    c = Character(name="t")
+    assert active_deck_entry(c.inventory) is None
+
+
+def test_install_program_requires_ownership():
+    c = _char_with_deck()
+    message = install_program(c, 0, PASSIVE_PROGRAM.id)
+    assert c.inventory[0].installed_programs == []
+    assert "don't own" in message.lower()
+
+
+def test_install_program_installs_and_free_program_slots_updates():
+    c = _char_with_deck(ONE_SLOT_DECK)
+    buy_program(c, PASSIVE_PROGRAM.id)
+    assert free_program_slots(ONE_SLOT_DECK, c.inventory[0]) == 1
+    message = install_program(c, 0, PASSIVE_PROGRAM.id)
+    assert c.inventory[0].installed_programs == [PASSIVE_PROGRAM.id]
+    assert free_program_slots(ONE_SLOT_DECK, c.inventory[0]) == 0
+    assert PASSIVE_PROGRAM.name in message
+    assert installed_programs_for(c.inventory[0]) == [PASSIVE_PROGRAM]
+
+
+def test_install_program_refuses_beyond_capacity():
+    c = _char_with_deck(ONE_SLOT_DECK)  # 1 slot
+    buy_program(c, PASSIVE_PROGRAM.id)
+    buy_program(c, ACTION_PROGRAM.id)
+    install_program(c, 0, PASSIVE_PROGRAM.id)
+    message = install_program(c, 0, ACTION_PROGRAM.id)
+    assert c.inventory[0].installed_programs == [PASSIVE_PROGRAM.id]
+    assert "no free program slots" in message.lower()
+
+
+def test_install_program_refuses_on_a_non_deck_item():
+    weapon = _first_weapon()
+    c = Character(name="t", cash=100_000)
+    buy_item(c, weapon)
+    buy_program(c, PASSIVE_PROGRAM.id)
+    message = install_program(c, 0, PASSIVE_PROGRAM.id)
+    assert "can't run programs" in message.lower()
+
+
+def test_uninstall_program_removes_it_but_it_stays_owned():
+    c = _char_with_deck(ONE_SLOT_DECK)
+    buy_program(c, PASSIVE_PROGRAM.id)
+    install_program(c, 0, PASSIVE_PROGRAM.id)
+    message = uninstall_program(c, 0, PASSIVE_PROGRAM.id)
+    assert c.inventory[0].installed_programs == []
+    assert PASSIVE_PROGRAM.id in c.owned_programs  # still owned, just not installed
+    assert PASSIVE_PROGRAM.name in message
+
+
+def test_uninstalled_program_can_be_installed_on_a_different_deck():
+    c = _char_with_deck(ONE_SLOT_DECK)
+    assert buy_item(c, TWO_SLOT_DECK)
+    buy_program(c, PASSIVE_PROGRAM.id)
+    install_program(c, 0, PASSIVE_PROGRAM.id)
+    uninstall_program(c, 0, PASSIVE_PROGRAM.id)
+    message = install_program(c, 1, PASSIVE_PROGRAM.id)
+    assert c.inventory[1].installed_programs == [PASSIVE_PROGRAM.id]
+    assert PASSIVE_PROGRAM.name in message

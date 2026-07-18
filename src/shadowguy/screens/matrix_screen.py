@@ -71,7 +71,7 @@ class MatrixScreen(Screen):
             )
             return
 
-        self.actions = available_matrix_actions(self.app.character)
+        self.actions = available_matrix_actions(self.app.character, state.program_uses)
         await _replace_items(
             self.query_one("#actions", ListView),
             [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],

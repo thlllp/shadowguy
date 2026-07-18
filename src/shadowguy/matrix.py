@@ -32,6 +32,17 @@ Left room, not built: an on-site variant (a hacker embedded with the muscle) tha
 you out *painfully* — a health cost — instead of blowing the run. That's an EJECT_COST
 and a caller flag away, not a second engine, which is why loss is already funnelled
 through a single MatrixOutcome.EJECTED rather than a die-here branch.
+
+**Cyberdecks carry programs** (shops.Item.program_slots / Program), the netrunner's
+loadout the way combat.py's weapons are the meat runner's: each installed Program is
+either a passive bonus (folded straight into player_integrity/firewall_defense/
+firewall_soak/player_attack_damage) or, if Program.uses_per_fight > 0, a limited-use
+MatrixAction (MatrixActionKind.PROGRAM) offered alongside the four fixed actions —
+uses_per_fight alone tells the two apart, so there's no separate kind field to drift
+out of sync with the bonus fields actually set. Only the *active* deck's programs count
+(shops.active_deck_entry — the same one equipped_deck_rating already reads off), and
+charges (MatrixState.program_uses) are per-fight, seeded fresh in start_matrix like
+integrity itself.
 """
 
 import random
@@ -41,7 +52,7 @@ from enum import StrEnum
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import Drop, resolve_hit
-from shadowguy.shops import equipped_deck_rating
+from shadowguy.shops import Program, active_deck_entry, equipped_deck_rating, installed_programs_for
 from shadowguy.skills import skill_value
 
 # The runner's matrix hit points, rebuilt each fight from Intelligence (gear included,
@@ -123,26 +134,43 @@ def roll_ice(tier: int, rng: random.Random) -> tuple[Ice, ...]:
     return tuple(ICE_BY_ID[rng.choice(pool)] for _ in range(rng.randint(low, high)))
 
 
+def _installed_programs(character: Character) -> list[Program]:
+    """Programs live on the active deck (shops.active_deck_entry) — the same one
+    equipped_deck_rating's number comes from, since a matrix fight only ever rides on
+    one deck. No deck equipped means no programs, passive or otherwise."""
+    entry = active_deck_entry(character.inventory)
+    return installed_programs_for(entry[0]) if entry else []
+
+
+def _passive_bonus(character: Character, attr: str) -> int:
+    return sum(getattr(program, attr) for program in _installed_programs(character) if program.uses_per_fight == 0)
+
+
 def player_integrity(character: Character) -> int:
-    return BASE_INTEGRITY + INTEGRITY_PER_INT * character.stat("intelligence")
+    return BASE_INTEGRITY + INTEGRITY_PER_INT * character.stat("intelligence") + _passive_bonus(
+        character, "integrity_bonus"
+    )
 
 
 def firewall_defense(character: Character) -> int:
-    return FIREWALL_BASE + skill_value(character, "infer")
+    return FIREWALL_BASE + skill_value(character, "infer") + _passive_bonus(character, "firewall_bonus")
 
 
 def firewall_soak(character: Character) -> int:
     """Dice rolled to shrug off a landed ICE hit — the matrix counterpart to combat's
-    body+armor soak, here just the runner's own Intelligence (no armor in cyberspace)."""
-    return character.stat("intelligence")
+    body+armor soak, here just the runner's own Intelligence (no armor in cyberspace),
+    plus any installed program's soak_bonus."""
+    return character.stat("intelligence") + _passive_bonus(character, "soak_bonus")
 
 
 def player_attack_damage(character: Character) -> int:
     """Base integrity a landed intrusion takes off an ICE, before the roll's margin.
     Comes from the deck (equipped_deck_rating), not the Hack skill — jack in bare and
-    you still get BARE_JACK_DAMAGE, the matrix's bare hands."""
+    you still get BARE_JACK_DAMAGE, the matrix's bare hands. A program's damage_bonus
+    still applies bare-handed — it's the software doing the work, not the rig."""
     rating = equipped_deck_rating(character.inventory)
-    return BARE_JACK_DAMAGE if rating == 0 else DECK_BASE_DAMAGE + rating
+    base = BARE_JACK_DAMAGE if rating == 0 else DECK_BASE_DAMAGE + rating
+    return base + _passive_bonus(character, "damage_bonus")
 
 
 # Below this Hack value, matrix_readiness flags the runner — a fresh runner rolls Hack 2,
@@ -173,27 +201,49 @@ class MatrixActionKind(StrEnum):
     HARDEN = "harden"
     ANALYZE = "analyze"
     JACK_OUT = "jack_out"
+    PROGRAM = "program"
 
 
 @dataclass(frozen=True)
 class MatrixAction:
     kind: MatrixActionKind
     label: str
-    skill: str | None = None  # None only for JACK_OUT, the one action that isn't a check
+    skill: str | None = None  # None only for JACK_OUT/PROGRAM, the actions that aren't a check
+    program: Program | None = None  # set only for PROGRAM — which one, the way Action.weapon does
 
 
-def available_matrix_actions(character: Character) -> list[MatrixAction]:
-    """Everything the runner can do with a round in the matrix. Fixed, unlike combat's
-    weapon-derived list: your intrusion is your deck-plus-Hack, not a rack of weapons to
-    pick between. Always includes JACK_OUT — a matrix fight is never a cage, same law as
-    combat's flee (combat.FLEE_DIFFICULTY)."""
+def _program_label(program: Program, uses_left: int) -> str:
+    effect = f"{program.action_damage} dmg" if program.action_damage else "skip ICE"
+    return f"Run {program.name} ({effect}, {uses_left} use{'s' if uses_left != 1 else ''} left)"
+
+
+def available_matrix_actions(
+    character: Character, program_uses: dict[str, int] | None = None
+) -> list[MatrixAction]:
+    """Everything the runner can do with a round in the matrix. The four base actions are
+    fixed, unlike combat's weapon-derived list — your intrusion is your deck-plus-Hack,
+    not a rack of weapons to pick between. Always includes JACK_OUT — a matrix fight is
+    never a cage, same law as combat's flee (combat.FLEE_DIFFICULTY).
+
+    `program_uses` mirrors combat.available_actions' `cooldowns` param exactly: an
+    installed action-program (Program.uses_per_fight > 0) only appears while it still has
+    a charge left this fight. None (the default) means nothing's been spent yet, so every
+    installed action-program is offered — this is what keeps every existing call site
+    (tests, and anywhere outside a live fight) working unchanged."""
     dmg = player_attack_damage(character)
-    return [
+    actions = [
         MatrixAction(MatrixActionKind.ATTACK, f"Breach the ICE (Hack, {dmg} dmg)", "hack"),
         MatrixAction(MatrixActionKind.HARDEN, "Harden your firewall (Tinkering)", "tinkering"),
         MatrixAction(MatrixActionKind.ANALYZE, "Analyze the ICE (Infer)", "infer"),
         MatrixAction(MatrixActionKind.JACK_OUT, "Jack out (blow the run)", None),
     ]
+    for program in _installed_programs(character):
+        if program.uses_per_fight == 0:
+            continue
+        uses_left = program.uses_per_fight if program_uses is None else program_uses.get(program.id, 0)
+        if uses_left > 0:
+            actions.append(MatrixAction(MatrixActionKind.PROGRAM, _program_label(program, uses_left), None, program))
+    return actions
 
 
 @dataclass
@@ -223,6 +273,9 @@ class MatrixState:
     next_attack_bonus: int = 0
     soak: int = 0
     ice_skip_rounds: int = 0
+    # program id -> charges left this fight, seeded in start_matrix from each installed
+    # action-program's uses_per_fight. Per-fight like integrity, not persisted.
+    program_uses: dict[str, int] = field(default_factory=dict)
 
     @property
     def standing(self) -> list[IceFighter]:
@@ -247,6 +300,11 @@ def start_matrix(
         ices=[IceFighter(ice=ice, integrity=ice.integrity) for ice in ices],
         integrity=integrity,
         max_integrity=integrity,
+        program_uses={
+            program.id: program.uses_per_fight
+            for program in _installed_programs(character)
+            if program.uses_per_fight > 0
+        },
     )
     if drop is Drop.PLAYER:
         state.ice_skip_rounds = FREE_ROUND
@@ -342,6 +400,23 @@ def _analyze(state: MatrixState, rng: random.Random) -> None:
         state.log.append("The architecture won't resolve. The round is wasted.")
 
 
+def _use_program(state: MatrixState, program: Program, rng: random.Random) -> None:
+    """Spend one charge of an installed action program. action_damage lands with no
+    roll — the whole point of a program action is that it's guaranteed, unlike the
+    ordinary ATTACK. action_skip_ice reuses ice_skip_rounds, the same free-round
+    mechanism Drop.PLAYER's clean breach already grants."""
+    state.program_uses[program.id] = state.program_uses.get(program.id, 0) - 1
+    if program.action_damage:
+        target = state.standing[0]
+        state.log.append(
+            f"{program.name} tears into {target.ice.name} for {program.action_damage}, no roll needed."
+        )
+        _damage_ice(state, target, program.action_damage)
+    elif program.action_skip_ice:
+        state.ice_skip_rounds += 1
+        state.log.append(f"{program.name} scrambles your signature. The ICE loses track of you this round.")
+
+
 def _ice_phase(state: MatrixState, rng: random.Random) -> None:
     if state.ice_skip_rounds > 0:
         state.ice_skip_rounds -= 1
@@ -379,6 +454,8 @@ def take_matrix_turn(state: MatrixState, action: MatrixAction, rng: random.Rando
         _harden(state, rng)
     elif action.kind is MatrixActionKind.ANALYZE:
         _analyze(state, rng)
+    elif action.kind is MatrixActionKind.PROGRAM:
+        _use_program(state, action.program, rng)
 
     _settle(state)
     if state.is_over:
