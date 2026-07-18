@@ -207,14 +207,20 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
             assert isinstance(app.screen, MatrixScreen)
 
             matrix_screen = app.screen
-            jack_index = next(
-                i
-                for i, action in enumerate(matrix_screen.actions)
-                if action.kind is MatrixActionKind.JACK_OUT
-            )
-            await pilot.click(f"#action_{jack_index}")
+            # The entry node is never guarded, so this opens in navigation mode --
+            # "Jack out" is always one of its rows, fight or no fight. It's always
+            # the last row, and a big network can push it below the viewport, so
+            # navigate to it by keyboard (which scrolls it into view) rather than
+            # clicking a raw screen offset.
+            assert not matrix_screen.run.in_fight
+            actions_list = matrix_screen.query_one("#actions", ListView)
+            jack_index = next(i for i, item in enumerate(actions_list.children) if item.id == "jack_out")
+            for _ in range(jack_index):
+                await pilot.press("down")
+            await pilot.press("enter")
             await pilot.pause()
-            assert matrix_screen.state.is_over
+            assert matrix_screen.run.is_over
+            assert matrix_screen.run.outcome is MatrixOutcome.EJECTED
 
     run(body())
 
@@ -234,14 +240,15 @@ def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
             assert isinstance(app.screen, MatrixScreen)
 
             matrix_screen = app.screen
-            jack_index = next(
-                i
-                for i, action in enumerate(matrix_screen.actions)
-                if action.kind is MatrixActionKind.JACK_OUT
-            )
-            await pilot.click(f"#action_{jack_index}")
+            assert not matrix_screen.run.in_fight
+            actions_list = matrix_screen.query_one("#actions", ListView)
+            jack_index = next(i for i, item in enumerate(actions_list.children) if item.id == "jack_out")
+            for _ in range(jack_index):
+                await pilot.press("down")
+            await pilot.press("enter")
             await pilot.pause()
-            assert matrix_screen.state.is_over
+            assert matrix_screen.run.is_over
+            assert matrix_screen.run.outcome is MatrixOutcome.EJECTED
             await pilot.click("#actions ListItem")  # click through the "Continue" row
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
