@@ -1,6 +1,6 @@
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
@@ -38,14 +38,31 @@ class MatrixScreen(Screen):
     BINDINGS = [("q", "quit_menu", "Menu")]
 
     CSS = """
+    #matrix_columns {
+        height: 1fr;
+    }
+
     #network_scroll {
-        height: auto;
-        max-height: 6;
+        width: 1fr;
+        height: 100%;
         overflow-x: auto;
+        overflow-y: auto;
+        border: round $accent;
+        padding: 0 1;
+        margin: 0 1 0 0;
     }
 
     #network_scroll #ice {
         width: auto;
+    }
+
+    #actions_column {
+        width: 1fr;
+        height: 100%;
+    }
+
+    #actions_column #actions {
+        height: 1fr;
     }
 
     #actions ListItem.matrix_action_box {
@@ -76,9 +93,15 @@ class MatrixScreen(Screen):
         yield Vertical(
             Static(self.stage.prompt, id="prompt"),
             Static(id="integrity"),
-            ScrollableContainer(Static(id="ice"), id="network_scroll", can_focus=False),
-            Static(id="matrix_log"),
-            ListView(id="actions"),
+            Horizontal(
+                ScrollableContainer(Static(id="ice"), id="network_scroll", can_focus=False),
+                Vertical(
+                    Static(id="matrix_log"),
+                    ListView(id="actions"),
+                    id="actions_column",
+                ),
+                id="matrix_columns",
+            ),
             id="matrix_body",
         )
         yield Footer()
