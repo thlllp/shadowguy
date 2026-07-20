@@ -6,10 +6,14 @@ Called once per day from ShadowguyApp.advance_day(), the same tick that pays
 crew wages and refreshes gigs/offers.
 
 Factions do something real: a faction can push onto neutral ground bordering
-its own territory (see claim_territory / _expansion_candidates below) — the
+its own territory (see claim_territory / corpmap.expansion_candidates) — the
 4X-style area-control mechanic CLAUDE.md flags as still missing. Deliberately
 scoped to neutral ground only: taking a rival faction's own territory is a
 bigger mechanic (contest resolution, standing/rep fallout) left for later.
+
+Once the player takes over a Faction (corp_turn.py), that faction is excluded
+from this AI loop via player_faction_id — its daily move becomes the player's
+own decision instead.
 
 RivalRunners are still an inert stub: a RivalAction records only that they
 acted, never what they did. Nothing here gives them dice or a decision yet;
@@ -24,7 +28,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from shadowguy.character import Character
-from shadowguy.corpmap import CorpMap, claim_territory
+from shadowguy.corpmap import CorpMap, claim_territory, expansion_candidates
 from shadowguy.factions import FACTIONS
 from shadowguy.runners import RIVAL_RUNNERS
 
@@ -46,35 +50,27 @@ class RivalAction:
     territory_id: str | None = None
 
 
-def _expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
-    """Neutral territories bordering `faction_id`'s own ground, excluding gang turf
-    and the player's start (corp_map.player_start_id) — the same reservation
-    _grow_blocs honors at generation time (a faction never seeds or expands onto
-    start_cell), kept alive at runtime so the player's home turf is never swallowed."""
-    owned = [t for t in corp_map.territories.values() if t.owner == faction_id]
-    return sorted(
-        {
-            conn_id
-            for territory in owned
-            for conn_id in territory.connections
-            if (neighbor := corp_map.territories[conn_id]).owner == "neutral"
-            and neighbor.gang_id is None
-            and neighbor.id != corp_map.player_start_id
-        }
-    )
-
-
 def resolve_rival_day(
-    character: Character, corp_map: CorpMap, day: int, rng: random.Random
+    character: Character,
+    corp_map: CorpMap,
+    day: int,
+    rng: random.Random,
+    player_faction_id: str | None = None,
 ) -> list[RivalAction]:
     """Every Faction gets a shot at expanding into bordering neutral ground. A
     RivalRunner acts only while independent — excluded the moment they're on the
     player's crew, indefinite or for-job alike, since either engagement means
-    they're working for the player that day, not freelancing on their own."""
+    they're working for the player that day, not freelancing on their own.
+
+    player_faction_id skips that faction entirely (no RivalAction recorded) once
+    the player has taken it over via corp_turn.py — its move is the player's own
+    decision, reported from the Corp screen instead of rolled here."""
     actions = []
     for faction in FACTIONS:
+        if faction.id == player_faction_id:
+            continue
         target_id = None
-        candidates = _expansion_candidates(corp_map, faction.id)
+        candidates = expansion_candidates(corp_map, faction.id)
         if candidates and rng.random() < EXPANSION_CHANCE:
             target_id = rng.choice(candidates)
             claim_territory(corp_map.territories[target_id], faction.id, rng)

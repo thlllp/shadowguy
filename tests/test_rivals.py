@@ -126,6 +126,18 @@ def test_total_action_count():
     assert len(actions) == len(FACTIONS) + len(RIVAL_RUNNERS)
 
 
+def test_player_faction_is_skipped_entirely():
+    """Once the player has taken over a Faction (corp_turn.py), the AI loop must
+    neither roll for it nor record a RivalAction — that faction's move is now
+    the player's own decision, made from CorpScreen instead."""
+    corp_map = _map()
+    actions = resolve_rival_day(Character(name="t"), corp_map, day=1, rng=HIT, player_faction_id=IRONCLAD)
+    assert not any(a.kind == "faction" and a.actor_id == IRONCLAD for a in actions)
+    assert corp_map.territories["neutral_a"].owner == "neutral"
+    # The other factions are unaffected by the skip.
+    assert _faction_action(actions, GHOSTWIRE).territory_id is None
+
+
 def test_chance_boundary_is_strict_less_than():
     """random() == EXPANSION_CHANCE must miss (>=), matching the >= convention
     test_encounters.py establishes for its own flat-chance gate."""

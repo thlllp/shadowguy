@@ -62,11 +62,25 @@ SAVE_SUFFIX = ".save"
 # scene.MatrixStage.ice (tuple[Ice, ...]) became .network (a matrix.MatrixNetwork)
 # -- a pre-v19 pickled MatrixStage (inside an accepted Data Heist job) has the old
 # field, not the new one.
-SAVE_VERSION = 19
+# v20 added the player's own Corp turn (corp_turn.py): ShadowguyApp.corp_state
+# (a pre-v20 save lacks the key).
+# v21 added each faction's research facility: corpmap.Location gained a
+# `research_tier` field and CorpState gained `research_points` (a pre-v21 pickled
+# Location/CorpState lacks both).
+# v22 added each faction's academy: corpmap.Location gained an `academy_tier`
+# field, and CorpState.expansion_used_today was renamed daily_action_used and
+# gained a sibling `employees` field (a pre-v22 pickled Location/CorpState has
+# neither the new fields nor the renamed one).
+# v23 split Academy training into two categories: CorpState.employees was
+# replaced by separate `scientists`/`operatives` fields (a pre-v23 pickled
+# CorpState has the old single field instead).
+SAVE_VERSION = 23
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
-STATE_KEYS = frozenset({"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions"})
+STATE_KEYS = frozenset(
+    {"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions", "corp_state"}
+)
 
 
 @dataclass(frozen=True)
