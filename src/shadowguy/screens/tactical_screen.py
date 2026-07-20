@@ -1,5 +1,6 @@
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
 
@@ -15,7 +16,7 @@ from shadowguy.tactical import (
     start_tactical,
 )
 
-from . import CharacterSheet
+from . import CharacterSheet, _boxed_text
 
 _TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _TAC_END_TEXT = {
@@ -43,7 +44,15 @@ class TacticalScreen(Screen):
 
     CSS = """
     #tac_map { height: 1fr; padding: 0 1; }
-    #tac_status, #tac_log { height: auto; padding: 0 1; }
+    #tac_end, #tac_log { height: auto; padding: 0 1; }
+    #tac_status { height: auto; padding: 0 1; }
+    #tac_status .tac_box {
+        border: round $accent;
+        padding: 0 1;
+        margin: 0 1 0 0;
+        width: auto;
+        height: auto;
+    }
     """
 
     def __init__(self, stage) -> None:
@@ -55,7 +64,15 @@ class TacticalScreen(Screen):
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(self.stage.prompt, id="tac_prompt")
-        yield Static(id="tac_status")
+        yield Static(id="tac_end")
+        yield Horizontal(
+            Static(id="tac_box_move", classes="tac_box"),
+            Static(id="tac_box_attack", classes="tac_box"),
+            Static(id="tac_box_end", classes="tac_box"),
+            Static(id="tac_box_leave", classes="tac_box"),
+            Static(id="tac_box_enemies", classes="tac_box"),
+            id="tac_status",
+        )
         yield Static(id="tac_map")
         yield Static(id="tac_log")
         yield Footer()
@@ -139,15 +156,25 @@ class TacticalScreen(Screen):
         self.query_one(CharacterSheet).refresh()
         self.query_one("#tac_map", Static).update(self._map_text())
         self.query_one("#tac_log", Static).update(Text("\n".join(state.log[-TACTICAL_LOG_LINES:])))
+
+        status = self.query_one("#tac_status", Horizontal)
         if state.is_over:
-            self.query_one("#tac_status", Static).update(
+            status.display = False
+            self.query_one("#tac_end", Static).update(
                 f"{_TAC_END_TEXT[state.outcome]}  —  press Enter to continue."
             )
             return
-        character = self.app.character
-        self.query_one("#tac_status", Static).update(
-            f"HP {character.health}/{character.max_health}   "
-            f"Moves {state.moves_left}/{state.player.speed}   "
-            f"Action {'used' if state.acted else 'ready'}   "
-            f"Enemies left {len(state.enemies)}   (arrows move, f attack, e end turn)"
+        self.query_one("#tac_end", Static).update("")
+        status.display = True
+
+        on_exit = state.player.coord in state.exits
+        attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
+        self.query_one("#tac_box_move", Static).update(
+            _boxed_text("Move (arrows)", f"{state.moves_left}/{state.player.speed} left")
         )
+        self.query_one("#tac_box_attack", Static).update(_boxed_text("Attack (f)", attack_detail))
+        self.query_one("#tac_box_end", Static).update(_boxed_text("End turn (e)", "advance the round"))
+        self.query_one("#tac_box_leave", Static).update(
+            _boxed_text("Leave (l)", "on exit" if on_exit else "not here")
+        )
+        self.query_one("#tac_box_enemies", Static).update(_boxed_text("Enemies", f"{len(state.enemies)} left"))

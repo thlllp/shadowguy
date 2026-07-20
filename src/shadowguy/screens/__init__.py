@@ -1,3 +1,6 @@
+import re
+
+from rich.text import Text
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
@@ -6,6 +9,25 @@ from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
 from shadowguy.shops import ITEMS_BY_ID
 from shadowguy.skills import skill_value
+
+# Combat/matrix Action labels follow "Title (detail)" — split it so a fight action can
+# render as a boxed RPG-style button (bold title, dim detail on its own line) instead of
+# a flat text row, shared by CombatScreen/MatrixScreen/TacticalScreen alike.
+_ACTION_LABEL_RE = re.compile(r"^(.*) \(([^)]*)\)$")
+
+
+def _boxed_text(title: str, detail: str | None = None) -> Text:
+    if not detail:
+        return Text.from_markup(f"[bold]{title}[/bold]")
+    return Text.from_markup(f"[bold]{title}[/bold]\n[dim]{detail}[/dim]")
+
+
+def _boxed_action_text(label: str) -> Text:
+    match = _ACTION_LABEL_RE.match(label)
+    if not match:
+        return _boxed_text(label)
+    title, detail = match.groups()
+    return _boxed_text(title, detail)
 
 
 def matrix_warning(character: Character, scene: Scene) -> str:
