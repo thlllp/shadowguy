@@ -30,7 +30,7 @@ from shadowguy.tactical import TacticalOutcome
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
 from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
-from shadowguy.screens.menu_screens import TitleMenu
+from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
@@ -83,6 +83,9 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
             await pilot.pause()
             await pilot.click("#new_game")
             await pilot.pause()
+            assert isinstance(app.screen, ModeSelectScreen)
+            await pilot.click("#runner")
+            await pilot.pause()
             assert isinstance(app.screen, CharacterCreationScreen)
 
             # Applying an archetype spends every point; begin should then succeed.
@@ -106,11 +109,38 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
             await pilot.pause()
             await pilot.click("#new_game")
             await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
             # No archetype applied -- points are still unspent.
             assert app.character.stat_points + app.character.skill_points > 0
             await pilot.click("#begin")
             await pilot.pause()
             assert isinstance(app.screen, CharacterCreationScreen)
+
+    run(body())
+
+
+def test_new_game_corp_mode_picks_faction_and_skips_creation():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpSelectScreen)
+
+            faction = FACTIONS[0]
+            await pilot.click(f"#faction_{faction.id}")
+            await pilot.pause()
+            # Corp mode has no runner to build -- straight to MainMenu, no
+            # CharacterCreationScreen, and nothing left in the build pools.
+            assert isinstance(app.screen, MainMenu)
+            assert app.corp_state is not None
+            assert app.corp_state.faction_id == faction.id
+            assert app.character.stat_points == 0
+            assert app.character.skill_points == 0
 
     run(body())
 
