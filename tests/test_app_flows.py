@@ -331,9 +331,9 @@ def test_buy_deck_and_program_then_install_via_inventory_screen():
             assert len(app.character.inventory) == 1
             deck_index = 0
 
-            await pilot.click("#buyp_backup_battery")
+            await pilot.click("#buyp_sleaze")
             await pilot.pause()
-            assert "backup_battery" in app.character.owned_programs
+            assert "sleaze" in app.character.owned_programs
             assert app.character.inventory[deck_index].installed_programs == []
 
             app.screen.action_back()
@@ -344,11 +344,9 @@ def test_buy_deck_and_program_then_install_via_inventory_screen():
             await pilot.pause()
             assert isinstance(app.screen, InventoryScreen)
 
-            await pilot.click(f"#install_{deck_index}_backup_battery")
+            await pilot.click(f"#install_{deck_index}_sleaze")
             await pilot.pause()
-            assert app.character.inventory[deck_index].installed_programs == [
-                "backup_battery"
-            ]
+            assert app.character.inventory[deck_index].installed_programs == ["sleaze"]
 
     run(body())
 

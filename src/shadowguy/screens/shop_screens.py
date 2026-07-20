@@ -1,6 +1,6 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corpmap import (
     Location,
@@ -31,7 +31,7 @@ from shadowguy.shops import (
     sell_price,
 )
 
-from . import CharacterSheet, _populate_list, _replace_items, matrix_warning
+from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _populate_list, _replace_items, matrix_warning
 
 
 class FixerOffersScreen(Screen):
@@ -127,8 +127,15 @@ class FixerOffersScreen(Screen):
         await self._refresh()
 
 
-class ShopScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class ShopScreen(PanelNav, Screen):
+    PANEL_IDS = ("shop_items", "shop_programs")
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
+
+    CSS = """
+    #shop_items_panel, #shop_programs_panel, #shop_items, #shop_programs {
+        height: auto;
+    }
+    """
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -138,7 +145,10 @@ class ShopScreen(Screen):
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(self.location.name, id="shop_info")
-        yield ListView(id="shop_items")
+        yield Collapsible(ListView(id="shop_items"), title="Stock", collapsed=False, id="shop_items_panel")
+        yield Collapsible(
+            ListView(id="shop_programs"), title="Programs", collapsed=False, id="shop_programs_panel"
+        )
         yield Footer()
 
     def action_back(self) -> None:
@@ -181,6 +191,15 @@ class ShopScreen(Screen):
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
 
+        if self.location.kind == LocationKind.PAWN:
+            for index, entry in enumerate(character.inventory):
+                item = ITEMS_BY_ID[entry.item_id]
+                proceeds = sell_price(item.price, standing)
+                items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
+
+        await _replace_items(self.query_one("#shop_items", ListView), items)
+
+        programs = []
         for program in PROGRAM_CATALOG.get(self.location.kind, []):
             if program.min_standing > standing:
                 continue
@@ -190,15 +209,11 @@ class ShopScreen(Screen):
                 label += " — owned"
             elif character.cash < price:
                 label += " — can't afford"
-            items.append(ListItem(Static(label), id=f"buyp_{program.id}"))
+            programs.append(ListItem(Static(label), id=f"buyp_{program.id}"))
+        if not programs:
+            programs = [ListItem(Static("No programs available."), id="no_programs")]
 
-        if self.location.kind == LocationKind.PAWN:
-            for index, entry in enumerate(character.inventory):
-                item = ITEMS_BY_ID[entry.item_id]
-                proceeds = sell_price(item.price, standing)
-                items.append(ListItem(Static(f"Sell {item.name} — {proceeds}eb"), id=f"sell_{index}"))
-
-        await _replace_items(self.query_one("#shop_items", ListView), items)
+        await _replace_items(self.query_one("#shop_programs", ListView), programs)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
