@@ -132,13 +132,13 @@ class TestMenu(Screen):
         yield Vertical(
             Static("Test"),
             ListView(
-                *(
-                    ListItem(Static(f"Tactical Combat — Tier {tier}"), id=f"tactical_{tier}")
-                    for tier in sorted(ENEMY_TIERS)
+                ListItem(
+                    Static(f"Tactical Combat — Tier {min(ENEMY_TIERS)}"),
+                    id=f"tactical_{min(ENEMY_TIERS)}",
                 ),
-                *(
-                    ListItem(Static(f"Matrix Combat — Tier {tier}"), id=f"matrix_{tier}")
-                    for tier in sorted(ICE_TIERS)
+                ListItem(
+                    Static(f"Matrix Combat — Tier {min(ICE_TIERS)}"),
+                    id=f"matrix_{min(ICE_TIERS)}",
                 ),
             ),
             id="test_dialog",

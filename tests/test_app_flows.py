@@ -13,15 +13,17 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
-from shadowguy.combat import ActionKind
+from shadowguy.combat import ENEMY_TIERS, ActionKind
 from shadowguy.corpmap import LocationKind
 from shadowguy.jobs import generate_job
-from shadowguy.matrix import MatrixOutcome
+from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
+from shadowguy.screens.tactical_screen import TacticalScreen
+from shadowguy.tactical import TacticalOutcome
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
@@ -169,6 +171,60 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
     run(body())
 
 
+def test_combat_action_list_boxes_only_the_highlighted_action():
+    """Regression test for the RPG-style boxed action list: a combat round can offer
+    far more actions than a matrix fight (per-weapon attacks, the four stat-spread
+    options, one row per grenade), so boxing every row like MatrixScreen does would
+    push the list past the screen's visible height -- only the highlighted action
+    gets a border, the rest stay flat text (see combat_screen.py's CSS comment)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            scene = None
+            for seed in range(30):
+                candidate, _timing = generate_job(
+                    day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
+                )
+                if candidate.stages[candidate.start_stage].burglary is not None:
+                    continue
+                fight_id = f"{candidate.start_stage}_fight"
+                if candidate.stages[fight_id].combat is not None:
+                    scene = candidate
+                    break
+            assert scene is not None, "no abstract-combat job turned up in 30 seeds"
+
+            app.push_screen(SceneScreen(scene))
+            await pilot.pause()
+
+            stage = scene.stages[scene.start_stage]
+            ambush_index = len(stage.choices) - 1
+            await pilot.click(f"#choice_{ambush_index}")
+            await pilot.pause()
+            await pilot.click("#choices ListItem")
+            await pilot.pause()
+            assert isinstance(app.screen, CombatScreen)
+
+            combat_screen = app.screen
+            actions_list = combat_screen.query_one("#actions", ListView)
+            items = list(actions_list.children)
+            assert len(items) > 1, "need at least two actions to tell boxed from flat apart"
+
+            def highlighted():
+                return [item for item in items if "-highlight" in item.classes]
+
+            # The default cursor position (index 0) is the only bordered item.
+            assert highlighted() == [items[0]]
+
+            actions_list.index = 1
+            await pilot.pause()
+            assert highlighted() == [items[1]]
+
+    run(body())
+
+
 def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
     """A Data Heist's fights are ICE, not gunmen: the guaranteed 'Take them first'
     ambush on its (ordinary Choice) approach stage must reach a live MatrixScreen
@@ -225,6 +281,26 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
     run(body())
 
 
+def test_test_menu_lists_a_single_tier_of_each_test_fight():
+    """The Test menu was trimmed down to one Tactical Combat and one Matrix Combat
+    entry (the lowest tier of each) rather than one row per combat.ENEMY_TIERS /
+    matrix.ICE_TIERS entry -- lock that in so a future tier addition doesn't quietly
+    reopen the full list."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.click("#test")
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
+
+            ids = [item.id for item in app.screen.query_one(ListView).children]
+            assert ids == [f"tactical_{min(ENEMY_TIERS)}", f"matrix_{min(ICE_TIERS)}"]
+
+    run(body())
+
+
 def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
     async def body():
         app = ShadowguyApp()
@@ -250,6 +326,51 @@ def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
             assert matrix_screen.run.is_over
             assert matrix_screen.run.outcome is MatrixOutcome.EJECTED
             await pilot.click("#actions ListItem")  # click through the "Continue" row
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_status_tiles():
+    """The Tactical Combat test-menu entry must reach a live TacticalScreen, and its
+    status readout must render as the bordered RPG-style HUD tiles (tactical_screen.py's
+    #tac_box_* rows) rather than the old single flat status line."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            assert not state.is_over
+
+            # Content that doesn't depend on the randomly generated map/enemy roll.
+            assert "Move (arrows)" in tac_screen.query_one("#tac_box_move").content.plain
+            assert "Attack (f)" in tac_screen.query_one("#tac_box_attack").content.plain
+            assert "End turn (e)" in tac_screen.query_one("#tac_box_end").content.plain
+            assert "Leave (l)" in tac_screen.query_one("#tac_box_leave").content.plain
+            assert f"{len(state.enemies)} left" in tac_screen.query_one("#tac_box_enemies").content.plain
+            assert tac_screen.query_one("#tac_status").display is True
+
+            # Force the player onto an exit tile and leave -- positional escape always
+            # works (no roll), so this ends the fight deterministically regardless of
+            # the map's RNG-driven layout.
+            state.player.coord = next(iter(state.exits))
+            tac_screen.action_leave()
+            await pilot.pause()
+            assert state.is_over
+            assert state.outcome is TacticalOutcome.ESCAPED
+            # The HUD hides and the end-of-fight message takes its place.
+            assert tac_screen.query_one("#tac_status").display is False
+
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
 
