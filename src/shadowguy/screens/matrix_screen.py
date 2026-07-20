@@ -1,5 +1,3 @@
-import re
-
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
@@ -22,23 +20,10 @@ from shadowguy.matrix import (
 )
 from shadowguy.scene import MatrixStage
 
-from . import CharacterSheet, _replace_items
+from . import CharacterSheet, _boxed_action_text, _replace_items
 
 MATRIX_LOG_LINES = 8
 NAV_LOG_LINES = 3
-
-# Every MatrixAction.label matrix.py generates follows "Title (detail)" — split it so
-# a fight action can render as a boxed RPG-style button (bold title, dim detail on its
-# own line) instead of a flat text row, without matrix.py needing separate fields.
-_ACTION_LABEL_RE = re.compile(r"^(.*) \(([^)]*)\)$")
-
-
-def _action_box_text(label: str) -> Text:
-    match = _ACTION_LABEL_RE.match(label)
-    if not match:
-        return Text.from_markup(f"[bold]{label}[/bold]")
-    title, detail = match.groups()
-    return Text.from_markup(f"[bold]{title}[/bold]\n[dim]{detail}[/dim]")
 
 
 class MatrixScreen(Screen):
@@ -162,7 +147,7 @@ class MatrixScreen(Screen):
             self.actions = available_matrix_actions(self.app.character, run.fight.program_uses)
             rows = [
                 ListItem(
-                    Static(_action_box_text(action.label)),
+                    Static(_boxed_action_text(action.label)),
                     id=f"action_{i}",
                     classes="matrix_action_box",
                 )

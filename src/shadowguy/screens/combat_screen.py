@@ -15,6 +15,22 @@ COMBAT_LOG_LINES = 8
 class CombatScreen(Screen):
     BINDINGS = [("q", "quit_menu", "Menu")]
 
+    # A combat round can offer far more actions than a matrix fight (per-weapon
+    # attacks, the four stat-spread options, one row per grenade) -- boxing every
+    # row the way MatrixScreen does would blow the action list past the screen's
+    # visible height. Only the highlighted action pops into an RPG-style bordered
+    # button; the rest stay flat text, so the list's total height barely changes.
+    CSS = """
+    #actions ListItem.combat_action_box {
+        height: auto;
+        padding: 0 1;
+    }
+
+    #actions ListItem.combat_action_box.-highlight {
+        border: round $secondary;
+    }
+    """
+
     def __init__(self, encounter: Encounter, drop: Drop) -> None:
         super().__init__()
         self.encounter = encounter
@@ -64,7 +80,10 @@ class CombatScreen(Screen):
         self.actions = available_actions(self.app.character, self.state.weapon_cooldowns)
         await _replace_items(
             self.query_one("#actions", ListView),
-            [ListItem(Static(action.label), id=f"action_{i}") for i, action in enumerate(self.actions)],
+            [
+                ListItem(Static(action.label), id=f"action_{i}", classes="combat_action_box")
+                for i, action in enumerate(self.actions)
+            ],
         )
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
