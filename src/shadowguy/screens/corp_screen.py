@@ -2,7 +2,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
@@ -40,14 +40,40 @@ class CorpScreen(Screen):
     to run (a plain menu choice for now — there's no in-fiction takeover yet,
     see corp_turn.py), then spend one directed move a day on either the same
     neutral-ground expansion rivals.py's AI factions make, or training up
-    employees at the corp's Academy."""
+    employees at the corp's Academy.
+
+    Actions are grouped by the thing they're attached to, not left in one flat
+    list: territory expansion + end-day stay in #corp_list, Academy training
+    goes in the #academy_list collapsible, and Research Facility upgrades go in
+    the #research_list collapsible — both always present once a corp is picked,
+    since every faction's territory carries one guaranteed Academy and one
+    guaranteed Research Facility from the start (corp_turn.py)."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    # ListView defaults to height: 1fr, which -- with three of them stacked as
+    # siblings (corp_list plus the two Collapsible-wrapped ones) -- squashes each
+    # to a sliver and lets the Collapsibles overlap on top of it. height: auto
+    # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
+    # each to its actual item count instead.
+    CSS = """
+    #corp_list, #academy_list, #research_list {
+        height: auto;
+    }
+
+    #academy_panel, #research_panel {
+        height: auto;
+    }
+    """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="corp_info")
         yield ListView(id="corp_list")
+        yield Collapsible(ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel")
+        yield Collapsible(
+            ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
+        )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -60,6 +86,8 @@ class CorpScreen(Screen):
         corp_state = self.app.corp_state
         info = self.query_one("#corp_info", Static)
         list_view = self.query_one("#corp_list", ListView)
+        academy_list = self.query_one("#academy_list", ListView)
+        research_list = self.query_one("#research_list", ListView)
 
         if corp_state is None:
             info.update("Pick a corp to run.")
@@ -68,7 +96,14 @@ class CorpScreen(Screen):
                 for faction in FACTIONS
             ]
             await _replace_items(list_view, items)
+            await _replace_items(academy_list, [])
+            await _replace_items(research_list, [])
+            self.query_one("#academy_panel").display = False
+            self.query_one("#research_panel").display = False
             return
+
+        self.query_one("#academy_panel").display = True
+        self.query_one("#research_panel").display = True
 
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[corp_state.faction_id]
@@ -108,42 +143,43 @@ class CorpScreen(Screen):
             items.append(ListItem(Static(label), id=f"expand_{territory_id}"))
         if not candidates:
             items.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
+        items.append(ListItem(Static("End the day"), id="end_day"))
+        await _replace_items(list_view, items)
 
+        academy_items = []
         for category in EmployeeCategory:
-            label = f"Train {_plural(category)} at the Academy — {ACADEMY_TRAINING_COST}eb"
+            label = f"Train {_plural(category)} — {ACADEMY_TRAINING_COST}eb"
             if corp_state.daily_action_used:
                 label += " (already acted today)"
             elif ACADEMY_TRAINING_COST > corp_state.cash:
                 label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"train_{category}"))
+            academy_items.append(ListItem(Static(label), id=f"train_{category}"))
+        await _replace_items(academy_list, academy_items)
 
+        research_items = []
         if facility is not None:
             cost = next_lab_cost(facility)
             if cost is None:
-                items.append(ListItem(Static("Research Facility labs fully upgraded"), id="labs_maxed"))
+                research_items.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))
             else:
-                label = f"Build a lab at the Research Facility — {cost}eb"
+                label = f"Build a lab — {cost}eb"
                 if corp_state.daily_action_used:
                     label += " (already acted today)"
                 elif cost > corp_state.cash:
                     label += " (can't afford)"
-                items.append(ListItem(Static(label), id="build_lab"))
+                research_items.append(ListItem(Static(label), id="build_lab"))
 
             efficiency_cost = next_efficiency_cost(facility)
             if efficiency_cost is None:
-                items.append(
-                    ListItem(Static("Research Facility efficiency fully upgraded"), id="efficiency_maxed")
-                )
+                research_items.append(ListItem(Static("Efficiency fully upgraded"), id="efficiency_maxed"))
             else:
-                label = f"Upgrade Research Facility efficiency — {efficiency_cost}eb"
+                label = f"Upgrade efficiency — {efficiency_cost}eb"
                 if corp_state.daily_action_used:
                     label += " (already acted today)"
                 elif efficiency_cost > corp_state.cash:
                     label += " (can't afford)"
-                items.append(ListItem(Static(label), id="build_efficiency"))
-
-        items.append(ListItem(Static("End the day"), id="end_day"))
-        await _replace_items(list_view, items)
+                research_items.append(ListItem(Static(label), id="build_efficiency"))
+        await _replace_items(research_list, research_items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
@@ -211,9 +247,9 @@ class CorpMainMenu(PanelNav, CorpScreen):
     runner in this kind of game, so none of the runner activities (gigs, jobs,
     legwork) apply. Laid out like MainMenu -- a left-hand category sidebar next to
     the main panel -- rather than dropping the player straight into the corp's
-    action list. "Corp" renders inline (CorpScreen's own info/action list, inherited
-    unchanged); "Corp Map"/"Contacts" push their own screens, same as MainMenu's
-    equivalent categories."""
+    action list. "Corp" renders inline (CorpScreen's own info/action list, grouped
+    into Academy/Research Facility collapsibles, inherited unchanged); "Corp Map"/
+    "Contacts" push their own screens, same as MainMenu's equivalent categories."""
 
     # CorpScreen's escape->back is redeclared here (not just omitted) with show=False:
     # Textual merges BINDINGS across the class hierarchy, so leaving it out would still
@@ -226,11 +262,25 @@ class CorpMainMenu(PanelNav, CorpScreen):
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
-    PANEL_IDS = ("categories", "corp_list")
+    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list")
 
     CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts")]
 
+    # The #corp_list/#academy_list/#research_list/#academy_panel/#research_panel rules
+    # are already on CorpScreen.CSS, but Textual's cross-hierarchy CSS merge silently
+    # drops them once PanelNav sits in the MRO (a confirmed Textual quirk: a plain
+    # mixin between a subclass and its CSS-defining base breaks the ID-selector scoping,
+    # leaving ListView's own default height: 1fr in effect instead). Re-declaring the
+    # same rules directly here routes around it -- without this, academy_panel/
+    # research_panel each claim a tall fixed box regardless of content and overlap
+    # corp_list and each other instead of stacking top to bottom.
     CSS = """
+    #corp_stats_panel {
+        height: auto;
+        border: solid $accent;
+        padding: 0 1;
+    }
+
     #sidebar {
         width: 20;
         border: solid $accent;
@@ -242,13 +292,34 @@ class CorpMainMenu(PanelNav, CorpScreen):
         border: solid $accent;
         padding: 0 1;
     }
+
+    #corp_list, #academy_list, #research_list {
+        height: auto;
+    }
+
+    #academy_panel, #research_panel {
+        height: auto;
+    }
     """
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Vertical(Static(id="corp_info"), id="corp_stats_panel")
         yield Horizontal(
             Vertical(ListView(id="categories"), id="sidebar"),
-            Vertical(Static(id="corp_info"), ListView(id="corp_list"), id="main_panel"),
+            Vertical(
+                ListView(id="corp_list"),
+                Collapsible(
+                    ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
+                ),
+                Collapsible(
+                    ListView(id="research_list"),
+                    title="Research Facility",
+                    collapsed=False,
+                    id="research_panel",
+                ),
+                id="main_panel",
+            ),
         )
         yield Footer()
 
