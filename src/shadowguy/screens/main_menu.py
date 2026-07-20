@@ -7,7 +7,6 @@ from shadowguy.corpmap import (
     PLAYER_OWNED_KINDS,
     SHOP_KINDS,
     LocationKind,
-    lodging_cost,
     owner_label,
 )
 from shadowguy.factions import FACTIONS_BY_ID
@@ -15,7 +14,6 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
-from shadowguy.security import resolve_security_night
 
 from . import (
     PANEL_NAV_BINDINGS,
@@ -26,6 +24,7 @@ from . import (
     matrix_warning,
 )
 from .corp_map_screen import CorpMapScreen
+from .corp_screen import CorpScreen
 from .info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from .scene_screen import SceneScreen
 from .shop_screens import (
@@ -43,6 +42,7 @@ class MainMenu(PanelNav, Screen):
     BINDINGS = [
         ("q", "quit_menu", "Menu"),
         ("m", "corp_map", "Corp Map (preview)"),
+        ("r", "run_corp", "Run a Corp"),
         ("i", "inventory", "Gear"),
         ("k", "skills", "Skills"),
         ("c", "contacts", "Contacts"),
@@ -86,6 +86,7 @@ class MainMenu(PanelNav, Screen):
         ("skills", "Skills"),
         ("contacts", "Contacts"),
         ("map", "Corp Map"),
+        ("corp", "Corp"),
     ]
 
     def __init__(self) -> None:
@@ -120,6 +121,9 @@ class MainMenu(PanelNav, Screen):
 
     def action_corp_map(self) -> None:
         self.app.push_screen(CorpMapScreen())
+
+    def action_run_corp(self) -> None:
+        self.app.push_screen(CorpScreen())
 
     def action_inventory(self) -> None:
         self.app.push_screen(InventoryScreen())
@@ -252,46 +256,7 @@ class MainMenu(PanelNav, Screen):
             return
 
         if item_id == "end_day":
-            here_id = character.location_id
-            here = self.app.corp_map.territories[here_id]
-            # Computed before any resolution/removal below: a contract that completes
-            # tonight must still count toward tonight's free lodging, since it was
-            # active here when the night started.
-            active_here = [c for c in character.security_contracts if c.territory_id == here_id]
-            for contract in active_here:
-                result = resolve_security_night(character, contract, self.app.rng)
-                if result.blown:
-                    self.notify(
-                        f"Security contract at {here.name} blown — you're compromised.",
-                        severity="error",
-                    )
-                    character.remove_security_contract(contract.id)
-                elif result.completed:
-                    self.notify(
-                        f"Security contract at {here.name} complete — {result.pay + result.bonus}eb paid."
-                    )
-                    character.remove_security_contract(contract.id)
-                elif result.pay:
-                    self.notify(
-                        f"Stood watch at {here.name} — paid {result.pay}eb "
-                        f"({contract.nights_completed}/{contract.nights_total} nights)."
-                    )
-                else:
-                    self.notify(
-                        f"Rough night at {here.name} — no pay "
-                        f"({contract.nights_completed}/{contract.nights_total} nights)."
-                    )
-            for contract in character.security_contracts:
-                if contract.territory_id != here_id:
-                    elsewhere = self.app.corp_map.territories[contract.territory_id]
-                    self.notify(f"Not on-site for the {elsewhere.name} contract tonight — no progress.")
-
-            cost = 0 if active_here else lodging_cost(here)
-            if cost:
-                paid = min(cost, character.cash)
-                character.cash -= paid
-                self.notify(f"Paid {paid}eb for lodging in {here.name}.")
-            self.app.advance_day()
+            self.app.end_day()
             await self._refresh()
             return
 
@@ -362,6 +327,8 @@ class MainMenu(PanelNav, Screen):
             self.app.push_screen(ContactsScreen())
         elif key == "map":
             self.app.push_screen(CorpMapScreen())
+        elif key == "corp":
+            self.app.push_screen(CorpScreen())
         elif key == "gear":
             self.app.push_screen(InventoryScreen())
         elif key == "skills":

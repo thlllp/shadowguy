@@ -14,11 +14,13 @@ import random
 
 from shadowguy.app import ShadowguyApp
 from shadowguy.combat import ENEMY_TIERS, ActionKind
-from shadowguy.corpmap import LocationKind
+from shadowguy.corpmap import LocationKind, expansion_candidates
+from shadowguy.factions import FACTIONS
 from shadowguy.jobs import generate_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
+from shadowguy.screens.corp_screen import CorpScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
@@ -490,6 +492,57 @@ def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
             await pilot.press("enter")
             await pilot.pause()
             assert app.character.location_id == neighbor_id
+
+    run(body())
+
+
+def test_corp_screen_pick_faction_expand_and_end_day():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+
+            await pilot.click("#cat_corp")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpScreen)
+            assert app.corp_state is None
+
+            # Real maps vary run to run (ShadowguyApp seeds its own rng) -- scan for
+            # whichever faction actually has an eligible neutral neighbor right now,
+            # the same tolerant-of-randomness approach the shop-finding tests use.
+            faction_id, candidates = None, []
+            for faction in FACTIONS:
+                found = expansion_candidates(app.corp_map, faction.id)
+                if found:
+                    faction_id, candidates = faction.id, found
+                    break
+            assert faction_id is not None, "no faction had an eligible neutral neighbor"
+
+            await pilot.click(f"#faction_{faction_id}")
+            await pilot.pause()
+            assert app.corp_state is not None
+            assert app.corp_state.faction_id == faction_id
+
+            # Give the corp room to afford the move regardless of the target's value.
+            app.corp_state.cash = 1_000_000
+            await app.screen._refresh()
+            await pilot.pause()
+
+            target_id = candidates[0]
+            await pilot.click(f"#expand_{target_id}")
+            await pilot.pause()
+            assert app.corp_map.territories[target_id].owner == faction_id
+            assert app.corp_state.daily_action_used is True
+
+            day_before = app.character.day
+            cash_before = app.corp_state.cash
+            await pilot.click("#end_day")
+            await pilot.pause()
+            assert app.character.day == day_before + 1
+            assert app.corp_state.daily_action_used is False
+            assert app.corp_state.cash >= cash_before  # territory income collected
 
     run(body())
 

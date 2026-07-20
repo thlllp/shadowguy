@@ -52,6 +52,8 @@ class LocationKind(StrEnum):
     REAL_ESTATE = "real_estate"
     CORP_HQ = "corp_hq"
     GANG_DEN = "gang_den"
+    RESEARCH_FACILITY = "research_facility"
+    ACADEMY = "academy"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -62,10 +64,18 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 
 # Kinds injected into specific districts rather than rolled onto the map, and carrying
 # none of the per-kind world tables below: the runner's own places, each corp's HQ
-# (which has its own officers and screen — see _make_hq / app.CorpHQScreen), and each
-# gang's den (see _make_gang_den). Neither the HQ nor a den is player-owned, so they're
-# a separate group from PLAYER_OWNED_KINDS.
-UNROLLED_KINDS = (*PLAYER_OWNED_KINDS, LocationKind.CORP_HQ, LocationKind.GANG_DEN)
+# (which has its own officers and screen — see _make_hq / app.CorpHQScreen), each
+# gang's den (see _make_gang_den), each corp's research facility (see
+# _make_research_facility / corp_turn.collect_research), and each corp's academy
+# (see _make_academy / corp_turn.train_employees). None of these four is
+# player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
+UNROLLED_KINDS = (
+    *PLAYER_OWNED_KINDS,
+    LocationKind.CORP_HQ,
+    LocationKind.GANG_DEN,
+    LocationKind.RESEARCH_FACILITY,
+    LocationKind.ACADEMY,
+)
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
 # storefront/job surface. They're a job target, scouted on legwork and run by generic
@@ -175,6 +185,12 @@ class Location:
     # REAL_ESTATE only: the territory ids this office has safehouses for sale in. Its
     # cross-map portfolio, sampled once at generation (see generate_corp_map).
     listings: list[str] = field(default_factory=list)
+    # RESEARCH_FACILITY only: how many RP/day it generates for whichever corp holds
+    # it (see corp_turn.collect_research). Starts at 1; nothing raises it yet.
+    research_tier: int | None = None
+    # ACADEMY only: how many employees one training session produces (see
+    # corp_turn.train_employees). Starts at 1; nothing raises it yet.
+    academy_tier: int | None = None
 
 
 @dataclass
@@ -274,6 +290,25 @@ def claim_territory(territory: Territory, faction_id: str, rng: random.Random) -
     territory.owner = faction_id
     territory.modifiers = _corp_modifiers(territory.value, rng)
     territory.gang_id = None
+
+
+def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
+    """Neutral territories bordering `faction_id`'s own ground, excluding gang turf
+    and the player's start (corp_map.player_start_id) — the same reservation
+    _grow_blocs honors at generation time (a faction never seeds or expands onto
+    start_cell), kept alive at runtime so the player's home turf is never swallowed.
+    Shared by rivals.py's AI expansion and corp_turn.py's player-directed one."""
+    owned = [t for t in corp_map.territories.values() if t.owner == faction_id]
+    return sorted(
+        {
+            conn_id
+            for territory in owned
+            for conn_id in territory.connections
+            if (neighbor := corp_map.territories[conn_id]).owner == "neutral"
+            and neighbor.gang_id is None
+            and neighbor.id != corp_map.player_start_id
+        }
+    )
 
 
 def _owner_tag(owner: str) -> str:
@@ -681,6 +716,38 @@ def _make_hq(territory_id: str, faction: Faction, rng: random.Random) -> Locatio
     )
 
 
+STARTING_RESEARCH_TIER = 1
+
+
+def _make_research_facility(territory_id: str, faction: Faction) -> Location:
+    """A corp's research facility — one per faction, injected into one of its own
+    districts (see generate_corp_map), always a different district than that same
+    faction's HQ. Starts at STARTING_RESEARCH_TIER; nothing raises its tier yet, the
+    same deferred-hook shape as TerritoryModifier before Development got wired up."""
+    return Location(
+        id=f"{territory_id}_research",
+        name=f"{faction.name} Research Facility",
+        kind=LocationKind.RESEARCH_FACILITY,
+        research_tier=STARTING_RESEARCH_TIER,
+    )
+
+
+STARTING_ACADEMY_TIER = 1
+
+
+def _make_academy(territory_id: str, faction: Faction) -> Location:
+    """A corp's academy — one per faction, injected into one of its own districts
+    (see generate_corp_map), always a different district than that same faction's
+    HQ and Research Facility. Starts at STARTING_ACADEMY_TIER; nothing raises its
+    tier yet, the same deferred-hook shape as the research facility."""
+    return Location(
+        id=f"{territory_id}_academy",
+        name=f"{faction.name} Academy",
+        kind=LocationKind.ACADEMY,
+        academy_tier=STARTING_ACADEMY_TIER,
+    )
+
+
 def _make_gang_members(location_id: str, rng: random.Random) -> list[LocalCharacter]:
     """The two ranks manning a gang's den: one per GANG_RANKS tier. app.py has no
     gate or screen for them yet (contrast _make_officers/CORP_OFFICER_TIERS) — they're
@@ -906,6 +973,8 @@ def _assign_values(owners: dict[Cell, str], region: list[Cell], faction_ids: lis
 class _InjectionPlan:
     hospital_ids: set[str]
     hq_ids: dict[str, str]
+    research_ids: dict[str, str]
+    academy_ids: dict[str, str]
     den_ids: dict[str, str]
     gang_ids: dict[str, str]
 
@@ -926,14 +995,28 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
 
     top_value = max(FACTION_VALUE_SPREAD)
     hq_ids: dict[str, str] = {}
+    research_ids: dict[str, str] = {}
+    academy_ids: dict[str, str] = {}
     for faction_id in faction_ids:
-        top_cells = sorted(
-            cell for cell, owner in owners.items()
-            if owner == faction_id and values[cell] == top_value
-        )
-        hq_ids[ids[rng.choice(top_cells)]] = faction_id
+        owned_cells = sorted(cell for cell, owner in owners.items() if owner == faction_id)
+        top_cells = [cell for cell in owned_cells if values[cell] == top_value]
+        hq_cell = rng.choice(top_cells)
+        hq_ids[ids[hq_cell]] = faction_id
+        # Never the HQ's own district, nor each other's — TERRITORIES_PER_FACTION
+        # guarantees enough other owned cells remain, so neither pick can come up empty.
+        research_cell = rng.choice([cell for cell in owned_cells if cell != hq_cell])
+        research_ids[ids[research_cell]] = faction_id
+        academy_cell = rng.choice([cell for cell in owned_cells if cell not in (hq_cell, research_cell)])
+        academy_ids[ids[academy_cell]] = faction_id
 
-    return _InjectionPlan(hospital_ids=hospital_ids, hq_ids=hq_ids, den_ids=den_ids, gang_ids=gang_ids)
+    return _InjectionPlan(
+        hospital_ids=hospital_ids,
+        hq_ids=hq_ids,
+        research_ids=research_ids,
+        academy_ids=academy_ids,
+        den_ids=den_ids,
+        gang_ids=gang_ids,
+    )
 
 
 def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
@@ -966,7 +1049,14 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         x, y = cell
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
-        reserved = (tid == start_id) + (tid in plan.hospital_ids) + (tid in plan.hq_ids) + (tid in plan.den_ids)
+        reserved = (
+            (tid == start_id)
+            + (tid in plan.hospital_ids)
+            + (tid in plan.hq_ids)
+            + (tid in plan.den_ids)
+            + (tid in plan.research_ids)
+            + (tid in plan.academy_ids)
+        )
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
             id=tid, name=name, x=x, y=y, owner=owner, value=values[cell],
@@ -983,6 +1073,10 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
+    for tid, faction_id in plan.research_ids.items():
+        territories[tid].locations.append(_make_research_facility(tid, FACTIONS_BY_ID[faction_id]))
+    for tid, faction_id in plan.academy_ids.items():
+        territories[tid].locations.append(_make_academy(tid, FACTIONS_BY_ID[faction_id]))
     for tid, gang_id in plan.den_ids.items():
         territories[tid].locations.append(_make_gang_den(tid, GANGS_BY_ID[gang_id], rng))
 

@@ -17,8 +17,11 @@ from shadowguy.corpmap import (
     GANG_TURF_MIN,
     MIN_START_DEGREE,
     MODIFIER_MAX,
+    STARTING_ACADEMY_TIER,
+    STARTING_RESEARCH_TIER,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
+    LocationKind,
     Territory,
     TerritoryModifier,
     claim_territory,
@@ -165,6 +168,41 @@ def test_each_faction_has_exactly_one_hq(seed):
         if location.kind == "corp_hq"
     ]
     assert Counter(hq_owners) == {faction.id: 1 for faction in FACTIONS}
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_each_faction_has_exactly_one_research_facility_at_starting_tier(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    facilities = [
+        (territory.owner, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.RESEARCH_FACILITY
+    ]
+    assert Counter(owner for owner, _location in facilities) == {faction.id: 1 for faction in FACTIONS}
+    assert all(location.research_tier == STARTING_RESEARCH_TIER for _owner, location in facilities)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_each_faction_has_exactly_one_academy_at_starting_tier(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    academies = [
+        (territory.owner, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.ACADEMY
+    ]
+    assert Counter(owner for owner, _location in academies) == {faction.id: 1 for faction in FACTIONS}
+    assert all(location.academy_tier == STARTING_ACADEMY_TIER for _owner, location in academies)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_hq_research_facility_and_academy_never_share_a_district(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    special = {LocationKind.CORP_HQ, LocationKind.RESEARCH_FACILITY, LocationKind.ACADEMY}
+    for territory in corp_map.territories.values():
+        kinds = [location.kind for location in territory.locations if location.kind in special]
+        assert len(kinds) <= 1
 
 
 @pytest.mark.parametrize("seed", SEEDS)
