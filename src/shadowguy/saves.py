@@ -74,7 +74,14 @@ SAVE_SUFFIX = ".save"
 # v23 split Academy training into two categories: CorpState.employees was
 # replaced by separate `scientists`/`operatives` fields (a pre-v23 pickled
 # CorpState has the old single field instead).
-SAVE_VERSION = 23
+# v24 added research facility labs: corpmap.Location gained a `labs_built`
+# field (a pre-v24 pickled Location lacks it).
+# v25 added research facility efficiency upgrades: corpmap.Location gained an
+# `efficiency_upgrades` field (a pre-v25 pickled Location lacks it).
+# v26 added research assistants: CorpState gained a `research_assistants`
+# field and `research_points` became a float (a pre-v26 pickled CorpState
+# lacks the new field).
+SAVE_VERSION = 26
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

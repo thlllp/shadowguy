@@ -191,6 +191,14 @@ class Location:
     # ACADEMY only: how many employees one training session produces (see
     # corp_turn.train_employees). Starts at 1; nothing raises it yet.
     academy_tier: int | None = None
+    # RESEARCH_FACILITY only: how many extra labs have been built there (see
+    # corp_turn.build_lab) — each one seats another scientist doing research.
+    # Starts at 0.
+    labs_built: int | None = None
+    # RESEARCH_FACILITY only: how many efficiency upgrades have been built there
+    # (see corp_turn.build_efficiency_upgrade) — each one adds +1 RP/day to every
+    # scientist working this facility. Starts at 0.
+    efficiency_upgrades: int | None = None
 
 
 @dataclass
@@ -729,6 +737,8 @@ def _make_research_facility(territory_id: str, faction: Faction) -> Location:
         name=f"{faction.name} Research Facility",
         kind=LocationKind.RESEARCH_FACILITY,
         research_tier=STARTING_RESEARCH_TIER,
+        labs_built=0,
+        efficiency_upgrades=0,
     )
 
 
