@@ -74,7 +74,7 @@ A text-based cyberpunk roguelite TUI. Python 3.14, managed with `uv`, built on T
 Two coupled game modes, not one game with a reskinned second mode:
 
 - **Runner mode** — RPG scale. One character, stats, scene-based missions, permadeath.
-- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. Only the territory map exists so far (browsable preview, no turns/economy/conflict yet).
+- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists now (`shadowguy/corp_turn.py`): take over one of the 3 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, or train employees at your Academy). No corp-vs-corp conflict yet — see Corp mode turn loop.
 
 Switching between runner and corp is optional and meant to be difficult — neither mode is a straight upgrade over the other.
 
@@ -370,6 +370,29 @@ Claiming is `corpmap.claim_territory(territory, faction_id, rng)`: flips `owner`
 
 **Still deliberately inert past that:** no UI surfaces a faction's claim (no `notify()`), and independent runners have no decision logic of their own — the natural next steps are a runner AI (taking their own jobs) and a way for the player to actually *see* a corp's expansion, neither bundled in here.
 
+**Once the player takes over a Faction (see Corp mode turn loop, below), that faction drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, `continue`s past that faction inside the `for faction in FACTIONS` loop, and records no `RivalAction` for it — its daily move is the player's own decision from `CorpScreen` now, not a roll here. Default `None` keeps every pre-existing call site (and test) working unchanged.
+
+### Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`)
+
+The other half of Rival AI: once the player takes over a Faction, they get the same kind of daily move the AI factions make, plus a bit more. A parallel resolution module like `rivals.py`/`security.py` — not a `Scene` — leaf-ish (imports `corpmap` only, never `scene` or `app`).
+
+**Taking over is a plain menu pick, not an earned one yet.** `CorpScreen` (reachable from `MainMenu` via `r` / the "Corp" category) lists the 3 `FACTIONS`; picking one sets `ShadowguyApp.corp_state = CorpState(faction_id=...)`. There's no in-fiction coup/acquisition mechanic — this is the same shortcut-before-the-real-gate precedent `TestMenu` already sets for jumping straight into a fight, flagged in `corp_turn.py`'s own docstring rather than silently pretended-away. Once set, `rivals.resolve_rival_day` stops rolling for that faction (see Rival AI, above) — the player's move replaces the AI's roll, it doesn't run alongside it.
+
+**Corp mode shares the runner's own day clock.** There's no separate calendar: `ShadowguyApp.advance_day()` — the same method `MainMenu`'s "End the day" and `CorpScreen`'s own "End the day" row both call, via a new shared `ShadowguyApp.end_day()` (extracted from what used to be inline in `MainMenu`, so both screens turn the day over identically, lodging/security-contract resolution included) — collects the corp's daily income and research, and resets `CorpState.daily_action_used`, right alongside `resolve_rival_day`.
+
+**Income is flat and passive.** `collect_income` sums `TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * value` over every territory the corp holds, credited to `CorpState.cash` every day regardless of what screen the player is looking at — first-slice numbers, not balance-simulated.
+
+**A turn is one real decision, shared by two mutually-exclusive moves** gated on the same `CorpState.daily_action_used` flag (the same "`_used_today` flag reset each day" idiom `Character.rest()` uses for `health_kit_used_today`):
+
+- **`expand_into`** a bordering neutral territory — the identical area-control move `rivals.py`'s AI factions make, reusing `corpmap.expansion_candidates`/`claim_territory`. Cost is `EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * value` (mirrors `corpmap.safehouse_price`'s base+per-value shape); fails closed (no charge, no mutation) if the corp's already moved today, the target isn't a legal candidate, or it can't afford it.
+- **`train_employees`** at the corp's Academy, spending a flat `ACADEMY_TRAINING_COST` to gain that many employees (the Academy's tier, currently always 1 — nothing raises it yet) in whichever `EmployeeCategory` the player picks. Same fail-closed shape as `expand_into`.
+
+**Employees come in two categories, `EmployeeCategory.SCIENTIST` and `.OPERATIVE`, tracked as separate `CorpState` fields** (`scientists`/`operatives`) rather than one fungible pool — they aren't meant to do the same thing once something reads them. `CorpScreen` offers one training row per category, both costing the same and drawing from the same daily slot.
+
+**Research points are the read side of a second guaranteed per-faction location.** `collect_research` sums `research_tier` (1 RP/day at tier 1, same "tier is the number, directly" shape training uses) over every `RESEARCH_FACILITY` the corp holds — see Corporate HQs & officers for how it's placed on the map. Folded into `CorpState.research_points` every day alongside cash.
+
+**Nothing is spent on research points, scientists, or operatives yet.** All three are the mechanism built ahead of its driver, the same pattern `gang_standing` predated `encounters.py` and `security.py` predated anything handing out contracts — flagged in `corp_turn.py`'s own docstrings rather than silently deferred. `saves.SAVE_VERSION` has climbed once per shape change across this feature (20: `ShadowguyApp.corp_state` itself; 21: `Location.research_tier` / `CorpState.research_points`; 22: `Location.academy_tier`, the `expansion_used_today`→`daily_action_used` rename, and a since-replaced `employees` field; 23: that field split into `scientists`/`operatives`) — a reminder that this corner of the save format is still actively shifting.
+
 ### Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
 The Corp-mode board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (38) `Territory` nodes on a `GRID_COLS`×`GRID_ROWS` (8×6) grid, picked as one contiguous blob, wired by a random spanning tree (so the map is always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops/flanking routes. The grid is deliberately larger than `TERRITORY_COUNT` — the leftover cells are the holes that stop the blob degenerating into a solid rectangle.
@@ -388,7 +411,7 @@ Faction starts are fair **by construction, not by search**: the generator races 
 
 District names must stay **single words**: a territory's id is its lowercased name and ends up inside Textual widget ids, which cannot contain spaces.
 
-Each `Territory` holds `MIN_LOCATIONS_PER_TERRITORY`..`MAX_LOCATIONS_PER_TERRITORY` (4–6) `Location`s — the concrete places a job hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` (2) of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a filler rolled from `FILLER_KINDS` (the bar, or one of the five shops), while neutral ground gets a random mix. One of each corp's highest-value districts also carries its **headquarters**, injected on top. Each `Location` carries `LocalCharacter`s and is where a per-Location gig spawns.
+Each `Territory` holds `MIN_LOCATIONS_PER_TERRITORY`..`MAX_LOCATIONS_PER_TERRITORY` (4–6) `Location`s — the concrete places a job hits. They're stocked from the owner: a corp district gets `SPECIALTY_LOCATIONS` (2) of its owner's own kind (`LOCATION_KIND_FOR_SPECIALTY`) plus a filler rolled from `FILLER_KINDS` (the bar, or one of the five shops), while neutral ground gets a random mix. One of each corp's highest-value districts also carries its **headquarters**, and two more of its districts each carry a **Research Facility** and an **Academy** (see Corporate HQs & officers) — all three injected on top. Each `Location` carries `LocalCharacter`s and is where a per-Location gig spawns.
 
 Location *kinds* are map data; the **skill** each kind is scouted with lives in `corpmap.LOCATION_SKILL` (flavor text is `jobs.LEGWORK_APPROACH_TEXT`, kept separate so there's one place that decides which skill a kind uses). Legwork is scouting, so the table leans on perception and agility, with intelligence on the wired places and cool where the read comes out of a conversation — that's where `Perception` earns its keep, since no job archetype rolls it.
 
@@ -425,6 +448,8 @@ Each corp has **one headquarters** — a `LocationKind.CORP_HQ` seated in one of
 Talking is **flavor only** — `factions.officer_dialogue(faction, role, standing)` returns one of three standing-band lines (hostile `< 0` / stranger `== 0` / warm `> 0`), all three reachable *because* reception has no standing floor; nothing else about the run moves. It's the hook the corp-side game will hang concrete interactions on: `Scene.target_faction_id`/`target_territory_id` are the existing effect fields if an officer should later hand out corp-sanctioned work.
 
 Officers are `LocalCharacter`s and so appear in `CorpMap.characters()`, but their gate is `rep` + faction `standing`, **not** `local_standing` — nothing moves an officer's `local_standing`, so they never surface in ContactsScreen's Locals panel (which gates on nonzero `local_standing`). Don't wire HQ access to `local_standing` without deciding what would move it.
+
+**Two more per-faction locations are injected the same way, for Corp mode rather than Runner mode.** A `RESEARCH_FACILITY` (`_make_research_facility`) and an `ACADEMY` (`_make_academy`) — both `UNROLLED_KINDS`, both out of `GENERATED_KINDS` for the same reasons the HQ is (no gig/legwork/job template, `gigs.refresh_gigs` skips them explicitly) — are seeded one each per faction, always in a *different* district from each other and from that faction's own HQ: `_plan_injections` picks the HQ's district from the faction's top-value cells first, then draws the Research Facility's district from the remaining owned cells excluding the HQ's, then the Academy's excluding both. `TERRITORIES_PER_FACTION` (6) guarantees enough owned cells remain for both picks to never come up empty. Neither carries officers, a dialogue ladder, or a screen — they're `LocalCharacter`-free, unlike the HQ — and neither is gated on rep/standing; what they do is read by `corp_turn.py` (see Corp mode turn loop), not by anything in `MainMenu`/`CorpHQScreen`. Each carries a `tier` (`Location.research_tier` / `.academy_tier`, both `int | None`, `None` on every other kind), starting at `STARTING_RESEARCH_TIER`/`STARTING_ACADEMY_TIER` (both 1) — nothing raises either yet.
 
 ### Street gangs (`shadowguy/gangs.py`, `shadowguy/corpmap.py`)
 
@@ -505,16 +530,21 @@ src/shadowguy/
                  staffing a den; leaf module — turf placement and den staffing live in corpmap.py
   rivals.py      daily-action pipeline: resolve_rival_day() lets every Faction push onto bordering
                  neutral territory (claim_territory) and gives every independent (not-hired)
-                 RivalRunner a stub turn, each day-advance (not Scene-based)
-  corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ per faction,
-                 one GANG_DEN per gang; lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
-                 claim_territory (rivals.py's expansion mutator)
+                 RivalRunner a stub turn, each day-advance (not Scene-based); skips a Faction the
+                 player has taken over via corp_turn.py
+  corp_turn.py   the player's own Corp turn: CorpState (cash/research_points/scientists/operatives),
+                 collect_income/collect_research, expand_into/train_employees sharing one
+                 daily_action_used slot (not Scene-based); leaf, imports corpmap only
+  corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ,
+                 one RESEARCH_FACILITY and one ACADEMY per faction, one GANG_DEN per gang;
+                 lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
+                 claim_territory (rivals.py's/corp_turn.py's expansion mutator)
   shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
                  Program catalog (cyberdeck program_slots, buy/install/uninstall_program), buy/sell/equip,
                  standing-scaled pricing, hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
-  app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state, advance_day);
-                 every screen now lives under screens/, not here
+  app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state,
+                 advance_day, end_day); every screen now lives under screens/, not here
   screens/
     creation_screen.py   CharacterCreationScreen
     main_menu.py         MainMenu
@@ -526,6 +556,7 @@ src/shadowguy/
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePickScreen + BurglaryWalkScreen
     corp_map_screen.py   CorpMapScreen + GangTollScreen
+    corp_screen.py       CorpScreen (play as a corp: pick a Faction, expand/train, end the day)
     shop_screens.py      FixerOffersScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen
                          + RealEstateScreen + SafehouseScreen
     info_screens.py      ContactsScreen + InventoryScreen + SkillsScreen
@@ -535,7 +566,7 @@ src/shadowguy/
 
 ### Verifying changes
 
-There **is** a real test suite now (`tests/`, 18 files, `pytest>=8` in `pyproject.toml`'s `dev` dependency group) exercised by CI (`.github/workflows/tests.yml`, on every push/PR to `master`) — `uv run pytest -q` runs it, `uvx ruff check src/` lints, both in CI. Guideline §4 still applies; the established conventions:
+There **is** a real test suite now (`tests/`, 19 files, `pytest>=8` in `pyproject.toml`'s `dev` dependency group) exercised by CI (`.github/workflows/tests.yml`, on every push/PR to `master`) — `uv run pytest -q` runs it, `uvx ruff check src/` lints, both in CI. Guideline §4 still applies; the established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm, see `tests/test_jobs.py`/`tests/test_security.py`/`tests/test_matrix.py`; `tests/test_corpmap.py` widens it to `range(200)` and `tests/test_burglary_gen.py`/`tests/test_tactical.py` narrow it to `range(80)`) over a module-scoped fixture (e.g. `generate_corp_map(FACTIONS, random.Random(0))`), asserting invariants rather than exact values. That's how the corp map's "always connected, every faction equal in count and value" guarantee is checked; a map that merely *looks* plausible can be quietly unfair. This caught a real bug once already: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep, since only some seeds happened to double-place a hospital and a den on the start cell.
 - **Forcing an exact `CheckResult` branch** — `tests/test_checks.py` establishes the pattern: a small `random.Random` subclass whose `randint` always returns a fixed face (`AlwaysSix`/`AlwaysOne`) or a call-counted mix, so a dice-pool roll can be pinned to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically rather than searching for a lucky seed. Reused in `tests/test_security.py` to test every branch of `resolve_security_night`.

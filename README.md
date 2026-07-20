@@ -2,7 +2,7 @@
 
 A text-based cyberpunk roguelite TUI. Python 3.14, built on [Textual](https://textual.textualize.io/) and [tcod](https://python-tcod.readthedocs.io/).
 
-Two coupled game modes — **Runner mode** (RPG-scale: one character, scene-based jobs, permadeath) and **Corp mode** (4X-scale: area control against rival corps). Corp mode is a browsable territory-map preview so far; no turns, economy or conflict yet.
+Two coupled game modes — **Runner mode** (RPG-scale: one character, scene-based jobs, permadeath) and **Corp mode** (4X-scale: area control against rival corps). Corp mode now has a first-slice turn loop: take over one of the 3 rival corps and play a turn alongside your runner — territory income, one directed move a day (expand onto neutral ground, or train up scientists and operatives at your Academy), plus a Research Facility generating research points. Corp-vs-corp conflict is still to come.
 
 ## Quick start
 
@@ -32,11 +32,12 @@ Death is permanent. No meta-progression between runs.
 | **Tactical** | ~35% of jobs play their fights on a generated grid instead: tcod FOV and A*, cover as a raised to-hit difficulty, firearms that kite and melee that has to close. Reach an exit to leave, no roll. |
 | **Matrix** | A Data Heist's fights are against ICE, not muscle, played out node by node across a small hacked network. Round-based like combat and rolling the same dice, but it drains a separate integrity pool instead of your health — lose and you're ejected (the contract blown) rather than killed. The cyberdeck is the damage, Hack is the hit; jacking out always works. Installed programs add a bypass roll, a soak-ignoring data grab, and remote recon — but pushing them raises the network's alert level, making every ICE hit harder to dodge for the rest of the run. |
 | **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
-| **Corp map** | 38 districts, generated fresh each run and always connected. Three rival corps hold equal territory by construction. Each district has locations — shops, bars, data hubs, clinics, a corp HQ — that jobs, gigs and legwork all hang off. |
+| **Corp map** | 38 districts, generated fresh each run and always connected. Three rival corps hold equal territory by construction. Each district has locations — shops, bars, data hubs, clinics, a corp HQ, a research facility, an academy — that jobs, gigs and legwork all hang off. |
 | **Standing** | Four separate relationships: street `rep`, per-corp `standing` (hit one corp and its rivals warm to you), per-fixer trust, and per-person local standing that bends shop prices and unlocks stock. |
 | **Crew** | Hire runners at a bar — indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. |
 | **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
 | **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
+| **Corp mode** | Take over one of the three rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, or train scientists/operatives at your Academy. A Research Facility generates research points passively. Neither resource is spent on anything yet. |
 
 ## Controls
 
@@ -44,7 +45,7 @@ Rows and menus are driven with the arrow keys and `enter`. Screen-specific:
 
 | Key | Screen | Action |
 |---|---|---|
-| `m` / `i` / `k` / `c` | Main menu | Corp map / Gear / Skills / Contacts |
+| `m` / `r` / `i` / `k` / `c` | Main menu | Corp map / Run a Corp / Gear / Skills / Contacts |
 | `←` `→` | Main menu, creation, contacts | Previous / next panel |
 | `r` / `b` | Character creation | Reset build / begin run |
 | `←↑→↓` | Corp map | Move cursor (`*`); `@` is you |
@@ -57,7 +58,7 @@ Rows and menus are driven with the arrow keys and `enter`. Screen-specific:
 
 ```
 src/shadowguy/
-  app.py          Textual App and every screen (MainMenu, SceneScreen, CombatScreen, CorpMapScreen, ...)
+  app.py          Textual App: on_mount, save/load_state, advance_day/end_day; every screen lives under screens/
   character.py    Character dataclass: stats, health, skills, inventory, crew, standing, accepted jobs
   archetypes.py   Enforcer/Hacker/Infiltrator creation presets
   skills.py       Skill table (32 skills across 6 core stats); leaf module
@@ -72,9 +73,10 @@ src/shadowguy/
   security.py     Multi-night security contract generation and nightly resolution (not Scene-based)
   runners.py      Hireable NPC runners (crew)
   factions.py     Rival corps, standing rules, HQ officer ladder
+  rivals.py       Daily rival-Faction territory expansion + independent-runner stub turns
+  corp_turn.py    The player's own Corp turn: territory income, one directed move/day (expand or train), research
   corpmap.py      Procedural territory map (38 nodes), ASCII renderer, locations, property/lodging
   shops.py        Item and consumable catalogs, buy/sell/equip, standing pricing, hospital care
-  content.py      Unwired example scenes (worked examples of the Scene data model)
   saves.py        Pickle-based save/load
 ```
 
