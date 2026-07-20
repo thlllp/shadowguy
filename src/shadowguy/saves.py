@@ -81,12 +81,15 @@ SAVE_SUFFIX = ".save"
 # v26 added research assistants: CorpState gained a `research_assistants`
 # field and `research_points` became a float (a pre-v26 pickled CorpState
 # lacks the new field).
-SAVE_VERSION = 26
+# v27 added ShadowguyApp.corp_only (a pre-v27 save lacks the key): tracks whether
+# this run was started fresh as a Corp (New Game -> Corp, no runner ever built),
+# so load_state knows to reopen CorpMainMenu instead of MainMenu.
+SAVE_VERSION = 27
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
 STATE_KEYS = frozenset(
-    {"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions", "corp_state"}
+    {"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions", "corp_state", "corp_only"}
 )
 
 

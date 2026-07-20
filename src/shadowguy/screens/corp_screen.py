@@ -1,4 +1,6 @@
 from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
@@ -22,7 +24,9 @@ from shadowguy.corp_turn import (
 from shadowguy.corpmap import expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 
-from . import _replace_items
+from . import PANEL_NAV_BINDINGS, PanelNav, _replace_items
+from .corp_map_screen import CorpMapScreen
+from .info_screens import ContactsScreen
 
 
 def _plural(category: EmployeeCategory) -> str:
@@ -200,3 +204,79 @@ class CorpScreen(Screen):
             else:
                 self.notify("Can't afford it.", severity="warning")
             await self._refresh()
+
+
+class CorpMainMenu(PanelNav, CorpScreen):
+    """Home screen for a game started fresh as a Corp (New Game -> Corp): there's no
+    runner in this kind of game, so none of the runner activities (gigs, jobs,
+    legwork) apply. Laid out like MainMenu -- a left-hand category sidebar next to
+    the main panel -- rather than dropping the player straight into the corp's
+    action list. "Corp" renders inline (CorpScreen's own info/action list, inherited
+    unchanged); "Corp Map"/"Contacts" push their own screens, same as MainMenu's
+    equivalent categories."""
+
+    # CorpScreen's escape->back is redeclared here (not just omitted) with show=False:
+    # Textual merges BINDINGS across the class hierarchy, so leaving it out would still
+    # leave the inherited binding live -- this is the top-level screen for a pure-corp
+    # game, with nothing below it worth popping back to (see action_back's override).
+    BINDINGS = [
+        ("q", "quit_menu", "Menu"),
+        ("m", "corp_map", "Corp Map"),
+        ("c", "contacts", "Contacts"),
+        Binding("escape", "back", "Back", show=False),
+        *PANEL_NAV_BINDINGS,
+    ]
+    PANEL_IDS = ("categories", "corp_list")
+
+    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts")]
+
+    CSS = """
+    #sidebar {
+        width: 20;
+        border: solid $accent;
+        padding: 1;
+    }
+
+    #main_panel {
+        width: 1fr;
+        border: solid $accent;
+        padding: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Horizontal(
+            Vertical(ListView(id="categories"), id="sidebar"),
+            Vertical(Static(id="corp_info"), ListView(id="corp_list"), id="main_panel"),
+        )
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        items = [ListItem(Static(label), id=f"cat_{key}") for key, label in self.CATEGORIES]
+        await _replace_items(self.query_one("#categories", ListView), items)
+        await super().on_mount()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    def action_back(self) -> None:
+        # No-op override of CorpScreen.action_back: escape is rebound above with
+        # show=False rather than removed, so it still resolves to this action.
+        pass
+
+    def action_corp_map(self) -> None:
+        self.app.push_screen(CorpMapScreen())
+
+    def action_contacts(self) -> None:
+        self.app.push_screen(ContactsScreen())
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id == "categories":
+            key = event.item.id.removeprefix("cat_")
+            if key == "map":
+                self.app.push_screen(CorpMapScreen())
+            elif key == "contacts":
+                self.app.push_screen(ContactsScreen())
+            return
+        await super().on_list_view_selected(event)

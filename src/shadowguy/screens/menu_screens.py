@@ -12,8 +12,8 @@ from shadowguy.scene import MatrixStage, Outcome, TacticalStage
 from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import _menu_css
+from .corp_screen import CorpMainMenu
 from .creation_screen import CharacterCreationScreen
-from .main_menu import MainMenu
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
 
@@ -130,7 +130,7 @@ class ModeSelectScreen(Screen):
     """New Game's first choice: build a Runner the usual way, or set up as a
     Corp instead by picking one of the 3 seeded Factions -- Corp mode has no
     runner to build, so that path skips CharacterCreationScreen entirely and
-    drops straight into MainMenu."""
+    drops straight into CorpMainMenu."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
     CSS = _menu_css("ModeSelectScreen", "mode_dialog")
@@ -159,10 +159,11 @@ class ModeSelectScreen(Screen):
 
 class CorpSelectScreen(Screen):
     """Pick which Faction to run. Corp mode has no runner to build -- picking
-    a Faction assigns app.corp_state and switches straight to MainMenu,
-    skipping character creation entirely. The stat/skill pools that creation
-    would normally spend are zeroed here instead, so there's nothing left
-    unspent to (pointlessly) force creation back open on a later save/load."""
+    a Faction assigns app.corp_state, sets app.corp_only so save/load knows to
+    reopen the same screen, and switches straight to CorpMainMenu, skipping
+    character creation entirely. The stat/skill pools that creation would
+    normally spend are zeroed here instead, so there's nothing left unspent to
+    (pointlessly) force creation back open on a later save/load."""
 
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
     CSS = _menu_css("CorpSelectScreen", "corp_select_dialog")
@@ -187,9 +188,10 @@ class CorpSelectScreen(Screen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         faction_id = event.item.id.removeprefix("faction_")
         self.app.corp_state = CorpState(faction_id=faction_id)
+        self.app.corp_only = True
         self.app.character.stat_points = 0
         self.app.character.skill_points = 0
-        self.app.switch_screen(MainMenu())
+        self.app.switch_screen(CorpMainMenu())
 
 
 class TestMenu(Screen):

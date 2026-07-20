@@ -12,6 +12,7 @@ from shadowguy.gigs import refresh_gigs
 from shadowguy.rivals import RivalAction, resolve_rival_day
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
+from shadowguy.screens.corp_screen import CorpMainMenu
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.menu_screens import QuitMenu, TitleMenu
@@ -36,6 +37,7 @@ class ShadowguyApp(App):
         refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
         self.rival_actions: list[RivalAction] = []
         self.corp_state: CorpState | None = None
+        self.corp_only = False
 
     def advance_day(self) -> None:
         self.character.rest()
@@ -114,6 +116,7 @@ class ShadowguyApp(App):
             "location_gigs": self.location_gigs,
             "rival_actions": self.rival_actions,
             "corp_state": self.corp_state,
+            "corp_only": self.corp_only,
         }
         return save_game(state, self.character.day)
 
@@ -125,8 +128,12 @@ class ShadowguyApp(App):
         self.location_gigs = location_gigs
         self.rival_actions = state["rival_actions"]
         self.corp_state = state["corp_state"]
+        self.corp_only = state["corp_only"]
         unspent = self.character.stat_points + self.character.skill_points
-        self._reopen(CharacterCreationScreen() if unspent else MainMenu())
+        if unspent:
+            self._reopen(CharacterCreationScreen())
+        else:
+            self._reopen(CorpMainMenu() if self.corp_only else MainMenu())
 
     def _reopen(self, screen: Screen) -> None:
         while len(self.screen_stack) > 1:

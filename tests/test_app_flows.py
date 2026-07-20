@@ -20,7 +20,7 @@ from shadowguy.jobs import generate_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
-from shadowguy.screens.corp_screen import CorpScreen
+from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
@@ -134,13 +134,60 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
             faction = FACTIONS[0]
             await pilot.click(f"#faction_{faction.id}")
             await pilot.pause()
-            # Corp mode has no runner to build -- straight to MainMenu, no
+            # Corp mode has no runner to build -- straight to CorpMainMenu, no
             # CharacterCreationScreen, and nothing left in the build pools.
-            assert isinstance(app.screen, MainMenu)
+            assert isinstance(app.screen, CorpMainMenu)
             assert app.corp_state is not None
             assert app.corp_state.faction_id == faction.id
             assert app.character.stat_points == 0
             assert app.character.skill_points == 0
+            assert app.corp_only is True
+
+    run(body())
+
+
+def test_corp_main_menu_has_sidebar_categories():
+    """CorpMainMenu is laid out like MainMenu -- a left category sidebar next to the
+    corp's own action list -- rather than dropping straight into the action list with
+    nothing beside it. "Corp" renders inline; "Corp Map"/"Contacts" push their own
+    screens, reachable both from the sidebar and from the same quick keybindings
+    MainMenu uses."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMainMenu)
+
+            categories = app.screen.query_one("#categories", ListView)
+            assert [item.id for item in categories.children] == ["cat_corp", "cat_map", "cat_contacts"]
+            # The corp's own action list (inherited from CorpScreen) is visible
+            # inline beside the sidebar, not something you have to navigate to.
+            assert any(item.id == "end_day" for item in app.screen.query_one("#corp_list", ListView).children)
+
+            await pilot.click("#cat_map")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+            app.pop_screen()
+            await pilot.pause()
+
+            await pilot.press("c")
+            await pilot.pause()
+            assert isinstance(app.screen, ContactsScreen)
+            app.pop_screen()
+            await pilot.pause()
+
+            # escape is a deliberate no-op here -- there's no MainMenu underneath
+            # to pop back to for a pure-corp game.
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMainMenu)
 
     run(body())
 
