@@ -624,6 +624,87 @@ def test_corp_screen_pick_faction_expand_and_end_day():
     run(body())
 
 
+def test_corp_screen_groups_actions_by_academy_and_research_facility():
+    """Academy/Research Facility actions live in their own collapsibles, not one
+    flat list with everything else -- and clicking a row inside either one still
+    reaches the same corp_turn.py functions as before."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_corp")
+            await pilot.pause()
+
+            faction = FACTIONS[0]
+            await pilot.click(f"#faction_{faction.id}")
+            await pilot.pause()
+            app.corp_state.cash = 1_000_000
+            await app.screen._refresh()
+            await pilot.pause()
+
+            academy_list = app.screen.query_one("#academy_list", ListView)
+            academy_ids = {item.id for item in academy_list.children}
+            assert academy_ids == {"train_scientist", "train_operative", "train_research_assistant"}
+
+            research_list = app.screen.query_one("#research_list", ListView)
+            research_ids = {item.id for item in research_list.children}
+            assert research_ids == {"build_lab", "build_efficiency"}
+
+            # Neither set of ids leaked into the territory/end-day list.
+            corp_list_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
+            assert "train_scientist" not in corp_list_ids
+            assert "build_lab" not in corp_list_ids
+            assert "end_day" in corp_list_ids
+
+            scientists_before = app.corp_state.scientists
+            await pilot.click("#train_scientist")
+            await pilot.pause()
+            assert app.corp_state.scientists > scientists_before
+            assert app.corp_state.daily_action_used is True
+
+    run(body())
+
+
+def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
+    """Regression test for a real layout bug: ListView defaults to height: 1fr, and a
+    plain mixin (PanelNav) sitting in CorpMainMenu's MRO was silently defeating the
+    height: auto override that fixes it, so academy_panel/research_panel each claimed
+    a tall fixed box and rendered on top of corp_list and each other instead of
+    stacking below it. Also checks the stat box (corp_info) got its own bordered panel
+    above the sidebar, the same way MainMenu's CharacterSheet does."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMainMenu)
+
+            stats_panel = app.screen.query_one("#corp_stats_panel")
+            sidebar = app.screen.query_one("#sidebar")
+            corp_list = app.screen.query_one("#corp_list", ListView)
+            academy_panel = app.screen.query_one("#academy_panel")
+            research_panel = app.screen.query_one("#research_panel")
+
+            # The stat box sits in its own panel above the sidebar/main-panel split.
+            assert stats_panel.region.y + stats_panel.region.height <= sidebar.region.y
+
+            # Each section starts at or after the previous one's bottom edge -- top to
+            # bottom, never overlapping.
+            assert corp_list.region.y + corp_list.region.height <= academy_panel.region.y
+            assert academy_panel.region.y + academy_panel.region.height <= research_panel.region.y
+
+    run(body())
+
+
 def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
     async def body():
         app = ShadowguyApp()
