@@ -500,37 +500,44 @@ class Program:
 
     uses_per_fight is what tells passive from active apart, derived rather than a
     separate kind field: 0 means the bonus fields below apply continuously while
-    installed on the runner's active deck (matrix.active_deck_entry); >0 means it
-    instead grants a MatrixAction usable that many times per fight, described by the
-    action_* fields. A program is exactly one or the other, enforced at import.
+    installed on the runner's active deck (matrix.active_deck_entry); nonzero means it
+    instead grants a MatrixAction, described by the action_* fields — usable that many
+    times per fight if positive, or unconditionally if negative (matrix.
+    EXTRACT_UNLIMITED_USES is -1; unlimited-use programs pay their cost some other way,
+    e.g. Extract raising MatrixState.security on a miss rather than running out). A
+    program is exactly one of passive/limited-action/unlimited-action, enforced at import.
     """
 
     id: str
     name: str
     price: int
+    ram_cost: int = 1  # how much of a deck's program_slots capacity this eats when installed
     uses_per_fight: int = 0
     # Passive-only (meaningful when uses_per_fight == 0):
     integrity_bonus: int = 0
     firewall_bonus: int = 0
     soak_bonus: int = 0
     damage_bonus: int = 0
-    # Action-only (meaningful when uses_per_fight > 0): exactly one of these is set.
+    # Action-only (meaningful when uses_per_fight != 0): exactly one of these is set.
     action_damage: int = 0  # guaranteed, no-roll damage dealt to the target ICE
     action_skip_ice: bool = False  # this round's ICE phase is skipped entirely
+    action_sleaze: bool = False  # attempt to talk the target ICE down instead of fighting it
+    action_extract: bool = False  # roll an attack against a DATA/CACHE node's ICE, ignoring its soak
+    action_analyze: bool = False  # navigation-mode only: read a connected node's role without visiting it
     min_standing: int = 0
     tag: str = ""
 
 
-# id, name, price, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
-# damage_bonus, action_damage, action_skip_ice, min_standing, tag. First-slice catalog,
-# not yet balance-simulated — see CLAUDE.md's convention for flagging that.
+# id, name, price, ram_cost, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
+# damage_bonus, action_damage, action_skip_ice, action_sleaze, action_extract,
+# action_analyze, min_standing, tag. First-slice catalog, not yet balance-simulated —
+# see CLAUDE.md's convention for flagging that.
 _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.COMPUTER_STORE: [
-        ("backup_battery", "Backup Battery", 150, 0, 3, 0, 0, 0, 0, False, 0, "passive"),
-        ("overclock_patch", "Overclock Patch", 180, 0, 0, 0, 0, 1, 0, False, 0, "passive"),
-        ("black_dawn_suite", "Black Dawn Suite", 200, 0, 0, 1, 0, 0, 0, False, 0, "passive"),
-        ("icebreaker_daemon", "Icebreaker Daemon", 250, 1, 0, 0, 0, 0, 4, False, 0, "1 use"),
-        ("ghost_protocol", "Ghost Protocol", 220, 1, 0, 0, 0, 0, 0, True, 0, "1 use"),
+        ("sleaze", "Sleaze", 230, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, "2 uses"),
+        ("extract", "Extract", 260, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, "unlimited"),
+        ("analyze", "Analyze", 180, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, "3 uses"),
+        ("icebreaker", "Icebreaker", 240, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, "unlimited"),
     ],
 }
 
@@ -543,10 +550,18 @@ PROGRAMS_BY_ID = {p.id: p for programs in PROGRAM_CATALOG.values() for p in prog
 for _p in PROGRAMS_BY_ID.values():
     if _p.min_standing < 0:
         raise ValueError(f"{_p.id}: min_standing must be >= 0")
-    if _p.uses_per_fight < 0:
-        raise ValueError(f"{_p.id}: uses_per_fight must be >= 0")
+    if _p.ram_cost < 1:
+        raise ValueError(f"{_p.id}: ram_cost must be >= 1")
+    if _p.uses_per_fight < -1:
+        raise ValueError(f"{_p.id}: uses_per_fight must be >= -1 (-1 means unlimited)")
     _passive_fields = (_p.integrity_bonus, _p.firewall_bonus, _p.soak_bonus, _p.damage_bonus)
-    _action_fields = (_p.action_damage, _p.action_skip_ice)
+    _action_fields = (
+        _p.action_damage,
+        _p.action_skip_ice,
+        _p.action_sleaze,
+        _p.action_extract,
+        _p.action_analyze,
+    )
     if _p.uses_per_fight == 0:
         if any(_action_fields):
             raise ValueError(f"{_p.id}: a passive program (uses_per_fight=0) can't set action_* fields")
@@ -554,7 +569,10 @@ for _p in PROGRAMS_BY_ID.values():
         if any(_passive_fields):
             raise ValueError(f"{_p.id}: an action program (uses_per_fight>0) can't set passive bonus fields")
         if sum(bool(f) for f in _action_fields) != 1:
-            raise ValueError(f"{_p.id}: an action program must set exactly one of action_damage/action_skip_ice")
+            raise ValueError(
+                f"{_p.id}: an action program must set exactly one of "
+                "action_damage/action_skip_ice/action_sleaze/action_extract/action_analyze"
+            )
 
 # A HOSPITAL (corpmap.LocationKind.HOSPITAL) heals over time, not on the spot: each day
 # you check in you pay this — the same as a nice district's lodging (LODGING per point of
@@ -620,9 +638,12 @@ def installed_programs_for(entry: InventoryItem) -> list[Program]:
 
 
 def free_program_slots(item: Item, entry: InventoryItem) -> int:
-    """How many more programs this deck can fit. Each program costs exactly one slot —
-    no slot_cost weighting, the ask was capacity, not a second economy."""
-    return item.program_slots - len(entry.installed_programs)
+    """How much of this deck's program_slots capacity is still free. Spent in
+    Program.ram_cost per installed program, not a flat one-program-per-slot count —
+    every program costs 1 RAM today, so this reads identically to a plain count until
+    something costs more."""
+    used = sum(program.ram_cost for program in installed_programs_for(entry))
+    return item.program_slots - used
 
 
 def buy_program(character: "Character", program_id: str, standing: int = 0) -> str:
@@ -654,7 +675,7 @@ def install_program(character: "Character", inventory_index: int, program_id: st
     program = PROGRAMS_BY_ID[program_id]
     if program_id in entry.installed_programs:
         return f"{program.name} is already installed on {item.name}."
-    if free_program_slots(item, entry) <= 0:
+    if program.ram_cost > free_program_slots(item, entry):
         return f"{item.name} has no free program slots."
     entry.installed_programs.append(program_id)
     return f"Installed {program.name} on {item.name}."

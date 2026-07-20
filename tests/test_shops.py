@@ -9,6 +9,7 @@ from shadowguy.shops import (
     PROGRAMS_BY_ID,
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
+    Program,
     Slot,
     active_deck_entry,
     buy_consumable,
@@ -181,11 +182,19 @@ def test_use_consumable_heal_capped_once_per_day():
 
 
 # --- cyberdeck programs ---
+#
+# These tests exercise buy/install/uninstall bookkeeping only (ownership, slot
+# capacity, error messages) -- none of it depends on a program's specific effect, so
+# any two distinct catalog programs work as fixtures. Every program in today's
+# catalog (sleaze/extract/analyze) happens to be action-shaped (uses_per_fight != 0);
+# effect-specific behavior (passive bonuses, action rolls) is covered in
+# tests/test_matrix.py instead.
 
 ONE_SLOT_DECK = ITEMS_BY_ID["burner_deck"]
 TWO_SLOT_DECK = ITEMS_BY_ID["cracked_cyberdeck"]
-PASSIVE_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight == 0)
-ACTION_PROGRAM = next(p for p in PROGRAMS_BY_ID.values() if p.uses_per_fight > 0)
+_CATALOG_PROGRAMS = sorted(PROGRAMS_BY_ID.values(), key=lambda p: p.id)
+PROGRAM_A = _CATALOG_PROGRAMS[0]
+PROGRAM_B = _CATALOG_PROGRAMS[1]
 
 
 def _char_with_deck(deck=ONE_SLOT_DECK, cash=100_000):
@@ -197,31 +206,31 @@ def _char_with_deck(deck=ONE_SLOT_DECK, cash=100_000):
 def test_buy_program_adds_to_owned_pool_and_charges_cash():
     c = _char_with_deck()
     before = c.cash
-    message = buy_program(c, PASSIVE_PROGRAM.id)
-    assert PASSIVE_PROGRAM.id in c.owned_programs
-    assert c.cash == before - buy_price(PASSIVE_PROGRAM.price, 0)
-    assert PASSIVE_PROGRAM.name in message
+    message = buy_program(c, PROGRAM_A.id)
+    assert PROGRAM_A.id in c.owned_programs
+    assert c.cash == before - buy_price(PROGRAM_A.price, 0)
+    assert PROGRAM_A.name in message
 
 
 def test_buy_program_does_not_install_it_on_any_deck():
     c = _char_with_deck()
-    buy_program(c, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
     assert c.inventory[0].installed_programs == []
 
 
 def test_buy_program_refuses_if_already_owned():
     c = _char_with_deck()
-    buy_program(c, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
     before = c.cash
-    message = buy_program(c, PASSIVE_PROGRAM.id)
+    message = buy_program(c, PROGRAM_A.id)
     assert c.cash == before
     assert "already own" in message.lower()
 
 
 def test_buy_program_refuses_when_cannot_afford():
     c = Character(name="t", cash=0)
-    message = buy_program(c, PASSIVE_PROGRAM.id)
-    assert PASSIVE_PROGRAM.id not in c.owned_programs
+    message = buy_program(c, PROGRAM_A.id)
+    assert PROGRAM_A.id not in c.owned_programs
     assert "afford" in message.lower()
 
 
@@ -240,57 +249,90 @@ def test_active_deck_entry_none_without_an_equipped_deck():
 
 def test_install_program_requires_ownership():
     c = _char_with_deck()
-    message = install_program(c, 0, PASSIVE_PROGRAM.id)
+    message = install_program(c, 0, PROGRAM_A.id)
     assert c.inventory[0].installed_programs == []
     assert "don't own" in message.lower()
 
 
 def test_install_program_installs_and_free_program_slots_updates():
     c = _char_with_deck(ONE_SLOT_DECK)
-    buy_program(c, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
     assert free_program_slots(ONE_SLOT_DECK, c.inventory[0]) == 1
-    message = install_program(c, 0, PASSIVE_PROGRAM.id)
-    assert c.inventory[0].installed_programs == [PASSIVE_PROGRAM.id]
+    message = install_program(c, 0, PROGRAM_A.id)
+    assert c.inventory[0].installed_programs == [PROGRAM_A.id]
     assert free_program_slots(ONE_SLOT_DECK, c.inventory[0]) == 0
-    assert PASSIVE_PROGRAM.name in message
-    assert installed_programs_for(c.inventory[0]) == [PASSIVE_PROGRAM]
+    assert PROGRAM_A.name in message
+    assert installed_programs_for(c.inventory[0]) == [PROGRAM_A]
 
 
 def test_install_program_refuses_beyond_capacity():
     c = _char_with_deck(ONE_SLOT_DECK)  # 1 slot
-    buy_program(c, PASSIVE_PROGRAM.id)
-    buy_program(c, ACTION_PROGRAM.id)
-    install_program(c, 0, PASSIVE_PROGRAM.id)
-    message = install_program(c, 0, ACTION_PROGRAM.id)
-    assert c.inventory[0].installed_programs == [PASSIVE_PROGRAM.id]
+    buy_program(c, PROGRAM_A.id)
+    buy_program(c, PROGRAM_B.id)
+    install_program(c, 0, PROGRAM_A.id)
+    message = install_program(c, 0, PROGRAM_B.id)
+    assert c.inventory[0].installed_programs == [PROGRAM_A.id]
     assert "no free program slots" in message.lower()
+
+
+def test_program_ram_cost_is_charged_against_capacity_not_just_program_count(monkeypatch):
+    """Every catalog program costs 1 RAM today, so this only bites once something
+    doesn't -- built with a synthetic higher-cost program to prove free_program_slots
+    actually sums ram_cost rather than just counting installed programs."""
+    heavy = Program(id="test_heavy", name="Test Heavy", price=0, ram_cost=2, integrity_bonus=1)
+    monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
+    c = _char_with_deck(TWO_SLOT_DECK)
+    c.owned_programs.add(heavy.id)
+    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 2
+    install_program(c, 0, heavy.id)
+    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 0  # one ram_cost=2 program fills a 2-slot deck
+    buy_program(c, PROGRAM_A.id)
+    message = install_program(c, 0, PROGRAM_A.id)
+    assert "no free program slots" in message.lower()
+
+
+def test_install_program_refuses_when_ram_cost_exceeds_partial_free_capacity(monkeypatch):
+    """The weaker, easier-to-miss case than "no room at all": free_program_slots can
+    be positive (some room left) but still less than the incoming program's own
+    ram_cost, and install_program must refuse that too, not just the exactly-full or
+    completely-empty cases."""
+    heavy = Program(id="test_heavy", name="Test Heavy", price=0, ram_cost=2, integrity_bonus=1)
+    monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
+    c = _char_with_deck(TWO_SLOT_DECK)  # 2 slots
+    buy_program(c, PROGRAM_A.id)
+    install_program(c, 0, PROGRAM_A.id)  # uses 1 RAM, leaving 1 free
+    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 1
+    c.owned_programs.add(heavy.id)
+    message = install_program(c, 0, heavy.id)  # needs 2 RAM, only 1 free
+    assert "no free program slots" in message.lower()
+    assert heavy.id not in c.inventory[0].installed_programs
 
 
 def test_install_program_refuses_on_a_non_deck_item():
     weapon = _first_weapon()
     c = Character(name="t", cash=100_000)
     buy_item(c, weapon)
-    buy_program(c, PASSIVE_PROGRAM.id)
-    message = install_program(c, 0, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
+    message = install_program(c, 0, PROGRAM_A.id)
     assert "can't run programs" in message.lower()
 
 
 def test_uninstall_program_removes_it_but_it_stays_owned():
     c = _char_with_deck(ONE_SLOT_DECK)
-    buy_program(c, PASSIVE_PROGRAM.id)
-    install_program(c, 0, PASSIVE_PROGRAM.id)
-    message = uninstall_program(c, 0, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
+    install_program(c, 0, PROGRAM_A.id)
+    message = uninstall_program(c, 0, PROGRAM_A.id)
     assert c.inventory[0].installed_programs == []
-    assert PASSIVE_PROGRAM.id in c.owned_programs  # still owned, just not installed
-    assert PASSIVE_PROGRAM.name in message
+    assert PROGRAM_A.id in c.owned_programs  # still owned, just not installed
+    assert PROGRAM_A.name in message
 
 
 def test_uninstalled_program_can_be_installed_on_a_different_deck():
     c = _char_with_deck(ONE_SLOT_DECK)
     assert buy_item(c, TWO_SLOT_DECK)
-    buy_program(c, PASSIVE_PROGRAM.id)
-    install_program(c, 0, PASSIVE_PROGRAM.id)
-    uninstall_program(c, 0, PASSIVE_PROGRAM.id)
-    message = install_program(c, 1, PASSIVE_PROGRAM.id)
-    assert c.inventory[1].installed_programs == [PASSIVE_PROGRAM.id]
-    assert PASSIVE_PROGRAM.name in message
+    buy_program(c, PROGRAM_A.id)
+    install_program(c, 0, PROGRAM_A.id)
+    uninstall_program(c, 0, PROGRAM_A.id)
+    message = install_program(c, 1, PROGRAM_A.id)
+    assert c.inventory[1].installed_programs == [PROGRAM_A.id]
+    assert PROGRAM_A.name in message

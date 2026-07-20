@@ -6,6 +6,7 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.combat import Drop
 from shadowguy.matrix import (
+    analyze_node,
     available_matrix_actions,
     connected_nodes,
     extract,
@@ -15,6 +16,7 @@ from shadowguy.matrix import (
     render_matrix_network,
     start_matrix_run,
     take_run_turn,
+    usable_analyze_program,
 )
 from shadowguy.scene import MatrixStage
 
@@ -95,10 +97,14 @@ class MatrixScreen(Screen):
 
     def _navigation_rows(self) -> list[ListItem]:
         run = self.run
-        rows = [
-            ListItem(Static(f"Move to {node.id} ({node.role.value})"), id=f"move_{node.id}")
-            for node in connected_nodes(run)
-        ]
+        program = usable_analyze_program(run)
+        rows = []
+        for node in connected_nodes(run):
+            revealed = node.id in run.revealed_node_ids
+            label = f"Move to {node.id} ({node.role.value})" if revealed else f"Move to {node.id}"
+            rows.append(ListItem(Static(label), id=f"move_{node.id}"))
+            if program is not None and not revealed:
+                rows.append(ListItem(Static(f"Analyze {node.id} ({program.name})"), id=f"analyze_{node.id}"))
         if run.can_extract:
             rows.append(ListItem(Static("Extract with the data"), id="extract"))
         rows.append(ListItem(Static("Jack out (blow the run)"), id="jack_out"))
@@ -162,6 +168,8 @@ class MatrixScreen(Screen):
             jack_out(run)
         elif item_id == "extract":
             extract(run)
+        elif item_id.startswith("analyze_"):
+            analyze_node(run, item_id.removeprefix("analyze_"), self.app.rng)
         elif item_id.startswith("move_"):
             move_to(run, item_id.removeprefix("move_"), self.app.rng)
         await self._refresh()

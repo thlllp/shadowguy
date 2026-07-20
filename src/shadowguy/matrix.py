@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from shadowguy.character import Character
-from shadowguy.checks import CheckResult, resolve_check, resolve_rng
+from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolve_check, resolve_rng
 from shadowguy.combat import Drop, resolve_hit
 from shadowguy.shops import (
     STOLEN_DATASHARD_ID,
@@ -95,12 +95,54 @@ ANALYZE_BONUS = 4
 # claws at your integrity every round.
 FREE_ROUND = 1
 
+# Sleaze (Program.action_sleaze): try to talk a node's ICE into treating the runner as
+# a valid user instead of fighting it. Deliberately *not* the normal opposed dice pool
+# (checks.resolve_check) — a flat three-way split (success / fail / critical fail) that
+# starts cut evenly into thirds and shifts with the margin between the runner's Hack and
+# the target ICE's own difficulty (its defense, read through the same pool_for_difficulty
+# conversion an ordinary intrusion's opposition already gets). Only the success/critical-
+# fail tails move; the fail third is fixed, so a botched Sleaze is never worse odds than
+# a coin a hacker could've called going in. First-slice numbers, not balance-simulated —
+# see CLAUDE.md's convention for flagging that.
+SLEAZE_SKILL = "hack"
+SLEAZE_MARGIN_FLOOR = 2  # skill_value's own floor — an unspecialized runner against the
+# weakest ICE lands exactly on the neutral 1/3-1/3-1/3 split
+SLEAZE_MARGIN_STEP = 0.04  # per net point of margin above the floor, shift 4% out of the
+# critical-fail tail and into the success tail
+SLEAZE_MAX_SHIFT = 0.28  # caps the swing so no outcome ever fully vanishes
+
+# Extract (Program.action_extract) has unlimited uses per fight (Program.uses_per_fight
+# == -1, see EXTRACT_UNLIMITED_USES) rather than a charge cap — MatrixState.security is
+# the cost instead: every missed Extract roll raises it, and it never comes back down
+# this fight. Uncapped on purpose (see MatrixState.security) — spamming Extract stays
+# free in charges but gets riskier the more it misses. First-slice numbers, not
+# balance-simulated — see CLAUDE.md's convention for flagging that.
+EXTRACT_UNLIMITED_USES = -1
+SECURITY_PER_FAILED_EXTRACT = 1
+
+# Below this, a freshly engaged node's guardian plays it neutral — same as any ordinary
+# node hop, no opening bite. At or above it, security has tipped the whole network onto
+# alert: every *new* node you engage (MatrixRunState._enter_node) opens hostile
+# (Drop.ENEMY, the same opening bite an ambush-gone-wrong hands you), not just the run's
+# very first guardian. Security never comes back down mid-run, so once you cross this
+# there's no un-tripping it for the rest of the crawl. First-slice number, not
+# balance-simulated — see CLAUDE.md's convention for flagging that.
+SECURITY_HOSTILE_THRESHOLD = 3
+
 
 @dataclass(frozen=True)
 class Ice:
     """One security program. The matrix analogue of combat.Enemy: `integrity` is its
     hit points, `defense` the difficulty your Hack roll must beat, `damage` the integrity
-    it takes off you on a hit, `soak` its own mitigation roll (its hardening)."""
+    it takes off you on a hit, `soak` its own mitigation roll (its hardening).
+
+    security_per_round is a second, mutually exclusive way an ICE can "hit" you: 0 (the
+    default) means it bites integrity like any ordinary guardian; nonzero means every
+    round it's still standing it instead adds that much straight to MatrixState.security,
+    no roll, no integrity cost — a different kind of threat than combat damage, one that
+    escalates every ICE's danger for the rest of the fight instead of directly hurting
+    you (see _ice_phase). It can still be fought down like any other ICE; the drip just
+    replaces its attack roll while it's alive."""
 
     id: str
     name: str
@@ -109,16 +151,20 @@ class Ice:
     defense: int  # what your intrusion roll must beat
     damage: int  # integrity off you on a hit, before the roll's margin
     soak: int  # added to the ICE's soak roll against your intrusion
+    security_per_round: float = 0.0  # if set, drains security instead of integrity — see above
 
 
-# id, name, integrity, attack, defense, damage, soak. Watchdogs are a nuisance; Black
-# ICE is what a light build fears. Tuned against a runner's ~7-20 integrity and the
-# deck damage above — first-slice numbers, NOT yet sim-checked (see CLAUDE.md).
+# id, name, integrity, attack, defense, damage, soak, security_per_round. Watchdogs are
+# a nuisance; Black ICE is what a light build fears; Sentinel doesn't fight you at all,
+# it just phones the rest in — leave it alive too long and everything else gets harder
+# to dodge. Tuned against a runner's ~7-20 integrity and the deck damage above —
+# first-slice numbers, NOT yet sim-checked (see CLAUDE.md).
 _ICE_ROWS = (
     ("watchdog", "Watchdog", 4, 1, 10, 2, 1),
     ("sentry", "Sentry ICE", 6, 2, 11, 2, 2),
     ("tracer", "Tracer", 5, 2, 12, 3, 1),
     ("black_ice", "Black ICE", 8, 3, 13, 3, 3),
+    ("sentinel", "Sentinel ICE", 5, 0, 11, 0, 1, 0.3),
 )
 
 ICE = [Ice(*row) for row in _ICE_ROWS]
@@ -127,8 +173,8 @@ ICE_BY_ID = {ice.id: ice for ice in ICE}
 # Day tier (checks.day_tier) -> which ICE turns up, and how many — the same shape as
 # combat.ENEMY_TIERS, and the count is the real difficulty lever here too.
 ICE_TIERS: dict[int, tuple[list[str], tuple[int, int]]] = {
-    0: (["watchdog", "sentry"], (1, 2)),
-    1: (["sentry", "tracer"], (1, 2)),
+    0: (["watchdog", "sentry", "sentinel"], (1, 2)),
+    1: (["sentry", "tracer", "sentinel"], (1, 2)),
     2: (["tracer", "black_ice"], (2, 3)),
 }
 
@@ -338,9 +384,19 @@ class MatrixAction:
     program: Program | None = None  # set only for PROGRAM — which one, the way Action.weapon does
 
 
-def _program_label(program: Program, uses_left: int) -> str:
-    effect = f"{program.action_damage} dmg" if program.action_damage else "skip ICE"
-    return f"Run {program.name} ({effect}, {uses_left} use{'s' if uses_left != 1 else ''} left)"
+def _program_label(program: Program, uses_left: int | None) -> str:
+    if program.action_damage:
+        effect = f"{program.action_damage} dmg"
+    elif program.action_sleaze:
+        effect = "sleaze the ICE"
+    elif program.action_extract:
+        effect = "extract data (no soak)"
+    else:
+        effect = "skip ICE"
+    # uses_left is None only for an unlimited-use program (EXTRACT_UNLIMITED_USES) —
+    # there's no charge count to show.
+    uses = "unlimited uses" if uses_left is None else f"{uses_left} use{'s' if uses_left != 1 else ''} left"
+    return f"Run {program.name} ({effect}, {uses})"
 
 
 def available_matrix_actions(
@@ -352,10 +408,14 @@ def available_matrix_actions(
     never a cage, same law as combat's flee (combat.FLEE_DIFFICULTY).
 
     `program_uses` mirrors combat.available_actions' `cooldowns` param exactly: an
-    installed action-program (Program.uses_per_fight > 0) only appears while it still has
-    a charge left this fight. None (the default) means nothing's been spent yet, so every
-    installed action-program is offered — this is what keeps every existing call site
-    (tests, and anywhere outside a live fight) working unchanged."""
+    installed action-program with a positive uses_per_fight only appears while it still
+    has a charge left this fight. None (the default) means nothing's been spent yet, so
+    every installed action-program is offered — this is what keeps every existing call
+    site (tests, and anywhere outside a live fight) working unchanged. A program whose
+    uses_per_fight is negative (EXTRACT_UNLIMITED_USES) is never charge-gated at all —
+    it always appears, since MatrixState.security is what it costs instead. A program
+    with action_analyze is never offered here at all — it's navigation-mode only (see
+    analyze_node/usable_analyze_program), read outside a fight rather than spent during one."""
     dmg = player_attack_damage(character)
     actions = [
         MatrixAction(MatrixActionKind.ATTACK, f"Breach the ICE (Hack, {dmg} dmg)", "hack"),
@@ -364,7 +424,10 @@ def available_matrix_actions(
         MatrixAction(MatrixActionKind.JACK_OUT, "Jack out (blow the run)", None),
     ]
     for program in _installed_programs(character):
-        if program.uses_per_fight == 0:
+        if program.uses_per_fight == 0 or program.action_analyze:
+            continue
+        if program.uses_per_fight < 0:
+            actions.append(MatrixAction(MatrixActionKind.PROGRAM, _program_label(program, None), None, program))
             continue
         uses_left = program.uses_per_fight if program_uses is None else program_uses.get(program.id, 0)
         if uses_left > 0:
@@ -407,6 +470,21 @@ class MatrixState:
     # as before). MatrixRunState sets this False on every node except the DATA one,
     # via engage_node, so clearing a mid-network guardian doesn't end the run early.
     is_final_node: bool = True
+    # Whether the current node is something Program.action_extract can pull info
+    # from — DATA or CACHE (False by default, matching a direct start_matrix() call
+    # having no node context to be extractable from). Set alongside is_final_node
+    # in MatrixRunState._enter_node/engage_node.
+    is_extractable: bool = False
+    # Escalating alert level: a run-wide ratchet, not reset between nodes (unlike
+    # ices, which engage_node does swap fresh) — tripping alarms on one node stays
+    # tripped for the rest of the run. A float, not an int: Ice.security_per_round
+    # drips it up in fractional steps (see _ice_phase) so it builds incrementally
+    # rather than only ever jumping by whole points; Program.action_extract's missed
+    # rolls (see _extract) add whole points on top of that. It makes every ICE hit
+    # harder to dodge (see _ice_bite, which floors it to a whole die bonus) rather
+    # than gating anything outright, so leaning on either source gets riskier instead
+    # of just running out.
+    security: float = 0.0
 
     @property
     def standing(self) -> list[IceFighter]:
@@ -415,6 +493,18 @@ class MatrixState:
     @property
     def is_over(self) -> bool:
         return self.outcome is not MatrixOutcome.ONGOING
+
+
+def _open_hostile(state: MatrixState, rng: random.Random | None, message: str) -> None:
+    """The opening-bite sequence a Drop.ENEMY entry pays before the player can act:
+    one free _ice_turn against the first ICE, then settle. Shared by start_matrix's
+    ambush/critical-failure drop and engage_node's security-triggered hostile open —
+    same mechanic, different reason you're already made."""
+    rng = resolve_rng(rng)
+    first = state.ices[0]
+    state.log.append(message)
+    _ice_turn(state, first, rng, harden=0)
+    _settle(state)
 
 
 def start_matrix(
@@ -445,16 +535,17 @@ def start_matrix(
         # act. One program, not the whole datastore — the same reason combat's ENEMY drop
         # is one opener, not a squad's worth (that stacks into a killing blow you never
         # chose). No harden here: there's been no round to harden in yet.
-        rng = resolve_rng(rng)
-        first = state.ices[0]
-        state.log.append("The ICE was waiting for you.")
-        _ice_bite(state, first, rng, harden=0)
-        _settle(state)
+        _open_hostile(state, rng, "The ICE was waiting for you.")
     return state
 
 
 def engage_node(
-    state: MatrixState, ices: tuple[Ice, ...], is_final_node: bool, rng: random.Random | None = None
+    state: MatrixState,
+    ices: tuple[Ice, ...],
+    is_final_node: bool,
+    is_extractable: bool = False,
+    drop: Drop = Drop.NONE,
+    rng: random.Random | None = None,
 ) -> None:
     """Swap in a fresh node's guardian(s) on an already-open MatrixState. Integrity,
     program_uses and the log all carry over — unlike start_matrix, nothing is reset,
@@ -463,12 +554,18 @@ def engage_node(
     resolving SEIZED (is_final_node was True there) must not block this one's fight
     from ever starting — only EJECTED should ever end a run, and that's checked
     before engage_node is ever called again (see MatrixRunState._settle_run/move_to).
-    No drop: only the very first node engaged in a run plays out an ambush/critical-
-    failure opening bite (see start_matrix_run)."""
+    Ordinarily no drop — only the run's very first guardian plays out an ambush/
+    critical-failure opening bite (see start_matrix_run). But once state.security has
+    crossed SECURITY_HOSTILE_THRESHOLD, _enter_node passes Drop.ENEMY for every
+    subsequent node too: high enough alert means the next guardian is already braced
+    for you, same opening bite an ambush gone wrong would've handed you."""
     state.ices = [IceFighter(ice=ice, integrity=ice.integrity) for ice in ices]
     state.is_final_node = is_final_node
+    state.is_extractable = is_extractable
     state.outcome = MatrixOutcome.ONGOING
     state.log.append("ICE lights up ahead.")
+    if drop is Drop.ENEMY:
+        _open_hostile(state, rng, "Security's already briefed on you. It doesn't wait.")
 
 
 def _damage_ice(state: MatrixState, fighter: IceFighter, damage: int) -> None:
@@ -479,11 +576,15 @@ def _damage_ice(state: MatrixState, fighter: IceFighter, damage: int) -> None:
 
 def _ice_bite(state: MatrixState, fighter: IceFighter, rng: random.Random, harden: int) -> None:
     """One ICE program's attack on the runner's integrity. Shares combat.resolve_hit, so
-    an ICE hit and a meat hit are the same two-roll formula with the roles swapped."""
+    an ICE hit and a meat hit are the same two-roll formula with the roles swapped.
+    state.security rides along as the ICE's attack advantage (floored to a whole die
+    bonus — a dice pool can't take a fractional die): the alert level doesn't gate
+    anything, it just makes every ICE in the fight — not just the one that tripped it —
+    hit harder to dodge."""
     roll, damage = resolve_hit(
         rng,
         fighter.ice.attack,
-        0,
+        int(state.security),
         firewall_defense(state.character),
         fighter.ice.damage,
         firewall_soak(state.character) + harden,
@@ -498,18 +599,40 @@ def _ice_bite(state: MatrixState, fighter: IceFighter, rng: random.Random, harde
         state.log.append(f"{fighter.ice.name} connects, but you shrug it off.")
 
 
-def _attack(state: MatrixState, rng: random.Random) -> None:
-    target = state.standing[0]
+def _ice_turn(state: MatrixState, fighter: IceFighter, rng: random.Random, harden: int) -> None:
+    """One ICE's turn against the player, whether it's the ordinary round phase, the
+    opening drop-in bite, or Sleaze's critical-fail extra bite: a security-drip
+    guardian (Ice.security_per_round) logs security instead of ever rolling an attack;
+    anything else bites integrity via _ice_bite."""
+    if fighter.ice.security_per_round:
+        state.security += fighter.ice.security_per_round
+        state.log.append(
+            f"{fighter.ice.name} logs your presence. Security climbs (+{fighter.ice.security_per_round:g})."
+        )
+    else:
+        _ice_bite(state, fighter, rng, harden=harden)
+
+
+def _intrude(state: MatrixState, target: IceFighter, rng: random.Random, soak: int) -> tuple[CheckRoll, int]:
+    """The runner's core intrusion roll: Hack to hit, the deck's rating for damage, any
+    banked Analyze bonus consumed on this attempt. Shared by the ordinary ATTACK action
+    and Extract (Program.action_extract) — the two differ only in what soak pool
+    opposes the hit (Extract ignores the target's soak entirely; see _extract)."""
     bonus = state.next_attack_bonus
     state.next_attack_bonus = 0
-    roll, damage = resolve_hit(
+    return resolve_hit(
         rng,
         skill_value(state.character, "hack"),
         bonus,
         target.ice.defense,
         player_attack_damage(state.character),
-        target.ice.soak,
+        soak,
     )
+
+
+def _attack(state: MatrixState, rng: random.Random) -> None:
+    target = state.standing[0]
+    roll, damage = _intrude(state, target, rng, target.ice.soak)
     if not roll.result.passed:
         state.log.append(f"Your intrusion glances off {target.ice.name}.")
         return
@@ -549,12 +672,66 @@ def _analyze(state: MatrixState, rng: random.Random) -> None:
         state.log.append("The architecture won't resolve. The round is wasted.")
 
 
+def _sleaze_odds(character: Character, ice: Ice) -> tuple[float, float, float]:
+    """Success / fail / critical-fail chances for a Sleaze bypass attempt — see the
+    SLEAZE_* constants for why this isn't checks.resolve_check's opposed pool."""
+    margin = skill_value(character, SLEAZE_SKILL) - pool_for_difficulty(ice.defense)
+    shift = min(SLEAZE_MAX_SHIFT, max(0.0, (margin - SLEAZE_MARGIN_FLOOR) * SLEAZE_MARGIN_STEP))
+    return 1 / 3 + shift, 1 / 3, 1 / 3 - shift
+
+
+def _sleaze(state: MatrixState, program: Program, rng: random.Random) -> None:
+    """Try to talk the targeted ICE into standing down instead of fighting it. Success
+    drops it outright, same as clearing it in combat. A critical fail means it's not
+    just unconvinced but alerted — it gets an extra bite on top of its normal one this
+    round. A plain fail costs nothing beyond the wasted round every other missed action
+    already costs."""
+    target = state.standing[0]
+    success, fail, _critical_fail = _sleaze_odds(state.character, target.ice)
+    roll = rng.random()
+    if roll < success:
+        state.log.append(f"{program.name} convinces {target.ice.name} you belong here. It stands down.")
+        _damage_ice(state, target, target.integrity)
+    elif roll < success + fail:
+        state.log.append(f"{program.name} can't sell the lie. {target.ice.name} isn't fooled.")
+    else:
+        state.log.append(f"{program.name} trips an alarm. {target.ice.name} snaps to alert.")
+        _ice_turn(state, target, rng, harden=state.soak)
+
+
+def _extract(state: MatrixState, program: Program, rng: random.Random) -> None:
+    """Roll an attack against the current node's info rather than its guardian's
+    fight — DATA and CACHE nodes only (MatrixState.is_extractable); against an
+    ordinary IC waypoint there's nothing here to pull. A landed hit ignores the
+    target's soak roll entirely — you're not out-fighting it, just grabbing the
+    file once you're past its lock, which is the edge that makes this worth a
+    program slot over just attacking. Unlimited uses (EXTRACT_UNLIMITED_USES), so
+    the cost of leaning on it isn't running out — see SECURITY_PER_FAILED_EXTRACT."""
+    target = state.standing[0]
+    if not state.is_extractable:
+        state.log.append(f"{program.name} finds nothing here worth extracting.")
+        return
+    roll, damage = _intrude(state, target, rng, 0)
+    if not roll.result.passed:
+        state.security += SECURITY_PER_FAILED_EXTRACT
+        state.log.append(
+            f"{program.name} can't get a clean read on {target.ice.name}. "
+            f"Security tightens (+{SECURITY_PER_FAILED_EXTRACT})."
+        )
+        return
+    state.log.append(f"{program.name} pulls the file straight through {target.ice.name}.")
+    _damage_ice(state, target, damage)
+
+
 def _use_program(state: MatrixState, program: Program, rng: random.Random) -> None:
     """Spend one charge of an installed action program. action_damage lands with no
-    roll — the whole point of a program action is that it's guaranteed, unlike the
-    ordinary ATTACK. action_skip_ice reuses ice_skip_rounds, the same free-round
-    mechanism Drop.PLAYER's clean breach already grants."""
-    state.program_uses[program.id] = state.program_uses.get(program.id, 0) - 1
+    roll — the whole point of a guaranteed program action is that it's not a check,
+    unlike the ordinary ATTACK. action_skip_ice reuses ice_skip_rounds, the same
+    free-round mechanism Drop.PLAYER's clean breach already grants. action_sleaze and
+    action_extract are rolled, unlike the other two — see _sleaze/_extract. A program
+    with unlimited uses (uses_per_fight < 0) has no charge to spend."""
+    if program.uses_per_fight > 0:
+        state.program_uses[program.id] = state.program_uses.get(program.id, 0) - 1
     if program.action_damage:
         target = state.standing[0]
         state.log.append(
@@ -564,6 +741,10 @@ def _use_program(state: MatrixState, program: Program, rng: random.Random) -> No
     elif program.action_skip_ice:
         state.ice_skip_rounds += 1
         state.log.append(f"{program.name} scrambles your signature. The ICE loses track of you this round.")
+    elif program.action_sleaze:
+        _sleaze(state, program, rng)
+    elif program.action_extract:
+        _extract(state, program, rng)
 
 
 def _ice_phase(state: MatrixState, rng: random.Random) -> None:
@@ -572,7 +753,7 @@ def _ice_phase(state: MatrixState, rng: random.Random) -> None:
         state.log.append("The ICE is still reorienting. You get this one free.")
         return
     for fighter in state.standing:
-        _ice_bite(state, fighter, rng, harden=state.soak)
+        _ice_turn(state, fighter, rng, harden=state.soak)
 
 
 def _settle(state: MatrixState) -> None:
@@ -632,6 +813,16 @@ class MatrixRunState:
     fight: MatrixState | None = None  # the live per-node engagement, if any
     outcome: MatrixOutcome = MatrixOutcome.ONGOING
     run_log: list[str] = field(default_factory=list)
+    # A node's role is hidden until it's been analyzed (Program.action_analyze, from
+    # outside — see analyze_node) or aggressed upon (physically entered — see
+    # _enter_node, which adds every node it's called on, guarded or not). Lives here
+    # rather than on MatrixState because the ENTRY node is never guarded, so a run can
+    # sit with no fight open at all while the player still wants to analyze a neighbor.
+    revealed_node_ids: set[str] = field(default_factory=set)
+    # program id -> Analyze charges left this run, seeded in start_matrix_run — the
+    # navigation-mode counterpart to MatrixState.program_uses, kept separate for the
+    # same reason revealed_node_ids is: it has to work with no MatrixState open yet.
+    analyze_uses: dict[str, int] = field(default_factory=dict)
 
     @property
     def is_over(self) -> bool:
@@ -661,8 +852,13 @@ def connected_nodes(run: MatrixRunState) -> list[MatrixNode]:
 MATRIX_CONNECTOR_WIDTH = 4
 
 
-def _matrix_node_label(node: MatrixNode, current_id: str, cleared_ids: set[str]) -> str:
+def _matrix_node_label(node: MatrixNode, current_id: str, cleared_ids: set[str], revealed_ids: set[str]) -> str:
     marker = "@" if node.id == current_id else " "
+    if node.id not in revealed_ids:
+        # Role AND guarded/clear status are both part of a node's "value" — showing
+        # one while hiding the other would leak it by elimination (only guarded
+        # roles ever show "guard"), so an unrevealed node shows neither.
+        return f"{marker}[{node.id} ???]"
     parts = [node.id, node.role.value.upper()]
     if node.id in cleared_ids:
         parts.append("clear")
@@ -757,7 +953,9 @@ def render_matrix_network(run: MatrixRunState) -> str:
     max_row = max(r for _, r in positions.values())
 
     def label(node_id: str) -> str:
-        return _matrix_node_label(network.nodes[node_id], run.current_node_id, run.cleared_node_ids)
+        return _matrix_node_label(
+            network.nodes[node_id], run.current_node_id, run.cleared_node_ids, run.revealed_node_ids
+        )
 
     col_width = {}
     for col in range(max_col + 1):
@@ -821,16 +1019,25 @@ def _settle_run(run: MatrixRunState) -> None:
 
 def _enter_node(run: MatrixRunState, node_id: str, drop: Drop, rng: random.Random | None) -> None:
     run.current_node_id = node_id
+    # Physically arriving reveals a node's value unconditionally — "aggressed upon"
+    # for a guarded one (you're about to fight it below), just "visited" for a plain
+    # waypoint. Unrelated to analyze_node's remote reveal, which never moves you.
+    run.revealed_node_ids.add(node_id)
     node = run.network.nodes[node_id]
     if node.ice is None or node_id in run.cleared_node_ids:
         run.run_log.append(f"You're clear at {node.id} ({node.role.value}).")
         return
     is_final = node.role is MatrixNodeRole.DATA
+    is_extractable = node.role in (MatrixNodeRole.DATA, MatrixNodeRole.CACHE)
     if run.fight is None:
         run.fight = start_matrix(run.character, (node.ice,), drop, rng)
         run.fight.is_final_node = is_final
+        run.fight.is_extractable = is_extractable
     else:
-        engage_node(run.fight, (node.ice,), is_final, rng)
+        # High enough alert and the network stops playing it neutral: every new
+        # guardian from here on opens hostile, not just the run's very first one.
+        node_drop = Drop.ENEMY if run.fight.security >= SECURITY_HOSTILE_THRESHOLD else Drop.NONE
+        engage_node(run.fight, (node.ice,), is_final, is_extractable, node_drop, rng)
     run.run_log.append(f"ICE lights up at {node.id}.")
     _settle_run(run)
 
@@ -841,20 +1048,78 @@ def start_matrix_run(
     """Jack in. Enters the network's entry node — never guarded, so this never
     triggers a fight; drop only ever matters for whichever node ends up engaged
     first."""
-    run = MatrixRunState(character=character, network=network, current_node_id=network.entry_id)
+    run = MatrixRunState(
+        character=character,
+        network=network,
+        current_node_id=network.entry_id,
+        analyze_uses={
+            program.id: program.uses_per_fight
+            for program in _installed_programs(character)
+            if program.action_analyze and program.uses_per_fight > 0
+        },
+    )
     _enter_node(run, network.entry_id, drop, rng)
     return run
+
+
+def _reachable(run: MatrixRunState, node_id: str) -> bool:
+    """Whether node_id is something the player could currently act on at all — move to
+    it or analyze it. False if the run is over, a guardian is still blocking movement,
+    or node_id isn't actually connected to wherever the runner is standing."""
+    if run.is_over or run.in_fight:
+        return False
+    return node_id in run.current_node.connections
 
 
 def move_to(run: MatrixRunState, node_id: str, rng: random.Random | None = None) -> bool:
     """Attempt to move onto a connected node. Refuses (no state change, returns
     False) if the run is already over, a guardian is still blocking movement, or
     node_id isn't actually reachable from here."""
-    if run.is_over or run.in_fight:
-        return False
-    if node_id not in run.current_node.connections:
+    if not _reachable(run, node_id):
         return False
     _enter_node(run, node_id, Drop.NONE, rng)
+    return True
+
+
+def usable_analyze_program(run: MatrixRunState) -> Program | None:
+    """The installed Analyze program (Program.action_analyze), if the runner has one
+    with a charge left — None otherwise, which is what tells MatrixScreen whether to
+    offer an "Analyze <node>" row at all. Unlimited-use analyze programs (uses_per_
+    fight < 0) would always qualify, the same convention Extract set."""
+    program = next((p for p in _installed_programs(run.character) if p.action_analyze), None)
+    if program is None:
+        return None
+    if program.uses_per_fight > 0 and run.analyze_uses.get(program.id, 0) <= 0:
+        return None
+    return program
+
+
+def analyze_node(run: MatrixRunState, node_id: str, rng: random.Random | None = None) -> bool:
+    """Run the installed Analyze program against a connected-but-unrevealed node to
+    read its value (role) remotely, without moving there or risking a fight — the
+    navigation-mode counterpart to Sleaze/Extract, same Hack roll and the same
+    ANALYZE_DIFFICULTY the in-fight ANALYZE action reads an ICE's shape with, just
+    aimed at a node instead. Refuses (no roll, no charge spent, returns False) if the
+    run is over, a guardian is blocking movement, node_id isn't reachable from here,
+    it's already revealed, or no Analyze program/charge is available. A miss costs
+    nothing beyond the attempt, same low-stakes shape as the in-fight version."""
+    if not _reachable(run, node_id):
+        return False
+    if node_id in run.revealed_node_ids:
+        return False
+    program = usable_analyze_program(run)
+    if program is None:
+        return False
+    if program.uses_per_fight > 0:
+        run.analyze_uses[program.id] = run.analyze_uses.get(program.id, 0) - 1
+    rng = resolve_rng(rng)
+    node = run.network.nodes[node_id]
+    roll = resolve_check(stat_value=skill_value(run.character, "hack"), difficulty=ANALYZE_DIFFICULTY, rng=rng)
+    if roll.result.passed:
+        run.revealed_node_ids.add(node_id)
+        run.run_log.append(f"{program.name} reads {node.id}'s traffic. It's a {node.role.value} node.")
+    else:
+        run.run_log.append(f"{program.name} can't get a clean read on {node.id}.")
     return True
 
 

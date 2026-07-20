@@ -11,6 +11,7 @@ from shadowguy.shops import (
     ITEMS_BY_ID,
     PROGRAMS_BY_ID,
     bonus_text,
+    free_program_slots,
     install_program,
     installed_programs_for,
     toggle_equip,
@@ -68,9 +69,10 @@ class InventoryScreen(Screen):
                 continue
             installed = installed_programs_for(entry)
             names = ", ".join(p.name for p in installed) if installed else "none"
+            used_ram = item.program_slots - free_program_slots(item, entry)
             items.append(
                 ListItem(
-                    Static(f"{item.name} — programs: {names} ({len(installed)}/{item.program_slots} slots)"),
+                    Static(f"{item.name} — programs: {names} ({used_ram}/{item.program_slots} slots)"),
                     id=f"deck_info_{index}",
                 )
             )
