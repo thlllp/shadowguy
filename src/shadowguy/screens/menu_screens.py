@@ -4,6 +4,8 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
+from shadowguy.corp_turn import CorpState
+from shadowguy.factions import FACTIONS
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import MatrixStage, Outcome, TacticalStage
@@ -11,6 +13,7 @@ from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import _menu_css
 from .creation_screen import CharacterCreationScreen
+from .main_menu import MainMenu
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
 
@@ -110,7 +113,7 @@ class TitleMenu(Screen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "new_game":
-            self.app.push_screen(CharacterCreationScreen())
+            self.app.push_screen(ModeSelectScreen())
         elif event.item.id == "load_game":
             slots = list_saves()
             if not slots:
@@ -121,6 +124,72 @@ class TitleMenu(Screen):
             self.app.push_screen(TestMenu())
         elif event.item.id == "settings":
             self.notify("Settings aren't implemented yet.")
+
+
+class ModeSelectScreen(Screen):
+    """New Game's first choice: build a Runner the usual way, or set up as a
+    Corp instead by picking one of the 3 seeded Factions -- Corp mode has no
+    runner to build, so that path skips CharacterCreationScreen entirely and
+    drops straight into MainMenu."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    CSS = _menu_css("ModeSelectScreen", "mode_dialog")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("New Game"),
+            ListView(
+                ListItem(Static("Runner"), id="runner"),
+                ListItem(Static("Corp"), id="corp"),
+            ),
+            id="mode_dialog",
+        )
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id == "runner":
+            self.app.push_screen(CharacterCreationScreen())
+        elif event.item.id == "corp":
+            self.app.push_screen(CorpSelectScreen())
+
+
+class CorpSelectScreen(Screen):
+    """Pick which Faction to run. Corp mode has no runner to build -- picking
+    a Faction assigns app.corp_state and switches straight to MainMenu,
+    skipping character creation entirely. The stat/skill pools that creation
+    would normally spend are zeroed here instead, so there's nothing left
+    unspent to (pointlessly) force creation back open on a later save/load."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    CSS = _menu_css("CorpSelectScreen", "corp_select_dialog")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("Pick a Corp to run"),
+            ListView(
+                *(
+                    ListItem(Static(f"{faction.name} ({faction.specialty})"), id=f"faction_{faction.id}")
+                    for faction in FACTIONS
+                )
+            ),
+            id="corp_select_dialog",
+        )
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        faction_id = event.item.id.removeprefix("faction_")
+        self.app.corp_state = CorpState(faction_id=faction_id)
+        self.app.character.stat_points = 0
+        self.app.character.skill_points = 0
+        self.app.switch_screen(MainMenu())
 
 
 class TestMenu(Screen):
