@@ -84,7 +84,9 @@ SAVE_SUFFIX = ".save"
 # v27 added ShadowguyApp.corp_only (a pre-v27 save lacks the key): tracks whether
 # this run was started fresh as a Corp (New Game -> Corp, no runner ever built),
 # so load_state knows to reopen CorpMainMenu instead of MainMenu.
-SAVE_VERSION = 27
+# v28 added CorpMap.relations (a pre-v28 pickled CorpMap lacks the field): standing
+# between every Faction/Gang pair, independent of the player.
+SAVE_VERSION = 28
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
