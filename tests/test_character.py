@@ -174,7 +174,7 @@ def test_on_new_day_clears_daily_flags():
     c = Character(name="t")
     c.health_kit_used_today = True
     c.temp_bonuses["strength"] = 3
-    c.on_new_day()
+    c.on_new_day(c.day)
     assert c.health_kit_used_today is False
     assert c.temp_bonuses == {}
 
@@ -183,7 +183,7 @@ def test_on_new_day_does_not_heal():
     c = Character(name="t")
     c.adjust_health(-5)
     hurt = c.health
-    c.on_new_day()
+    c.on_new_day(c.day)
     assert c.health == hurt
 
 

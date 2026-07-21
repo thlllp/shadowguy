@@ -328,11 +328,16 @@ class Character:
         active = {job.scene.id for job in self.accepted_jobs}
         self.crew = [hire for hire in self.crew if hire.job_id is None or hire.job_id in active]
 
-    def on_new_day(self, protect_job_id: str | None = None) -> None:
+    def on_new_day(self, day: int, protect_job_id: str | None = None) -> None:
         """Everything that resets once per day boundary crossed, scoped to Character's
         own state — called once per day by app._apply_day_tick, which owns the parts
         needing corp_map/fixers/rng (crew wages, offer/gig refresh, rival AI, corp
         income) that Character can't reach without an import cycle.
+
+        `day` is the specific day boundary being ticked (not necessarily self.day,
+        which is already the final day once a multi-boundary spend has finished
+        bumping elapsed_hours) — the same value _apply_day_tick passes to every
+        other subsystem this tick.
 
         `protect_job_id` (a Scene.id) exempts one job from expiry pruning this tick —
         set when the day boundary was crossed by spending time on that very job (or
@@ -344,7 +349,7 @@ class Character:
         self.accepted_jobs = [
             job
             for job in self.accepted_jobs
-            if job.scene.id == protect_job_id or not job.timing.is_expired(self.day)
+            if job.scene.id == protect_job_id or not job.timing.is_expired(day)
         ]
         self._discharge_orphan_crew()
 
