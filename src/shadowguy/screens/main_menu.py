@@ -3,7 +3,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import HOURS_PER_DAY
 from shadowguy.corpmap import (
     PLAYER_OWNED_KINDS,
     SHOP_KINDS,
@@ -172,11 +171,12 @@ class MainMenu(PanelNav, Screen):
                 items.append(ListItem(Static(label), id=f"gig_{location.id}"))
 
         if self.selected_category == "job":
+            today = character.day
             for job in character.accepted_jobs:
                 label = f"Job — {job.scene.title} ({job.scene.hours_cost}h) — {job.timing.label}"
                 if not self._on_site(job.scene):
                     label += f" — travel to {self._district(job.scene)}"
-                elif not job.timing.is_available(character.day):
+                elif not job.timing.is_available(today):
                     label += " — not yet"
                 label += matrix_warning(character, job.scene)
                 items.append(ListItem(Static(label), id=f"job_{job.id}"))
@@ -253,7 +253,7 @@ class MainMenu(PanelNav, Screen):
             return
 
         if item_id == "rest":
-            self.app.spend_time(HOURS_PER_DAY)
+            self.app.rest()
             await self._refresh()
             return
 

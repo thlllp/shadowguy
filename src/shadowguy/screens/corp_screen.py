@@ -4,7 +4,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import HOURS_PER_DAY
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     RESEARCH_PER_ASSISTANT,
@@ -192,7 +191,7 @@ class CorpScreen(Screen):
             return
 
         if item_id == "rest":
-            self.app.spend_time(HOURS_PER_DAY)
+            self.app.rest()
             await self._refresh()
             return
 

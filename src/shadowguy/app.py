@@ -3,7 +3,7 @@ import random
 from textual.app import App
 from textual.screen import Screen
 
-from shadowguy.character import Character
+from shadowguy.character import HOURS_PER_DAY, Character
 from shadowguy.corp_turn import CorpState, collect_income, collect_research
 from shadowguy.corpmap import generate_corp_map, lodging_cost
 from shadowguy.factions import FACTIONS
@@ -31,10 +31,11 @@ class ShadowguyApp(App):
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
-        refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
-        refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
+        day = self.character.day
+        refresh_offers(self.fixers, day, self.corp_map, self.rng)
+        refresh_security_offers(self.fixers, day, self.corp_map, self.rng)
         self.location_gigs: dict[str, Scene] = {}
-        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+        refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         self.rival_actions: list[RivalAction] = []
         self.corp_state: CorpState | None = None
         self.corp_only = False
@@ -68,10 +69,15 @@ class ShadowguyApp(App):
             for day in range(old_day + 1, new_day + 1):
                 self._apply_day_tick(day, skip_night_effects, protect_job_id)
 
+    def rest(self) -> None:
+        """Shared "Rest" action wiring for MainMenu and CorpScreen — spends exactly
+        one day, same as any other spend_time call."""
+        self.spend_time(HOURS_PER_DAY)
+
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that used to fire from a deliberate "End the day" click —
         now fired once per day boundary crossed, by whatever action crossed it."""
-        self.character.on_new_day(protect_job_id)
+        self.character.on_new_day(day, protect_job_id)
         for name in self.character.pay_crew_wages():
             self.notify(f"{name} walked off the crew — you missed payroll.", severity="warning")
         expire_offers(self.fixers, day)
