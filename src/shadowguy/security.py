@@ -1,13 +1,14 @@
 """Procedural generation and nightly resolution of Security contracts offered by Fixers.
 
 Unlike a job (jobs.py) — a Scene walked once in a single sitting — a Security contract
-is a standing engagement: accept it, then end each day (rest) standing in its territory
-to work a night's watch. There is deliberately no Scene/Stage/Choice graph here: nothing
-in scene.py has any day-awareness (every Outcome resolves once, synchronously), so this
-is a parallel data path rather than a shoehorned Scene. resolve_security_night is called
-once per contract per end-day by MainMenu, the same way Character.pay_crew_wages() is
-called once per day by ShadowguyApp.advance_day() — this is that mechanic's inverse (the
-corp pays the runner) plus a lodging-waiver side effect the caller applies separately.
+is a standing engagement: accept it, then be standing in its territory when a day
+boundary ticks over to work a night's watch. There is deliberately no Scene/Stage/Choice
+graph here: nothing in scene.py has any day-awareness (every Outcome resolves once,
+synchronously), so this is a parallel data path rather than a shoehorned Scene.
+resolve_security_night is called once per contract per day tick by ShadowguyApp's
+_apply_day_tick, the same tick that calls Character.pay_crew_wages() — this is that
+mechanic's inverse (the corp pays the runner) plus a lodging-waiver side effect the
+caller applies separately.
 """
 
 import random

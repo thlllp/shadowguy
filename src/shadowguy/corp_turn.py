@@ -8,13 +8,14 @@ in-fiction takeover mechanic yet, the same shortcut-before-the-real-gate
 precedent TestMenu already sets for jumping straight into a fight.
 
 Corp mode shares the runner's own day clock rather than keeping a separate
-calendar: ShadowguyApp.advance_day() collects each day's territory income into
-CorpState.cash and resets daily_action_used, right alongside the AI factions'
-own resolve_rival_day (which skips the player's faction_id once this is set).
+calendar: ShadowguyApp's day tick (app._apply_day_tick) collects each day's
+territory income into CorpState.cash and resets daily_action_used, right
+alongside the AI factions' own resolve_rival_day (which skips the player's
+faction_id once this is set).
 
 A turn is one real decision, shared by two mutually-exclusive moves gated on the
 same CorpState.daily_action_used flag (the same "_used_today flag reset each
-day" idiom Character.rest() uses for health_kit_used_today):
+day" idiom Character.on_new_day() uses for health_kit_used_today):
   - expand_into a bordering neutral territory, the same area-control move
     rivals.py's AI factions make (reusing corpmap.expansion_candidates/
     claim_territory).

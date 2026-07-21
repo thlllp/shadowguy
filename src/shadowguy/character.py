@@ -6,7 +6,6 @@ from shadowguy.shops import (
     InventoryItem,
     equipped_bonus,
     equipped_skill_bonus,
-    equipped_travel_bonus,
 )
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
@@ -27,7 +26,10 @@ class CrewHire:
     runner_id: str
     job_id: str | None = None
 HEALTH_PER_BODY = 5
-BASE_STAMINA = 5
+# Length of a day for Character.day's derivation from elapsed_hours (below) — also
+# how many hours Rest/a hospital stay spend, so either one deterministically
+# advances the day by exactly one (see app.spend_time).
+HOURS_PER_DAY = 24
 
 # Everything starts at 1 and is bought up from there. Both pools are spent at
 # character creation (app.CharacterCreationScreen) and never refill — there is
@@ -92,8 +94,10 @@ class Character:
     cash: int = STARTING_CASH
     rep: int = 0
     health: int | None = None
-    stamina: int | None = None
-    day: int = 1
+    # The run's clock: a continuous count of in-game hours spent, never reset.
+    # Character.day (below) is derived from this rather than stored — see
+    # app.spend_time, the single chokepoint that advances it.
+    elapsed_hours: float = 0.0
     # Which Territory of the corp map the runner is standing in.
     location_id: str = ""
     advantage: dict[str, int] = field(default_factory=dict)
@@ -143,22 +147,14 @@ class Character:
     # nothing puts them back.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
-    # How many of today's free travel moves (shops.Item.travel_bonus, from the
-    # equipped Slot.VEHICLE item) have already been spent. Tracked as usage rather
-    # than a remaining count so re-equipping a different vehicle mid-day raises or
-    # lowers the cap immediately instead of waiting for the next rest(). Reset to 0
-    # on rest(), same as stamina.
-    free_travel_used: int = 0
     # Whether a Health Kit has already been used today. A kit is a small emergency
     # top-up, not a stack you burn to full — one per day (shops.use_consumable enforces
-    # it), cleared on rest() like stamina. Real recovery is time in a hospital ward.
+    # it), cleared on on_new_day(). Real recovery is time in a hospital ward.
     health_kit_used_today: bool = False
 
     def __post_init__(self) -> None:
         if self.health is None:
             self.health = self.max_health
-        if self.stamina is None:
-            self.stamina = self.max_stamina
 
     def advantage_for(self, job_id: str) -> int:
         return self.advantage.get(job_id, 0)
@@ -240,8 +236,18 @@ class Character:
         return BASE_HEALTH + self.body * HEALTH_PER_BODY
 
     @property
-    def max_stamina(self) -> int:
-        return BASE_STAMINA
+    def day(self) -> int:
+        """1-indexed day derived from elapsed_hours — hour 0-23 is day 1, 24-47 is
+        day 2, etc. Not stored: app.spend_time is the only thing that moves the
+        clock, and every day-boundary system reads this rather than a counter."""
+        return int(self.elapsed_hours // HOURS_PER_DAY) + 1
+
+    @property
+    def hour_of_day(self) -> int:
+        """The clock hour within the current day (0-23) — the other half of `day`'s
+        derivation from elapsed_hours, kept beside it so nothing re-derives this
+        independently (see screens.CharacterSheet)."""
+        return int(self.elapsed_hours % HOURS_PER_DAY)
 
     @property
     def is_alive(self) -> bool:
@@ -252,21 +258,6 @@ class Character:
 
     def adjust_rep(self, delta: int) -> None:
         self.rep = max(REP_FLOOR, self.rep + delta)
-
-    def can_afford(self, cost: int) -> bool:
-        return self.stamina >= cost
-
-    def spend_stamina(self, amount: int) -> None:
-        self.stamina -= amount
-
-    def restore_stamina(self, amount: int) -> None:
-        self.stamina = min(self.max_stamina, self.stamina + amount)
-
-    def free_travel_remaining(self) -> int:
-        return max(0, equipped_travel_bonus(self.inventory) - self.free_travel_used)
-
-    def spend_free_travel(self) -> None:
-        self.free_travel_used += 1
 
     def add_temp_bonus(self, stat: str, amount: int) -> None:
         self.temp_bonuses[stat] = self.temp_bonuses.get(stat, 0) + amount
@@ -337,13 +328,24 @@ class Character:
         active = {job.scene.id for job in self.accepted_jobs}
         self.crew = [hire for hire in self.crew if hire.job_id is None or hire.job_id in active]
 
-    def rest(self) -> None:
-        self.day += 1
-        self.stamina = self.max_stamina
-        self.free_travel_used = 0
+    def on_new_day(self, protect_job_id: str | None = None) -> None:
+        """Everything that resets once per day boundary crossed, scoped to Character's
+        own state — called once per day by app._apply_day_tick, which owns the parts
+        needing corp_map/fixers/rng (crew wages, offer/gig refresh, rival AI, corp
+        income) that Character can't reach without an import cycle.
+
+        `protect_job_id` (a Scene.id) exempts one job from expiry pruning this tick —
+        set when the day boundary was crossed by spending time on that very job (or
+        its legwork), so running a job doesn't expire the job out from under itself
+        the moment its own hours_cost pushes past midnight.
+        """
         self.health_kit_used_today = False
         self.temp_bonuses = {}
-        self.accepted_jobs = [job for job in self.accepted_jobs if not job.timing.is_expired(self.day)]
+        self.accepted_jobs = [
+            job
+            for job in self.accepted_jobs
+            if job.scene.id == protect_job_id or not job.timing.is_expired(self.day)
+        ]
         self._discharge_orphan_crew()
 
     def stat(self, name: str) -> int:

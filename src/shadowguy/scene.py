@@ -233,7 +233,7 @@ class Scene:
     start_stage: str = "start"
     kind: SceneKind = SceneKind.JOB
     prepares_for: str | None = None
-    stamina_cost: int = 1
+    hours_cost: int = 4
     # Which corp this scene is run against, and where. target_territory_id is the
     # anchor for scenes that should also move territory control, not just standing.
     # target_location_id is the specific place inside that territory being hit.

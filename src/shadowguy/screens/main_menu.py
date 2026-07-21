@@ -3,6 +3,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
+from shadowguy.character import HOURS_PER_DAY
 from shadowguy.corpmap import (
     PLAYER_OWNED_KINDS,
     SHOP_KINDS,
@@ -165,27 +166,23 @@ class MainMenu(PanelNav, Screen):
                     continue
                 owner = next((c for c in location.characters if c.id == gig.target_character_id), None)
                 who = f" — {owner.name}" if owner else ""
-                label = f"Gig — {gig.title} @ {location.name}{who} ({gig.stamina_cost} stamina)"
-                if not character.can_afford(gig.stamina_cost):
-                    label += " — too tired"
-                elif character.cash < gig.max_cash_loss:
+                label = f"Gig — {gig.title} @ {location.name}{who} ({gig.hours_cost}h)"
+                if character.cash < gig.max_cash_loss:
                     label += f" — can't cover the stake ({gig.max_cash_loss} cash)"
                 items.append(ListItem(Static(label), id=f"gig_{location.id}"))
 
         if self.selected_category == "job":
             for job in character.accepted_jobs:
-                label = f"Job — {job.scene.title} ({job.scene.stamina_cost} stamina) — {job.timing.label}"
+                label = f"Job — {job.scene.title} ({job.scene.hours_cost}h) — {job.timing.label}"
                 if not self._on_site(job.scene):
                     label += f" — travel to {self._district(job.scene)}"
                 elif not job.timing.is_available(character.day):
                     label += " — not yet"
-                elif not character.can_afford(job.scene.stamina_cost):
-                    label += " — too tired"
                 label += matrix_warning(character, job.scene)
                 items.append(ListItem(Static(label), id=f"job_{job.id}"))
             # Display-only: a security contract isn't "run" like a job — it progresses
-            # by ending the day on-site (see the end_day branch below), so it carries
-            # no stamina cost or travel-gated action here.
+            # by ending the day on-site (see the Rest branch below), so it carries
+            # no time cost or travel-gated action here.
             for contract in character.security_contracts:
                 faction = FACTIONS_BY_ID[contract.faction_id]
                 territory = self.app.corp_map.territories[contract.territory_id]
@@ -241,7 +238,7 @@ class MainMenu(PanelNav, Screen):
         self.query_one("#local_locations_panel").display = self.selected_category == "local"
         self.query_one("#local_fixers_panel").display = self.selected_category == "local"
 
-        items.append(ListItem(Static("End the day (rest)"), id="end_day"))
+        items.append(ListItem(Static("Rest"), id="rest"))
         await _replace_items(self.query_one("#activities", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -255,8 +252,8 @@ class MainMenu(PanelNav, Screen):
         if item_id.startswith("security_info_"):
             return
 
-        if item_id == "end_day":
-            self.app.end_day()
+        if item_id == "rest":
+            self.app.spend_time(HOURS_PER_DAY)
             await self._refresh()
             return
 
@@ -265,11 +262,9 @@ class MainMenu(PanelNav, Screen):
             gig = self.app.location_gigs.get(location_id)
             if gig is None:
                 return
-            if not character.can_afford(gig.stamina_cost):
-                return
             if character.cash < gig.max_cash_loss:
                 return
-            character.spend_stamina(gig.stamina_cost)
+            self.app.spend_time(gig.hours_cost)
             self.app.push_screen(SceneScreen(gig))
             return
 
@@ -279,9 +274,7 @@ class MainMenu(PanelNav, Screen):
             if not self._on_site(job.scene):
                 return
             legwork_scene = generate_legwork_for_job(job.scene, self.app.corp_map, self.app.rng)
-            if not character.can_afford(legwork_scene.stamina_cost):
-                return
-            character.spend_stamina(legwork_scene.stamina_cost)
+            self.app.spend_time(legwork_scene.hours_cost, protect_job_id=job.scene.id)
             self.app.push_screen(SceneScreen(legwork_scene))
             return
 
@@ -290,9 +283,9 @@ class MainMenu(PanelNav, Screen):
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
             if not self._on_site(job.scene):
                 return
-            if not job.timing.is_available(character.day) or not character.can_afford(job.scene.stamina_cost):
+            if not job.timing.is_available(character.day):
                 return
-            character.spend_stamina(job.scene.stamina_cost)
+            self.app.spend_time(job.scene.hours_cost, protect_job_id=job.scene.id)
             self.app.push_screen(SceneScreen(job.scene))
             return
 

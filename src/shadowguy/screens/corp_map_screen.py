@@ -18,12 +18,19 @@ from shadowguy.corpmap import (
 from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
+from shadowguy.shops import equipped_travel_reduction
 
 from . import _menu_css
 from .combat_screen import CombatScreen
 
-TRAVEL_STAMINA_COST = 1
+TRAVEL_HOURS_COST = 2.0
 MODIFIER_COLUMN = 13
+
+
+def _travel_hours(character: Character) -> float:
+    """What one hop costs this character right now -- the one place this is computed,
+    so the hint text shown before travelling can never disagree with what's charged."""
+    return TRAVEL_HOURS_COST * (1 - equipped_travel_reduction(character.inventory))
 
 
 class CorpMapScreen(Screen):
@@ -85,12 +92,9 @@ class CorpMapScreen(Screen):
         here = self.app.corp_map.territories[character.location_id]
         if self.selected_id not in here.connections:
             return
-        if character.free_travel_remaining() > 0:
-            character.spend_free_travel()
-        elif character.can_afford(TRAVEL_STAMINA_COST):
-            character.spend_stamina(TRAVEL_STAMINA_COST)
-        else:
-            return
+        # Spend before the move lands: a day boundary crossed mid-hop resolves
+        # tonight's lodging/security at the origin, not the destination.
+        self.app.spend_time(_travel_hours(character))
         character.location_id = self.selected_id
         self._refresh()
         self._maybe_gang_encounter()
@@ -216,17 +220,11 @@ class CorpMapScreen(Screen):
         return f"{''.join(labels).rstrip()}\n{''.join(levels).rstrip()}"
 
     def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
-        stamina = f"{character.stamina}/{character.max_stamina}"
         if t.id == here.id:
-            return f"You are here. Stamina: {stamina}"
+            return f"You are here. Day {character.day}."
         if t.id not in here.connections:
             return f"No route from {here.name} — travel is only to a bordering district."
-        free = character.free_travel_remaining()
-        if free > 0:
-            return f"enter: travel here (free — {free} left today) — Stamina: {stamina}"
-        if not character.can_afford(TRAVEL_STAMINA_COST):
-            return f"Too tired to travel ({TRAVEL_STAMINA_COST} stamina). Rest to move."
-        return f"enter: travel here ({TRAVEL_STAMINA_COST} stamina) — you have {stamina}"
+        return f"enter: travel here ({_travel_hours(character):.1f}h)"
 
 
 class GangTollScreen(ModalScreen):

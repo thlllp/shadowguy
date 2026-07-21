@@ -9,6 +9,7 @@ from shadowguy.shops import (
     PROGRAMS_BY_ID,
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
+    InventoryItem,
     Program,
     Slot,
     active_deck_entry,
@@ -16,6 +17,7 @@ from shadowguy.shops import (
     buy_item,
     buy_price,
     buy_program,
+    equipped_travel_reduction,
     free_program_slots,
     install_program,
     installed_programs_for,
@@ -336,3 +338,23 @@ def test_uninstalled_program_can_be_installed_on_a_different_deck():
     message = install_program(c, 1, PROGRAM_A.id)
     assert c.inventory[1].installed_programs == [PROGRAM_A.id]
     assert PROGRAM_A.name in message
+
+
+def test_vehicle_catalog_has_the_three_expected_reductions():
+    beater, coupe, towncar = (
+        ITEMS_BY_ID["beater_bike"],
+        ITEMS_BY_ID["tuned_coupe"],
+        ITEMS_BY_ID["armored_towncar"],
+    )
+    assert beater.travel_reduction == 0.10
+    assert coupe.travel_reduction == 0.20
+    assert towncar.travel_reduction == 0.25
+
+
+def test_equipped_travel_reduction_reads_only_the_equipped_vehicle():
+    c = Character(name="t")
+    assert equipped_travel_reduction(c.inventory) == 0.0
+    c.inventory.append(InventoryItem("beater_bike", equipped=False))
+    assert equipped_travel_reduction(c.inventory) == 0.0
+    c.inventory[0].equipped = True
+    assert equipped_travel_reduction(c.inventory) == 0.10
