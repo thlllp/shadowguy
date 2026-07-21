@@ -13,10 +13,12 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
+from shadowguy.character import HOURS_PER_DAY
 from shadowguy.combat import ENEMY_TIERS, ActionKind
-from shadowguy.corpmap import LocationKind, expansion_candidates
+from shadowguy.corpmap import Location, LocationKind, expansion_candidates, has_home, lodging_cost
 from shadowguy.factions import FACTIONS
-from shadowguy.jobs import generate_job
+from shadowguy.fixer import JobOffer
+from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
@@ -35,7 +37,8 @@ from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
 from shadowguy.screens.scene_screen import SceneScreen
-from shadowguy.screens.shop_screens import ShopScreen
+from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
+from shadowguy.shops import HOSPITAL_STAY_COST
 from textual.widgets import Collapsible, ListView
 
 
@@ -169,7 +172,7 @@ def test_corp_main_menu_has_sidebar_categories():
             assert [item.id for item in categories.children] == ["cat_corp", "cat_map", "cat_contacts"]
             # The corp's own action list (inherited from CorpScreen) is visible
             # inline beside the sidebar, not something you have to navigate to.
-            assert any(item.id == "end_day" for item in app.screen.query_one("#corp_list", ListView).children)
+            assert any(item.id == "rest" for item in app.screen.query_one("#corp_list", ListView).children)
 
             await pilot.click("#cat_map")
             await pilot.pause()
@@ -573,7 +576,143 @@ def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
     run(body())
 
 
-def test_corp_screen_pick_faction_expand_and_end_day():
+def test_travel_never_refused_regardless_of_hours_already_spent():
+    """No exhaustion cap: chaining travel hops never gets refused for "being too
+    tired" the way stamina used to block it -- time just keeps accumulating."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+
+            here_id = app.character.location_id
+            for _ in range(15):
+                neighbor_id = app.corp_map.territories[here_id].connections[0]
+                screen.selected_id = neighbor_id
+                screen._refresh()
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                assert app.character.location_id == neighbor_id
+                here_id = neighbor_id
+
+            # 15 hops well past a single day's worth of hours, with no refusal above.
+            assert app.character.elapsed_hours > HOURS_PER_DAY
+
+    run(body())
+
+
+def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
+    """spend_time's per-boundary loop only ever fires once with today's in-game costs
+    (nothing spends >=2*HOURS_PER_DAY in one call) -- this proves the loop itself
+    actually iterates more than once when a spend crosses more than one boundary,
+    since no real call site exercises that path."""
+    from shadowguy.corp_turn import CorpState, collect_income
+    from shadowguy.runners import RIVAL_RUNNERS
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test():
+            app.corp_state = CorpState(faction_id=FACTIONS[0].id)
+            one_day_income = collect_income(app.corp_state, app.corp_map)
+            assert one_day_income > 0
+            cash_before = app.corp_state.cash
+
+            app.spend_time(HOURS_PER_DAY * 2 + 3)
+
+            assert app.character.day == 3
+            assert app.corp_state.cash == cash_before + 2 * one_day_income
+            # rival_actions must accumulate across both boundaries crossed in this one
+            # spend, not just keep the last day's -- one action per non-player faction
+            # plus one per not-on-crew rival runner, per day ticked.
+            actions_per_day = (len(FACTIONS) - 1) + len(RIVAL_RUNNERS)
+            assert len(app.rival_actions) == 2 * actions_per_day
+
+    run(body())
+
+
+def test_hospital_stay_advances_one_day_and_skips_the_lodging_charge():
+    """A hospital stay spends exactly HOURS_PER_DAY hours with skip_night_effects=True
+    -- it still ticks the day over (crew wages, offer refresh, etc.) but must not also
+    charge lodging that night, since the stay already covers room and board."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # The start tile always carries the runner's free apartment (has_home), which
+            # would make a lodging charge zero regardless -- move to any territory with
+            # no home and a nonzero lodging cost, so a missed double-charge would
+            # actually show up (a generated map's Development can be 0, especially on
+            # neutral ground, so scan rather than assume the first non-home neighbor).
+            territory = next(
+                t for t in app.corp_map.territories.values()
+                if not has_home(t) and lodging_cost(t) > 0
+            )
+            app.character.location_id = territory.id
+
+            hospital_location = Location(id="test_hospital", name="Test Ward", kind=LocationKind.HOSPITAL)
+            app.character.adjust_health(-10)
+            hurt_health = app.character.health
+            day_before = app.character.day
+            cash_before = app.character.cash
+
+            app.push_screen(HospitalScreen(hospital_location))
+            await pilot.pause()
+            await pilot.click("#stay")
+            await pilot.pause()
+
+            assert app.character.day == day_before + 1
+            assert app.character.health > hurt_health
+            # Only the flat hospital fee was charged -- no separate lodging on top.
+            assert app.character.cash == cash_before - HOSPITAL_STAY_COST
+
+    run(body())
+
+
+def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_crew():
+    """Regression test: the job-run handler used to call spend_time() (charging the
+    job's own hours_cost) before pushing its Scene, and if that spend crossed
+    midnight, the resulting day tick would prune the very job -- and discharge any
+    crew hired for it -- out from under itself. protect_job_id (threaded through
+    spend_time) exists to stop exactly this."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            scene, _timing = generate_job(day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(0))
+            # A hard scheduled-day job due exactly today, run late enough that its
+            # own hours_cost (8 or 12) pushes elapsed_hours past midnight.
+            offer = JobOffer(
+                id="offer_1", fixer_id="fx", scene=scene, timing=JobTiming(scheduled_day=1), offered_day=1
+            )
+            app.character.accepted_jobs.append(offer)
+            app.character.location_id = scene.target_territory_id
+            app.character.hire_for_job("runner_specter", scene.id)
+            app.character.elapsed_hours = HOURS_PER_DAY - 1
+
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_job")
+            await pilot.pause()
+            await pilot.click(f"#job_{offer.id}")
+            await pilot.pause()
+
+            assert isinstance(app.screen, SceneScreen)
+            assert app.character.day == 2  # the job's own hours_cost crossed midnight
+            assert offer in app.character.accepted_jobs  # not pruned out from under itself
+            assert app.character.on_crew("runner_specter")  # crew hire survived too
+
+    run(body())
+
+
+def test_corp_screen_pick_faction_expand_and_rest():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
@@ -614,10 +753,12 @@ def test_corp_screen_pick_faction_expand_and_end_day():
             assert app.corp_state.daily_action_used is True
 
             day_before = app.character.day
+            hours_before = app.character.elapsed_hours
             cash_before = app.corp_state.cash
-            await pilot.click("#end_day")
+            await pilot.click("#rest")
             await pilot.pause()
             assert app.character.day == day_before + 1
+            assert app.character.elapsed_hours == hours_before + HOURS_PER_DAY
             assert app.corp_state.daily_action_used is False
             assert app.corp_state.cash >= cash_before  # territory income collected
 
@@ -653,11 +794,11 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             research_ids = {item.id for item in research_list.children}
             assert research_ids == {"build_lab", "build_efficiency"}
 
-            # Neither set of ids leaked into the territory/end-day list.
+            # Neither set of ids leaked into the territory/rest list.
             corp_list_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert "train_scientist" not in corp_list_ids
             assert "build_lab" not in corp_list_ids
-            assert "end_day" in corp_list_ids
+            assert "rest" in corp_list_ids
 
             scientists_before = app.corp_state.scientists
             await pilot.click("#train_scientist")

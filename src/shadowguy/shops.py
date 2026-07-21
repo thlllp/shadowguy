@@ -2,8 +2,8 @@
 
 Item is persistent stat-boosting gear (bought once, equipped/stowed, never
 used up). Consumable is single-use: buying it appends to Character.consumables,
-and using it pops that entry and applies a one-off effect (heal, restore
-stamina, or a temporary stat boost that clears on Character.rest()).
+and using it pops that entry and applies a one-off effect (heal, or a
+temporary stat boost that clears on Character.on_new_day()).
 
 These locations can land on neutral ground or in a corp district's
 non-specialty slot (see corpmap.FILLER_KINDS), so a job can target one —
@@ -67,7 +67,7 @@ class Slot(Enum):
 # main-hand and off-hand piece) rather than 1 like the wearable slots, so a
 # two-handed weapon (Item.two_handed) costs both. VEHICLE is 1 like the
 # wearable slots — you only ever have one ride active at a time, even if you
-# own more (see Item.travel_bonus).
+# own more (see Item.travel_reduction).
 SLOT_CAPACITY: dict[Slot, int] = {
     Slot.HEADWEAR: 1,
     Slot.FACEWEAR: 1,
@@ -122,12 +122,11 @@ class Item:
     # core stat and so every skill layered on it — this is for gear that's specialized
     # rather than generally useful. Same wearable-only restriction as `defense`.
     skill_bonuses: dict[str, int] = field(default_factory=dict)
-    # Only meaningful (and only valid, 1-5) on a Slot.VEHICLE item: free travel
-    # moves (CorpMapScreen.action_travel) it grants per day, refilled on
-    # Character.rest() rather than consumed from the shared stamina pool — a
-    # bigger ride buys back more of the day, it doesn't make any single trip
-    # cheaper.
-    travel_bonus: int = 0
+    # Only meaningful (and only valid, a fraction strictly between 0 and 1) on a
+    # Slot.VEHICLE item: the fraction it cuts off TRAVEL_HOURS_COST
+    # (CorpMapScreen.action_travel) on every hop — a bigger ride makes each trip
+    # cheaper, computed fresh per hop rather than metered against a daily allowance.
+    travel_reduction: float = 0.0
     # Minimum standing with this shop's owner (LocalCharacter) required to see
     # and buy the item. 0 = no gate (all current items). Tier 2 items use 2
     # (see _CATALOG_ROWS). Hidden from the shop UI until the runner reaches
@@ -181,14 +180,13 @@ def bonus_text(item: Item) -> str:
         parts.append(f"{item.stun_damage} stun")
     if item.defense:
         parts.append(f"+{item.defense} defense")
-    if item.travel_bonus:
-        parts.append(f"+{item.travel_bonus} free travel/day")
+    if item.travel_reduction:
+        parts.append(f"-{item.travel_reduction:.0%} travel time")
     return ", ".join(parts)
 
 
 class EffectKind(Enum):
     HEAL = "heal"
-    RESTORE_STAMINA = "restore_stamina"
     TEMP_STAT_BOOST = "temp_stat_boost"  # stat name comes from Consumable.stat
     # The three below only mean anything inside a fight, and are spent by combat.py
     # rather than by use_consumable — see COMBAT_ONLY_EFFECTS.
@@ -207,7 +205,7 @@ class EffectKind(Enum):
 # a fight would be the cheapest possible place to spend a kit — top up, swing again, top
 # up. That turns a fight from a thing you survive into a thing you grind, and it makes
 # health (the resource the whole damage curve is denominated in) refundable mid-encounter.
-# You patch yourself up *after*, on your own time. Stamina and chems are out for the same
+# You patch yourself up *after*, on your own time. Chems are out for the same
 # reason: a fight is not the place to come up on a stim.
 COMBAT_ONLY_EFFECTS = frozenset(
     {EffectKind.COMBAT_DAMAGE_ALL, EffectKind.COMBAT_STUN, EffectKind.COMBAT_ESCAPE}
@@ -229,8 +227,8 @@ class Consumable:
 
 # id, name, price, bonuses, slot, defense, then for weapons only: skill, damage,
 # concealment, two_handed, then skill_bonuses (a wearable's per-skill bonus, e.g.
-# Slippers' Stealth), then travel_bonus (a Slot.VEHICLE item's free travel
-# moves per day, e.g. Beater Bike), then min_standing (tier gate), then
+# Slippers' Stealth), then travel_reduction (a Slot.VEHICLE item's percentage cut
+# off travel time, e.g. Beater Bike), then min_standing (tier gate), then
 # recharge_rounds (weapon cooldown between shots), and finally stun_damage
 # (non-lethal knockout damage). A weapon's skill is what its attack rolls in combat and
 # its damage is what a hit takes off — the pool spans blunt/short_blade/long_blade/
@@ -259,13 +257,13 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("taser_m5", "Taser (M5)", 600, {}, Slot.WEAPON, 0, "misc",
          0,   # damage (lethal)
          5,   # concealment
-         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_bonus, min_standing
+         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_reduction, min_standing
          2,   # recharge_rounds
          5),  # stun_damage
         ("taser_h6", "Taser (H6)", 800, {}, Slot.WEAPON, 0, "misc",
          0,   # damage (lethal)
          4,   # concealment
-         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_bonus, min_standing
+         False, {}, 0, 0,  # two_handed, skill_bonuses, travel_reduction, min_standing
          1,   # recharge_rounds
          6),  # stun_damage
         # Tier 2 — requires standing 2 with the gunsmith to browse the back room.
@@ -286,8 +284,8 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ),
     ],
     LocationKind.AUTO_DEALER: [
-        ("beater_bike", "Beater Bike", 200, {"cool": 1}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 1),
-        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 2),
+        ("beater_bike", "Beater Bike", 200, {"cool": 1}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 0.10),
+        ("tuned_coupe", "Tuned Coupe", 500, {"cool": 2}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 0.20),
         (
             "armored_towncar",
             "Armored Towncar",
@@ -300,14 +298,14 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
             0,
             False,
             {},
-            3,
+            0.25,
         ),
     ],
     # Persistent +body gear moved out in favor of the consumables below.
     LocationKind.PHARMACY: [],
     LocationKind.COMPUTER_STORE: [
         # id, name, price, bonuses, slot(None=deck), defense, skill, damage, concealment,
-        # two_handed, skill_bonuses, travel_bonus, min_standing, recharge_rounds,
+        # two_handed, skill_bonuses, travel_reduction, min_standing, recharge_rounds,
         # stun_damage, tag, program_slots (a deck's matrix-program capacity).
         ("burner_deck", "Burner Deck", 200, {"intelligence": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         (
@@ -433,10 +431,10 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: only a wearable item can have skill_bonuses")
     for _skill_id in _item.skill_bonuses:
         skill_for(_skill_id)
-    if _item.travel_bonus and _item.slot is not Slot.VEHICLE:
-        raise ValueError(f"{_item.id}: only a Slot.VEHICLE item can have travel_bonus")
-    if _item.travel_bonus and not (1 <= _item.travel_bonus <= 5):
-        raise ValueError(f"{_item.id}: travel_bonus must be 1-5")
+    if _item.travel_reduction and _item.slot is not Slot.VEHICLE:
+        raise ValueError(f"{_item.id}: only a Slot.VEHICLE item can have travel_reduction")
+    if _item.travel_reduction and not (0 < _item.travel_reduction < 1):
+        raise ValueError(f"{_item.id}: travel_reduction must be a fraction between 0 and 1")
     if _item.min_standing < 0:
         raise ValueError(f"{_item.id}: min_standing must be >= 0")
     if _item.recharge_rounds and not _is_weapon:
@@ -453,7 +451,6 @@ for _item in ITEMS_BY_ID.values():
 _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, str | None, int]]] = {
     LocationKind.PHARMACY: [
         ("health_kit", "Health Kit", 100, EffectKind.HEAL, 5, None),
-        ("energy_drink", "Energy Drink", 60, EffectKind.RESTORE_STAMINA, 2, None),
         ("chem_x", "Chem X", 150, EffectKind.TEMP_STAT_BOOST, 2, "body"),
         ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "intelligence"),
         # Tier 2 — stronger stock the pharmacist reserves for regulars.
@@ -597,8 +594,8 @@ def equipped_skill_bonus(inventory: list[InventoryItem], skill_id: str) -> int:
     return sum(item.skill_bonuses.get(skill_id, 0) for item in _equipped_items(inventory))
 
 
-def equipped_travel_bonus(inventory: list[InventoryItem]) -> int:
-    return sum(item.travel_bonus for item in _equipped_items(inventory))
+def equipped_travel_reduction(inventory: list[InventoryItem]) -> float:
+    return sum(item.travel_reduction for item in _equipped_items(inventory))
 
 
 def active_deck_entry(inventory: list[InventoryItem]) -> tuple[InventoryItem, Item] | None:
@@ -753,12 +750,9 @@ def use_consumable(character: "Character", index: int) -> str:
         character.adjust_health(consumable.amount)
         character.health_kit_used_today = True
         return f"+{character.health - before} Health"
-    if consumable.effect is EffectKind.RESTORE_STAMINA:
-        character.restore_stamina(consumable.amount)
-        return f"+{consumable.amount} Stamina"
     if consumable.effect is EffectKind.TEMP_STAT_BOOST:
         character.add_temp_bonus(consumable.stat, consumable.amount)
-        return f"+{consumable.amount} {consumable.stat.capitalize()} until next rest"
+        return f"+{consumable.amount} {consumable.stat.capitalize()} until the next day"
     # Every non-combat effect is handled above; a new EffectKind that is neither
     # listed in COMBAT_ONLY_EFFECTS nor given a branch here would otherwise be silently
     # eaten (the item spent, nothing applied).

@@ -39,27 +39,56 @@ class ShadowguyApp(App):
         self.corp_state: CorpState | None = None
         self.corp_only = False
 
-    def advance_day(self) -> None:
-        self.character.rest()
+    def spend_time(
+        self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
+    ) -> None:
+        """The single chokepoint that advances the clock — travel, every job/gig/
+        legwork run, a hospital stay, and the Rest action all funnel through this
+        instead of the old stamina spend. Firing a day tick is a side effect of
+        crossing midnight, not something the player triggers directly: whichever
+        action happens to push elapsed_hours past a multiple of HOURS_PER_DAY
+        fires it, at wherever the runner currently is.
+
+        `protect_job_id` (a Scene.id) is passed by the job/legwork run handlers so
+        the job being run right now can't be expired out from under itself by the
+        very tick its own hours_cost triggers — see Character.on_new_day.
+
+        The loop below only ever runs once with today's costs (no single spend
+        reaches 2*HOURS_PER_DAY), but it's written to handle more than one
+        boundary crossing in a single spend — e.g. a future long job — rather
+        than assuming one tick per call. rival_actions is reset once here (not
+        inside the loop) so a spend crossing several boundaries accumulates every
+        day's actions into one list instead of only keeping the last day's.
+        """
+        old_day = self.character.day
+        self.character.elapsed_hours += hours
+        new_day = self.character.day
+        if new_day > old_day:
+            self.rival_actions = []
+            for day in range(old_day + 1, new_day + 1):
+                self._apply_day_tick(day, skip_night_effects, protect_job_id)
+
+    def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
+        """Everything that used to fire from a deliberate "End the day" click —
+        now fired once per day boundary crossed, by whatever action crossed it."""
+        self.character.on_new_day(protect_job_id)
         for name in self.character.pay_crew_wages():
             self.notify(f"{name} walked off the crew — you missed payroll.", severity="warning")
-        expire_offers(self.fixers, self.character.day)
-        refresh_offers(self.fixers, self.character.day, self.corp_map, self.rng)
-        refresh_security_offers(self.fixers, self.character.day, self.corp_map, self.rng)
-        refresh_gigs(self.corp_map, self.location_gigs, self.character.day, self.rng)
+        expire_offers(self.fixers, day)
+        refresh_offers(self.fixers, day, self.corp_map, self.rng)
+        refresh_security_offers(self.fixers, day, self.corp_map, self.rng)
+        refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         player_faction_id = self.corp_state.faction_id if self.corp_state else None
-        self.rival_actions = resolve_rival_day(
-            self.character, self.corp_map, self.character.day, self.rng, player_faction_id
-        )
+        self.rival_actions += resolve_rival_day(self.character, self.corp_map, day, self.rng, player_faction_id)
         if self.corp_state:
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
             self.corp_state.daily_action_used = False
 
-    def end_day(self) -> None:
-        """Charge lodging/resolve the night's security contracts and turn the day
-        over — shared by MainMenu's "End the day" row and CorpScreen's, since
-        it's the same character/clock regardless of which screen ends it."""
+        if skip_night_effects:
+            return
+        # A hospital stay skips this block (it already covers room and board) —
+        # everything above still fires the same as any other crossing.
         character = self.character
         here_id = character.location_id
         here = self.corp_map.territories[here_id]
@@ -98,7 +127,6 @@ class ShadowguyApp(App):
             paid = min(cost, character.cash)
             character.cash -= paid
             self.notify(f"Paid {paid}eb for lodging in {here.name}.")
-        self.advance_day()
 
     def action_quit_menu(self) -> None:
         self.push_screen(QuitMenu())

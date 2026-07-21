@@ -80,7 +80,7 @@ class CharacterSheet(Static):
         ) or "none"
         return (
             f"{c.name}\n"
-            f"Day {c.day}   Stamina: {c.stamina}/{c.max_stamina}   Health: {c.health}/{c.max_health}\n"
+            f"Day {c.day}, {c.hour_of_day:02d}:00   Health: {c.health}/{c.max_health}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
             f"Cool: {c.stat('cool')}\n"

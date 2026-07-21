@@ -86,7 +86,15 @@ SAVE_SUFFIX = ".save"
 # so load_state knows to reopen CorpMainMenu instead of MainMenu.
 # v28 added CorpMap.relations (a pre-v28 pickled CorpMap lacks the field): standing
 # between every Faction/Gang pair, independent of the player.
-SAVE_VERSION = 28
+# v29 replaced Character.day (a stored int) with elapsed_hours (a float; day became a
+# derived property) and removed stamina (stamina/max_stamina/can_afford/spend_stamina/
+# restore_stamina, BASE_STAMINA) and free-travel metering (free_travel_used/
+# free_travel_remaining/spend_free_travel) entirely -- runner-mode actions now spend
+# hours via ShadowguyApp.spend_time. Also renamed Scene.stamina_cost to hours_cost (a
+# pre-v29 pickled Scene -- inside an accepted job, a location's gig, or a fixer's
+# offers -- has the old field instead). A pre-v29 pickled Character has day/stamina/
+# free_travel_used instead of elapsed_hours.
+SAVE_VERSION = 29
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

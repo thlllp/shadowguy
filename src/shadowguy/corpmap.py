@@ -891,7 +891,7 @@ def _player_start(region: list[Cell], edges: set[frozenset[Cell]], rng: random.R
 
     The rim is also where the dead ends are, so demand a way out: MIN_START_DEGREE
     connections. A degree-1 start makes every trip a there-and-back and taxes a
-    stamina budget that already has to cover gigs, jobs and legwork.
+    time budget that already has to cover gigs, jobs and legwork.
     """
     degree = Counter(cell for edge in edges for cell in edge)
     candidates = [c for c in region if _on_grid_edge(c) and degree[c] >= MIN_START_DEGREE]

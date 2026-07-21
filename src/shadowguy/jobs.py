@@ -1022,7 +1022,7 @@ def generate_job(
         id=job_id,
         title=f"{archetype.name}: {faction.name} ({territory.name})",
         kind=SceneKind.JOB,
-        stamina_cost=2 if tier == 0 else 3,
+        hours_cost=8 if tier == 0 else 12,
         start_stage=stage_ids[0],
         stages=stages,
         target_faction_id=faction.id,

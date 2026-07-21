@@ -2,7 +2,8 @@
 Factions and independent Runners each get a daily action on day-advance.
 
 A parallel resolution module, like security.py/encounters.py — not a Scene.
-Called once per day from ShadowguyApp.advance_day(), the same tick that pays
+Called once per day from ShadowguyApp's day tick (app._apply_day_tick, fired by
+app.spend_time whenever elapsed time crosses midnight), the same tick that pays
 crew wages and refreshes gigs/offers.
 
 Factions do something real: a faction can push onto neutral ground bordering

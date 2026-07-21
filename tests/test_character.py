@@ -6,6 +6,7 @@ from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
     HEALTH_PER_BODY,
+    HOURS_PER_DAY,
     MAX_SKILL_RANK,
     REP_FLOOR,
     SKILL_RANK_COST,
@@ -23,10 +24,20 @@ def test_max_health_from_raw_body_not_stat():
     assert c.max_health == BASE_HEALTH + 3 * HEALTH_PER_BODY
 
 
-def test_starting_health_and_stamina_default_to_max():
+def test_starting_health_defaults_to_max():
     c = Character(name="t")
     assert c.health == c.max_health
-    assert c.stamina == c.max_stamina
+
+
+def test_day_is_derived_from_elapsed_hours():
+    c = Character(name="t")
+    assert c.day == 1
+    c.elapsed_hours = HOURS_PER_DAY - 1
+    assert c.day == 1
+    c.elapsed_hours = HOURS_PER_DAY
+    assert c.day == 2
+    c.elapsed_hours = HOURS_PER_DAY * 2 + 5
+    assert c.day == 3
 
 
 def test_adjust_health_floors_at_zero_and_caps_at_max():
@@ -159,26 +170,20 @@ def test_advantage_bank_is_per_job_and_consumed_once():
     assert c.advantage_for("job_1") == 0
 
 
-def test_rest_advances_day_refills_stamina_and_clears_daily_flags():
+def test_on_new_day_clears_daily_flags():
     c = Character(name="t")
-    c.spend_stamina(c.max_stamina)
-    c.free_travel_used = 2
     c.health_kit_used_today = True
     c.temp_bonuses["strength"] = 3
-    day_before = c.day
-    c.rest()
-    assert c.day == day_before + 1
-    assert c.stamina == c.max_stamina
-    assert c.free_travel_used == 0
+    c.on_new_day()
     assert c.health_kit_used_today is False
     assert c.temp_bonuses == {}
 
 
-def test_rest_does_not_heal():
+def test_on_new_day_does_not_heal():
     c = Character(name="t")
     c.adjust_health(-5)
     hurt = c.health
-    c.rest()
+    c.on_new_day()
     assert c.health == hurt
 
 
@@ -206,14 +211,6 @@ def test_remove_job_discharges_orphaned_for_job_crew_but_not_indefinite():
     c.remove_job("job_1")
     assert not c.on_crew("runner_a")
     assert c.on_crew("runner_b")
-
-
-def test_can_afford_and_spend_stamina():
-    c = Character(name="t")
-    assert c.can_afford(c.max_stamina)
-    assert not c.can_afford(c.max_stamina + 1)
-    c.spend_stamina(2)
-    assert c.stamina == c.max_stamina - 2
 
 
 def test_pay_crew_wages_charges_indefinite_hires_and_drops_who_you_cant_cover():

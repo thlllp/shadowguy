@@ -4,6 +4,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
+from shadowguy.character import HOURS_PER_DAY
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     RESEARCH_PER_ASSISTANT,
@@ -143,7 +144,7 @@ class CorpScreen(Screen):
             items.append(ListItem(Static(label), id=f"expand_{territory_id}"))
         if not candidates:
             items.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
-        items.append(ListItem(Static("End the day"), id="end_day"))
+        items.append(ListItem(Static("Rest"), id="rest"))
         await _replace_items(list_view, items)
 
         academy_items = []
@@ -190,8 +191,8 @@ class CorpScreen(Screen):
             await self._refresh()
             return
 
-        if item_id == "end_day":
-            self.app.end_day()
+        if item_id == "rest":
+            self.app.spend_time(HOURS_PER_DAY)
             await self._refresh()
             return
 

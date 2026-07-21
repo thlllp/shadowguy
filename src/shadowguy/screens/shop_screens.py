@@ -2,6 +2,7 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
+from shadowguy.character import HOURS_PER_DAY
 from shadowguy.corpmap import (
     Location,
     LocationKind,
@@ -78,7 +79,7 @@ class FixerOffersScreen(Screen):
         items = [
             ListItem(
                 Static(
-                    f"{offer.scene.title} ({offer.scene.stamina_cost} stamina) — {offer.timing.label}"
+                    f"{offer.scene.title} ({offer.scene.hours_cost}h) — {offer.timing.label}"
                     f"{matrix_warning(character, offer.scene)}"
                 ),
                 id=offer.id,
@@ -439,7 +440,7 @@ class HospitalScreen(Screen):
         if message is None:
             self.notify("Can't afford a night's care.", severity="warning")
             return
-        self.app.advance_day()
+        self.app.spend_time(HOURS_PER_DAY, skip_night_effects=True)
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()

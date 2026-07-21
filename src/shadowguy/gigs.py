@@ -43,8 +43,8 @@ if len(GIG_DIFFICULTY) != len(GIG_CASH):
     raise ValueError("GIG_DIFFICULTY and GIG_CASH must cover the same tiers")
 
 # A crit pays ~1.6x and a point of rep; a plain success pays cash and one point of the
-# character's standing. A plain botch never costs health — the stamina spent attempting
-# it (Scene.stamina_cost, paid upfront whether it lands or not) is the whole price of a
+# character's standing. A plain botch never costs health — the hours spent attempting
+# it (Scene.hours_cost, paid upfront whether it lands or not) is the whole price of a
 # clean miss — but it does cost a point of standing with the character who owns the gig
 # and a point of street rep. A critical botch is a plain one gone actually wrong (you
 # hurt yourself doing something stupid, not just missed): it costs the same standing hit,
