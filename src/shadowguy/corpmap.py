@@ -11,6 +11,7 @@ from shadowguy.factions import (
     FactionSpecialty,
 )
 from shadowguy.gangs import GANG_RANKS, GANGS, GANGS_BY_ID, Gang
+from shadowguy.relations import Relations, generate_relations
 from shadowguy.skills import skill_for
 
 OWNER_NAMES = {"neutral": "Unclaimed"}
@@ -221,6 +222,9 @@ class Territory:
 class CorpMap:
     territories: dict[str, Territory]
     player_start_id: str
+    # Hand-built test fixtures that don't care about faction/gang standing can omit
+    # this; generate_corp_map always fills it via generate_relations.
+    relations: Relations = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for territory in self.territories.values():
@@ -1096,4 +1100,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             if location.kind is LocationKind.REAL_ESTATE:
                 location.listings = rng.sample(for_sale, k=min(REAL_ESTATE_LISTING_COUNT, len(for_sale)))
 
-    return CorpMap(territories=territories, player_start_id=ids[start_cell])
+    return CorpMap(
+        territories=territories,
+        player_start_id=ids[start_cell],
+        relations=generate_relations(rng),
+    )
