@@ -14,17 +14,6 @@ if TYPE_CHECKING:
     from shadowguy.security import SecurityContract
 
 BASE_HEALTH = 10
-
-
-@dataclass
-class CrewHire:
-    """One runner engaged on your crew, and on what terms. `job_id` set = signed for that
-    single accepted job (they take runners.RivalRunner.job_cut of its payout, and the
-    engagement ends when the job does); `job_id` None = kept on indefinitely (charged
-    runners.RivalRunner.daily_cost every rest). A runner has at most one live hire."""
-
-    runner_id: str
-    job_id: str | None = None
 HEALTH_PER_BODY = 5
 # Length of a day for Character.day's derivation from elapsed_hours (below) — also
 # how many hours Rest/a hospital stay spend, so either one deterministically
@@ -80,6 +69,17 @@ REP_FLOOR = -10
 # would otherwise raise from stat() the first time something rolled it.
 if any(skill.stat not in CORE_STATS for skill in SKILLS):
     raise ValueError("every Skill.stat must be one of CORE_STATS")
+
+
+@dataclass
+class CrewHire:
+    """One runner engaged on your crew, and on what terms. `job_id` set = signed for that
+    single accepted job (they take runners.RivalRunner.job_cut of its payout, and the
+    engagement ends when the job does); `job_id` None = kept on indefinitely (charged
+    runners.RivalRunner.daily_cost every day tick). A runner has at most one live hire."""
+
+    runner_id: str
+    job_id: str | None = None
 
 
 @dataclass

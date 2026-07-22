@@ -54,6 +54,8 @@ SAVE_SUFFIX = ".save"
 # as v7's `tactical` field) -- a pre-v14 pickled Stage (inside an accepted job) lacks it.
 # v15 added Data Heist / matrix combat: scene.Stage gained a `matrix` field (same shape
 # of break again) -- a pre-v15 pickled Stage lacks it.
+# v16 added gang standing and turf encounters (encounters.py): Character.gang_standing
+# (a pre-v16 pickled Character lacks the field).
 # v17 added rival AI actions (rivals.py): ShadowguyApp.rival_actions (a pre-v17 save
 # lacks the key).
 # v18 added cyberdeck programs: Character.owned_programs and InventoryItem.
