@@ -6,22 +6,32 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
-    RESEARCH_PER_ASSISTANT,
+    DEVELOPMENT_BUMP_COST,
+    SURVEILLANCE_BUMP_COST,
+    TECHNOLOGIES,
+    TECHNOLOGIES_BY_ID,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
+    assistant_rate,
     build_efficiency_upgrade,
     build_lab,
+    development_targets,
     expand_into,
     expansion_cost,
+    has_technology,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
     owned_research_facility,
+    raise_development,
+    raise_surveillance,
     research_rate,
+    research_technology,
+    surveillance_targets,
     train_employees,
 )
-from shadowguy.corpmap import expansion_candidates
+from shadowguy.corpmap import TerritoryModifier, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 
 from . import PANEL_NAV_BINDINGS, PanelNav, _replace_items
@@ -57,11 +67,11 @@ class CorpScreen(Screen):
     # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
     # each to its actual item count instead.
     CSS = """
-    #corp_list, #academy_list, #research_list {
+    #corp_list, #academy_list, #research_list, #tech_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel {
+    #academy_panel, #research_panel, #tech_panel {
         height: auto;
     }
     """
@@ -74,6 +84,7 @@ class CorpScreen(Screen):
         yield Collapsible(
             ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
         )
+        yield Collapsible(ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -98,12 +109,15 @@ class CorpScreen(Screen):
             await _replace_items(list_view, items)
             await _replace_items(academy_list, [])
             await _replace_items(research_list, [])
+            await _replace_items(self.query_one("#tech_list", ListView), [])
             self.query_one("#academy_panel").display = False
             self.query_one("#research_panel").display = False
+            self.query_one("#tech_panel").display = False
             return
 
         self.query_one("#academy_panel").display = True
         self.query_one("#research_panel").display = True
+        self.query_one("#tech_panel").display = True
 
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[corp_state.faction_id]
@@ -119,8 +133,10 @@ class CorpScreen(Screen):
             working_assistants = min(corp_state.research_assistants, assist_capacity)
             facility_line = (
                 f"\nResearch Facility: tier {facility.research_tier}, "
-                f"{working}/{capacity} scientists at work ({research_rate(facility)}rp/scientist), "
-                f"{working_assistants}/{assist_capacity} assistants at work ({RESEARCH_PER_ASSISTANT}rp/assistant)"
+                f"{working}/{capacity} scientists at work "
+                f"({research_rate(corp_state, facility):g}rp/scientist), "
+                f"{working_assistants}/{assist_capacity} assistants at work "
+                f"({assistant_rate(corp_state):g}rp/assistant)"
             )
         info.update(
             f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
@@ -143,8 +159,42 @@ class CorpScreen(Screen):
             items.append(ListItem(Static(label), id=f"expand_{territory_id}"))
         if not candidates:
             items.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
+
+        # The two modifier bumps are cash-gated and repeatable, so they never
+        # carry the "already acted today" note the expansion rows above do.
+        for territory in surveillance_targets(corp_state, corp_map):
+            level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+            label = (
+                f"Raise Surveillance in {territory.name} "
+                f"({level}→{level + 1}) — {SURVEILLANCE_BUMP_COST}eb"
+            )
+            if SURVEILLANCE_BUMP_COST > corp_state.cash:
+                label += " (can't afford)"
+            items.append(ListItem(Static(label), id=f"surveil_{territory.id}"))
+
+        for territory in development_targets(corp_state, corp_map):
+            level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+            label = f"Develop {territory.name} ({level}→{level + 1}) — {DEVELOPMENT_BUMP_COST}eb"
+            if DEVELOPMENT_BUMP_COST > corp_state.cash:
+                label += " (can't afford)"
+            items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
+
         items.append(ListItem(Static("Rest"), id="rest"))
         await _replace_items(list_view, items)
+
+        tech_items = []
+        for technology in TECHNOLOGIES:
+            if has_technology(corp_state, technology.id):
+                tech_items.append(
+                    ListItem(Static(f"{technology.name} — researched"), id=f"tech_done_{technology.id}")
+                )
+                continue
+            label = f"Research {technology.name} — {technology.cost}rp"
+            if technology.cost > corp_state.research_points:
+                short = technology.cost - corp_state.research_points
+                label += f" (need {short:g}rp more)"
+            tech_items.append(ListItem(Static(label), id=f"tech_{technology.id}"))
+        await _replace_items(self.query_one("#tech_list", ListView), tech_items)
 
         academy_items = []
         for category in EmployeeCategory:
@@ -208,6 +258,41 @@ class CorpScreen(Screen):
             await self._refresh()
             return
 
+        if item_id.startswith("tech_done_"):
+            return
+
+        if item_id.startswith("tech_"):
+            corp_state = self.app.corp_state
+            technology_id = item_id.removeprefix("tech_")
+            if research_technology(corp_state, technology_id):
+                self.notify(f"Researched {TECHNOLOGIES_BY_ID[technology_id].name}.")
+            else:
+                self.notify("Not enough research points.", severity="warning")
+            await self._refresh()
+            return
+
+        if item_id.startswith("surveil_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("surveil_")
+            territory = self.app.corp_map.territories[territory_id]
+            if raise_surveillance(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"Surveillance raised in {territory.name}.")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
+            return
+
+        if item_id.startswith("develop_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("develop_")
+            territory = self.app.corp_map.territories[territory_id]
+            if raise_development(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"{territory.name} builds up. Development raised.")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
+            return
+
         if item_id.startswith("train_"):
             corp_state = self.app.corp_state
             category = EmployeeCategory(item_id.removeprefix("train_"))
@@ -262,7 +347,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
-    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list")
+    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "tech_list")
 
     CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts")]
 
@@ -293,11 +378,11 @@ class CorpMainMenu(PanelNav, CorpScreen):
         padding: 0 1;
     }
 
-    #corp_list, #academy_list, #research_list {
+    #corp_list, #academy_list, #research_list, #tech_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel {
+    #academy_panel, #research_panel, #tech_panel {
         height: auto;
     }
     """
@@ -317,6 +402,9 @@ class CorpMainMenu(PanelNav, CorpScreen):
                     title="Research Facility",
                     collapsed=False,
                     id="research_panel",
+                ),
+                Collapsible(
+                    ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel"
                 ),
                 id="main_panel",
             ),

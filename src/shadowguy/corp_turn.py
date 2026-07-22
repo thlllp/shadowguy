@@ -27,8 +27,32 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
 
 Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility)
 generates research_points every day too, at 1 RP per tier — collect_research is
-the read side of that; nothing spends RP yet, the same deferred-hook shape as
-TerritoryModifier before Development got wired up.
+the read side of that, and research_technology is what finally spends it.
+
+TECHNOLOGIES is the researchable list; both entries are available from the start
+(there's no prerequisite system, and nothing needs one yet). A tech's *effect*
+isn't a field on Technology — it's read wherever it applies, keyed off the id:
+  - Worker Surveillance: collect_income adds WORKER_SURVEILLANCE_INCOME_BONUS
+    per held territory, and surveillance_targets/raise_surveillance only work
+    once it's researched.
+  - Brains 2: scientist_base_rate/assistant_rate return the better per-head
+    research rates, which research_rate and collect_research read. It replaces
+    the base rates rather than stacking with them, but facility efficiency
+    upgrades still stack on top of the scientist rate — the two paths compose.
+    Note this one compounds: faster research buys techs faster.
+
+Neither research_technology nor the two territory bumps below touch
+daily_action_used: RP and cash are their own gates, and the day's one *directed
+move* is for expand/train/build. So a corp turn now has two independent budgets
+— the daily slot, and whatever cash/RP has piled up.
+
+Territory modifiers are no longer generation-only. raise_surveillance and
+raise_development each buy one point of corpmap.TerritoryModifier on a held
+district, and they chain: Development can only be bought once Security AND
+Surveillance clear DEVELOPMENT_MIN_*, so Worker Surveillance is the route to
+developing a district that didn't seed well enough. Note raise_surveillance
+deliberately does NOT re-derive Development the way corpmap._development() does
+at generation time — Development is its own purchase here, not a formula.
 
 A research facility can also be upgraded, two ways, both sharing
 expand_into/train_employees' one daily_action_used slot:
@@ -47,10 +71,19 @@ Leaf-ish: imports corpmap only, never scene or app.
 """
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-from shadowguy.corpmap import CorpMap, Location, LocationKind, Territory, claim_territory, expansion_candidates
+from shadowguy.corpmap import (
+    MODIFIER_MAX,
+    CorpMap,
+    Location,
+    LocationKind,
+    Territory,
+    TerritoryModifier,
+    claim_territory,
+    expansion_candidates,
+)
 
 # First-slice numbers, not balance-simulated.
 STARTING_CASH = 500
@@ -91,6 +124,107 @@ RESEARCH_ASSISTANTS_PER_LAB = 2
 RESEARCH_PER_ASSISTANT = 0.5
 
 
+@dataclass(frozen=True)
+class Technology:
+    """One researchable corp technology. `cost` is in research points — this is
+    the first thing in the game that actually spends them (collect_research had
+    been accruing RP against nothing).
+
+    Effects are *not* fields here: a tech's effect is read where it applies
+    (collect_income for the income bonus, raise_surveillance for the ability),
+    keyed off its id, rather than described by a generic bonus field the reader
+    would then have to hunt for the consumer of. One tech, one place that asks
+    "is it researched?" — the same shape jobs.archetype_specialist uses, derived
+    at the point of use instead of tabulated.
+    """
+
+    id: str
+    name: str
+    cost: int  # research points
+    description: str
+
+
+WORKER_SURVEILLANCE_ID = "worker_surveillance"
+BRAINS_2_ID = "brains_2"
+
+# id, name, cost (RP), description. Both are researchable from the start —
+# there's no prerequisite system, and nothing here needs one yet.
+_TECHNOLOGY_ROWS = (
+    (
+        WORKER_SURVEILLANCE_ID,
+        "Worker Surveillance",
+        10,
+        "Every territory you hold earns +{income}/day, and you can pay {bump}eb "
+        "to raise Surveillance by 1 in any district you hold that isn't already at "
+        f"{MODIFIER_MAX}.",
+    ),
+    (
+        BRAINS_2_ID,
+        "Brains 2",
+        10,
+        "Every working scientist produces {scientist}rp/day instead of "
+        "{base_scientist}, and every working research assistant {assistant}rp/day "
+        "instead of {base_assistant}.",
+    ),
+)
+
+# What Worker Surveillance is worth, in the two places it lands. The income bonus
+# is per *territory* (it exactly doubles TERRITORY_INCOME_BASE), so the tech keeps
+# paying as the corp expands rather than becoming a rounding error.
+WORKER_SURVEILLANCE_INCOME_BONUS = 10
+# Cash per Surveillance bump. Deliberately NOT on the daily_action_used slot —
+# unlike expand/train/build, this is repeatable within a day and cash is its only
+# gate, so the tech's own income bonus partly funds its use.
+SURVEILLANCE_BUMP_COST = 400
+
+# Development is raised as a *purchase*, not re-derived (see raise_development):
+# capital only lands where the block is already both policed and watched, so a
+# district has to clear both thresholds before it can be built up at all. This
+# mirrors _development()'s own "rises with Security and Surveillance" logic
+# without turning it back into an automatic re-derivation. Same cash-gated,
+# repeatable shape as SURVEILLANCE_BUMP_COST, priced steeper because Development
+# is the modifier that actually does something today (it prices runner-side
+# lodging and safehouses — see corpmap.lodging_cost/safehouse_price).
+# First-slice numbers, not balance-simulated.
+DEVELOPMENT_MIN_SECURITY = 3
+DEVELOPMENT_MIN_SURVEILLANCE = 3
+DEVELOPMENT_BUMP_COST = 800
+
+# Brains 2 replaces both per-head research rates outright rather than adding to
+# them — a flat better rate, not a stacking bonus, so there's one number in
+# effect at a time and scientist_base_rate/assistant_rate just pick which.
+# Efficiency upgrades still stack on top of the scientist rate (see
+# research_rate), so the two upgrade paths compose rather than compete.
+# Unlike Worker Surveillance's cash payoff this compounds — it makes research
+# itself faster — which is why it costs the same 10 RP despite looking smaller.
+# First-slice numbers, not balance-simulated.
+BRAINS_2_RESEARCH_PER_SCIENTIST = 1.25
+BRAINS_2_RESEARCH_PER_ASSISTANT = 0.75
+
+# Descriptions are filled in from the constants above rather than repeating the
+# numbers as prose, so a retune can't leave the shop text lying about the effect.
+TECHNOLOGIES = [
+    Technology(
+        id=tech_id,
+        name=name,
+        cost=cost,
+        description=description.format(
+            income=WORKER_SURVEILLANCE_INCOME_BONUS,
+            bump=SURVEILLANCE_BUMP_COST,
+            scientist=BRAINS_2_RESEARCH_PER_SCIENTIST,
+            base_scientist=RESEARCH_PER_SCIENTIST,
+            assistant=BRAINS_2_RESEARCH_PER_ASSISTANT,
+            base_assistant=RESEARCH_PER_ASSISTANT,
+        ),
+    )
+    for tech_id, name, cost, description in _TECHNOLOGY_ROWS
+]
+TECHNOLOGIES_BY_ID = {tech.id: tech for tech in TECHNOLOGIES}
+
+if any(tech.cost <= 0 for tech in TECHNOLOGIES):
+    raise ValueError("a Technology must cost research points to be worth researching")
+
+
 class EmployeeCategory(StrEnum):
     """What a training session at the Academy produces — nothing reads which
     category a hire belongs to yet beyond research_assistants feeding
@@ -118,12 +252,43 @@ class CorpState:
     operatives: int = 0
     research_assistants: int = 0
     daily_action_used: bool = False
+    # Technology ids (TECHNOLOGIES_BY_ID) already researched. A set of ids, the
+    # same shape Character.owned_programs/discovered_fixers use. Research is
+    # permanent — nothing takes a tech back.
+    researched: set[str] = field(default_factory=set)
+
+
+def has_technology(corp_state: CorpState, technology_id: str) -> bool:
+    return technology_id in corp_state.researched
+
+
+def research_technology(corp_state: CorpState, technology_id: str) -> bool:
+    """Spend research points to unlock a Technology permanently. Fails closed (no
+    charge, no mutation) if it's already researched or the corp can't afford it.
+
+    Deliberately NOT on the daily_action_used slot: RP is its own pacing gate
+    (10 RP is ~10 days of research at the base rate), and double-gating a
+    purchase behind the day's one *directed move* would make researching compete
+    with expanding for no design reason. Same call the cash-gated territory
+    bumps below make.
+    """
+    technology = TECHNOLOGIES_BY_ID[technology_id]
+    if has_technology(corp_state, technology_id) or technology.cost > corp_state.research_points:
+        return False
+    corp_state.research_points -= technology.cost
+    corp_state.researched.add(technology_id)
+    return True
 
 
 def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
-    """Flat daily income from every territory the player's faction holds."""
+    """Flat daily income from every territory the player's faction holds, plus
+    WORKER_SURVEILLANCE_INCOME_BONUS per territory once that tech is researched
+    — per territory, not once, so the tech keeps paying as the corp expands."""
     owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
-    return sum(TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
+    bonus = (
+        WORKER_SURVEILLANCE_INCOME_BONUS if has_technology(corp_state, WORKER_SURVEILLANCE_ID) else 0
+    )
+    return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
 def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
@@ -160,10 +325,28 @@ def next_lab_cost(facility: Location) -> int | None:
     return LAB_UPGRADE_COSTS[labs_built]
 
 
-def research_rate(facility: Location) -> int:
-    """RP/day one working scientist adds at this facility: the base rate plus
-    any efficiency upgrades built there."""
-    return RESEARCH_PER_SCIENTIST + (facility.efficiency_upgrades or 0)
+def scientist_base_rate(corp_state: CorpState) -> float:
+    """RP/day one working scientist adds before any facility efficiency upgrade —
+    RESEARCH_PER_SCIENTIST, or Brains 2's better rate once that's researched."""
+    if has_technology(corp_state, BRAINS_2_ID):
+        return BRAINS_2_RESEARCH_PER_SCIENTIST
+    return RESEARCH_PER_SCIENTIST
+
+
+def assistant_rate(corp_state: CorpState) -> float:
+    """RP/day one working research assistant adds. Flat regardless of facility —
+    efficiency upgrades boost scientists only — but Brains 2 raises it."""
+    if has_technology(corp_state, BRAINS_2_ID):
+        return BRAINS_2_RESEARCH_PER_ASSISTANT
+    return RESEARCH_PER_ASSISTANT
+
+
+def research_rate(corp_state: CorpState, facility: Location) -> float:
+    """RP/day one working scientist adds at this facility: the base rate (which
+    Brains 2 raises) plus any efficiency upgrades built there. Takes corp_state
+    because the rate is now a property of the corp's tech as well as the
+    building — the two stack."""
+    return scientist_base_rate(corp_state) + (facility.efficiency_upgrades or 0)
 
 
 def next_efficiency_cost(facility: Location) -> int | None:
@@ -184,7 +367,8 @@ def assistant_capacity(facility: Location) -> int:
 def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     """RP/day from the corp's research facility: its tier directly (1 RP at tier
     1), plus research_rate() for each scientist actually working it, plus
-    RESEARCH_PER_ASSISTANT for each research assistant actually working it.
+    assistant_rate() for each research assistant actually working it. Both
+    per-head rates are raised by the Brains 2 technology.
 
     "Actually working" is the whole mechanic: lab_capacity/assistant_capacity
     cap how many of each count, so employees trained beyond the seats built for
@@ -198,9 +382,93 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     assistants = min(corp_state.research_assistants, assistant_capacity(facility))
     return (
         (facility.research_tier or 0)
-        + scientists * research_rate(facility)
-        + assistants * RESEARCH_PER_ASSISTANT
+        + scientists * research_rate(corp_state, facility)
+        + assistants * assistant_rate(corp_state)
     )
+
+
+def _owned_territories(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Sorted by id, so every list built off this renders in a stable order."""
+    return sorted(
+        (t for t in corp_map.territories.values() if t.owner == corp_state.faction_id),
+        key=lambda t: t.id,
+    )
+
+
+def surveillance_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp holds whose Surveillance isn't already at MODIFIER_MAX.
+    Empty until Worker Surveillance is researched — the tech is what grants the
+    ability at all, not just a discount on it."""
+    if not has_technology(corp_state, WORKER_SURVEILLANCE_ID):
+        return []
+    return [
+        t
+        for t in _owned_territories(corp_state, corp_map)
+        if t.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) < MODIFIER_MAX
+    ]
+
+
+def raise_surveillance(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
+    """Pay SURVEILLANCE_BUMP_COST to raise one held district's Surveillance by 1.
+
+    Repeatable within a day (cash is the only gate — see SURVEILLANCE_BUMP_COST),
+    so unlike expand_into/train_employees this never touches daily_action_used.
+    Fails closed if the tech isn't researched, the district isn't a legal target
+    (not held, or already at MODIFIER_MAX), or the corp can't afford it.
+
+    Deliberately does NOT re-derive TerritoryModifier.DEVELOPMENT, though
+    corpmap._development() reads Surveillance: Development is raised as its own
+    purchase here (raise_development), gated on Security and Surveillance rather
+    than recomputed from them. So a district can sit at high Surveillance and low
+    Development — that's the gap raise_development exists to let the player close,
+    not an inconsistency to auto-correct.
+    """
+    if territory_id not in {t.id for t in surveillance_targets(corp_state, corp_map)}:
+        return False
+    if SURVEILLANCE_BUMP_COST > corp_state.cash:
+        return False
+    territory = corp_map.territories[territory_id]
+    corp_state.cash -= SURVEILLANCE_BUMP_COST
+    territory.modifiers[TerritoryModifier.SURVEILLANCE] = (
+        territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) + 1
+    )
+    return True
+
+
+def development_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp holds that are ready to be built up: Development below
+    MODIFIER_MAX, and both Security and Surveillance already at their thresholds.
+    Needs no technology — a district seeded well enough can be developed from day
+    one; Worker Surveillance is simply how a district that *isn't* gets there."""
+    return [
+        t
+        for t in _owned_territories(corp_state, corp_map)
+        if t.modifiers.get(TerritoryModifier.DEVELOPMENT, 0) < MODIFIER_MAX
+        and t.modifiers.get(TerritoryModifier.SECURITY, 0) >= DEVELOPMENT_MIN_SECURITY
+        and t.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) >= DEVELOPMENT_MIN_SURVEILLANCE
+    ]
+
+
+def raise_development(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
+    """Pay DEVELOPMENT_BUMP_COST to raise one held district's Development by 1,
+    once it's policed and watched enough to justify the capital (see
+    development_targets). Same cash-gated, repeatable, no-daily-slot shape as
+    raise_surveillance; fails closed on an illegal target or short cash.
+
+    This is the first thing in Corp mode with a *runner-side* consequence:
+    Development prices lodging and safehouses (corpmap.lodging_cost /
+    safehouse_price), so building a block up makes it dearer to sleep in.
+    """
+    if territory_id not in {t.id for t in development_targets(corp_state, corp_map)}:
+        return False
+    if DEVELOPMENT_BUMP_COST > corp_state.cash:
+        return False
+    territory = corp_map.territories[territory_id]
+    corp_state.cash -= DEVELOPMENT_BUMP_COST
+    territory.modifiers[TerritoryModifier.DEVELOPMENT] = (
+        territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0) + 1
+    )
+    return True
 
 
 def expansion_cost(territory: Territory) -> int:
