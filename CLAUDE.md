@@ -74,9 +74,9 @@ A text-based cyberpunk roguelite TUI. Python 3.14, managed with `uv`, built on T
 Two coupled game modes, not one game with a reskinned second mode:
 
 - **Runner mode** — RPG scale. One character, stats, scene-based missions, permadeath.
-- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists now (`shadowguy/corp_turn.py`): take over one of the 3 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, or train employees at your Academy). No corp-vs-corp conflict yet — see Corp mode turn loop.
+- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists now (`shadowguy/corp_turn.py`): take over one of the 3 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, train employees at your Academy, or upgrade your Research Facility's labs/efficiency). No corp-vs-corp conflict yet — see Corp mode turn loop.
 
-Switching between runner and corp is optional and meant to be difficult — neither mode is a straight upgrade over the other.
+Switching between runner and corp is optional and meant to be difficult — neither mode is a straight upgrade over the other. **A run can also start as either one** (New Game → Runner / Corp): a Corp game never builds a runner at all (`ShadowguyApp.corp_only`), so it isn't "runner mode plus a corp screen" — it's the 4X half on its own.
 
 ### Run/game-over rules
 
@@ -98,7 +98,7 @@ Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Per
 
 ### Character creation (`screens/creation_screen.py`)
 
-**Everything starts at 1** — all six stats, all 32 skill ranks — and is bought up from there. The app's actual entry point is `screens.menu_screens.TitleMenu` (New Game / Load Game / Test / Settings), pushed from `app.py`'s `on_mount`; picking New Game is what opens a run on `CharacterCreationScreen` (not `MainMenu`), where the player spends `STARTING_STAT_POINTS` (6) and `STARTING_SKILL_POINTS` (20). So an unspent runner rolls `skill_value` 2 on everything, and the build is entirely what those 26 points bought. (`TitleMenu`'s Test option opens `TestMenu`, a developer shortcut straight into a standalone tactical or matrix fight — reachable before ever visiting `CharacterCreationScreen`, since it reuses whatever `Character` `_new_run()` already stamped out (unbuilt, all stats at 1, unless creation was already finished). No job or gig is involved; a tactical test fight resets the character's health to max afterward.)
+**Everything starts at 1** — all six stats, all 32 skill ranks — and is bought up from there. The app's actual entry point is `screens.menu_screens.TitleMenu` (New Game / Load Game / Test / Settings), pushed from `app.py`'s `on_mount`; picking New Game opens `ModeSelectScreen` (Runner / Corp — see Corp mode turn loop), and it's the **Runner** branch that reaches `CharacterCreationScreen` (not `MainMenu`), where the player spends `STARTING_STAT_POINTS` (6) and `STARTING_SKILL_POINTS` (20). A Corp game skips this screen entirely and never builds a runner at all. So an unspent runner rolls `skill_value` 2 on everything, and the build is entirely what those 26 points bought. (`TitleMenu`'s Test option opens `TestMenu`, a developer shortcut straight into a standalone tactical or matrix fight — reachable before ever visiting `CharacterCreationScreen`, since it reuses whatever `Character` `_new_run()` already stamped out (unbuilt, all stats at 1, unless creation was already finished). No job or gig is involved; a tactical test fight resets the character's health to max afterward.)
 
 **Archetypes (`shadowguy/archetypes.py`) are the fast path**: Enforcer, Hacker, Infiltrator. Each is a canned allocation of the same 6 + 20 points, and `Archetype.apply()` spends them through `spend_stat_point`/`spend_skill_point` rather than assigning fields — so a preset obeys the rank cap and cost curve exactly like a hand-built runner and **cannot buy anything the player couldn't**. `_validate_preset()` runs every preset against a fresh `Character` and raises unless it spends both pools to exactly zero — but not at plain import time: it's deferred to first access of `ARCHETYPES`/`ARCHETYPES_BY_ID` via module `__getattr__`, so importing `archetypes` alone doesn't construct a `Character` (the creation screen is still the first thing that touches it in practice). Picking one calls `reset_build()` first: a preset is the *whole* build, not a top-up. (Note `archetypes.Archetype` is a *character* preset — unrelated to `jobs.JobArchetype`, a job template.)
 
@@ -396,20 +396,39 @@ The other half of Rival AI: once the player takes over a Faction, they get the s
 
 **Taking over is a plain menu pick, not an earned one yet.** `CorpScreen` (reachable from `MainMenu` via `r` / the "Corp" category) lists the 3 `FACTIONS`; picking one sets `ShadowguyApp.corp_state = CorpState(faction_id=...)`. There's no in-fiction coup/acquisition mechanic — this is the same shortcut-before-the-real-gate precedent `TestMenu` already sets for jumping straight into a fight, flagged in `corp_turn.py`'s own docstring rather than silently pretended-away. Once set, `rivals.resolve_rival_day` stops rolling for that faction (see Rival AI, above) — the player's move replaces the AI's roll, it doesn't run alongside it.
 
+**There are two ways in, and they produce different games.** New Game opens `menu_screens.ModeSelectScreen` (Runner / Corp) before anything else:
+
+- **Runner** is the original path — `CharacterCreationScreen`, then `MainMenu`, with `CorpScreen` reachable from it as *one activity among many*. The runner exists, and taking over a corp is something they did.
+- **Corp** skips character creation entirely (`menu_screens.CorpSelectScreen` picks the Faction, assigns `corp_state`, sets **`ShadowguyApp.corp_only = True`**, and `switch_screen`s straight to `CorpMainMenu`). There is no runner to build in this kind of game.
+
+`corp_only` is what `ShadowguyApp.load_state` reads to decide which home screen to reopen (`CorpMainMenu` vs `MainMenu`), so it's part of the save bundle (`saves.STATE_KEYS`) rather than a UI flag. **`CorpMainMenu` subclasses `CorpScreen`** and inherits its whole info/action surface unchanged — it only adds `MainMenu`'s sidebar layout (a category list next to the main panel) and neutralizes `escape`-to-back, since it's the bottom of the stack in a pure-corp game. Note the `Character` still exists in a corp-only run (it's what carries `elapsed_hours`, and so `day` — see Time & the day clock); it's just never built or played.
+
 **Corp mode shares the runner's own day clock.** There's no separate calendar: `ShadowguyApp._apply_day_tick` (see Time & the day clock) — fired once per day boundary crossed, whether that's `MainMenu`'s or `CorpScreen`'s "Rest" row or any other time-spending action rolling over midnight — collects the corp's daily income and research, and resets `CorpState.daily_action_used`, right alongside `resolve_rival_day`.
 
 **Income is flat and passive.** `collect_income` sums `TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * value` over every territory the corp holds, credited to `CorpState.cash` every day regardless of what screen the player is looking at — first-slice numbers, not balance-simulated.
 
-**A turn is one real decision, shared by two mutually-exclusive moves** gated on the same `CorpState.daily_action_used` flag (the same "`_used_today` flag reset each day" idiom `Character.on_new_day()` uses for `health_kit_used_today`):
+**A turn is one real decision, shared by four mutually-exclusive moves** gated on the same `CorpState.daily_action_used` flag (the same "`_used_today` flag reset each day" idiom `Character.on_new_day()` uses for `health_kit_used_today`). All four fail closed — no charge, no mutation — if the corp's already moved today or can't afford it:
 
-- **`expand_into`** a bordering neutral territory — the identical area-control move `rivals.py`'s AI factions make, reusing `corpmap.expansion_candidates`/`claim_territory`. Cost is `EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * value` (mirrors `corpmap.safehouse_price`'s base+per-value shape); fails closed (no charge, no mutation) if the corp's already moved today, the target isn't a legal candidate, or it can't afford it.
-- **`train_employees`** at the corp's Academy, spending a flat `ACADEMY_TRAINING_COST` to gain that many employees (the Academy's tier, currently always 1 — nothing raises it yet) in whichever `EmployeeCategory` the player picks. Same fail-closed shape as `expand_into`.
+- **`expand_into`** a bordering neutral territory — the identical area-control move `rivals.py`'s AI factions make, reusing `corpmap.expansion_candidates`/`claim_territory`. Cost is `EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * value` (mirrors `corpmap.safehouse_price`'s base+per-value shape); also refuses a target that isn't a legal candidate.
+- **`train_employees`** at the corp's Academy, spending a flat `ACADEMY_TRAINING_COST` to gain that many employees (the Academy's tier, currently always 1 — nothing raises it yet) in whichever `EmployeeCategory` the player picks.
+- **`build_lab`** at the corp's Research Facility, raising how many scientists it can put to work.
+- **`build_efficiency_upgrade`** at the same facility, raising what each working scientist produces.
 
-**Employees come in two categories, `EmployeeCategory.SCIENTIST` and `.OPERATIVE`, tracked as separate `CorpState` fields** (`scientists`/`operatives`) rather than one fungible pool — they aren't meant to do the same thing once something reads them. `CorpScreen` offers one training row per category, both costing the same and drawing from the same daily slot.
+**Employees come in three categories** — `EmployeeCategory.SCIENTIST`, `.OPERATIVE` and `.RESEARCH_ASSISTANT` — tracked as separate `CorpState` fields (`scientists`/`operatives`/`research_assistants`) rather than one fungible pool, since they aren't meant to do the same thing. `CorpScreen` offers one training row per category, all costing the same and drawing from the same daily slot.
 
-**Research points are the read side of a second guaranteed per-faction location.** `collect_research` sums `research_tier` (1 RP/day at tier 1, same "tier is the number, directly" shape training uses) over every `RESEARCH_FACILITY` the corp holds — see Corporate HQs & officers for how it's placed on the map. Folded into `CorpState.research_points` every day alongside cash.
+**Research is the one corp system with a real internal economy.** A corp holds **exactly one** `RESEARCH_FACILITY` — seeded per faction (see Corporate HQs & officers), and `expand_into` only claims *neutral* ground, which never carries one — so `owned_research_facility` is deliberately singular and `collect_research`, `build_lab` and `build_efficiency_upgrade` all read that same one place. It sums:
 
-**Nothing is spent on research points, scientists, or operatives yet.** All three are the mechanism built ahead of its driver, the same pattern `gang_standing` predated `encounters.py` and `security.py` predated anything handing out contracts — flagged in `corp_turn.py`'s own docstrings rather than silently deferred. `saves.SAVE_VERSION` has climbed once per shape change across this feature (20: `ShadowguyApp.corp_state` itself; 21: `Location.research_tier` / `CorpState.research_points`; 22: `Location.academy_tier`, the `expansion_used_today`→`daily_action_used` rename, and a since-replaced `employees` field; 23: that field split into `scientists`/`operatives`) — a reminder that this corner of the save format is still actively shifting.
+- the facility's own `research_tier` (1 RP/day at tier 1, the same "tier is the number, directly" shape training uses),
+- plus `research_rate(facility)` for every **scientist actually working** it — `RESEARCH_PER_SCIENTIST` (1) plus one per efficiency upgrade built there,
+- plus a flat `RESEARCH_PER_ASSISTANT` (0.5) for every **research assistant actually working** one. Assistants are deliberately *not* scaled by efficiency upgrades — those boost scientists only.
+
+"Actually working" is the point: `lab_capacity` (`BASE_LAB_CAPACITY` 1, +1 per lab built) caps scientists and `assistant_capacity` (`RESEARCH_ASSISTANTS_PER_LAB` 2 × that lab count) caps assistants, so **training employees you have no seats for produces nothing** — capacity (`build_lab`) and headcount (`train_employees`) are two separate purchases competing for the same daily slot, and that tension is the mechanic. Both upgrade tracks are **strictly sequential**: `LAB_UPGRADE_COSTS` (2000, 5000) and `EFFICIENCY_UPGRADE_COSTS` (3000, 7000) are indexed by `Location.labs_built`/`efficiency_upgrades`, so the second tier's price isn't reachable until the first is built. Efficiency is priced steeper than a lab on purpose — +1 RP/scientist compounds with however many are staffed. **None of these numbers are balance-simulated.**
+
+Note `collect_research` returns a **float**, not an int, purely because of `RESEARCH_PER_ASSISTANT`'s 0.5 — `CorpState.research_points` is annotated `float` to match, though it still *defaults* to int `0`, so it stays an int (and renders as `0rp` rather than `0.0rp`) until the first assistant contributes. Don't "tidy" that default to `0.0` without noticing it changes what `CorpScreen` prints.
+
+**Nothing is spent on research points, scientists or operatives yet** — only research assistants feed anything (`collect_research`). The rest is the mechanism built ahead of its driver, the same pattern `gang_standing` predated `encounters.py` and `security.py` predated anything handing out contracts — flagged in `corp_turn.py`'s own docstrings rather than silently deferred. `saves.SAVE_VERSION` has climbed once per shape change across this feature (20: `ShadowguyApp.corp_state` itself; 21: `Location.research_tier` / `CorpState.research_points`; 22: `Location.academy_tier`, the `expansion_used_today`→`daily_action_used` rename, and a since-replaced `employees` field; 23: that field split into `scientists`/`operatives`; 24: `Location.labs_built`; 25: `Location.efficiency_upgrades`; 26: `CorpState.research_assistants` and `research_points` becoming a float; 27: `ShadowguyApp.corp_only`) — a reminder that this corner of the save format is still actively shifting.
+
+**If corps ever come to hold more than one facility, this is the spot to revisit.** `collect_research` used to spread scientists across N facilities highest-rate-first; that was collapsed to the single owned facility once it was clear nothing could produce a second (the fill-order test went with it). Whatever eventually lets a corp take *another corp's* territory — the conflict layer `rivals.py` explicitly defers — is what would make multi-facility real, and it should bring the fill rule back with it rather than leaving `collect_research` silently counting only one.
 
 ### Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
@@ -562,8 +581,9 @@ src/shadowguy/
                  neutral territory (claim_territory) and gives every independent (not-hired)
                  RivalRunner a stub turn, each day-advance (not Scene-based); skips a Faction the
                  player has taken over via corp_turn.py
-  corp_turn.py   the player's own Corp turn: CorpState (cash/research_points/scientists/operatives),
-                 collect_income/collect_research, expand_into/train_employees sharing one
+  corp_turn.py   the player's own Corp turn: CorpState (cash/research_points/scientists/
+                 operatives/research_assistants), collect_income/collect_research,
+                 expand_into/train_employees/build_lab/build_efficiency_upgrade sharing one
                  daily_action_used slot (not Scene-based); leaf, imports corpmap only
   corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ,
                  one RESEARCH_FACILITY and one ACADEMY per faction, one GANG_DEN per gang;
@@ -574,19 +594,21 @@ src/shadowguy/
                  standing-scaled pricing, hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
   app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state,
-                 spend_time/_apply_day_tick); every screen now lives under screens/, not here
+                 corp_only -> which home screen to reopen, spend_time/_apply_day_tick);
+                 every screen now lives under screens/, not here
   screens/
     creation_screen.py   CharacterCreationScreen
     main_menu.py         MainMenu
-    menu_screens.py      TitleMenu (entry point) + TestMenu (standalone tactical/matrix test fights)
-                         + QuitMenu + LoadMenu
+    menu_screens.py      TitleMenu (entry point) + ModeSelectScreen (Runner/Corp) + CorpSelectScreen
+                         + TestMenu (standalone tactical/matrix test fights) + QuitMenu + LoadMenu
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen
     tactical_screen.py   TacticalScreen
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePickScreen + BurglaryWalkScreen
     corp_map_screen.py   CorpMapScreen + GangTollScreen
-    corp_screen.py       CorpScreen (play as a corp: pick a Faction, expand/train, end the day)
+    corp_screen.py       CorpScreen (play as a corp: pick a Faction, expand/train/upgrade research)
+                         + CorpMainMenu (subclasses it; home screen for a corp-only run)
     shop_screens.py      FixerOffersScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen
                          + RealEstateScreen + SafehouseScreen
     info_screens.py      ContactsScreen + InventoryScreen + SkillsScreen
