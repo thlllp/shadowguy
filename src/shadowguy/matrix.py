@@ -1125,8 +1125,15 @@ def analyze_node(run: MatrixRunState, node_id: str, rng: random.Random | None = 
 
 def take_run_turn(run: MatrixRunState, action: MatrixAction, rng: random.Random | None = None) -> None:
     """Delegate one round to the active node engagement (take_matrix_turn,
-    unchanged), then fold the result into the run."""
-    if run.is_over or run.fight is None or run.fight.is_over:
+    unchanged), then fold the result into the run.
+
+    Gated on `in_fight`, not just `fight.is_over`: clearing a *non-final* node's
+    guardian leaves the fight ONGOING with nothing standing (see _settle's
+    is_final_node branch), and the per-node actions all target state.standing[0].
+    MatrixScreen already stops offering them at that point, but the invariant
+    belongs here rather than only in the screen.
+    """
+    if run.is_over or not run.in_fight:
         return
     take_matrix_turn(run.fight, action, rng)
     _settle_run(run)
