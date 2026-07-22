@@ -36,7 +36,7 @@ from shadowguy.corp_turn import (
     collect_income,
     has_technology,
 )
-from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen
+from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
@@ -1049,9 +1049,10 @@ def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
 
 
 def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
-    """The Technology panel spends research points, and the tech's two effects show
-    up where they land: income rises per territory, and Surveillance rows appear in
-    the territory list (they don't exist at all before researching)."""
+    """The Research Tree screen ('t' from CorpScreen) spends research points, and
+    the tech's effects show up where they land: income rises per territory,
+    Surveillance rows appear in the territory list (they don't exist at all before
+    researching), and researching unlocks the tier behind it (Panopticon Grid)."""
 
     async def body():
         app = ShadowguyApp()
@@ -1074,14 +1075,16 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await app.screen._refresh()
             await pilot.pause()
 
-            # Nothing to raise, and the tech row reports the shortfall.
+            # Nothing to raise yet.
             corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert not any(i.startswith("surveil_") for i in corp_ids)
-            tech_list = app.screen.query_one("#tech_list", ListView)
-            assert {item.id for item in tech_list.children} == {
-                "tech_worker_surveillance",
-                "tech_brains_2",
-            }
+
+            await pilot.press("t")
+            await pilot.pause()
+            assert isinstance(app.screen, ResearchTreeScreen)
+            # Both roots sit in Tier 0; the shortfall reports on the box itself.
+            tier0_ids = {item.id for item in app.screen.query_one("#tier_0_list", ListView).children}
+            assert tier0_ids == {"tech_worker_surveillance", "tech_brains_2"}
 
             income_before = collect_income(app.corp_state, app.corp_map)
             app.corp_state.research_points = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
@@ -1100,10 +1103,23 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
                 WORKER_SURVEILLANCE_INCOME_BONUS * len(owned)
             )
 
-            # The row flips to the researched state, and surveillance rows appear.
-            # Only the researched one flips; the other stays offered.
-            tech_ids = {item.id for item in app.screen.query_one("#tech_list", ListView).children}
-            assert tech_ids == {"tech_done_worker_surveillance", "tech_brains_2"}
+            # The researched box flips state; Brains 2 stays offered untouched, and
+            # Panopticon Grid (Tier 1, gated behind Worker Surveillance) is now on
+            # the tree at all.
+            tier0_item = next(
+                item
+                for item in app.screen.query_one("#tier_0_list", ListView).children
+                if item.id == "tech_worker_surveillance"
+            )
+            assert tier0_item.has_class("-researched")
+            tier1_ids = {item.id for item in app.screen.query_one("#tier_1_list", ListView).children}
+            assert "tech_panopticon_grid" in tier1_ids
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpScreen)
+            await app.screen._refresh()
+            await pilot.pause()
 
             corp_list = app.screen.query_one("#corp_list", ListView)
             surveil_ids = [item.id for item in corp_list.children if item.id.startswith("surveil_")]
