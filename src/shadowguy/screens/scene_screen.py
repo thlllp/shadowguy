@@ -158,7 +158,7 @@ class SceneScreen(Screen):
         # outcome is already applied, so this is a plain advance (_await_continue),
         # not a re-apply (_finish_stage_outcome would double-apply it).
         target = self.scene.stages[outcome.next_stage]
-        if target.combat is not None or target.tactical is not None:
+        if target.combat is not None or target.tactical is not None or target.matrix is not None:
             await self._await_continue(outcome.next_stage, result)
             return
 

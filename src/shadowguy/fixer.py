@@ -94,7 +94,7 @@ def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[F
     unlike a street-level fixer.
     """
     rng = resolve_rng(rng)
-    candidates = [
+    neutral_candidates = [
         territory.id
         for territory in corp_map.territories.values()
         if territory.owner == "neutral" and territory.id != corp_map.player_start_id
@@ -105,10 +105,10 @@ def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[F
             corp_candidates.setdefault(territory.owner, []).append(territory.id)
 
     neutral_roster = [entry for entry in FIXER_ROSTER if entry[3] is None]
-    fixers = _seat(neutral_roster, candidates, rng)
-    for faction_id, candidates in corp_candidates.items():
+    fixers = _seat(neutral_roster, neutral_candidates, rng)
+    for faction_id, faction_territory_ids in corp_candidates.items():
         corp_roster = [entry for entry in FIXER_ROSTER if entry[3] == faction_id]
-        fixers += _seat(corp_roster, candidates, rng)
+        fixers += _seat(corp_roster, faction_territory_ids, rng)
     return fixers
 
 
