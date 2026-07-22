@@ -55,21 +55,31 @@ class Tile(StrEnum):
 # move around, not into. (Low cover's whole point is that a unit hugging it — adjacent,
 # not on it — gets a defense bonus; that's a tactical.py increment-1 concern, computed
 # from adjacency, not a property of the tile you occupy.)
-_WALKABLE = {Tile.FLOOR}
+_WALKABLE = frozenset({Tile.FLOOR})
 # Seeing/shooting *through* a tile. Low cover is transparent (you shoot over the crate);
 # only a full wall is opaque. This is the array tcod's FOV and our LOS check read.
-_TRANSPARENT = {Tile.FLOOR, Tile.LOW_COVER}
+_TRANSPARENT = frozenset({Tile.FLOOR, Tile.LOW_COVER})
 
 
 @dataclass
 class Grid:
-    """A rectangular tile map. The numpy/tcod arrays it feeds are rebuilt on demand from
-    `tiles` rather than cached — a tactical map is small (tens of cells a side) and only
-    the *units* move; the terrain is fixed for the fight, so there's nothing to invalidate."""
+    """A rectangular tile map. The numpy/tcod arrays it feeds are built once and cached:
+    only the *units* move, so the terrain is fixed for the fight and there's nothing to
+    invalidate. That matters because has_line_of_sight runs an unlimited-radius FOV per
+    call and is hit hard — once per movement step per enemy in _enemy_phase, per guard
+    per keypress in a burglary walk — and rebuilding the array from `tiles` was ~70% of
+    each call. Generation mutates `tiles` in place while carving (see generate_map), so
+    the cache is keyed on the tile data's identity-and-contents via _invalidate below;
+    callers that edit tiles after construction must go through it."""
 
     width: int
     height: int
     tiles: list[list[Tile]]  # tiles[y][x]
+    _arrays: dict[frozenset[Tile], np.ndarray] = field(default_factory=dict, repr=False, compare=False)
+
+    def _invalidate(self) -> None:
+        """Drop the cached arrays after an in-place edit to `tiles`."""
+        self._arrays.clear()
 
     def in_bounds(self, coord: Coord) -> bool:
         x, y = coord
@@ -85,12 +95,18 @@ class Grid:
         not a property of the map."""
         return self.in_bounds(coord) and self.tile(coord) in _WALKABLE
 
-    def _bool_array(self, kinds: set[Tile]) -> np.ndarray:
-        """A [y, x] boolean grid, True where the tile is in `kinds` — the shape tcod wants."""
-        return np.array(
-            [[self.tiles[y][x] in kinds for x in range(self.width)] for y in range(self.height)],
-            dtype=bool,
-        )
+    def _bool_array(self, kinds: frozenset[Tile]) -> np.ndarray:
+        """A [y, x] boolean grid, True where the tile is in `kinds` — the shape tcod wants.
+        Cached per `kinds` (see the class docstring); the returned array is shared, so
+        treat it as read-only — tcod's FOV/A* only ever read it."""
+        cached = self._arrays.get(kinds)
+        if cached is None:
+            cached = np.array(
+                [[self.tiles[y][x] in kinds for x in range(self.width)] for y in range(self.height)],
+                dtype=bool,
+            )
+            self._arrays[kinds] = cached
+        return cached
 
     def transparency(self) -> np.ndarray:
         return self._bool_array(_TRANSPARENT)
@@ -617,6 +633,8 @@ def generate_map(
 
         keep_clear = {player_start, *exits, *enemy_spawns}
         _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
+        # `tiles` was just edited in place under an already-constructed Grid.
+        grid._invalidate()
 
         if _verify_map(grid, player_start, enemy_spawns, exits):
             return TacticalMap(grid, player_start, enemy_spawns, exits)
@@ -697,6 +715,8 @@ def generate_building(
 
         keep_clear = {objective, *entrance_spawns, *guards}
         _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
+        # `tiles` was just edited in place under an already-constructed Grid.
+        grid._invalidate()
 
         if all(path_between(grid, spawn, objective) for spawn in entrance_spawns):
             return BuildingLayout(grid, entrance_spawns, objective, guards)
