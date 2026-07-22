@@ -1078,7 +1078,10 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert not any(i.startswith("surveil_") for i in corp_ids)
             tech_list = app.screen.query_one("#tech_list", ListView)
-            assert {item.id for item in tech_list.children} == {"tech_worker_surveillance"}
+            assert {item.id for item in tech_list.children} == {
+                "tech_worker_surveillance",
+                "tech_brains_2",
+            }
 
             income_before = collect_income(app.corp_state, app.corp_map)
             app.corp_state.research_points = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
@@ -1098,8 +1101,9 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             )
 
             # The row flips to the researched state, and surveillance rows appear.
+            # Only the researched one flips; the other stays offered.
             tech_ids = {item.id for item in app.screen.query_one("#tech_list", ListView).children}
-            assert tech_ids == {"tech_done_worker_surveillance"}
+            assert tech_ids == {"tech_done_worker_surveillance", "tech_brains_2"}
 
             corp_list = app.screen.query_one("#corp_list", ListView)
             surveil_ids = [item.id for item in corp_list.children if item.id.startswith("surveil_")]

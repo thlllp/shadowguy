@@ -29,11 +29,19 @@ Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility
 generates research_points every day too, at 1 RP per tier — collect_research is
 the read side of that, and research_technology is what finally spends it.
 
-TECHNOLOGIES is the researchable list (one entry today: Worker Surveillance).
-A tech's *effect* isn't a field on Technology — it's read wherever it applies,
-keyed off the id: collect_income adds WORKER_SURVEILLANCE_INCOME_BONUS per held
-territory, and surveillance_targets/raise_surveillance only work once it's
-researched. Neither research_technology nor the two territory bumps below touch
+TECHNOLOGIES is the researchable list; both entries are available from the start
+(there's no prerequisite system, and nothing needs one yet). A tech's *effect*
+isn't a field on Technology — it's read wherever it applies, keyed off the id:
+  - Worker Surveillance: collect_income adds WORKER_SURVEILLANCE_INCOME_BONUS
+    per held territory, and surveillance_targets/raise_surveillance only work
+    once it's researched.
+  - Brains 2: scientist_base_rate/assistant_rate return the better per-head
+    research rates, which research_rate and collect_research read. It replaces
+    the base rates rather than stacking with them, but facility efficiency
+    upgrades still stack on top of the scientist rate — the two paths compose.
+    Note this one compounds: faster research buys techs faster.
+
+Neither research_technology nor the two territory bumps below touch
 daily_action_used: RP and cash are their own gates, and the day's one *directed
 move* is for expand/train/build. So a corp turn now has two independent budgets
 — the daily slot, and whatever cash/RP has piled up.
@@ -137,8 +145,10 @@ class Technology:
 
 
 WORKER_SURVEILLANCE_ID = "worker_surveillance"
+BRAINS_2_ID = "brains_2"
 
-# id, name, cost (RP), description.
+# id, name, cost (RP), description. Both are researchable from the start —
+# there's no prerequisite system, and nothing here needs one yet.
 _TECHNOLOGY_ROWS = (
     (
         WORKER_SURVEILLANCE_ID,
@@ -147,6 +157,14 @@ _TECHNOLOGY_ROWS = (
         "Every territory you hold earns +{income}/day, and you can pay {bump}eb "
         "to raise Surveillance by 1 in any district you hold that isn't already at "
         f"{MODIFIER_MAX}.",
+    ),
+    (
+        BRAINS_2_ID,
+        "Brains 2",
+        10,
+        "Every working scientist produces {scientist}rp/day instead of "
+        "{base_scientist}, and every working research assistant {assistant}rp/day "
+        "instead of {base_assistant}.",
     ),
 )
 
@@ -172,6 +190,17 @@ DEVELOPMENT_MIN_SECURITY = 3
 DEVELOPMENT_MIN_SURVEILLANCE = 3
 DEVELOPMENT_BUMP_COST = 800
 
+# Brains 2 replaces both per-head research rates outright rather than adding to
+# them — a flat better rate, not a stacking bonus, so there's one number in
+# effect at a time and scientist_base_rate/assistant_rate just pick which.
+# Efficiency upgrades still stack on top of the scientist rate (see
+# research_rate), so the two upgrade paths compose rather than compete.
+# Unlike Worker Surveillance's cash payoff this compounds — it makes research
+# itself faster — which is why it costs the same 10 RP despite looking smaller.
+# First-slice numbers, not balance-simulated.
+BRAINS_2_RESEARCH_PER_SCIENTIST = 1.25
+BRAINS_2_RESEARCH_PER_ASSISTANT = 0.75
+
 # Descriptions are filled in from the constants above rather than repeating the
 # numbers as prose, so a retune can't leave the shop text lying about the effect.
 TECHNOLOGIES = [
@@ -180,7 +209,12 @@ TECHNOLOGIES = [
         name=name,
         cost=cost,
         description=description.format(
-            income=WORKER_SURVEILLANCE_INCOME_BONUS, bump=SURVEILLANCE_BUMP_COST
+            income=WORKER_SURVEILLANCE_INCOME_BONUS,
+            bump=SURVEILLANCE_BUMP_COST,
+            scientist=BRAINS_2_RESEARCH_PER_SCIENTIST,
+            base_scientist=RESEARCH_PER_SCIENTIST,
+            assistant=BRAINS_2_RESEARCH_PER_ASSISTANT,
+            base_assistant=RESEARCH_PER_ASSISTANT,
         ),
     )
     for tech_id, name, cost, description in _TECHNOLOGY_ROWS
@@ -291,10 +325,28 @@ def next_lab_cost(facility: Location) -> int | None:
     return LAB_UPGRADE_COSTS[labs_built]
 
 
-def research_rate(facility: Location) -> int:
-    """RP/day one working scientist adds at this facility: the base rate plus
-    any efficiency upgrades built there."""
-    return RESEARCH_PER_SCIENTIST + (facility.efficiency_upgrades or 0)
+def scientist_base_rate(corp_state: CorpState) -> float:
+    """RP/day one working scientist adds before any facility efficiency upgrade —
+    RESEARCH_PER_SCIENTIST, or Brains 2's better rate once that's researched."""
+    if has_technology(corp_state, BRAINS_2_ID):
+        return BRAINS_2_RESEARCH_PER_SCIENTIST
+    return RESEARCH_PER_SCIENTIST
+
+
+def assistant_rate(corp_state: CorpState) -> float:
+    """RP/day one working research assistant adds. Flat regardless of facility —
+    efficiency upgrades boost scientists only — but Brains 2 raises it."""
+    if has_technology(corp_state, BRAINS_2_ID):
+        return BRAINS_2_RESEARCH_PER_ASSISTANT
+    return RESEARCH_PER_ASSISTANT
+
+
+def research_rate(corp_state: CorpState, facility: Location) -> float:
+    """RP/day one working scientist adds at this facility: the base rate (which
+    Brains 2 raises) plus any efficiency upgrades built there. Takes corp_state
+    because the rate is now a property of the corp's tech as well as the
+    building — the two stack."""
+    return scientist_base_rate(corp_state) + (facility.efficiency_upgrades or 0)
 
 
 def next_efficiency_cost(facility: Location) -> int | None:
@@ -315,7 +367,8 @@ def assistant_capacity(facility: Location) -> int:
 def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     """RP/day from the corp's research facility: its tier directly (1 RP at tier
     1), plus research_rate() for each scientist actually working it, plus
-    RESEARCH_PER_ASSISTANT for each research assistant actually working it.
+    assistant_rate() for each research assistant actually working it. Both
+    per-head rates are raised by the Brains 2 technology.
 
     "Actually working" is the whole mechanic: lab_capacity/assistant_capacity
     cap how many of each count, so employees trained beyond the seats built for
@@ -329,8 +382,8 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     assistants = min(corp_state.research_assistants, assistant_capacity(facility))
     return (
         (facility.research_tier or 0)
-        + scientists * research_rate(facility)
-        + assistants * RESEARCH_PER_ASSISTANT
+        + scientists * research_rate(corp_state, facility)
+        + assistants * assistant_rate(corp_state)
     )
 
 

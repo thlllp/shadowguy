@@ -12,6 +12,9 @@ import pytest
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     BASE_LAB_CAPACITY,
+    BRAINS_2_ID,
+    BRAINS_2_RESEARCH_PER_ASSISTANT,
+    BRAINS_2_RESEARCH_PER_SCIENTIST,
     DEVELOPMENT_BUMP_COST,
     DEVELOPMENT_MIN_SECURITY,
     DEVELOPMENT_MIN_SURVEILLANCE,
@@ -34,6 +37,7 @@ from shadowguy.corp_turn import (
     CorpState,
     EmployeeCategory,
     assistant_capacity,
+    assistant_rate,
     build_efficiency_upgrade,
     build_lab,
     collect_income,
@@ -50,6 +54,7 @@ from shadowguy.corp_turn import (
     raise_surveillance,
     research_rate,
     research_technology,
+    scientist_base_rate,
     surveillance_targets,
     train_employees,
 )
@@ -394,7 +399,7 @@ def test_build_lab_fails_when_already_used_today():
 
 def test_research_rate_starts_at_base_with_no_efficiency_upgrades():
     facility = Location(id="rf1", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
-    assert research_rate(facility) == RESEARCH_PER_SCIENTIST
+    assert research_rate(CorpState(faction_id=IRONCLAD), facility) == RESEARCH_PER_SCIENTIST
 
 
 def test_next_efficiency_cost_matches_the_upgrade_table():
@@ -781,3 +786,78 @@ def test_surveillance_unlocks_development_on_a_poorly_seeded_district():
     assert {t.id for t in development_targets(corp_state, corp_map)} == {"iron_home"}
     assert raise_development(corp_state, corp_map, "iron_home") is True
     assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
+
+
+# --- Technology: Brains 2 -----------------------------------------------------
+
+
+def _facility(corp_map, territory_id="iron_home", **kwargs):
+    location = Location(
+        id="rf", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=0, **kwargs
+    )
+    corp_map.territories[territory_id].locations.append(location)
+    return location
+
+
+def test_brains_2_raises_both_per_head_rates():
+    researched = CorpState(faction_id=IRONCLAD, researched={BRAINS_2_ID})
+    plain = CorpState(faction_id=IRONCLAD)
+    assert scientist_base_rate(plain) == RESEARCH_PER_SCIENTIST
+    assert assistant_rate(plain) == RESEARCH_PER_ASSISTANT
+    assert scientist_base_rate(researched) == BRAINS_2_RESEARCH_PER_SCIENTIST
+    assert assistant_rate(researched) == BRAINS_2_RESEARCH_PER_ASSISTANT
+
+
+def test_brains_2_replaces_the_base_rate_rather_than_stacking():
+    """0.75 / 1.25 are the whole rate, not a bonus added to 0.5 / 1."""
+    corp_state = CorpState(faction_id=IRONCLAD, researched={BRAINS_2_ID})
+    assert scientist_base_rate(corp_state) == 1.25
+    assert assistant_rate(corp_state) == 0.75
+
+
+def test_brains_2_still_stacks_with_facility_efficiency_upgrades():
+    corp_map = _map()
+    facility = _facility(corp_map, efficiency_upgrades=2)
+    corp_state = CorpState(faction_id=IRONCLAD, researched={BRAINS_2_ID})
+    assert research_rate(corp_state, facility) == BRAINS_2_RESEARCH_PER_SCIENTIST + 2
+
+
+def test_brains_2_moves_collect_research_for_scientists_and_assistants():
+    corp_map = _map()
+    facility = _facility(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, scientists=1, research_assistants=2)
+    scientists = min(corp_state.scientists, lab_capacity(facility))
+    assistants = min(corp_state.research_assistants, assistant_capacity(facility))
+
+    before = collect_research(corp_state, corp_map)
+    assert before == scientists * RESEARCH_PER_SCIENTIST + assistants * RESEARCH_PER_ASSISTANT
+
+    corp_state.researched.add(BRAINS_2_ID)
+    after = collect_research(corp_state, corp_map)
+    assert after == (
+        scientists * BRAINS_2_RESEARCH_PER_SCIENTIST + assistants * BRAINS_2_RESEARCH_PER_ASSISTANT
+    )
+    assert after > before
+
+
+def test_brains_2_does_nothing_without_staff():
+    """The tech pays per working head, so an unstaffed facility gains nothing --
+    it's a multiplier on employees, not a flat research bump."""
+    corp_map = _map()
+    _facility(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD)
+    before = collect_research(corp_state, corp_map)
+    corp_state.researched.add(BRAINS_2_ID)
+    assert collect_research(corp_state, corp_map) == before
+
+
+def test_both_technologies_are_researchable_from_the_start():
+    """Neither has a prerequisite -- a fresh corp with enough RP can take either
+    one first, and researching one doesn't gate the other."""
+    for first, second in ((WORKER_SURVEILLANCE_ID, BRAINS_2_ID), (BRAINS_2_ID, WORKER_SURVEILLANCE_ID)):
+        cost = TECHNOLOGIES_BY_ID[first].cost + TECHNOLOGIES_BY_ID[second].cost
+        corp_state = CorpState(faction_id=IRONCLAD, research_points=cost)
+        assert research_technology(corp_state, first) is True
+        assert research_technology(corp_state, second) is True
+        assert corp_state.research_points == 0
+        assert corp_state.researched == {first, second}

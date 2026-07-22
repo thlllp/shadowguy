@@ -7,13 +7,13 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
-    RESEARCH_PER_ASSISTANT,
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
+    assistant_rate,
     build_efficiency_upgrade,
     build_lab,
     development_targets,
@@ -133,8 +133,10 @@ class CorpScreen(Screen):
             working_assistants = min(corp_state.research_assistants, assist_capacity)
             facility_line = (
                 f"\nResearch Facility: tier {facility.research_tier}, "
-                f"{working}/{capacity} scientists at work ({research_rate(facility)}rp/scientist), "
-                f"{working_assistants}/{assist_capacity} assistants at work ({RESEARCH_PER_ASSISTANT}rp/assistant)"
+                f"{working}/{capacity} scientists at work "
+                f"({research_rate(corp_state, facility):g}rp/scientist), "
+                f"{working_assistants}/{assist_capacity} assistants at work "
+                f"({assistant_rate(corp_state):g}rp/assistant)"
             )
         info.update(
             f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
