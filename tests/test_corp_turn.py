@@ -90,16 +90,13 @@ def test_collect_income_sums_only_owned_territories():
     assert collect_income(corp_state, corp_map) == expected
 
 
-def test_collect_research_sums_facility_tiers_on_owned_territory():
+def test_collect_research_reads_the_facility_tier_on_owned_territory():
     corp_map = _map()
     corp_map.territories["iron_home"].locations.append(
-        Location(id="rf1", name="Facility One", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
-    )
-    corp_map.territories["iron_second"].locations.append(
-        Location(id="rf2", name="Facility Two", kind=LocationKind.RESEARCH_FACILITY, research_tier=3)
+        Location(id="rf1", name="Facility One", kind=LocationKind.RESEARCH_FACILITY, research_tier=3)
     )
     corp_state = CorpState(faction_id=IRONCLAD)
-    assert collect_research(corp_state, corp_map) == 1 + 3
+    assert collect_research(corp_state, corp_map) == 3
 
 
 def test_collect_research_ignores_facilities_on_unowned_territory():
@@ -418,28 +415,30 @@ def test_collect_research_uses_the_boosted_rate():
     assert collect_research(corp_state, corp_map) == expected
 
 
-def test_collect_research_staffs_the_higher_rate_facility_first():
+def test_collect_research_reads_only_the_corps_own_facility():
+    """A corp holds exactly one research facility (seeded per faction; expand_into
+    only claims neutral ground, which carries none), so collect_research reads the
+    single owned one -- another faction's is never counted. This replaces an earlier
+    multi-facility fill-order test, dropped when collect_research collapsed to one."""
     corp_map = _map()
     corp_map.territories["iron_home"].locations.append(
         Location(
-            id="rf_low",
-            name="Low Facility",
-            kind=LocationKind.RESEARCH_FACILITY,
-            research_tier=0,
-            efficiency_upgrades=0,
-        )
-    )
-    corp_map.territories["iron_second"].locations.append(
-        Location(
-            id="rf_high",
-            name="High Facility",
+            id="rf_own",
+            name="Own Facility",
             kind=LocationKind.RESEARCH_FACILITY,
             research_tier=0,
             efficiency_upgrades=2,
         )
     )
-    # Exactly enough scientists to staff the high-rate facility (capacity 1) and
-    # nothing else -- if they were staffed low-first this would score lower.
+    corp_map.territories["neutral_a"].locations.append(
+        Location(
+            id="rf_other",
+            name="Unowned Facility",
+            kind=LocationKind.RESEARCH_FACILITY,
+            research_tier=9,
+            efficiency_upgrades=9,
+        )
+    )
     corp_state = CorpState(faction_id=IRONCLAD, scientists=BASE_LAB_CAPACITY)
     expected = BASE_LAB_CAPACITY * (RESEARCH_PER_SCIENTIST + 2)
     assert collect_research(corp_state, corp_map) == expected

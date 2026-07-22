@@ -126,14 +126,24 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     return sum(TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
-def _owned_research_facilities(corp_state: CorpState, corp_map: CorpMap) -> list[Location]:
-    return [
-        location
-        for territory in corp_map.territories.values()
-        if territory.owner == corp_state.faction_id
-        for location in territory.locations
-        if location.kind == LocationKind.RESEARCH_FACILITY
-    ]
+def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
+    """The corp's research facility, or None if it holds none.
+
+    Singular on purpose: a faction is seeded with exactly one
+    (corpmap._make_research_facility), and expand_into only claims *neutral*
+    ground, which never carries one — so a corp can't come to hold a second.
+    collect_research and both upgrade actions all read this same one place.
+    """
+    return next(
+        (
+            location
+            for territory in corp_map.territories.values()
+            if territory.owner == corp_state.faction_id
+            for location in territory.locations
+            if location.kind == LocationKind.RESEARCH_FACILITY
+        ),
+        None,
+    )
 
 
 def lab_capacity(facility: Location) -> int:
@@ -172,32 +182,25 @@ def assistant_capacity(facility: Location) -> int:
 
 
 def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
-    """RP/day is a research facility's tier, directly — 1 RP at tier 1 — summed
-    over every RESEARCH_FACILITY inside territory the corp currently holds, plus
-    research_rate() for each scientist actually working one, plus
-    RESEARCH_PER_ASSISTANT for each research assistant actually working one.
-    Scientists fill the corp's own facilities highest-rate-first, and a
-    facility's own lab_capacity/assistant_capacity caps how many of each count
-    there, so the same employee can't be double-counted across separate
-    facilities and a corp with more than one always staffs its best-upgraded
-    facility's scientist seats first (assistants pay the same flat rate
-    everywhere, so their fill order doesn't matter)."""
-    facilities = _owned_research_facilities(corp_state, corp_map)
-    tier_total = sum(facility.research_tier or 0 for facility in facilities)
-    remaining_scientists = corp_state.scientists
-    scientist_total = 0
-    for facility in sorted(facilities, key=research_rate, reverse=True):
-        working = min(remaining_scientists, lab_capacity(facility))
-        scientist_total += working * research_rate(facility)
-        remaining_scientists -= working
-    assistant_capacity_total = sum(assistant_capacity(facility) for facility in facilities)
-    working_assistants = min(corp_state.research_assistants, assistant_capacity_total)
-    return tier_total + scientist_total + working_assistants * RESEARCH_PER_ASSISTANT
+    """RP/day from the corp's research facility: its tier directly (1 RP at tier
+    1), plus research_rate() for each scientist actually working it, plus
+    RESEARCH_PER_ASSISTANT for each research assistant actually working it.
 
-
-def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
-    facilities = _owned_research_facilities(corp_state, corp_map)
-    return facilities[0] if facilities else None
+    "Actually working" is the whole mechanic: lab_capacity/assistant_capacity
+    cap how many of each count, so employees trained beyond the seats built for
+    them produce nothing — headcount (train_employees) and capacity (build_lab)
+    are two separate purchases.
+    """
+    facility = owned_research_facility(corp_state, corp_map)
+    if facility is None:
+        return 0.0
+    scientists = min(corp_state.scientists, lab_capacity(facility))
+    assistants = min(corp_state.research_assistants, assistant_capacity(facility))
+    return (
+        (facility.research_tier or 0)
+        + scientists * research_rate(facility)
+        + assistants * RESEARCH_PER_ASSISTANT
+    )
 
 
 def expansion_cost(territory: Territory) -> int:
