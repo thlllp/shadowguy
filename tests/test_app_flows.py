@@ -15,13 +15,27 @@ import random
 from shadowguy.app import ShadowguyApp
 from shadowguy.character import HOURS_PER_DAY
 from shadowguy.combat import ENEMY_TIERS, ActionKind
-from shadowguy.corpmap import Location, LocationKind, expansion_candidates, has_home, lodging_cost
+from shadowguy.corpmap import (
+    Location,
+    LocationKind,
+    TerritoryModifier,
+    expansion_candidates,
+    has_home,
+    lodging_cost,
+)
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
+from shadowguy.corp_turn import (
+    TECHNOLOGIES_BY_ID,
+    WORKER_SURVEILLANCE_ID,
+    WORKER_SURVEILLANCE_INCOME_BONUS,
+    collect_income,
+    has_technology,
+)
 from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
@@ -1030,5 +1044,73 @@ def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
 
             assert app.character.location_id == neighbor_id
             assert isinstance(app.screen, CombatScreen)
+
+    run(body())
+
+
+def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
+    """The Technology panel spends research points, and the tech's two effects show
+    up where they land: income rises per territory, and Surveillance rows appear in
+    the territory list (they don't exist at all before researching)."""
+
+    async def body():
+        app = ShadowguyApp()
+        # Tall enough that no row needs scrolling to click. The map is generated off
+        # an unseeded app.rng, so the number of expansion rows -- and with it every
+        # widget's y position -- varies run to run; at 80x24 this screen's four
+        # stacked sections overflow and the click target moves. See CLAUDE.md's note
+        # on the section stack's height.
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_corp")
+            await pilot.pause()
+
+            faction = FACTIONS[0]
+            await pilot.click(f"#faction_{faction.id}")
+            await pilot.pause()
+            app.corp_state.cash = 1_000_000
+            await app.screen._refresh()
+            await pilot.pause()
+
+            # Nothing to raise, and the tech row reports the shortfall.
+            corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
+            assert not any(i.startswith("surveil_") for i in corp_ids)
+            tech_list = app.screen.query_one("#tech_list", ListView)
+            assert {item.id for item in tech_list.children} == {"tech_worker_surveillance"}
+
+            income_before = collect_income(app.corp_state, app.corp_map)
+            app.corp_state.research_points = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
+            await app.screen._refresh()
+            await pilot.pause()
+
+            await pilot.click("#tech_worker_surveillance")
+            await pilot.pause()
+            assert has_technology(app.corp_state, WORKER_SURVEILLANCE_ID)
+            assert app.corp_state.research_points == 0
+            # Researching is not the day's directed move.
+            assert app.corp_state.daily_action_used is False
+
+            owned = [t for t in app.corp_map.territories.values() if t.owner == faction.id]
+            assert collect_income(app.corp_state, app.corp_map) - income_before == (
+                WORKER_SURVEILLANCE_INCOME_BONUS * len(owned)
+            )
+
+            # The row flips to the researched state, and surveillance rows appear.
+            tech_ids = {item.id for item in app.screen.query_one("#tech_list", ListView).children}
+            assert tech_ids == {"tech_done_worker_surveillance"}
+
+            corp_list = app.screen.query_one("#corp_list", ListView)
+            surveil_ids = [item.id for item in corp_list.children if item.id.startswith("surveil_")]
+            assert surveil_ids
+            target_id = surveil_ids[0].removeprefix("surveil_")
+            territory = app.corp_map.territories[target_id]
+            before = territory.modifiers[TerritoryModifier.SURVEILLANCE]
+
+            await pilot.click(f"#{surveil_ids[0]}")
+            await pilot.pause()
+            assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == before + 1
+            assert app.corp_state.daily_action_used is False
 
     run(body())

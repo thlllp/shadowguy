@@ -12,6 +12,9 @@ import pytest
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     BASE_LAB_CAPACITY,
+    DEVELOPMENT_BUMP_COST,
+    DEVELOPMENT_MIN_SECURITY,
+    DEVELOPMENT_MIN_SURVEILLANCE,
     EFFICIENCY_UPGRADE_COSTS,
     EXPANSION_COST_BASE,
     EXPANSION_COST_PER_VALUE,
@@ -22,8 +25,12 @@ from shadowguy.corp_turn import (
     RESEARCH_PER_ASSISTANT,
     RESEARCH_PER_SCIENTIST,
     STARTING_CASH,
+    SURVEILLANCE_BUMP_COST,
+    TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
     TERRITORY_INCOME_PER_VALUE,
+    WORKER_SURVEILLANCE_ID,
+    WORKER_SURVEILLANCE_INCOME_BONUS,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
@@ -31,20 +38,28 @@ from shadowguy.corp_turn import (
     build_lab,
     collect_income,
     collect_research,
+    development_targets,
     expand_into,
     expansion_cost,
+    has_technology,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
     owned_research_facility,
+    raise_development,
+    raise_surveillance,
     research_rate,
+    research_technology,
+    surveillance_targets,
     train_employees,
 )
 from shadowguy.corpmap import (
+    MODIFIER_MAX,
     CorpMap,
     Location,
     LocationKind,
     Territory,
+    TerritoryModifier,
     expansion_candidates,
     generate_corp_map,
 )
@@ -572,3 +587,197 @@ def test_train_employees_matches_the_generated_academy_s_tier(seed):
     assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE) is True
     assert corp_state.operatives == academy.academy_tier
     assert corp_state.scientists == 0
+
+
+# --- Technology: Worker Surveillance ------------------------------------------
+# The first thing in the game that spends research points. Its two effects land in
+# different places (collect_income for the per-territory bonus, raise_surveillance
+# for the ability), so they're tested separately rather than through one call.
+
+
+def _corp_territory(corp_map, territory_id, **modifiers):
+    """Set a held territory's modifiers explicitly -- _map()'s fixtures carry none,
+    and every gate below reads them."""
+    territory = corp_map.territories[territory_id]
+    territory.modifiers = {
+        TerritoryModifier.SECURITY: modifiers.get("security", 0),
+        TerritoryModifier.SURVEILLANCE: modifiers.get("surveillance", 0),
+        TerritoryModifier.UNREST: modifiers.get("unrest", 0),
+        TerritoryModifier.DEVELOPMENT: modifiers.get("development", 0),
+        TerritoryModifier.RESTRICTED: modifiers.get("restricted", 0),
+    }
+    return territory
+
+
+def test_research_technology_spends_research_points_once():
+    corp_state = CorpState(faction_id=IRONCLAD, research_points=10)
+    cost = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
+    assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is True
+    assert corp_state.research_points == 10 - cost
+    assert has_technology(corp_state, WORKER_SURVEILLANCE_ID)
+    # Researching again is refused and costs nothing further.
+    assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is False
+    assert corp_state.research_points == 10 - cost
+
+
+def test_research_technology_fails_closed_when_short_on_points():
+    cost = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
+    corp_state = CorpState(faction_id=IRONCLAD, research_points=cost - 1)
+    assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is False
+    assert corp_state.research_points == cost - 1
+    assert corp_state.researched == set()
+
+
+def test_research_technology_does_not_consume_the_daily_action():
+    """RP is its own pacing gate, so researching doesn't compete with expanding."""
+    corp_state = CorpState(faction_id=IRONCLAD, research_points=10)
+    assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is True
+    assert corp_state.daily_action_used is False
+
+
+def test_worker_surveillance_income_bonus_is_per_territory():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+    owned = [t for t in corp_map.territories.values() if t.owner == IRONCLAD]
+    before = collect_income(corp_state, corp_map)
+    corp_state.researched.add(WORKER_SURVEILLANCE_ID)
+    after = collect_income(corp_state, corp_map)
+    assert after - before == WORKER_SURVEILLANCE_INCOME_BONUS * len(owned)
+
+
+def test_surveillance_targets_are_empty_until_researched():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert surveillance_targets(corp_state, corp_map) == []
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == 10_000
+
+
+def test_raise_surveillance_bumps_one_level_and_charges_cash():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 2
+    assert corp_state.cash == 10_000 - SURVEILLANCE_BUMP_COST
+    # Repeatable within the same day -- cash is the only gate.
+    assert corp_state.daily_action_used is False
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 3
+
+
+def test_raise_surveillance_refuses_a_maxed_district():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", surveillance=MODIFIER_MAX)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
+    assert "iron_home" not in {t.id for t in surveillance_targets(corp_state, corp_map)}
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == 10_000
+
+
+def test_raise_surveillance_refuses_territory_the_corp_does_not_hold():
+    corp_map = _map()
+    _corp_territory(corp_map, "neutral_a", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
+    assert raise_surveillance(corp_state, corp_map, "neutral_a") is False
+    assert corp_map.territories["neutral_a"].modifiers[TerritoryModifier.SURVEILLANCE] == 1
+
+
+def test_raise_surveillance_fails_closed_when_unaffordable():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0, researched={WORKER_SURVEILLANCE_ID})
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is False
+    assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 1
+
+
+def test_raise_surveillance_leaves_development_alone():
+    """Development is its own purchase (raise_development), not re-derived from the
+    levers the way corpmap._development() does at generation time."""
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=4, surveillance=1, development=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
+
+
+# --- Development, gated on Security + Surveillance ----------------------------
+
+
+def test_development_targets_require_both_thresholds():
+    corp_map = _map()
+    _corp_territory(
+        corp_map, "iron_home", security=DEVELOPMENT_MIN_SECURITY, surveillance=DEVELOPMENT_MIN_SURVEILLANCE
+    )
+    # Watched enough, but not policed enough.
+    _corp_territory(
+        corp_map, "iron_second", security=DEVELOPMENT_MIN_SECURITY - 1, surveillance=MODIFIER_MAX
+    )
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert {t.id for t in development_targets(corp_state, corp_map)} == {"iron_home"}
+
+
+def test_raise_development_bumps_one_level_and_charges_cash():
+    corp_map = _map()
+    territory = _corp_territory(
+        corp_map,
+        "iron_home",
+        security=DEVELOPMENT_MIN_SECURITY,
+        surveillance=DEVELOPMENT_MIN_SURVEILLANCE,
+        development=1,
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert raise_development(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 2
+    assert corp_state.cash == 10_000 - DEVELOPMENT_BUMP_COST
+    assert corp_state.daily_action_used is False
+
+
+def test_raise_development_needs_no_technology():
+    """A district seeded well enough can be built up from day one -- Worker
+    Surveillance is only the route for one that wasn't."""
+    corp_map = _map()
+    _corp_territory(
+        corp_map, "iron_home", security=DEVELOPMENT_MIN_SECURITY, surveillance=DEVELOPMENT_MIN_SURVEILLANCE
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert corp_state.researched == set()
+    assert raise_development(corp_state, corp_map, "iron_home") is True
+
+
+def test_raise_development_refuses_below_threshold_and_when_maxed():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", security=0, surveillance=0, development=0)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert raise_development(corp_state, corp_map, "iron_home") is False
+
+    _corp_territory(
+        corp_map,
+        "iron_home",
+        security=MODIFIER_MAX,
+        surveillance=MODIFIER_MAX,
+        development=MODIFIER_MAX,
+    )
+    assert raise_development(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == 10_000
+
+
+def test_surveillance_unlocks_development_on_a_poorly_seeded_district():
+    """The chain the tech exists for: a policed but unwatched district can't be
+    developed until Worker Surveillance raises its Surveillance to the threshold."""
+    corp_map = _map()
+    territory = _corp_territory(
+        corp_map,
+        "iron_home",
+        security=DEVELOPMENT_MIN_SECURITY,
+        surveillance=DEVELOPMENT_MIN_SURVEILLANCE - 1,
+        development=0,
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=100_000, researched={WORKER_SURVEILLANCE_ID})
+    assert development_targets(corp_state, corp_map) == []
+
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert {t.id for t in development_targets(corp_state, corp_map)} == {"iron_home"}
+    assert raise_development(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
