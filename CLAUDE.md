@@ -86,7 +86,7 @@ Switching between runner and corp is optional and meant to be difficult — neit
 
 ### Stats and skills (`shadowguy/character.py`, `shadowguy/skills.py`)
 
-Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Perception`, `Intelligence`, `Cool`. `Cash` and `Rep` are resources, not checkable stats — `STAT_NAMES` is the union, and `Character.stat()` only folds gear bonuses into the six core ones. Health is a separate pool that scales off **raw** Body (`BASE_HEALTH + body * HEALTH_PER_BODY` = `10 + body * 5`), deliberately not `stat("body")`, so gear never moves max health.
+Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Perception`, `Intelligence`, `Cool`. `Cash`, `Rep` and `Humanity` are resources, not checkable stats — `STAT_NAMES` is the union, and `Character.stat()` only folds gear bonuses into the six core ones. Health is a separate pool that scales off **raw** Body (`BASE_HEALTH + body * HEALTH_PER_BODY` = `10 + body * 5`), deliberately not `stat("body")`, so gear never moves max health.
 
 **Nothing rolls a core stat directly.** Each stat carries skills (`skills.SKILLS`, **32** total); a `Choice` names a *skill*, and `skills.skill_value()` is what the dice see: the skill's tied stat (gear included) plus the rank invested in that specific skill. Perception carries the two extras beyond five — `Firearms` (a gun is aimed, not swung, so it rolls the same faculty as `Sight`) and `Misc Weapons`. Nothing enforces five-per-stat, and a stat's cost is per-skill anyway, so extras make perception *broader*, not stronger. `Character.skill_ranks` is `dict[skill_id, int]`, fully populated (every skill starts at `STARTING_SKILL_RANK`), not sparse. A skill id that isn't in `SKILLS_BY_ID` raises from `skills.skill_for()`, the single chokepoint: `Scene.__post_init__` runs it over every choice, so a typo fails when the scene is *built*, not mid-roll.
 
@@ -95,6 +95,8 @@ Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Per
 `Rep` is global standing in the street. `Character.standing` is a separate `dict[faction_id, int]` of per-corp standing (see Faction standing). The two are not interchangeable.
 
 **`Rep` is floored at `REP_FLOOR` (-10), not 0** — unlike health, it's allowed into the red. A blown job or gig now costs a point of it (`Character.adjust_rep`, called from `scene.apply_outcome` and, for the knockout path that bypasses `Outcome`s entirely, directly from `screens.scene_screen.SceneScreen._on_combat_end`): the last stage's plain failure or fleeing any of a job's fights costs `jobs.JOB_FAILURE_REP_HIT` (-1, alongside `JOB_FAILURE_TRUST_HIT` (-1) with the fixer who sent you), and either kind of gig failure costs `gigs.GIG_FAIL_REP_HIT` (-1, alongside `GIG_FAIL_STANDING_HIT` (-1) with the gig's owning character). A mid-job stage failure that isn't the last one doesn't trigger this — the job carries on, so nothing's actually blown yet (see Fixers & job generation). This has a live consequence: `factions.CORP_OFFICER_TIERS`' reception gate is `min_rep = 0`, so a runner whose rep has gone negative gets turned away even from the public lobby (see Corporate HQs & officers).
+
+**`Humanity` is a fixed baseline (`HUMANITY_BASELINE`, 6), not a meter that moves.** Unlike Rep or Health, nothing in the game raises or lowers `Character.humanity` itself today — it's a ceiling, not a pool that drains. What it caps is real, though: it's the runner's total budget for cyberware, spent as `cybernetics.Cyberware.humanity_cost` per installed piece (see Cyberware, below) rather than as some abstract cyberpsychosis tally.
 
 ### Character creation (`screens/creation_screen.py`)
 
@@ -600,22 +602,29 @@ An `Item` carries more than a flat stat bonus:
 
 Persistent body modifications, distinct from `shops.Item`: cyberware is **installed**, not equipped/unequipped — there's no `InventoryItem.equipped` toggle, because a surgically-installed piece is always active. `CyberSlot` (`NEURALWARE`/`OPTICS`/`ARMS`/`INTERNAL`) is the cyberware counterpart to `shops.Slot`'s wearable slots, one piece per slot, tracked on `Character.installed_cyberware: dict[CyberSlot, str]`. `CYBERWARE_CATALOG` is hand-authored like `shops.CATALOG`, each `Cyberware` carrying `bonuses`/`skill_bonuses` in the exact same shape `shops.Item` uses.
 
-**It's load-bearing today, not inert data.** `Character.stat()` folds `cybernetics.installed_bonus` in right alongside `shops.equipped_bonus`, and `skill_gear_bonus()` does the same with `installed_skill_bonus` — so installed cyberware strengthens checks immediately, the same as worn gear. `install_cyberware`/`remove_cyberware` are real functions: installing charges cash and fails closed if the slot's already occupied or it's unaffordable; removing frees the slot with no refund (ripping cyberware out is surgery, not a sale).
+**It's load-bearing today, not inert data.** `Character.stat()` folds `cybernetics.installed_bonus` in right alongside `shops.equipped_bonus`, and `skill_gear_bonus()` does the same with `installed_skill_bonus` — so installed cyberware strengthens checks immediately, the same as worn gear. `install_cyberware`/`remove_cyberware` are real functions: installing charges cash **and** a piece of Humanity capacity (below) and fails closed if the slot's already occupied, it's unaffordable, or it wouldn't fit in whatever Humanity is left free; removing frees both, with no refund on either (ripping cyberware out is surgery, not a sale).
 
-**What's deliberately missing is acquisition** — no `LocationKind` (a ripperdoc clinic), no `ShopScreen` wiring, no `min_standing` gate, and no Humanity/cyberpsychosis cost. Adding a shop kind touches `corpmap.py`'s name pools, `LOCATION_SKILL`, `GENERATED_KINDS`, `jobs.LEGWORK_APPROACH_TEXT` and `gigs._GIG_TEMPLATES` all at once (see Shops' own opening note on `SHOP_KINDS`) — real wiring, deliberately deferred rather than bolted on early. Nothing in the game calls `install_cyberware` yet; it's reachable only from tests and a future screen. `saves.SAVE_VERSION` 33 added `Character.installed_cyberware`.
+**Humanity is capacity, not a drain.** Every `Cyberware` carries a `humanity_cost` (a `float` — Smartlink costs 0.5), and the sum across everything installed can never exceed `Character.humanity` (`HUMANITY_BASELINE`, 6 — see Stats and skills). `cybernetics.installed_humanity_cost`/`free_humanity` are the capacity/remaining-budget pair, the same shape `shops.free_program_slots` already gives a deck's RAM. Nothing lowers `Character.humanity` itself yet, so today this is purely a loadout budget — how much of a four-slot frame a runner can afford to replace at once — not a resource that depletes over a run the way a cyberpsychosis mechanic would.
+
+**Smartlink** (`CyberSlot.OPTICS`) is the one piece whose whole effect is conditional rather than a flat bonus: installed alone it does nothing. It only grants `combat.smartlink_bonus`'s extra to-hit dice (`SMARTLINK_ATTACK_BONUS`, 2) when the *equipped weapon* is itself tagged `shops.Item.smartlinked` (today, just the pipe pistol — the game's one firearm, guarded at import to only ever be valid on a `skill == "firearms"` weapon). That conditionality is why the bonus is threaded through `resolve_hit`'s `advantage` parameter in both `combat._attack` and `tactical.player_attack`, rather than folded into `skill_gear_bonus` the way every other piece of gear's skill bonus is — an unconditional per-check bonus has no way to express "only with this weapon." The gate itself is `cybernetics.has_smartlink`, checking `Cyberware.grants_smartlink` (a flag, not an id match, since a higher-tier Smartlink is a second row that has to grant the same thing).
+
+**Cyberware comes in four quality tiers**, generated rather than hand-authored per tier: `cybernetics.CYBERWARE_TIER_MULTIPLIERS` maps a tier to a `(price_mult, humanity_mult)` pair, both relative to the same piece's **Tier 1** row (not the tier below it) — Tier 2 trades nothing on price for -10% humanity_cost, Tier 3 is -25% price/+10% humanity_cost, and Tier 4 a much cruder knockoff at -50% price/+60% humanity_cost. A tier changes **only** what a piece costs, never what it does — same `bonuses`/`skill_bonuses`/`slot` as Tier 1 — enforced structurally by generating every higher-tier row via `dataclasses.replace(tier_1_row, ...)` rather than duplicating the stat/skill profile by hand, so a Tier 4 piece can never quietly drift from its Tier 1 twin's effect. `Cyberware.tier` is validated against `VALID_CYBERWARE_TIERS` at import, and ids follow `f"{base_id}_t{tier}"` (e.g. `smartlink_t4`) — a slot-occupancy check doesn't care which tier is installed, so picking a cheaper, cruder Tier 4 Smartlink over the Tier 1 original is an ordinary purchase choice, not a second mechanic.
+
+**What's deliberately missing is acquisition** — no `LocationKind` (a ripperdoc clinic), no `ShopScreen` wiring, and no `min_standing` gate. Adding a shop kind touches `corpmap.py`'s name pools, `LOCATION_SKILL`, `GENERATED_KINDS`, `jobs.LEGWORK_APPROACH_TEXT` and `gigs._GIG_TEMPLATES` all at once (see Shops' own opening note on `SHOP_KINDS`) — real wiring, deliberately deferred rather than bolted on early. Nothing in the game calls `install_cyberware` yet; it's reachable only from tests and a future screen. `saves.SAVE_VERSION` 34 added `Character.humanity` (33 added `Character.installed_cyberware`).
 
 ### Codebase layout
 
 ```
 src/shadowguy/
-  character.py   Character dataclass: core stats, health, skill ranks/points, post-creation
-                 experience (spend_experience_on_stat/skill) + crew_experience, advantage bank,
-                 faction standing, local_standing, gang_standing, crew, inventory, owned_programs,
-                 accepted_jobs, security_contracts
+  character.py   Character dataclass: core stats, health, humanity (cyberware capacity, fixed),
+                 skill ranks/points, post-creation experience (spend_experience_on_stat/skill) +
+                 crew_experience, advantage bank, faction standing, local_standing, gang_standing,
+                 crew, inventory, owned_programs, accepted_jobs, security_contracts
   archetypes.py  Enforcer/Hacker/Infiltrator creation presets; apply() spends via Character's own methods
   checks.py      resolve_check(): opposed d6 pool; pool_for_difficulty() converts legacy DCs
   skills.py      Skill table (32 skills), skill_value(), skill_for(); leaf module, imports nothing
-  combat.py      Enemy roster, rounds, the six-stat action set, Drop/CombatOutcome, shared resolve_hit; imports no scene
+  combat.py      Enemy roster, rounds, the six-stat action set, Drop/CombatOutcome, shared resolve_hit,
+                 smartlink_bonus (cybernetics.has_smartlink + a smartlinked weapon); imports no scene
   tactical.py    grid combat: Grid/Tile, tcod FOV+A*, turn engine (reuses combat.resolve_hit), BSP generate_map;
                  also generate_building/BurglaryWalkState (Burglary jobs, no combat); imports no scene
   matrix.py      matrix combat (Data Heist): MatrixNetwork/generate_matrix_network (node graph),
@@ -654,11 +663,13 @@ src/shadowguy/
                  one RESEARCH_FACILITY and one ACADEMY per faction, one GANG_DEN per gang;
                  lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
                  claim_territory (rivals.py's/corp_turn.py's expansion mutator)
-  shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
-                 Program catalog (cyberdeck program_slots, buy/install/uninstall_program), buy/sell/equip,
-                 standing-scaled pricing, hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
-  cybernetics.py Cyberware catalog (CyberSlot, bonuses/skill_bonuses like shops.Item), install_cyberware/
-                 remove_cyberware onto Character.installed_cyberware; no shop/screen wired to it yet; leaf
+  shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate,
+                 smartlinked flag for combat.smartlink_bonus), consumables, Program catalog (cyberdeck
+                 program_slots, buy/install/uninstall_program), buy/sell/equip, standing-scaled pricing,
+                 hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
+  cybernetics.py Cyberware catalog (CyberSlot, bonuses/skill_bonuses like shops.Item, humanity_cost as
+                 install capacity, four generated quality tiers), install_cyberware/remove_cyberware
+                 onto Character.installed_cyberware, has_smartlink; no shop/screen wired to it yet; leaf
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
   app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state,
                  corp_only -> which home screen to reopen, spend_time/_apply_day_tick);
