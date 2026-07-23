@@ -377,6 +377,8 @@ Only the runner's **active deck** matters — `shops.active_deck_entry`, the sam
 
 **The Stock/Programs split on `ShopScreen`** (`screens/shop_screens.py`) is a UI change only — reuses the existing `PanelNav` mixin (already driving `ContactsScreen`'s panels) rather than inventing a second one, so a Computer Store's catalog and its programs are two `Collapsible` `ListView`s cycled with the same left/right binding as everywhere else `PanelNav` shows up.
 
+**`CyberdeckScreen` (`screens/info_screens.py`) is where a deck's programs actually get installed/uninstalled** — reached from `MainMenu` as its own sidebar category and `d` binding, the same double-access pattern Gear/Skills/Contacts/Map/Corp already have. This used to be a block appended onto `InventoryScreen`'s list; it moved out because which deck is `shops.active_deck_entry` (the equipped deck with the best Intelligence bonus, and so the one whose `installed_programs` matter this fight) is a cyberdeck-specific question, not general gear — `InventoryScreen` keeps the generic equip/stow toggle (a deck is still an `Item` there), `CyberdeckScreen` repeats just that one toggle because it's what `active_deck_entry` reads. Adding this 10th sidebar category needed a companion fix: `MainMenu`'s `#categories` `ListView` has an exact row budget the same way `CorpMapScreen`'s panels do (see Corp map) — at 80×24 it could show only 9 rows, one short of 10, which silently clipped the last category (`corp`) out of click range without erroring. Fixed by matching `#sidebar`'s CSS `padding` to `#main_panel`'s already-established `padding: 0 1` (it had been the odd one out at `padding: 1`), reclaiming the two rows the uniform padding cost. Same lesson as `CorpMapScreen`'s note: a tight row budget fails silently, not loudly — drive the real screen at `size=(80, 24)` and check container vs. virtual size rather than assuming a new row fits.
+
 **None of `security_per_round`, the Sleaze odds curve, `SECURITY_HOSTILE_THRESHOLD`, or the new catalog's prices are balance-simulated** — first-slice numbers layered on top of a matrix engine that the doc below already flags as unsimulated at the flat-fight level; re-run a sim before leaning on any of it.
 
 ### Faction standing (`shadowguy/factions.py`, `shadowguy/scene.py`, `shadowguy/character.py`)
@@ -677,7 +679,7 @@ src/shadowguy/
                          + ResearchTreeScreen (spend research points; pushed from either with 't')
     shop_screens.py      FixerOffersScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen
                          + RealEstateScreen + SafehouseScreen
-    info_screens.py      ContactsScreen + InventoryScreen + SkillsScreen
+    info_screens.py      ContactsScreen + InventoryScreen + CyberdeckScreen + SkillsScreen
 ```
 
 `saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change.

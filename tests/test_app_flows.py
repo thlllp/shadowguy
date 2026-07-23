@@ -50,7 +50,7 @@ from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, T
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome
-from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen, SkillsScreen
+from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
 from shadowguy.shops import HOSPITAL_STAY_COST
@@ -527,7 +527,7 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
     run(body())
 
 
-def test_buy_deck_and_program_then_install_via_inventory_screen():
+def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
@@ -569,13 +569,34 @@ def test_buy_deck_and_program_then_install_via_inventory_screen():
             await pilot.pause()
             assert isinstance(app.screen, MainMenu)
 
-            await pilot.click("#cat_gear")
+            await pilot.click("#cat_cyberdeck")
             await pilot.pause()
-            assert isinstance(app.screen, InventoryScreen)
+            assert isinstance(app.screen, CyberdeckScreen)
 
             await pilot.click(f"#install_{deck_index}_sleaze")
             await pilot.pause()
             assert app.character.inventory[deck_index].installed_programs == ["sleaze"]
+
+    run(body())
+
+
+def test_cyberdeck_menu_option_reaches_the_screen_with_no_decks_owned():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+
+            categories = app.screen.query_one("#categories", ListView)
+            assert "cat_cyberdeck" in [item.id for item in categories.children]
+
+            await pilot.click("#cat_cyberdeck")
+            await pilot.pause()
+            assert isinstance(app.screen, CyberdeckScreen)
+
+            items = app.screen.query_one("#cyberdeck_items", ListView)
+            assert [item.id for item in items.children] == ["no_deck"]
 
     run(body())
 
