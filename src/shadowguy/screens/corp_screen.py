@@ -8,8 +8,6 @@ from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
     SURVEILLANCE_BUMP_COST,
-    TECHNOLOGIES,
-    TECHNOLOGIES_BY_ID,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
@@ -19,7 +17,6 @@ from shadowguy.corp_turn import (
     development_targets,
     expand_into,
     expansion_cost,
-    has_technology,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
@@ -27,7 +24,6 @@ from shadowguy.corp_turn import (
     raise_development,
     raise_surveillance,
     research_rate,
-    research_technology,
     surveillance_targets,
     train_employees,
 )
@@ -37,6 +33,7 @@ from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from . import PANEL_NAV_BINDINGS, PanelNav, _replace_items
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
+from .technology_screen import TechnologyScreen
 
 
 def _plural(category: EmployeeCategory) -> str:
@@ -59,19 +56,19 @@ class CorpScreen(Screen):
     since every faction's territory carries one guaranteed Academy and one
     guaranteed Research Facility from the start (corp_turn.py)."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), ("t", "technology", "Technology")]
 
-    # ListView defaults to height: 1fr, which -- with three of them stacked as
+    # ListView defaults to height: 1fr, which -- with two of them stacked as
     # siblings (corp_list plus the two Collapsible-wrapped ones) -- squashes each
     # to a sliver and lets the Collapsibles overlap on top of it. height: auto
     # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
     # each to its actual item count instead.
     CSS = """
-    #corp_list, #academy_list, #research_list, #tech_list {
+    #corp_list, #academy_list, #research_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel, #tech_panel {
+    #academy_panel, #research_panel {
         height: auto;
     }
     """
@@ -84,7 +81,6 @@ class CorpScreen(Screen):
         yield Collapsible(
             ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
         )
-        yield Collapsible(ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -92,6 +88,10 @@ class CorpScreen(Screen):
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def action_technology(self) -> None:
+        if self.app.corp_state is not None:
+            self.app.push_screen(TechnologyScreen())
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state
@@ -109,15 +109,12 @@ class CorpScreen(Screen):
             await _replace_items(list_view, items)
             await _replace_items(academy_list, [])
             await _replace_items(research_list, [])
-            await _replace_items(self.query_one("#tech_list", ListView), [])
             self.query_one("#academy_panel").display = False
             self.query_one("#research_panel").display = False
-            self.query_one("#tech_panel").display = False
             return
 
         self.query_one("#academy_panel").display = True
         self.query_one("#research_panel").display = True
-        self.query_one("#tech_panel").display = True
 
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[corp_state.faction_id]
@@ -182,20 +179,6 @@ class CorpScreen(Screen):
         items.append(ListItem(Static("Rest"), id="rest"))
         await _replace_items(list_view, items)
 
-        tech_items = []
-        for technology in TECHNOLOGIES:
-            if has_technology(corp_state, technology.id):
-                tech_items.append(
-                    ListItem(Static(f"{technology.name} — researched"), id=f"tech_done_{technology.id}")
-                )
-                continue
-            label = f"Research {technology.name} — {technology.cost}rp"
-            if technology.cost > corp_state.research_points:
-                short = technology.cost - corp_state.research_points
-                label += f" (need {short:g}rp more)"
-            tech_items.append(ListItem(Static(label), id=f"tech_{technology.id}"))
-        await _replace_items(self.query_one("#tech_list", ListView), tech_items)
-
         academy_items = []
         for category in EmployeeCategory:
             label = f"Train {_plural(category)} — {ACADEMY_TRAINING_COST}eb"
@@ -255,19 +238,6 @@ class CorpScreen(Screen):
                 self.notify("Already made your move today.", severity="warning")
             else:
                 self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("tech_done_"):
-            return
-
-        if item_id.startswith("tech_"):
-            corp_state = self.app.corp_state
-            technology_id = item_id.removeprefix("tech_")
-            if research_technology(corp_state, technology_id):
-                self.notify(f"Researched {TECHNOLOGIES_BY_ID[technology_id].name}.")
-            else:
-                self.notify("Not enough research points.", severity="warning")
             await self._refresh()
             return
 
@@ -347,9 +317,9 @@ class CorpMainMenu(PanelNav, CorpScreen):
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
-    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "tech_list")
+    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list")
 
-    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts")]
+    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts"), ("tech", "Technology")]
 
     # The #corp_list/#academy_list/#research_list/#academy_panel/#research_panel rules
     # are already on CorpScreen.CSS, but Textual's cross-hierarchy CSS merge silently
@@ -378,11 +348,11 @@ class CorpMainMenu(PanelNav, CorpScreen):
         padding: 0 1;
     }
 
-    #corp_list, #academy_list, #research_list, #tech_list {
+    #corp_list, #academy_list, #research_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel, #tech_panel {
+    #academy_panel, #research_panel {
         height: auto;
     }
     """
@@ -402,9 +372,6 @@ class CorpMainMenu(PanelNav, CorpScreen):
                     title="Research Facility",
                     collapsed=False,
                     id="research_panel",
-                ),
-                Collapsible(
-                    ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel"
                 ),
                 id="main_panel",
             ),
@@ -437,5 +404,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
                 self.app.push_screen(CorpMapScreen())
             elif key == "contacts":
                 self.app.push_screen(ContactsScreen())
+            elif key == "tech":
+                self.action_technology()
             return
         await super().on_list_view_selected(event)

@@ -52,6 +52,7 @@ from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
+from shadowguy.screens.technology_screen import TechnologyScreen
 from shadowguy.shops import HOSPITAL_STAY_COST
 from textual.widgets import Collapsible, ListView
 
@@ -166,9 +167,9 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
 def test_corp_main_menu_has_sidebar_categories():
     """CorpMainMenu is laid out like MainMenu -- a left category sidebar next to the
     corp's own action list -- rather than dropping straight into the action list with
-    nothing beside it. "Corp" renders inline; "Corp Map"/"Contacts" push their own
-    screens, reachable both from the sidebar and from the same quick keybindings
-    MainMenu uses."""
+    nothing beside it. "Corp" renders inline; "Corp Map"/"Contacts"/"Technology" push
+    their own screens, reachable both from the sidebar and from the same quick
+    keybindings MainMenu uses."""
 
     async def body():
         app = ShadowguyApp()
@@ -183,7 +184,12 @@ def test_corp_main_menu_has_sidebar_categories():
             assert isinstance(app.screen, CorpMainMenu)
 
             categories = app.screen.query_one("#categories", ListView)
-            assert [item.id for item in categories.children] == ["cat_corp", "cat_map", "cat_contacts"]
+            assert [item.id for item in categories.children] == [
+                "cat_corp",
+                "cat_map",
+                "cat_contacts",
+                "cat_tech",
+            ]
             # The corp's own action list (inherited from CorpScreen) is visible
             # inline beside the sidebar, not something you have to navigate to.
             assert any(item.id == "rest" for item in app.screen.query_one("#corp_list", ListView).children)
@@ -197,6 +203,12 @@ def test_corp_main_menu_has_sidebar_categories():
             await pilot.press("c")
             await pilot.pause()
             assert isinstance(app.screen, ContactsScreen)
+            app.pop_screen()
+            await pilot.pause()
+
+            await pilot.click("#cat_tech")
+            await pilot.pause()
+            assert isinstance(app.screen, TechnologyScreen)
             app.pop_screen()
             await pilot.pause()
 
@@ -1077,6 +1089,11 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             # Nothing to raise, and the tech row reports the shortfall.
             corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert not any(i.startswith("surveil_") for i in corp_ids)
+
+            # Technology now lives on its own pushed screen.
+            await pilot.press("t")
+            await pilot.pause()
+            assert isinstance(app.screen, TechnologyScreen)
             tech_list = app.screen.query_one("#tech_list", ListView)
             assert {item.id for item in tech_list.children} == {
                 "tech_worker_surveillance",
@@ -1104,6 +1121,12 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             # Only the researched one flips; the other stays offered.
             tech_ids = {item.id for item in app.screen.query_one("#tech_list", ListView).children}
             assert tech_ids == {"tech_done_worker_surveillance", "tech_brains_2"}
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpScreen)
+            await app.screen._refresh()
+            await pilot.pause()
 
             corp_list = app.screen.query_one("#corp_list", ListView)
             surveil_ids = [item.id for item in corp_list.children if item.id.startswith("surveil_")]

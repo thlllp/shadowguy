@@ -390,7 +390,7 @@ Claiming is `corpmap.claim_territory(territory, faction_id, rng)`: flips `owner`
 
 **Once the player takes over a Faction (see Corp mode turn loop, below), that faction drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, `continue`s past that faction inside the `for faction in FACTIONS` loop, and records no `RivalAction` for it — its daily move is the player's own decision from `CorpScreen` now, not a roll here. Default `None` keeps every pre-existing call site (and test) working unchanged.
 
-### Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`)
+### Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`, `screens/technology_screen.py`)
 
 The other half of Rival AI: once the player takes over a Faction, they get the same kind of daily move the AI factions make, plus a bit more. A parallel resolution module like `rivals.py`/`security.py` — not a `Scene` — leaf-ish (imports `corpmap` only, never `scene` or `app`).
 
@@ -430,6 +430,8 @@ Note `collect_research` returns a **float**, not an int, because of `RESEARCH_PE
 
 **Technology is what finally spends research points** (`corp_turn.TECHNOLOGIES`, two entries today, **both researchable from the start** — there's no prerequisite system and nothing needs one yet). `Technology` is a plain id/name/cost/description row; a tech's **effect is not a field on it** — it's read wherever it applies, keyed off the id, the same derive-at-the-point-of-use principle `jobs.archetype_specialist()` follows. `CorpState.researched` is a set of ids (mirroring `Character.owned_programs`), and research is permanent. Descriptions are `.format`ed from the effect constants at construction, so retuning a number can't leave the menu text lying about it.
 
+**Researching lives on its own pushed screen**, `screens/technology_screen.py`'s `TechnologyScreen` — pulled out of what used to be an inline `#tech_panel` collapsible on `CorpScreen` so there's room for the tree to grow, reachable from both `CorpScreen` and `CorpMainMenu` via the `t` binding (`CorpMainMenu` also lists it as a sidebar category, alongside Corp Map/Contacts). Since `TECHNOLOGIES` is still flat and prerequisite-free, it renders as a plain researchable list rather than a literal node graph — the same "don't build the graphics before there's a graph" restraint `EntrancePickScreen`'s fixed diagram already documents. No `saves.SAVE_VERSION` bump was needed for the split — `CorpState.researched` didn't change shape, only which screen reads it.
+
 **Worker Surveillance** (`WORKER_SURVEILLANCE_ID`, 10 RP) does two things:
 - `collect_income` adds `WORKER_SURVEILLANCE_INCOME_BONUS` (10) **per held territory**, not once — it exactly doubles `TERRITORY_INCOME_BASE`, so the tech keeps paying as the corp expands rather than becoming a rounding error.
 - It unlocks `raise_surveillance`, which pays `SURVEILLANCE_BUMP_COST` (400 cash) to raise one held district's `TerritoryModifier.SURVEILLANCE` by 1, up to `MODIFIER_MAX`. `surveillance_targets` returns empty until it's researched — the tech grants the ability outright, it isn't a discount on it.
@@ -445,7 +447,7 @@ Note `collect_research` returns a **float**, not an int, because of `RESEARCH_PE
 
 **Neither the tech purchase nor either modifier bump touches `daily_action_used`.** RP and cash are their own gates, and the daily slot is for the *directed move* (expand/train/build). So a corp turn now has two independent budgets: the one decision a day, and whatever cash/RP has piled up. Both bumps are therefore repeatable within a single day. **None of these numbers are balance-simulated** — 10 RP each, 400, 800, the two thresholds, and 1.25/0.75 are first-slice.
 
-Note `CorpScreen` now renders four stacked sections (territory actions + Academy/Research Facility/Technology collapsibles), which at 80×24 totals ~36 rows. The screen scrolls, so everything stays reachable, but it is well past a single viewport — see the `CorpMapScreen` row-budget note under Corp map for why that matters. It also makes click-position UI tests fragile, since the map is generated off an **unseeded** `app.rng` and the row count varies run to run; drive such a test at a taller size rather than relying on where a row lands.
+Note `CorpScreen` now renders three stacked sections (territory actions + Academy/Research Facility collapsibles — Technology moved to its own screen, above), which at 80×24 still overflows a single viewport. The screen scrolls, so everything stays reachable, but it is well past a single viewport — see the `CorpMapScreen` row-budget note under Corp map for why that matters. It also makes click-position UI tests fragile, since the map is generated off an **unseeded** `app.rng` and the row count varies run to run; drive such a test at a taller size rather than relying on where a row lands.
 
 **Scientists and operatives still buy nothing directly.** Research assistants feed `collect_research`, and both are now worth training *because* Brains 2 scales them — but operatives remain the mechanism built ahead of its driver, the same pattern `gang_standing` predated `encounters.py` and `security.py` predated anything handing out contracts. `saves.SAVE_VERSION` has climbed once per shape change across this feature (20: `ShadowguyApp.corp_state` itself; 21: `Location.research_tier` / `CorpState.research_points`; 22: `Location.academy_tier`, the `expansion_used_today`→`daily_action_used` rename, and a since-replaced `employees` field; 23: that field split into `scientists`/`operatives`; 24: `Location.labs_built`; 25: `Location.efficiency_upgrades`; 26: `CorpState.research_assistants` and `research_points` becoming a float; 27: `ShadowguyApp.corp_only`; 30: `CorpState.researched`) — a reminder that this corner of the save format is still actively shifting.
 
@@ -628,6 +630,7 @@ src/shadowguy/
     corp_map_screen.py   CorpMapScreen + GangTollScreen
     corp_screen.py       CorpScreen (play as a corp: pick a Faction, expand/train/upgrade research)
                          + CorpMainMenu (subclasses it; home screen for a corp-only run)
+    technology_screen.py TechnologyScreen (spend research points; pushed from CorpScreen/CorpMainMenu)
     shop_screens.py      FixerOffersScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen
                          + RealEstateScreen + SafehouseScreen
     info_screens.py      ContactsScreen + InventoryScreen + SkillsScreen
