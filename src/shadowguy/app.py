@@ -4,7 +4,13 @@ from textual.app import App
 from textual.screen import Screen
 
 from shadowguy.character import HOURS_PER_DAY, Character
-from shadowguy.corp_turn import CorpState, collect_income, collect_research
+from shadowguy.corp_turn import (
+    CorpState,
+    advance_training,
+    collect_income,
+    collect_research,
+    employee_plural,
+)
 from shadowguy.corpmap import generate_corp_map, lodging_cost
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
@@ -94,6 +100,12 @@ class ShadowguyApp(App):
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
             self.corp_state.daily_action_used = False
+            trained = advance_training(self.corp_state, day)
+            if trained:
+                self.notify(
+                    f"Training complete: {trained.count} new "
+                    f"{employee_plural(trained.category)} report for duty."
+                )
             sightings = resolve_surveillance_day(
                 self.character, self.corp_map, self.corp_state, self.rival_runner_locations, day, self.rng
             )

@@ -32,10 +32,12 @@ from shadowguy.corp_turn import (
     TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
     TERRITORY_INCOME_PER_VALUE,
+    TRAINING_DAYS,
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     CorpState,
     EmployeeCategory,
+    advance_training,
     assistant_capacity,
     assistant_rate,
     build_efficiency_upgrade,
@@ -235,17 +237,61 @@ def test_expand_into_only_mutates_the_claimed_territory(seed):
         assert expand_into(corp_state, corp_map, other_candidates[0], rng) is False
 
 
-def test_train_employees_succeeds_and_charges_cash():
+def test_train_employees_queues_a_batch_and_charges_cash():
     corp_map = _map()
     corp_map.territories["iron_second"].locations.append(
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=2)
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST) is True
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=5) is True
     assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST
-    assert corp_state.scientists == 2
-    assert corp_state.operatives == 0
     assert corp_state.daily_action_used is True
+    # The hires don't land yet -- they're queued behind the training delay.
+    assert corp_state.scientists == 0
+    pending = corp_state.pending_recruit
+    assert pending is not None
+    assert pending.category is EmployeeCategory.SCIENTIST
+    assert pending.count == 2
+    assert pending.ready_day == 5 + TRAINING_DAYS[EmployeeCategory.SCIENTIST]
+
+
+def test_advance_training_completes_the_batch_on_its_ready_day():
+    corp_map = _map()
+    corp_map.territories["iron_second"].locations.append(
+        Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=2)
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is True
+    ready_day = TRAINING_DAYS[EmployeeCategory.SCIENTIST]
+    # Nothing lands on the days before it's ready, and the slot stays occupied.
+    for day in range(1, ready_day):
+        assert advance_training(corp_state, day) is None
+        assert corp_state.scientists == 0
+        assert corp_state.pending_recruit is not None
+    completed = advance_training(corp_state, ready_day)
+    assert completed is not None
+    assert completed.category is EmployeeCategory.SCIENTIST
+    assert corp_state.scientists == 2
+    assert corp_state.pending_recruit is None
+    # Idempotent once the slot's cleared.
+    assert advance_training(corp_state, ready_day + 1) is None
+
+
+def test_train_employees_uses_the_category_specific_delay():
+    corp_map = _map()
+    corp_map.territories["iron_second"].locations.append(
+        Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
+    )
+    # Each role trains for its own number of days.
+    for category, expected in (
+        (EmployeeCategory.SCIENTIST, 9),
+        (EmployeeCategory.OPERATIVE, 6),
+        (EmployeeCategory.RESEARCH_ASSISTANT, 3),
+    ):
+        assert TRAINING_DAYS[category] == expected
+        corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+        assert train_employees(corp_state, corp_map, category, day=0) is True
+        assert corp_state.pending_recruit.ready_day == expected
 
 
 def test_train_employees_credits_the_right_category():
@@ -254,7 +300,8 @@ def test_train_employees_credits_the_right_category():
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE) is True
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0) is True
+    advance_training(corp_state, TRAINING_DAYS[EmployeeCategory.OPERATIVE])
     assert corp_state.operatives == 1
     assert corp_state.scientists == 0
     assert corp_state.research_assistants == 0
@@ -266,19 +313,34 @@ def test_train_employees_credits_research_assistants():
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=2)
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.RESEARCH_ASSISTANT) is True
+    assert train_employees(corp_state, corp_map, EmployeeCategory.RESEARCH_ASSISTANT, day=0) is True
+    advance_training(corp_state, TRAINING_DAYS[EmployeeCategory.RESEARCH_ASSISTANT])
     assert corp_state.research_assistants == 2
     assert corp_state.scientists == 0
     assert corp_state.operatives == 0
 
 
+def test_train_employees_trains_one_batch_at_a_time():
+    corp_map = _map()
+    corp_map.territories["iron_second"].locations.append(
+        Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is True
+    # A second batch is refused while the first is still training, even on a later
+    # day with the daily action free -- the Academy has one slot.
+    corp_state.daily_action_used = False
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is False
+    assert corp_state.pending_recruit.category is EmployeeCategory.SCIENTIST
+    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST
+
+
 def test_train_employees_fails_with_no_academy():
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST) is False
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
     assert corp_state.cash == 10_000
-    assert corp_state.scientists == 0
-    assert corp_state.operatives == 0
+    assert corp_state.pending_recruit is None
 
 
 def test_train_employees_fails_when_unaffordable():
@@ -287,8 +349,8 @@ def test_train_employees_fails_when_unaffordable():
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=0)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST) is False
-    assert corp_state.scientists == 0
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
+    assert corp_state.pending_recruit is None
 
 
 def test_train_employees_fails_when_already_used_today():
@@ -297,8 +359,8 @@ def test_train_employees_fails_when_already_used_today():
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST) is False
-    assert corp_state.scientists == 0
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
+    assert corp_state.pending_recruit is None
 
 
 def test_expand_and_train_share_the_same_daily_slot():
@@ -310,8 +372,8 @@ def test_expand_and_train_share_the_same_daily_slot():
     rng = random.Random(0)
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is True
     # Training the same day is refused -- the day's one move is already spent.
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST) is False
-    assert corp_state.scientists == 0
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
+    assert corp_state.pending_recruit is None
 
 
 def test_lab_capacity_starts_at_base_with_no_labs_built():
@@ -589,7 +651,8 @@ def test_train_employees_matches_the_generated_academy_s_tier(seed):
         for location in territory.locations
         if location.kind == LocationKind.ACADEMY and territory.owner == faction.id
     )
-    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE) is True
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0) is True
+    advance_training(corp_state, TRAINING_DAYS[EmployeeCategory.OPERATIVE])
     assert corp_state.operatives == academy.academy_tier
     assert corp_state.scientists == 0
 
