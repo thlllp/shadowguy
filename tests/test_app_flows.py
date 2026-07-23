@@ -53,7 +53,6 @@ from shadowguy.scene import Outcome
 from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
-from shadowguy.screens.technology_screen import TechnologyScreen
 from shadowguy.shops import HOSPITAL_STAY_COST
 from textual.widgets import Collapsible, ListView
 
@@ -209,7 +208,7 @@ def test_corp_main_menu_has_sidebar_categories():
 
             await pilot.click("#cat_tech")
             await pilot.pause()
-            assert isinstance(app.screen, TechnologyScreen)
+            assert isinstance(app.screen, ResearchTreeScreen)
             app.pop_screen()
             await pilot.pause()
 
@@ -1145,9 +1144,9 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
         app = ShadowguyApp()
         # Tall enough that no row needs scrolling to click. The map is generated off
         # an unseeded app.rng, so the number of expansion rows -- and with it every
-        # widget's y position -- varies run to run; at 80x24 this screen's four
-        # stacked sections overflow and the click target moves. See CLAUDE.md's note
-        # on the section stack's height.
+        # widget's y position -- varies run to run; at 80x24 this screen's stacked
+        # sections overflow and the click target moves. See CLAUDE.md's note on the
+        # section stack's height.
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
@@ -1166,15 +1165,14 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert not any(i.startswith("surveil_") for i in corp_ids)
 
-            # Technology now lives on its own pushed screen.
+            # Technology now lives on its own pushed Research Tree screen. Worker
+            # Surveillance and Brains 2 are the two roots (empty prereqs), so both
+            # land in tier 0.
             await pilot.press("t")
             await pilot.pause()
-            assert isinstance(app.screen, TechnologyScreen)
-            tech_list = app.screen.query_one("#tech_list", ListView)
-            assert {item.id for item in tech_list.children} == {
-                "tech_worker_surveillance",
-                "tech_brains_2",
-            }
+            assert isinstance(app.screen, ResearchTreeScreen)
+            tier0_ids = {item.id for item in app.screen.query_one("#tier_0_list", ListView).children}
+            assert tier0_ids == {"tech_worker_surveillance", "tech_brains_2"}
 
             income_before = collect_income(app.corp_state, app.corp_map)
             app.corp_state.research_points = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost
@@ -1204,12 +1202,6 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             assert tier0_item.has_class("-researched")
             tier1_ids = {item.id for item in app.screen.query_one("#tier_1_list", ListView).children}
             assert "tech_panopticon_grid" in tier1_ids
-
-            await pilot.press("escape")
-            await pilot.pause()
-            assert isinstance(app.screen, CorpScreen)
-            await app.screen._refresh()
-            await pilot.pause()
 
             await pilot.press("escape")
             await pilot.pause()
