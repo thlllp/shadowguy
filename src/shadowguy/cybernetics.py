@@ -103,6 +103,13 @@ class Cyberware:
     # gate, via has_smartlink) -- a flag rather than an id check because a Tier 4
     # Smartlink is a second row that has to grant the same thing.
     grants_smartlink: bool = False
+    # Extra advantage dice on matrix.py's dice-rolling actions (Breach/Extract via
+    # _intrude, Harden, Analyze) -- unconditional, unlike Smartlink's weapon-gated
+    # bonus, since Datajack (the first piece to set this) helps every matrix action
+    # just by being installed. Summed across installed pieces the same way
+    # bonuses/skill_bonuses/defense already are (installed_matrix_action_bonus below),
+    # so a later, bigger interface can stack or replace it without a new mechanism.
+    matrix_action_bonus: int = 0
 
 
 # id, name, price, slot, bonuses, skill_bonuses, humanity_cost, tag. First-slice
@@ -151,12 +158,18 @@ _TIER_1_CYBERWARE = [
         {},
         humanity_cost=3,
     ),
-    # Inert today, like Smartlink was before combat.smartlink_bonus gave it a hook --
-    # a wired-in neural port with no bonuses/skill_bonuses of its own, waiting on a
-    # future matrix.py gate (e.g. jacking in requiring one installed) rather than
-    # granting anything on its own.
+    # A small, unconditional edge in the matrix (matrix_action_bonus) rather than a
+    # flat stat/skill bonus -- see the field's own comment above. First-slice; more
+    # benefits are expected to land on this one later rather than a new implant.
     Cyberware(
-        "datajack", "Datajack", 1000, CyberSlot.NEURALWARE, {}, {}, humanity_cost=0.5
+        "datajack",
+        "Datajack",
+        1000,
+        CyberSlot.NEURALWARE,
+        {},
+        {},
+        humanity_cost=0.5,
+        matrix_action_bonus=1,
     ),
     Cyberware(
         "hydraulic_cyberarm", "Hydraulic Cyberarm", 1000, CyberSlot.ARMS, {"strength": 2}, {}, humanity_cost=2
@@ -244,6 +257,8 @@ for _cyberware in CYBERWARE_CATALOG:
         raise ValueError(f"{_cyberware.id}: tier must be one of {VALID_CYBERWARE_TIERS}")
     if _cyberware.defense and not (1 <= _cyberware.defense <= 8):
         raise ValueError(f"{_cyberware.id}: defense must be 1-8")
+    if _cyberware.matrix_action_bonus < 0:
+        raise ValueError(f"{_cyberware.id}: matrix_action_bonus must be >= 0")
 
 if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
     raise ValueError("CYBERWARE_CATALOG has duplicate ids")
@@ -313,3 +328,10 @@ def installed_defense(installed: dict[CyberSlot, str]) -> int:
     counterpart to shops.equipped_defense, folded into combat.player_soak
     alongside worn armor."""
     return sum(CYBERWARE_BY_ID[cyberware_id].defense for cyberware_id in installed.values())
+
+
+def installed_matrix_action_bonus(installed: dict[CyberSlot, str]) -> int:
+    """Every installed piece's contribution to matrix.py's dice-rolling actions --
+    Datajack's small edge today, summed the same way installed_defense sums
+    defense, in case a later, better interface stacks or replaces it."""
+    return sum(CYBERWARE_BY_ID[cyberware_id].matrix_action_bonus for cyberware_id in installed.values())

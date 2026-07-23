@@ -15,6 +15,7 @@ from shadowguy.cybernetics import (
     installed_bonus,
     installed_defense,
     installed_humanity_cost,
+    installed_matrix_action_bonus,
     installed_skill_bonus,
     remove_cyberware,
 )
@@ -293,12 +294,28 @@ def test_datajack_catalog_values():
     assert datajack.slot is CyberSlot.NEURALWARE
 
 
-def test_datajack_is_inert_today():
+def test_datajack_has_no_stat_or_skill_bonus_or_defense():
     datajack = CYBERWARE_BY_ID["datajack"]
     assert datajack.bonuses == {}
     assert datajack.skill_bonuses == {}
     assert datajack.defense == 0
     assert datajack.grants_smartlink is False
+
+
+def test_datajack_grants_a_small_matrix_action_bonus():
+    assert CYBERWARE_BY_ID["datajack"].matrix_action_bonus == 1
+
+
+def test_installed_matrix_action_bonus_sums_across_installed_slots():
+    assert installed_matrix_action_bonus({CyberSlot.NEURALWARE: "datajack"}) == 1
+
+
+def test_installed_matrix_action_bonus_is_zero_with_nothing_installed():
+    assert installed_matrix_action_bonus({}) == 0
+
+
+def test_installed_matrix_action_bonus_zero_for_a_different_neuralware_piece():
+    assert installed_matrix_action_bonus({CyberSlot.NEURALWARE: "neural_processor"}) == 0
 
 
 def test_install_datajack_succeeds_and_spends_humanity():

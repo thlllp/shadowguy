@@ -53,6 +53,7 @@ from enum import StrEnum
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolve_check, resolve_rng
 from shadowguy.combat import Drop, resolve_hit
+from shadowguy.cybernetics import installed_matrix_action_bonus
 from shadowguy.shops import (
     STOLEN_DATASHARD_ID,
     InventoryItem,
@@ -615,10 +616,11 @@ def _ice_turn(state: MatrixState, fighter: IceFighter, rng: random.Random, harde
 
 def _intrude(state: MatrixState, target: IceFighter, rng: random.Random, soak: int) -> tuple[CheckRoll, int]:
     """The runner's core intrusion roll: Hack to hit, the deck's rating for damage, any
-    banked Analyze bonus consumed on this attempt. Shared by the ordinary ATTACK action
-    and Extract (Program.action_extract) — the two differ only in what soak pool
-    opposes the hit (Extract ignores the target's soak entirely; see _extract)."""
-    bonus = state.next_attack_bonus
+    banked Analyze bonus consumed on this attempt, plus any installed cyberware's
+    matrix_action_bonus (Datajack, today). Shared by the ordinary ATTACK action and
+    Extract (Program.action_extract) — the two differ only in what soak pool opposes
+    the hit (Extract ignores the target's soak entirely; see _extract)."""
+    bonus = state.next_attack_bonus + installed_matrix_action_bonus(state.character.installed_cyberware)
     state.next_attack_bonus = 0
     return resolve_hit(
         rng,
@@ -648,6 +650,7 @@ def _harden(state: MatrixState, rng: random.Random) -> None:
     roll = resolve_check(
         stat_value=skill_value(state.character, "tinkering"),
         difficulty=HARDEN_DIFFICULTY,
+        advantage=installed_matrix_action_bonus(state.character.installed_cyberware),
         rng=rng,
     )
     hit = roll.result.passed
@@ -663,6 +666,7 @@ def _analyze(state: MatrixState, rng: random.Random) -> None:
     roll = resolve_check(
         stat_value=skill_value(state.character, "infer"),
         difficulty=ANALYZE_DIFFICULTY,
+        advantage=installed_matrix_action_bonus(state.character.installed_cyberware),
         rng=rng,
     )
     if roll.result.passed:
@@ -1114,7 +1118,12 @@ def analyze_node(run: MatrixRunState, node_id: str, rng: random.Random | None = 
         run.analyze_uses[program.id] = run.analyze_uses.get(program.id, 0) - 1
     rng = resolve_rng(rng)
     node = run.network.nodes[node_id]
-    roll = resolve_check(stat_value=skill_value(run.character, "hack"), difficulty=ANALYZE_DIFFICULTY, rng=rng)
+    roll = resolve_check(
+        stat_value=skill_value(run.character, "hack"),
+        difficulty=ANALYZE_DIFFICULTY,
+        advantage=installed_matrix_action_bonus(run.character.installed_cyberware),
+        rng=rng,
+    )
     if roll.result.passed:
         run.revealed_node_ids.add(node_id)
         run.run_log.append(f"{program.name} reads {node.id}'s traffic. It's a {node.role.value} node.")
