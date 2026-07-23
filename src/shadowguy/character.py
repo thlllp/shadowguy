@@ -21,8 +21,11 @@ HEALTH_PER_BODY = 5
 HOURS_PER_DAY = 24
 
 # Everything starts at 1 and is bought up from there. Both pools are spent at
-# character creation (app.CharacterCreationScreen) and never refill — there is
-# no XP system, so the build you walk in with is the build you have.
+# character creation (app.CharacterCreationScreen) and never refill — the build
+# you walk in with is the build you have on day one. Later growth (Character.
+# experience, gained from completed jobs) is a separate pool entirely, spent
+# post-creation via spend_experience_on_stat/spend_experience_on_skill rather
+# than topping either of these back up.
 STARTING_STAT = 1
 STARTING_SKILL_RANK = 1
 STARTING_STAT_POINTS = 6
@@ -147,6 +150,18 @@ class Character:
     # nothing puts them back.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
+    # Earned through play (currently: completed jobs only, see jobs.JOB_XP_BASE and
+    # Outcome.experience_delta) and spent post-creation via spend_experience_on_stat/
+    # spend_experience_on_skill — a single pool that buys either, the player's choice
+    # each time, unlike the two separate creation-time pools above.
+    experience: int = 0
+    # Runner ids (runners.RUNNERS_BY_ID) -> XP earned while on this character's crew for
+    # a completed job. Not split with the player's own experience (see gain_experience) —
+    # every crew member on the job gets the full amount too. No spend path exists for a
+    # hired runner yet (they have no stat/skill sheet of their own to spend it on) — this
+    # is the mechanism, waiting on a driver, the same pattern gang_standing predated
+    # encounters.py.
+    crew_experience: dict[str, int] = field(default_factory=dict)
     # Whether a Health Kit has already been used today. A kit is a small emergency
     # top-up, not a stack you burn to full — one per day (shops.use_consumable enforces
     # it), cleared on on_new_day(). Real recovery is time in a hospital ward.
@@ -278,13 +293,32 @@ class Character:
             return None
         return SKILL_RANK_COST[self.skill_rank(skill_id) + 1]
 
+    def next_stat_cost(self, name: str) -> int:
+        """XP to raise `name` one point above its current value. Escalates the
+        higher a stat already climbs -- the same "steadily pricier" shape
+        next_rank_cost gives skills -- but has no ceiling: unlike a skill rank,
+        a stat is never maxed out, so scarce XP is what does the limiting."""
+        if name not in CORE_STATS:
+            raise ValueError(f"not a core stat: {name!r}")
+        return max(1, getattr(self, name) - STARTING_STAT + 1)
+
+    def _raise_stat(self, name: str) -> None:
+        setattr(self, name, getattr(self, name) + 1)
+        if name == "body":
+            # max_health is derived from body, so buying Body raises the ceiling.
+            # Carry current health up with it, or the run starts already wounded.
+            self.health += HEALTH_PER_BODY
+
+    def _raise_skill_rank(self, skill_id: str) -> None:
+        self.skill_ranks[skill_id] = self.skill_rank(skill_id) + 1
+
     def spend_skill_point(self, skill_id: str) -> bool:
         skill_for(skill_id)  # unknown id: raise rather than burn points on a junk rank
         cost = self.next_rank_cost(skill_id)
         if cost is None or cost > self.skill_points:
             return False
         self.skill_points -= cost
-        self.skill_ranks[skill_id] = self.skill_rank(skill_id) + 1
+        self._raise_skill_rank(skill_id)
         return True
 
     def spend_stat_point(self, name: str) -> bool:
@@ -293,12 +327,37 @@ class Character:
         if self.stat_points <= 0:
             return False
         self.stat_points -= 1
-        setattr(self, name, getattr(self, name) + 1)
-        if name == "body":
-            # max_health is derived from body, so buying Body raises the ceiling.
-            # Carry current health up with it, or the run starts already wounded.
-            self.health += HEALTH_PER_BODY
+        self._raise_stat(name)
         return True
+
+    def spend_experience_on_skill(self, skill_id: str) -> bool:
+        """Post-creation counterpart to spend_skill_point: same cost curve
+        (next_rank_cost), paid out of `experience` instead of the one-shot
+        creation pool."""
+        skill_for(skill_id)
+        cost = self.next_rank_cost(skill_id)
+        if cost is None or cost > self.experience:
+            return False
+        self.experience -= cost
+        self._raise_skill_rank(skill_id)
+        return True
+
+    def spend_experience_on_stat(self, name: str) -> bool:
+        """Post-creation counterpart to spend_stat_point: costed by
+        next_stat_cost (escalating) instead of creation's flat 1 point, paid
+        out of `experience`."""
+        cost = self.next_stat_cost(name)
+        if cost > self.experience:
+            return False
+        self.experience -= cost
+        self._raise_stat(name)
+        return True
+
+    def gain_experience(self, amount: int) -> None:
+        self.experience += amount
+
+    def grant_crew_experience(self, runner_id: str, amount: int) -> None:
+        self._adjust_dict(self.crew_experience, runner_id, amount)
 
     def reset_build(self) -> None:
         """Undo every point spent at creation. The creation screen's only way back."""

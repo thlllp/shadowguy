@@ -49,7 +49,8 @@ from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
 from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
+from shadowguy.scene import Outcome
+from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
 from shadowguy.shops import HOSPITAL_STAY_COST
@@ -722,6 +723,80 @@ def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_
             assert app.character.day == 2  # the job's own hours_cost crossed midnight
             assert offer in app.character.accepted_jobs  # not pruned out from under itself
             assert app.character.on_crew("runner_specter")  # crew hire survived too
+
+
+def test_completed_job_xp_is_not_split_with_crew_but_each_crew_member_earns_it_too():
+    """The player's own XP (credited via scene.apply_outcome, ahead of
+    _take_crew_cut) is never reduced by having crew along, and every crew member
+    hired for that job separately earns the same full amount into their own
+    Character.crew_experience -- not divided out of a shared pot."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            scene, _timing = generate_job(day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(0))
+            app.character.hire_for_job("runner_specter", scene.id)
+            app.character.hire_for_job("runner_juncture", scene.id)
+            app.push_screen(SceneScreen(scene))
+            await pilot.pause()
+
+            outcome = Outcome(text="done", cash_delta=100, experience_delta=20, next_stage=None)
+            app.character.gain_experience(outcome.experience_delta)
+            app.screen._take_crew_cut(outcome)
+
+            assert app.character.experience == 20
+            assert app.character.crew_experience == {"runner_specter": 20, "runner_juncture": 20}
+
+
+def test_skills_screen_spends_experience_on_a_stat_and_a_skill():
+    """SkillsScreen is the post-creation spend surface: a 'Raise <Stat>' row and
+    every skill row both draw on Character.experience rather than the one-shot
+    creation pools."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.character.experience = 100
+            body_before = app.character.body
+            hack_rank_before = app.character.skill_rank("hack")
+
+            app.push_screen(SkillsScreen())
+            await pilot.pause()
+
+            await pilot.click("#stat_body")
+            await pilot.pause()
+            assert app.character.body == body_before + 1
+            xp_after_stat = app.character.experience
+            assert xp_after_stat == 99  # first point on a fresh stat costs 1
+
+            await pilot.click("#skill_hack")
+            await pilot.pause()
+            assert app.character.skill_rank("hack") == hack_rank_before + 1
+            assert app.character.experience < xp_after_stat
+
+    run(body())
+
+
+def test_skills_screen_refuses_unaffordable_stat_without_charging():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.character.experience = 0
+            body_before = app.character.body
+
+            app.push_screen(SkillsScreen())
+            await pilot.pause()
+            await pilot.click("#stat_body")
+            await pilot.pause()
+
+            assert app.character.body == body_before
+            assert app.character.experience == 0
+
+    run(body())
 
     run(body())
 
