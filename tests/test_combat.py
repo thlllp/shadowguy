@@ -15,6 +15,7 @@ from shadowguy.combat import (
     available_actions,
     drop_for_result,
     equipped_weapons,
+    player_soak,
     resolve_hit,
     smartlink_bonus,
     start_combat,
@@ -221,3 +222,10 @@ def test_smartlink_bonus_zero_with_a_different_implant_in_the_slot():
     assert character.installed_cyberware[CyberSlot.OPTICS] == "cybereye_scanner"
     pistol = ITEMS_BY_ID["pipe_pistol"]
     assert smartlink_bonus(character, pistol) == 0
+
+
+def test_player_soak_folds_in_installed_cyberware_defense():
+    character = Character(name="t", cash=10_000)
+    before = player_soak(character)
+    install_cyberware(character, "titanium_bones")
+    assert player_soak(character) == before + 2

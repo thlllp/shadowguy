@@ -89,6 +89,11 @@ class Cyberware:
     humanity_cost: float
     # Short flavor tag, same convention as shops.Item.tag.
     tag: str = ""
+    # Soak-pool bonus, same shape and 1-8 bound as shops.Item.defense (folded into
+    # combat.player_soak by installed_defense below, alongside equipped armor) --
+    # unlike Item.defense there's no wearable-slot restriction, since every piece
+    # of cyberware is always active.
+    defense: int = 0
     # Quality grade, 1-4 (see VALID_CYBERWARE_TIERS and the module docstring). Tier 1
     # is the baseline catalog below; a higher tier is a dataclasses.replace of a Tier
     # 1 row with the same effect and a different price/humanity_cost -- never a
@@ -146,6 +151,13 @@ _TIER_1_CYBERWARE = [
         {},
         humanity_cost=3,
     ),
+    # Inert today, like Smartlink was before combat.smartlink_bonus gave it a hook --
+    # a wired-in neural port with no bonuses/skill_bonuses of its own, waiting on a
+    # future matrix.py gate (e.g. jacking in requiring one installed) rather than
+    # granting anything on its own.
+    Cyberware(
+        "datajack", "Datajack", 1000, CyberSlot.NEURALWARE, {}, {}, humanity_cost=0.5
+    ),
     Cyberware(
         "hydraulic_cyberarm", "Hydraulic Cyberarm", 1000, CyberSlot.ARMS, {"strength": 2}, {}, humanity_cost=2
     ),
@@ -169,6 +181,19 @@ _TIER_1_CYBERWARE = [
         {"cool": 1},
         {},
         humanity_cost=2,
+    ),
+    # Bone lacing: a soak-pool bonus (defense) rather than a stat/skill bonus, at an
+    # escalating price *and* humanity_cost in lockstep with how much of the skeleton
+    # is replaced -- unlike the rest of the catalog, where a piece's stat effect stays
+    # fixed and only its tier moves the price/humanity trade-off (above).
+    Cyberware(
+        "steel_bones", "Steel Bones", 1000, CyberSlot.INTERNAL, {}, {}, humanity_cost=1, defense=1
+    ),
+    Cyberware(
+        "titanium_bones", "Titanium Bones", 3000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2, defense=2
+    ),
+    Cyberware(
+        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=4, defense=4
     ),
 ]
 
@@ -217,6 +242,8 @@ for _cyberware in CYBERWARE_CATALOG:
         raise ValueError(f"{_cyberware.id}: humanity_cost must be >= 0")
     if _cyberware.tier not in VALID_CYBERWARE_TIERS:
         raise ValueError(f"{_cyberware.id}: tier must be one of {VALID_CYBERWARE_TIERS}")
+    if _cyberware.defense and not (1 <= _cyberware.defense <= 8):
+        raise ValueError(f"{_cyberware.id}: defense must be 1-8")
 
 if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
     raise ValueError("CYBERWARE_CATALOG has duplicate ids")
@@ -279,3 +306,10 @@ def installed_skill_bonus(installed: dict[CyberSlot, str], skill_id: str) -> int
     return sum(
         CYBERWARE_BY_ID[cyberware_id].skill_bonuses.get(skill_id, 0) for cyberware_id in installed.values()
     )
+
+
+def installed_defense(installed: dict[CyberSlot, str]) -> int:
+    """Every installed piece's contribution to the soak pool -- the cyberware
+    counterpart to shops.equipped_defense, folded into combat.player_soak
+    alongside worn armor."""
+    return sum(CYBERWARE_BY_ID[cyberware_id].defense for cyberware_id in installed.values())

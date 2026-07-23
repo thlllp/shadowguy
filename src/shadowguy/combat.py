@@ -52,7 +52,7 @@ from shadowguy.checks import (
     resolve_check,
     resolve_rng,
 )
-from shadowguy.cybernetics import has_smartlink
+from shadowguy.cybernetics import has_smartlink, installed_defense
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -310,13 +310,18 @@ def player_defense(character: Character) -> int:
 
 
 def player_soak(character: Character) -> int:
-    """Body + equipped armor's defense: the player's soak pool size (dice rolled to
-    mitigate a landed hit — see resolve_hit).
+    """Body + equipped armor's defense + installed cyberware's defense (e.g. bone
+    lacing): the player's soak pool size (dice rolled to mitigate a landed hit —
+    see resolve_hit).
 
     Bracing (CombatState.soak) is added on top of this per-round, at the call site
     — it is not part of the character's standing soak, since it clears at round end.
     """
-    return character.stat("body") + equipped_defense(character.inventory)
+    return (
+        character.stat("body")
+        + equipped_defense(character.inventory)
+        + installed_defense(character.installed_cyberware)
+    )
 
 
 def _soak_damage(rng: random.Random, base_damage: int, soak_pool: int) -> int:
