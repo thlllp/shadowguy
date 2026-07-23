@@ -5,9 +5,13 @@ import pytest
 
 from shadowguy.character import Character
 from shadowguy.combat import Drop
+from shadowguy.cybernetics import CyberSlot
 from shadowguy.matrix import (
+    ANALYZE_BONUS,
     BARE_JACK_DAMAGE,
     EXTRACT_UNLIMITED_USES,
+    HARDEN_SOAK,
+    HARDEN_SOAK_ON_FAILURE,
     ICE_BY_ID,
     ICE_TIERS,
     MATRIX_NETWORK_TIERS,
@@ -19,6 +23,9 @@ from shadowguy.matrix import (
     MatrixNode,
     MatrixNodeRole,
     MatrixOutcome,
+    _analyze,
+    _harden,
+    _intrude,
     analyze_node,
     available_matrix_actions,
     connected_nodes,
@@ -121,6 +128,54 @@ def test_actions_always_offer_attack_and_jack_out():
     assert attack.skill == "hack"
     jack = next(a for a in actions if a.kind is MatrixActionKind.JACK_OUT)
     assert jack.skill is None  # the one action that isn't a check
+
+
+# --- Datajack (cybernetics.Cyberware.matrix_action_bonus) ---
+
+
+def test_intrude_pool_includes_the_datajack_bonus():
+    c = _char(deck_id="burner_deck")
+    state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    base_pool = roll.pool
+
+    c.installed_cyberware[CyberSlot.NEURALWARE] = "datajack"
+    state2 = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    roll2, _ = _intrude(state2, state2.standing[0], random.Random(0), state2.standing[0].ice.soak)
+    assert roll2.pool == base_pool + 1
+
+
+def test_harden_action_gets_a_datajack_bonus():
+    """AlwaysSix makes every die a success, so margin = player_pool - opposing_pool
+    exactly. HARDEN_DIFFICULTY (11) converts to an opposing pool of 1; intelligence 0
+    makes Tinkering's skill_value exactly 1 (default rank 1, no gear), so the baseline
+    margin is exactly 0 -- a plain failure -- and Datajack's +1 advantage is what
+    tips it into a pass."""
+    c = _char()
+    c.intelligence = 0
+    state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    _harden(state, AlwaysSix())
+    assert state.soak == HARDEN_SOAK_ON_FAILURE
+
+    c.installed_cyberware[CyberSlot.NEURALWARE] = "datajack"
+    state2 = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    _harden(state2, AlwaysSix())
+    assert state2.soak == HARDEN_SOAK
+
+
+def test_analyze_action_gets_a_datajack_bonus():
+    """Same technique as the Harden test above: _char()'s defaults already give Infer
+    skill_value 2, and ANALYZE_DIFFICULTY (12) converts to an opposing pool of 2, so
+    the baseline margin under AlwaysSix is exactly 0 -- a plain failure."""
+    c = _char()
+    state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    _analyze(state, AlwaysSix())
+    assert state.next_attack_bonus == 0
+
+    c.installed_cyberware[CyberSlot.NEURALWARE] = "datajack"
+    state2 = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    _analyze(state2, AlwaysSix())
+    assert state2.next_attack_bonus == ANALYZE_BONUS
 
 
 # --- cyberdeck programs: generic mechanism (passive bonuses, action-program shape) ---

@@ -13,7 +13,9 @@ from shadowguy.cybernetics import (
     has_smartlink,
     install_cyberware,
     installed_bonus,
+    installed_defense,
     installed_humanity_cost,
+    installed_matrix_action_bonus,
     installed_skill_bonus,
     remove_cyberware,
 )
@@ -243,3 +245,81 @@ def test_install_cyberware_works_with_a_tier_4_id():
     assert install_cyberware(character, variant.id) is True
     assert character.cash == 10_000 - variant.price
     assert character.installed_cyberware[CyberSlot.OPTICS] == variant.id
+
+
+# --- bone lacing (defense) ---
+
+
+def test_bone_lacing_catalog_values():
+    steel = CYBERWARE_BY_ID["steel_bones"]
+    titanium = CYBERWARE_BY_ID["titanium_bones"]
+    adamantium = CYBERWARE_BY_ID["adamantium_bones"]
+    assert (steel.price, steel.defense, steel.humanity_cost) == (1000, 1, 1)
+    assert (titanium.price, titanium.defense, titanium.humanity_cost) == (3000, 2, 2)
+    assert (adamantium.price, adamantium.defense, adamantium.humanity_cost) == (6000, 4, 4)
+    assert steel.slot is CyberSlot.INTERNAL
+    assert titanium.slot is CyberSlot.INTERNAL
+    assert adamantium.slot is CyberSlot.INTERNAL
+
+
+def test_bone_lacing_gets_generated_tier_variants_too():
+    for base_id in ("steel_bones", "titanium_bones", "adamantium_bones"):
+        for tier in (2, 3, 4):
+            variant = CYBERWARE_BY_ID[f"{base_id}_t{tier}"]
+            assert variant.defense == CYBERWARE_BY_ID[base_id].defense
+            assert variant.tier == tier
+
+
+def test_installed_defense_sums_across_installed_slots():
+    assert installed_defense({CyberSlot.INTERNAL: "titanium_bones"}) == 2
+
+
+def test_installed_defense_is_zero_with_nothing_installed():
+    assert installed_defense({}) == 0
+
+
+def test_installing_bone_lacing_competes_with_other_internal_pieces():
+    character = Character(name="t", cash=10_000)
+    assert install_cyberware(character, "subdermal_plating") is True
+    assert install_cyberware(character, "steel_bones") is False
+    assert character.installed_cyberware[CyberSlot.INTERNAL] == "subdermal_plating"
+
+
+# --- datajack ---
+
+
+def test_datajack_catalog_values():
+    datajack = CYBERWARE_BY_ID["datajack"]
+    assert (datajack.price, datajack.humanity_cost) == (1000, 0.5)
+    assert datajack.slot is CyberSlot.NEURALWARE
+
+
+def test_datajack_has_no_stat_or_skill_bonus_or_defense():
+    datajack = CYBERWARE_BY_ID["datajack"]
+    assert datajack.bonuses == {}
+    assert datajack.skill_bonuses == {}
+    assert datajack.defense == 0
+    assert datajack.grants_smartlink is False
+
+
+def test_datajack_grants_a_small_matrix_action_bonus():
+    assert CYBERWARE_BY_ID["datajack"].matrix_action_bonus == 1
+
+
+def test_installed_matrix_action_bonus_sums_across_installed_slots():
+    assert installed_matrix_action_bonus({CyberSlot.NEURALWARE: "datajack"}) == 1
+
+
+def test_installed_matrix_action_bonus_is_zero_with_nothing_installed():
+    assert installed_matrix_action_bonus({}) == 0
+
+
+def test_installed_matrix_action_bonus_zero_for_a_different_neuralware_piece():
+    assert installed_matrix_action_bonus({CyberSlot.NEURALWARE: "neural_processor"}) == 0
+
+
+def test_install_datajack_succeeds_and_spends_humanity():
+    character = Character(name="t", cash=10_000)
+    assert install_cyberware(character, "datajack") is True
+    assert character.cash == 10_000 - 1000
+    assert free_humanity(character) == HUMANITY_BASELINE - 0.5

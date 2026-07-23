@@ -89,6 +89,11 @@ class Cyberware:
     humanity_cost: float
     # Short flavor tag, same convention as shops.Item.tag.
     tag: str = ""
+    # Soak-pool bonus, same shape and 1-8 bound as shops.Item.defense (folded into
+    # combat.player_soak by installed_defense below, alongside equipped armor) --
+    # unlike Item.defense there's no wearable-slot restriction, since every piece
+    # of cyberware is always active.
+    defense: int = 0
     # Quality grade, 1-4 (see VALID_CYBERWARE_TIERS and the module docstring). Tier 1
     # is the baseline catalog below; a higher tier is a dataclasses.replace of a Tier
     # 1 row with the same effect and a different price/humanity_cost -- never a
@@ -98,6 +103,13 @@ class Cyberware:
     # gate, via has_smartlink) -- a flag rather than an id check because a Tier 4
     # Smartlink is a second row that has to grant the same thing.
     grants_smartlink: bool = False
+    # Extra advantage dice on matrix.py's dice-rolling actions (Breach/Extract via
+    # _intrude, Harden, Analyze) -- unconditional, unlike Smartlink's weapon-gated
+    # bonus, since Datajack (the first piece to set this) helps every matrix action
+    # just by being installed. Summed across installed pieces the same way
+    # bonuses/skill_bonuses/defense already are (installed_matrix_action_bonus below),
+    # so a later, bigger interface can stack or replace it without a new mechanism.
+    matrix_action_bonus: int = 0
 
 
 # id, name, price, slot, bonuses, skill_bonuses, humanity_cost, tag. First-slice
@@ -146,6 +158,19 @@ _TIER_1_CYBERWARE = [
         {},
         humanity_cost=3,
     ),
+    # A small, unconditional edge in the matrix (matrix_action_bonus) rather than a
+    # flat stat/skill bonus -- see the field's own comment above. First-slice; more
+    # benefits are expected to land on this one later rather than a new implant.
+    Cyberware(
+        "datajack",
+        "Datajack",
+        1000,
+        CyberSlot.NEURALWARE,
+        {},
+        {},
+        humanity_cost=0.5,
+        matrix_action_bonus=1,
+    ),
     Cyberware(
         "hydraulic_cyberarm", "Hydraulic Cyberarm", 1000, CyberSlot.ARMS, {"strength": 2}, {}, humanity_cost=2
     ),
@@ -169,6 +194,19 @@ _TIER_1_CYBERWARE = [
         {"cool": 1},
         {},
         humanity_cost=2,
+    ),
+    # Bone lacing: a soak-pool bonus (defense) rather than a stat/skill bonus, at an
+    # escalating price *and* humanity_cost in lockstep with how much of the skeleton
+    # is replaced -- unlike the rest of the catalog, where a piece's stat effect stays
+    # fixed and only its tier moves the price/humanity trade-off (above).
+    Cyberware(
+        "steel_bones", "Steel Bones", 1000, CyberSlot.INTERNAL, {}, {}, humanity_cost=1, defense=1
+    ),
+    Cyberware(
+        "titanium_bones", "Titanium Bones", 3000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2, defense=2
+    ),
+    Cyberware(
+        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=4, defense=4
     ),
 ]
 
@@ -217,6 +255,10 @@ for _cyberware in CYBERWARE_CATALOG:
         raise ValueError(f"{_cyberware.id}: humanity_cost must be >= 0")
     if _cyberware.tier not in VALID_CYBERWARE_TIERS:
         raise ValueError(f"{_cyberware.id}: tier must be one of {VALID_CYBERWARE_TIERS}")
+    if _cyberware.defense and not (1 <= _cyberware.defense <= 8):
+        raise ValueError(f"{_cyberware.id}: defense must be 1-8")
+    if _cyberware.matrix_action_bonus < 0:
+        raise ValueError(f"{_cyberware.id}: matrix_action_bonus must be >= 0")
 
 if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
     raise ValueError("CYBERWARE_CATALOG has duplicate ids")
@@ -279,3 +321,17 @@ def installed_skill_bonus(installed: dict[CyberSlot, str], skill_id: str) -> int
     return sum(
         CYBERWARE_BY_ID[cyberware_id].skill_bonuses.get(skill_id, 0) for cyberware_id in installed.values()
     )
+
+
+def installed_defense(installed: dict[CyberSlot, str]) -> int:
+    """Every installed piece's contribution to the soak pool -- the cyberware
+    counterpart to shops.equipped_defense, folded into combat.player_soak
+    alongside worn armor."""
+    return sum(CYBERWARE_BY_ID[cyberware_id].defense for cyberware_id in installed.values())
+
+
+def installed_matrix_action_bonus(installed: dict[CyberSlot, str]) -> int:
+    """Every installed piece's contribution to matrix.py's dice-rolling actions --
+    Datajack's small edge today, summed the same way installed_defense sums
+    defense, in case a later, better interface stacks or replaces it."""
+    return sum(CYBERWARE_BY_ID[cyberware_id].matrix_action_bonus for cyberware_id in installed.values())
