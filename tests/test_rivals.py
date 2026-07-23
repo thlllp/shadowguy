@@ -99,7 +99,7 @@ def test_every_independent_runner_acts_with_empty_crew():
     actions = resolve_rival_day(Character(name="t"), corp_map, day=1, rng=MISS)
     runner_actions = [a for a in actions if a.kind == "runner"]
     assert {a.actor_id for a in runner_actions} == {r.id for r in RIVAL_RUNNERS}
-    assert all(a.territory_id is None for a in runner_actions)
+    assert all(a.territory_id in corp_map.territories for a in runner_actions)
 
 
 def test_indefinite_hire_excludes_that_runner():
@@ -145,3 +145,39 @@ def test_chance_boundary_is_strict_less_than():
     boundary = ForcedChance(EXPANSION_CHANCE)
     actions = resolve_rival_day(Character(name="t"), corp_map, day=1, rng=boundary)
     assert _faction_action(actions, IRONCLAD).territory_id is None
+
+
+def test_runner_locations_persist_and_wander_across_days():
+    """A runner is placed somewhere on the first call, stays there on a miss,
+    and hops to a connection on a hit -- and rival_runner_locations (the
+    caller-owned persistence dict) reflects exactly that across two days.
+
+    A dedicated two-node, no-faction map sidesteps needing to predict exactly
+    which node rng.choice's untouched Mersenne Twister state lands the runner
+    on first: with both territories connected only to each other, "hop to a
+    connection" is unambiguous regardless of which one that turns out to be."""
+    corp_map = CorpMap(
+        territories={"a": _territory("a", connections=["b"]), "b": _territory("b", connections=["a"])},
+        player_start_id="a",
+    )
+    runner_id = RIVAL_RUNNERS[0].id
+    locations: dict[str, str] = {}
+
+    resolve_rival_day(Character(name="t"), corp_map, day=1, rng=MISS, rival_runner_locations=locations)
+    first_location = locations[runner_id]
+    assert first_location in corp_map.territories
+
+    resolve_rival_day(Character(name="t"), corp_map, day=2, rng=MISS, rival_runner_locations=locations)
+    assert locations[runner_id] == first_location  # a miss never moves them
+
+    resolve_rival_day(Character(name="t"), corp_map, day=3, rng=HIT, rival_runner_locations=locations)
+    assert locations[runner_id] in corp_map.territories[first_location].connections
+
+
+def test_omitted_rival_runner_locations_defaults_to_a_fresh_dict():
+    """Every pre-existing call site (and most tests) doesn't pass
+    rival_runner_locations at all -- that must keep working exactly as before,
+    just without any persistence across calls."""
+    actions = resolve_rival_day(Character(name="t"), _map(), day=1, rng=MISS)
+    runner_action = next(a for a in actions if a.kind == "runner" and a.actor_id == RIVAL_RUNNERS[0].id)
+    assert runner_action.territory_id in _map().territories
