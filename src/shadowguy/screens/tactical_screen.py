@@ -16,7 +16,7 @@ from shadowguy.tactical import (
     start_tactical,
 )
 
-from . import CharacterSheet, _boxed_text
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text
 
 _TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _TAC_END_TEXT = {
@@ -37,7 +37,7 @@ class TacticalScreen(Screen):
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
         ("enter", "continue", "Continue"),
-        ("q", "quit_menu", "Menu"),
+        *MENU_QUIT_BINDINGS,
     ]
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}

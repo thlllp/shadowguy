@@ -7,13 +7,13 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from shadowguy.combat import Action, Drop, available_actions, start_combat, take_turn
 from shadowguy.scene import Encounter
 
-from . import CharacterSheet, _replace_items
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 
 COMBAT_LOG_LINES = 8
 
 
 class CombatScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu")]
+    BINDINGS = MENU_QUIT_BINDINGS
 
     # A combat round can offer far more actions than a matrix fight (per-weapon
     # attacks, the four stat-spread options, one row per grenade) -- boxing every

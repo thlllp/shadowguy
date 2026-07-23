@@ -21,7 +21,7 @@ from shadowguy.tactical import (
     spotted,
 )
 
-from . import CharacterSheet, _replace_items
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 
 # A fixed illustration, not a positional layout -- deliberately not corpmap.py's
 # dynamic column/connector rendering, which is built for dozens of interconnected
@@ -44,7 +44,7 @@ class EntrancePickScreen(Screen):
     # callback entirely rather than invoking it with any value -- popping instead
     # of dismissing would strand SceneScreen with no way to resume the stage.
     # Same reason CombatScreen/TacticalScreen have no escape binding either.
-    BINDINGS = [("q", "quit_menu", "Menu")]
+    BINDINGS = MENU_QUIT_BINDINGS
 
     def __init__(self, stage: BurglaryStage) -> None:
         super().__init__()
@@ -94,7 +94,7 @@ class BurglaryWalkScreen(Screen):
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
         ("enter", "continue", "Continue"),
-        ("q", "quit_menu", "Menu"),
+        *MENU_QUIT_BINDINGS,
     ]
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}

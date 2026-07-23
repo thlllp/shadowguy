@@ -2,7 +2,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
-from textual.screen import ModalScreen, Screen
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
@@ -20,7 +20,7 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.shops import equipped_travel_reduction
 
-from . import _menu_css
+from . import MENU_BACK_BINDINGS, BackScreen, _menu_css
 from .combat_screen import CombatScreen
 
 TRAVEL_HOURS_COST = 2.0
@@ -33,10 +33,9 @@ def _travel_hours(character: Character) -> float:
     return TRAVEL_HOURS_COST * (1 - equipped_travel_reduction(character.inventory))
 
 
-class CorpMapScreen(Screen):
+class CorpMapScreen(BackScreen):
     BINDINGS = [
-        ("q", "quit_menu", "Menu"),
-        ("escape", "back", "Back"),
+        *MENU_BACK_BINDINGS,
         ("up", "move('up')", "Move"),
         ("down", "move('down')", "Move"),
         ("left", "move('left')", "Move"),
@@ -83,9 +82,6 @@ class CorpMapScreen(Screen):
     def on_mount(self) -> None:
         self.selected_id = self.app.character.location_id
         self._refresh()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     def action_travel(self) -> None:
         character = self.app.character

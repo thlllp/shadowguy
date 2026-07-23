@@ -1,5 +1,4 @@
 from textual.app import ComposeResult
-from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import HOURS_PER_DAY
@@ -32,11 +31,20 @@ from shadowguy.shops import (
     sell_price,
 )
 
-from . import PANEL_NAV_BINDINGS, CharacterSheet, PanelNav, _populate_list, _replace_items, matrix_warning
+from . import (
+    MENU_BACK_BINDINGS,
+    PANEL_NAV_BINDINGS,
+    BackScreen,
+    CharacterSheet,
+    PanelNav,
+    _populate_list,
+    _replace_items,
+    matrix_warning,
+)
 
 
-class FixerOffersScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class FixerOffersScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     CSS = """
     #offer_roles {
@@ -56,9 +64,6 @@ class FixerOffersScreen(Screen):
         yield ListView(id="offers")
         yield Static(id="offer_roles")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -128,9 +133,9 @@ class FixerOffersScreen(Screen):
         await self._refresh()
 
 
-class ShopScreen(PanelNav, Screen):
+class ShopScreen(PanelNav, BackScreen):
     PANEL_IDS = ("shop_items", "shop_programs")
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
+    BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
     #shop_items_panel, #shop_programs_panel, #shop_items, #shop_programs {
@@ -151,9 +156,6 @@ class ShopScreen(PanelNav, Screen):
             ListView(id="shop_programs"), title="Programs", collapsed=False, id="shop_programs_panel"
         )
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -238,8 +240,8 @@ class ShopScreen(PanelNav, Screen):
         await self._refresh()
 
 
-class BarScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class BarScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -323,8 +325,8 @@ class BarScreen(Screen):
         await self._refresh()
 
 
-class SafehouseScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class SafehouseScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -337,12 +339,9 @@ class SafehouseScreen(Screen):
         yield Static("Your place. Nothing to do here yet.")
         yield Footer()
 
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
-
-class RealEstateScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class RealEstateScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -354,9 +353,6 @@ class RealEstateScreen(Screen):
         yield Static(self.location.name, id="realestate_info")
         yield ListView(id="realestate_listings")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -399,8 +395,8 @@ class RealEstateScreen(Screen):
         await self._refresh()
 
 
-class HospitalScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class HospitalScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
         super().__init__()
@@ -412,9 +408,6 @@ class HospitalScreen(Screen):
         yield Static(self.location.name, id="hospital_info")
         yield ListView(id="hospital_actions")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -446,8 +439,8 @@ class HospitalScreen(Screen):
         await self._refresh()
 
 
-class CorpHQScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class CorpHQScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location, faction: Faction) -> None:
         super().__init__()
@@ -461,9 +454,6 @@ class CorpHQScreen(Screen):
         yield ListView(id="hq_officers")
         yield Static("", id="hq_dialogue")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()

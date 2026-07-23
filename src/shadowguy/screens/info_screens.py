@@ -1,6 +1,5 @@
 from textual.app import ComposeResult
 from textual.containers import Grid, Vertical
-from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
@@ -22,7 +21,9 @@ from shadowguy.shops import (
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
+    MENU_BACK_BINDINGS,
     PANEL_NAV_BINDINGS,
+    BackScreen,
     CharacterSheet,
     PanelNav,
     _compact_skill_label,
@@ -32,17 +33,14 @@ from . import (
 from .shop_screens import FixerOffersScreen
 
 
-class InventoryScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class InventoryScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
         yield ListView(id="inventory_items")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -82,7 +80,7 @@ class InventoryScreen(Screen):
         await self._refresh()
 
 
-class CyberdeckScreen(Screen):
+class CyberdeckScreen(BackScreen):
     """Deck + Program management, split out of InventoryScreen: a deck's
     installed_programs and which deck is Character.stat()'s and matrix.py's
     active one (shops.active_deck_entry -- the equipped deck with the best
@@ -91,16 +89,13 @@ class CyberdeckScreen(Screen):
     is still an Item there); a deck's equip toggle is repeated here only
     because it's what active_deck_entry actually reads."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    BINDINGS = MENU_BACK_BINDINGS
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
         yield ListView(id="cyberdeck_items")
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -177,9 +172,9 @@ class CyberdeckScreen(Screen):
         await self._refresh()
 
 
-class ContactsScreen(PanelNav, Screen):
+class ContactsScreen(PanelNav, BackScreen):
     PANEL_IDS = ("fixers_list", "corps_list", "locals_list", "runners_list")
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
+    BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
     #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
@@ -207,9 +202,6 @@ class ContactsScreen(PanelNav, Screen):
             ListView(id="runners_list"), title="Runners", collapsed=False, id="runners_panel"
         )
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -279,7 +271,7 @@ class ContactsScreen(PanelNav, Screen):
             self.app.push_screen(FixerOffersScreen(fixer))
 
 
-class SkillsScreen(PanelNav, Screen):
+class SkillsScreen(PanelNav, BackScreen):
     """Read-only for skill *values* (gear bonuses included), but spendable for
     Character.experience: a "Raise <Stat>" row atop each column plus every skill
     row, both showing next-purchase cost the same way CharacterCreationScreen's
@@ -287,7 +279,7 @@ class SkillsScreen(PanelNav, Screen):
     instead of the one-shot creation pools."""
 
     PANEL_IDS = tuple(f"skill_list_{stat}" for stat in CORE_STATS)
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
+    BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
     #skills_grid {
@@ -321,9 +313,6 @@ class SkillsScreen(PanelNav, Screen):
             id="skills_grid",
         )
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def on_mount(self) -> None:
         await self._refresh()

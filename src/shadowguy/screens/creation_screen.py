@@ -8,6 +8,7 @@ from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
+    MENU_QUIT_BINDINGS,
     PANEL_NAV_BINDINGS,
     CharacterSheet,
     PanelNav,
@@ -23,7 +24,7 @@ class CharacterCreationScreen(PanelNav, Screen):
     # module import time, so building this tuple here would defeat that laziness the
     # moment this screen module is imported.
     BINDINGS = [
-        ("q", "quit_menu", "Menu"),
+        *MENU_QUIT_BINDINGS,
         ("r", "reset", "Reset build"),
         ("b", "begin", "Begin run"),
         *PANEL_NAV_BINDINGS,
