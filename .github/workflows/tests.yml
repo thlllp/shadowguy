@@ -16,6 +16,6 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Ruff
-        run: uvx ruff check src/
+        run: uv run ruff check src/
       - name: Pytest
         run: uv run pytest -q
