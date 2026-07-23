@@ -9,6 +9,7 @@ from shadowguy.corp_turn import (
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
+    TRAINING_DAYS,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
@@ -16,6 +17,7 @@ from shadowguy.corp_turn import (
     build_efficiency_upgrade,
     build_lab,
     development_targets,
+    employee_plural,
     expand_into,
     expansion_cost,
     has_technology,
@@ -47,12 +49,6 @@ from . import (
 )
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
-
-
-def _plural(category: EmployeeCategory) -> str:
-    """research_assistant -> "research assistants"; scientist/operative have
-    no underscore to begin with, so this just adds the s."""
-    return f"{category.replace('_', ' ')}s"
 
 
 def _sighting_label(sighting, corp_map) -> str:
@@ -210,13 +206,26 @@ class CorpScreen(BackScreen):
         await _replace_items(list_view, items)
 
         academy_items = []
-        for category in EmployeeCategory:
-            label = f"Train {_plural(category)} — {ACADEMY_TRAINING_COST}eb"
-            if corp_state.daily_action_used:
-                label += " (already acted today)"
-            elif ACADEMY_TRAINING_COST > corp_state.cash:
-                label += " (can't afford)"
-            academy_items.append(ListItem(Static(label), id=f"train_{category}"))
+        pending = corp_state.pending_recruit
+        if pending is not None:
+            days_left = pending.ready_day - self.app.character.day
+            academy_items.append(
+                ListItem(
+                    Static(
+                        f"Training {employee_plural(pending.category)} — "
+                        f"ready in {days_left} day{'s' if days_left != 1 else ''}"
+                    ),
+                    id="pending_recruit",
+                )
+            )
+        else:
+            for category in EmployeeCategory:
+                label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {ACADEMY_TRAINING_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif ACADEMY_TRAINING_COST > corp_state.cash:
+                    label += " (can't afford)"
+                academy_items.append(ListItem(Static(label), id=f"train_{category}"))
         await _replace_items(academy_list, academy_items)
 
         research_items = []
@@ -308,8 +317,13 @@ class CorpScreen(BackScreen):
         if item_id.startswith("train_"):
             corp_state = self.app.corp_state
             category = EmployeeCategory(item_id.removeprefix("train_"))
-            if train_employees(corp_state, self.app.corp_map, category):
-                self.notify(f"Trained a new batch of {_plural(category)} at the Academy.")
+            if train_employees(corp_state, self.app.corp_map, category, self.app.character.day):
+                self.notify(
+                    f"Training a batch of {employee_plural(category)} — "
+                    f"ready in {TRAINING_DAYS[category]} days."
+                )
+            elif corp_state.pending_recruit is not None:
+                self.notify("The Academy's already training a batch.", severity="warning")
             elif corp_state.daily_action_used:
                 self.notify("Already made your move today.", severity="warning")
             else:

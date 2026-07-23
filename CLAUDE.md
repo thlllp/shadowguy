@@ -190,6 +190,7 @@ Leaf modules, and why each has to stay one:
 | 32 | `Character.experience`/`crew_experience`, `Outcome.experience_delta` |
 | 33 | `Character.installed_cyberware` |
 | 34 | `Character.humanity` |
+| 35 | `CorpState.pending_recruit` (Academy training takes days) |
 
 ### Verifying changes
 

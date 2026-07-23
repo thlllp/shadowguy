@@ -924,8 +924,14 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             scientists_before = app.corp_state.scientists
             await pilot.click("#train_scientist")
             await pilot.pause()
-            assert app.corp_state.scientists > scientists_before
+            # Training is queued, not instant: the batch sits in pending_recruit and
+            # the pool doesn't grow until it completes on a later day tick.
+            assert app.corp_state.scientists == scientists_before
+            assert app.corp_state.pending_recruit is not None
             assert app.corp_state.daily_action_used is True
+            # While a batch trains, the Academy shows its progress row, not new offers.
+            academy_ids = {item.id for item in academy_list.children}
+            assert academy_ids == {"pending_recruit"}
 
     run(body())
 

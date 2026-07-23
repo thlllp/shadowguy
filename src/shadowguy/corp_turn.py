@@ -20,10 +20,12 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
     rivals.py's AI factions make (reusing corpmap.expansion_candidates/
     claim_territory).
   - train_employees at the corp's one guaranteed ACADEMY (corpmap._make_academy),
-    spending cash to grow one of CorpState.scientists/operatives/
+    spending cash to queue a batch of CorpState.scientists/operatives/
     research_assistants (EmployeeCategory picks which — three separate pools,
     not one, since they're meant to eventually do different things for the
-    corp).
+    corp). The batch doesn't land immediately: it trains for TRAINING_DAYS days
+    (one batch at a time, held in pending_recruit) and advance_training drops
+    the hires into the pool on the day tick.
 
 Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility)
 generates research_points every day too, at 1 RP per tier — collect_research is
@@ -373,6 +375,35 @@ class EmployeeCategory(StrEnum):
     RESEARCH_ASSISTANT = "research_assistant"
 
 
+# Days a batch spends at the Academy before the hires land in the pool. Training
+# is no longer instant: train_employees queues the batch and advance_training
+# completes it on the day tick this many days later. Different roles take
+# different amounts of time to train up. Not balance-simulated.
+TRAINING_DAYS = {
+    EmployeeCategory.SCIENTIST: 9,
+    EmployeeCategory.OPERATIVE: 6,
+    EmployeeCategory.RESEARCH_ASSISTANT: 3,
+}
+
+
+def employee_plural(category: EmployeeCategory) -> str:
+    """research_assistant -> "research assistants"; scientist/operative have no
+    underscore to begin with, so this just adds the s."""
+    return f"{category.replace('_', ' ')}s"
+
+
+@dataclass
+class PendingRecruit:
+    """A training batch in progress at the Academy: which category is training,
+    how many hires it yields (the Academy's tier when training began), and the
+    day advance_training drops them into the pool. The Academy runs one batch at
+    a time — CorpState.pending_recruit holds at most one."""
+
+    category: EmployeeCategory
+    count: int
+    ready_day: int
+
+
 @dataclass
 class CorpState:
     """The player's own corp: which Faction they run, its cash/research points/
@@ -387,6 +418,10 @@ class CorpState:
     operatives: int = 0
     research_assistants: int = 0
     daily_action_used: bool = False
+    # A training batch in progress at the Academy, or None when idle. The Academy
+    # has a single training slot, so train_employees won't start a second batch
+    # while this is set; advance_training clears it once its ready_day arrives.
+    pending_recruit: PendingRecruit | None = None
     # Technology ids (TECHNOLOGIES_BY_ID) already researched. A set of ids, the
     # same shape Character.owned_programs/discovered_fixers use. Research is
     # permanent — nothing takes a tech back.
@@ -671,28 +706,47 @@ def _owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
     return None
 
 
-def train_employees(corp_state: CorpState, corp_map: CorpMap, category: EmployeeCategory) -> bool:
-    """Spend cash on one training session at the corp's Academy, gaining that
-    many scientists, operatives or research assistants (whichever `category`
-    picks) equal to the Academy's tier. Shares expand_into's once-a-day slot —
-    fails closed if the corp's already made its move today, holds no Academy
-    (it always does once its territory has been claimed at all), or can't
-    afford it."""
-    if corp_state.daily_action_used:
+def train_employees(
+    corp_state: CorpState, corp_map: CorpMap, category: EmployeeCategory, day: int
+) -> bool:
+    """Start one training batch at the corp's Academy: charge cash now and queue
+    that many scientists, operatives or research assistants (whichever `category`
+    picks, Academy-tier many) to land TRAINING_DAYS[category] days later, when
+    advance_training completes it. Shares expand_into's once-a-day slot and the
+    Academy's single training slot — fails closed if the corp's already made its
+    move today, a batch is already training, holds no Academy (it always does
+    once its territory has been claimed at all), or can't afford it."""
+    if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = _owned_academy(corp_state, corp_map)
     if academy is None or ACADEMY_TRAINING_COST > corp_state.cash:
         return False
     corp_state.cash -= ACADEMY_TRAINING_COST
-    gained = academy.academy_tier or 0
-    if category is EmployeeCategory.SCIENTIST:
-        corp_state.scientists += gained
-    elif category is EmployeeCategory.OPERATIVE:
-        corp_state.operatives += gained
-    else:
-        corp_state.research_assistants += gained
+    corp_state.pending_recruit = PendingRecruit(
+        category=category,
+        count=academy.academy_tier or 0,
+        ready_day=day + TRAINING_DAYS[category],
+    )
     corp_state.daily_action_used = True
     return True
+
+
+def advance_training(corp_state: CorpState, day: int) -> PendingRecruit | None:
+    """Complete the Academy's training batch if `day` has reached its ready_day:
+    add the trained hires to the matching pool, clear the slot, and return the
+    finished batch for the caller to announce. Returns None while a batch is
+    still training or the Academy is idle. Called once per day tick."""
+    recruit = corp_state.pending_recruit
+    if recruit is None or day < recruit.ready_day:
+        return None
+    if recruit.category is EmployeeCategory.SCIENTIST:
+        corp_state.scientists += recruit.count
+    elif recruit.category is EmployeeCategory.OPERATIVE:
+        corp_state.operatives += recruit.count
+    else:
+        corp_state.research_assistants += recruit.count
+    corp_state.pending_recruit = None
+    return recruit
 
 
 def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:

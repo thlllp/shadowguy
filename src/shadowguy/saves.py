@@ -114,7 +114,9 @@ SAVE_SUFFIX = ".save"
 # v34 added Humanity (character.py): Character gained `humanity`, a fixed
 # baseline (HUMANITY_BASELINE, 6) with no gear/temp bonus and nothing yet to
 # raise or lower it (a pre-v34 pickled Character lacks it).
-SAVE_VERSION = 34
+# v35 made Academy training take days (corp_turn.py): CorpState gained
+# `pending_recruit` (a pre-v35 pickled CorpState lacks it, None when idle).
+SAVE_VERSION = 35
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
