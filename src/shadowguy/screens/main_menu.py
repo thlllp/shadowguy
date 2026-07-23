@@ -25,7 +25,7 @@ from . import (
 )
 from .corp_map_screen import CorpMapScreen
 from .corp_screen import CorpScreen
-from .info_screens import ContactsScreen, InventoryScreen, SkillsScreen
+from .info_screens import ContactsScreen, CyberdeckScreen, InventoryScreen, SkillsScreen
 from .scene_screen import SceneScreen
 from .shop_screens import (
     BarScreen,
@@ -44,6 +44,7 @@ class MainMenu(PanelNav, Screen):
         ("m", "corp_map", "Corp Map (preview)"),
         ("r", "run_corp", "Run a Corp"),
         ("i", "inventory", "Gear"),
+        ("d", "cyberdeck", "Cyberdeck"),
         ("k", "skills", "Skills"),
         ("c", "contacts", "Contacts"),
         *PANEL_NAV_BINDINGS,
@@ -59,7 +60,7 @@ class MainMenu(PanelNav, Screen):
     #sidebar {
         width: 20;
         border: solid $accent;
-        padding: 1;
+        padding: 0 1;
     }
 
     #main_panel {
@@ -83,6 +84,7 @@ class MainMenu(PanelNav, Screen):
         ("legwork", "Legwork"),
         ("local", "Local"),
         ("gear", "Gear"),
+        ("cyberdeck", "Cyberdeck"),
         ("skills", "Skills"),
         ("contacts", "Contacts"),
         ("map", "Corp Map"),
@@ -127,6 +129,9 @@ class MainMenu(PanelNav, Screen):
 
     def action_inventory(self) -> None:
         self.app.push_screen(InventoryScreen())
+
+    def action_cyberdeck(self) -> None:
+        self.app.push_screen(CyberdeckScreen())
 
     def action_skills(self) -> None:
         self.app.push_screen(SkillsScreen())
@@ -324,6 +329,8 @@ class MainMenu(PanelNav, Screen):
             self.app.push_screen(CorpScreen())
         elif key == "gear":
             self.app.push_screen(InventoryScreen())
+        elif key == "cyberdeck":
+            self.app.push_screen(CyberdeckScreen())
         elif key == "skills":
             self.app.push_screen(SkillsScreen())
         self.selected_category = key

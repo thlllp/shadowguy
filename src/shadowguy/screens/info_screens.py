@@ -10,6 +10,7 @@ from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
     PROGRAMS_BY_ID,
+    active_deck_entry,
     bonus_text,
     free_program_slots,
     install_program,
@@ -62,31 +63,6 @@ class InventoryScreen(Screen):
             consumable = CONSUMABLES_BY_ID[item_id]
             items.append(ListItem(Static(f"Use {consumable.name}"), id=f"use_{index}"))
 
-        character = self.app.character
-        for index, entry in enumerate(character.inventory):
-            item = ITEMS_BY_ID[entry.item_id]
-            if item.program_slots <= 0:
-                continue
-            installed = installed_programs_for(entry)
-            names = ", ".join(p.name for p in installed) if installed else "none"
-            used_ram = item.program_slots - free_program_slots(item, entry)
-            items.append(
-                ListItem(
-                    Static(f"{item.name} — programs: {names} ({used_ram}/{item.program_slots} slots)"),
-                    id=f"deck_info_{index}",
-                )
-            )
-            for program_id in entry.installed_programs:
-                program = PROGRAMS_BY_ID[program_id]
-                items.append(
-                    ListItem(Static(f"  Uninstall {program.name} from {item.name}"), id=f"uninstall_{index}_{program_id}")
-                )
-            for program_id in sorted(character.owned_programs - set(entry.installed_programs)):
-                program = PROGRAMS_BY_ID[program_id]
-                items.append(
-                    ListItem(Static(f"  Install {program.name} on {item.name}"), id=f"install_{index}_{program_id}")
-                )
-
         await _replace_items(self.query_one("#inventory_items", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -101,6 +77,95 @@ class InventoryScreen(Screen):
         elif item_id.startswith("use_"):
             index = int(item_id.removeprefix("use_"))
             self.notify(use_consumable(character, index))
+
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class CyberdeckScreen(Screen):
+    """Deck + Program management, split out of InventoryScreen: a deck's
+    installed_programs and which deck is Character.stat()'s and matrix.py's
+    active one (shops.active_deck_entry -- the equipped deck with the best
+    Intelligence bonus) are cyberdeck-specific concerns, not general gear.
+    Equip/stow itself stays generic and lives on InventoryScreen too (a deck
+    is still an Item there); a deck's equip toggle is repeated here only
+    because it's what active_deck_entry actually reads."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield ListView(id="cyberdeck_items")
+        yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        active_entry = active_deck_entry(character.inventory)
+        active_index = character.inventory.index(active_entry[0]) if active_entry else None
+
+        items = []
+        for index, entry in enumerate(character.inventory):
+            item = ITEMS_BY_ID[entry.item_id]
+            if item.program_slots <= 0:
+                continue
+            state = "Equipped" if entry.equipped else "Stowed"
+            tag = " [active]" if index == active_index else ""
+            installed = installed_programs_for(entry)
+            names = ", ".join(p.name for p in installed) if installed else "none"
+            used_ram = item.program_slots - free_program_slots(item, entry)
+            items.append(
+                ListItem(
+                    Static(
+                        f"{state} — {item.name}{tag} — programs: {names} "
+                        f"({used_ram}/{item.program_slots} slots)"
+                    ),
+                    id=f"toggle_{index}",
+                )
+            )
+            for program_id in entry.installed_programs:
+                program = PROGRAMS_BY_ID[program_id]
+                items.append(
+                    ListItem(
+                        Static(f"  Uninstall {program.name} from {item.name}"),
+                        id=f"uninstall_{index}_{program_id}",
+                    )
+                )
+            for program_id in sorted(character.owned_programs - set(entry.installed_programs)):
+                program = PROGRAMS_BY_ID[program_id]
+                items.append(
+                    ListItem(
+                        Static(f"  Install {program.name} on {item.name}"),
+                        id=f"install_{index}_{program_id}",
+                    )
+                )
+
+        if not items:
+            items.append(ListItem(Static("No cyberdeck owned — visit a Computer Store."), id="no_deck"))
+
+        await _replace_items(self.query_one("#cyberdeck_items", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id == "no_deck":
+            return
+
+        character = self.app.character
+
+        if item_id.startswith("toggle_"):
+            index = int(item_id.removeprefix("toggle_"))
+            item = ITEMS_BY_ID[character.inventory[index].item_id]
+            if not toggle_equip(character, index):
+                self.notify(f"No free {item.slot.value} slot.", severity="warning")
         elif item_id.startswith("install_"):
             index_str, program_id = item_id.removeprefix("install_").split("_", 1)
             self.notify(install_program(character, int(index_str), program_id))
