@@ -127,6 +127,100 @@ def test_maxing_one_skill_costs_19_of_20_points():
     assert c.skill_points == STARTING_SKILL_POINTS - 19
 
 
+def test_next_stat_cost_escalates_with_current_value():
+    """Cost climbs by 1 each time, unlike spend_stat_point's flat 1-point cost —
+    the higher a stat already is, the pricier the next point."""
+    c = Character(name="t", body=STARTING_STAT)
+    assert c.next_stat_cost("body") == 1
+    c.body += 2
+    assert c.next_stat_cost("body") == 3
+
+
+def test_next_stat_cost_rejects_unknown_stat():
+    c = Character(name="t")
+    with pytest.raises(ValueError):
+        c.next_stat_cost("luck")
+
+
+def test_spend_experience_on_stat_charges_escalating_cost_and_raises_the_stat():
+    c = Character(name="t", experience=10, body=STARTING_STAT)
+    assert c.spend_experience_on_stat("body")
+    assert c.body == STARTING_STAT + 1
+    assert c.experience == 9  # first point costs 1
+
+
+def test_spend_experience_on_stat_raises_health_like_spend_stat_point():
+    c = Character(name="t", experience=10, body=STARTING_STAT)
+    before_max, before_health = c.max_health, c.health
+    assert c.spend_experience_on_stat("body")
+    assert c.max_health == before_max + HEALTH_PER_BODY
+    assert c.health == before_health + HEALTH_PER_BODY
+
+
+def test_spend_experience_on_stat_refuses_unaffordable_without_charging():
+    c = Character(name="t", experience=0)
+    before = c.experience
+    assert not c.spend_experience_on_stat("body")
+    assert c.experience == before
+    assert c.body == STARTING_STAT
+
+
+def test_spend_experience_on_stat_never_hits_a_cap():
+    """Escalating cost, not a hard ceiling — enough XP always buys the next point."""
+    c = Character(name="t", experience=10_000)
+    for _ in range(20):
+        assert c.spend_experience_on_stat("body")
+    assert c.body == STARTING_STAT + 20
+
+
+def test_spend_experience_on_skill_matches_next_rank_cost():
+    c = Character(name="t", experience=1)
+    cost = c.next_rank_cost("hack")
+    assert c.spend_experience_on_skill("hack")
+    assert c.experience == 1 - cost
+    assert c.skill_rank("hack") == STARTING_SKILL_RANK + 1
+
+
+def test_spend_experience_on_skill_refuses_unaffordable_without_charging():
+    c = Character(name="t", experience=0)
+    assert not c.spend_experience_on_skill("hack")
+    assert c.experience == 0
+    assert c.skill_rank("hack") == STARTING_SKILL_RANK
+
+
+def test_spend_experience_on_skill_refuses_past_max_rank():
+    c = Character(name="t", experience=10_000)
+    while c.spend_experience_on_skill("hack"):
+        pass
+    assert c.skill_rank("hack") == MAX_SKILL_RANK
+    before = c.experience
+    assert not c.spend_experience_on_skill("hack")
+    assert c.experience == before
+
+
+def test_spend_experience_on_skill_raises_on_unknown_skill():
+    c = Character(name="t", experience=100)
+    with pytest.raises(ValueError):
+        c.spend_experience_on_skill("not_a_real_skill")
+
+
+def test_gain_experience_accumulates():
+    c = Character(name="t")
+    c.gain_experience(5)
+    c.gain_experience(3)
+    assert c.experience == 8
+
+
+def test_grant_crew_experience_is_per_runner_and_accumulates():
+    c = Character(name="t")
+    c.grant_crew_experience("runner_specter", 10)
+    c.grant_crew_experience("runner_specter", 5)
+    c.grant_crew_experience("runner_juncture", 7)
+    assert c.crew_experience == {"runner_specter": 15, "runner_juncture": 7}
+    # A hired runner's own XP is entirely separate from the player's pool.
+    assert c.experience == 0
+
+
 def test_reset_build_undoes_every_point():
     c = Character(name="t")
     c.spend_stat_point("body")

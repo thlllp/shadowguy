@@ -3,7 +3,7 @@ from textual.containers import Grid, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import CORE_STATS
+from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
 from shadowguy.factions import FACTIONS
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.shops import (
@@ -18,7 +18,7 @@ from shadowguy.shops import (
     uninstall_program,
     use_consumable,
 )
-from shadowguy.skills import SKILLS
+from shadowguy.skills import SKILLS, skill_for
 
 from . import (
     PANEL_NAV_BINDINGS,
@@ -215,6 +215,12 @@ class ContactsScreen(PanelNav, Screen):
 
 
 class SkillsScreen(PanelNav, Screen):
+    """Read-only for skill *values* (gear bonuses included), but spendable for
+    Character.experience: a "Raise <Stat>" row atop each column plus every skill
+    row, both showing next-purchase cost the same way CharacterCreationScreen's
+    build columns do, funded by spend_experience_on_stat/spend_experience_on_skill
+    instead of the one-shot creation pools."""
+
     PANEL_IDS = tuple(f"skill_list_{stat}" for stat in CORE_STATS)
     BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), *PANEL_NAV_BINDINGS]
 
@@ -241,7 +247,7 @@ class SkillsScreen(PanelNav, Screen):
         yield Grid(
             *(
                 Vertical(
-                    Static(stat.capitalize()),
+                    Static(id=f"skill_head_{stat}"),
                     ListView(id=f"skill_list_{stat}"),
                     classes="skill_column",
                 )
@@ -260,12 +266,44 @@ class SkillsScreen(PanelNav, Screen):
     async def on_screen_resume(self) -> None:
         await self._refresh()
 
-    async def _refresh(self) -> None:
+    async def _refresh(self, stat: str | None = None, index: int = 0) -> None:
         character = self.app.character
-        for stat in CORE_STATS:
-            items = [
-                ListItem(Static(_compact_skill_label(character, skill)), id=f"skill_{skill.id}")
+        for s in CORE_STATS if stat is None else (stat,):
+            self.query_one(f"#skill_head_{s}", Static).update(f"{s.capitalize()} — {character.stat(s)}")
+            cost = character.next_stat_cost(s)
+            items = [ListItem(Static(f"Raise {s.capitalize()}\n  {cost}xp"), id=f"stat_{s}")]
+            items += [
+                ListItem(Static(_compact_skill_label(character, skill, show_cost=True)), id=f"skill_{skill.id}")
                 for skill in SKILLS
-                if skill.stat == stat
+                if skill.stat == s
             ]
-            await _replace_items(self.query_one(f"#skill_list_{stat}", ListView), items)
+            await _replace_items(self.query_one(f"#skill_list_{s}", ListView), items, index)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        character = self.app.character
+        index = event.list_view.index or 0
+
+        if item_id.startswith("stat_"):
+            stat = item_id.removeprefix("stat_")
+            if not character.spend_experience_on_stat(stat):
+                self.notify(
+                    f"Raising {stat.capitalize()} costs {character.next_stat_cost(stat)}xp; "
+                    f"you have {character.experience}.",
+                    severity="warning",
+                )
+        elif item_id.startswith("skill_"):
+            skill_id = item_id.removeprefix("skill_")
+            stat = skill_for(skill_id).stat
+            name = skill_for(skill_id).name
+            cost = character.next_rank_cost(skill_id)
+            if cost is None:
+                self.notify(f"{name} is already at rank {MAX_SKILL_RANK}.", severity="warning")
+                return
+            if not character.spend_experience_on_skill(skill_id):
+                self.notify(f"{name}'s next rank costs {cost}xp; you have {character.experience}.", severity="warning")
+        else:
+            return
+
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh(stat, index)

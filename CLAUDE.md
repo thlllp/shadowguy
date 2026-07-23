@@ -109,16 +109,31 @@ Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Per
 
 The three presets still buy narrow — a preset should read as an archetype, not a hedge — which is what makes each bleed on the job stages that don't suit it.
 
-Both pools are **spent once and never refill** — there is no XP system, so this screen is the whole character-progression system. Consequences that are load-bearing:
+Both pools are **spent once and never refill** — the build you leave creation with is the build you have on day one. Consequences that are load-bearing:
 
 - **Begin is gated on an empty pool** (`action_begin`): unspent points would be silently forfeited, so the screen refuses to leave until both pools are 0. It `switch_screen`s to `MainMenu` rather than pushing, so there's no going back to respend.
 - **`r` resets the whole build** (`Character.reset_build()`) — 26 irreversible allocations with no undo is a footgun.
-- **`SkillsScreen` is read-only after creation.** Don't re-add a spend path there without deciding where the points come from.
+- **`SkillsScreen` is read-only for the creation pools, but not for `Character.experience`** — see Post-creation experience, below, for what that screen spends and where the currency comes from.
 - **Buying Body raises current health, not just max** (`spend_stat_point`), or the runner would start a 30-max run at 15 health.
 - **Skill rank is capped at `MAX_SKILL_RANK` (10) and ranks get dearer as they climb.** `SKILL_RANK_COST` prices the *next* rank: 1 point for ranks 2–4, 2 for 5–7, 3 for 8–9, 4 for rank 10 — so taking one skill from rank 1 to 10 costs **19 of the 20 points**. A specialist buys one great skill and almost nothing else. Both cap and price are enforced in `Character.spend_skill_point`, never in the UI, and a refused buy is **never charged**.
 - **Read `next_rank_cost()` before spending, not after.** It returns `None` for a maxed skill, otherwise the price — which is what lets the screen tell apart "already at rank 10" from "rank 8 costs 3 points, you have 2". Since high ranks cost 3–4, *"can't afford" happens with points still in hand*; a bare `if not spend_skill_point(...)` would report "no points left" to a player staring at their points.
 - The begin-gate can't deadlock on an unspendable remainder: ranks 2–4 always cost 1, and 20 points can never push enough of the 32 skills past rank 4 to exhaust the 1-point buys.
 - Stats are uncapped and flat-priced (1 point each), but the 6-point pool is its own ceiling — 7 at most in one stat.
+
+### Post-creation experience (`shadowguy/character.py`, `shadowguy/jobs.py`, `screens/info_screens.py`)
+
+The creation pools above are one-shot; `Character.experience` is the run's actual growth path — a single pool spent on either a stat or a skill, the player's choice each time, rather than two separate currencies or a level-up system that assigns bonuses automatically. Earned **only from completed jobs** — `jobs.JOB_XP_BASE` (10/15/20 by day tier, same tier domain as `REWARD_BASE`) is folded into every final-stage `Outcome` `_payout` builds, scaled by the same success/critical-success multiplier (1.0/1.5) cash already uses, so a clean critical always pays more of both. Gigs, legwork and security contracts deliberately pay none — a job is the thing worth grinding for growth, a gig is quick cash. `scene.apply_outcome` credits it unconditionally (`character.gain_experience(outcome.experience_delta)`), the same shape `cash_delta` already has.
+
+**Spending has its own cost curve per resource, both funded by the one pool:**
+
+- **A skill's next rank costs exactly what it would have at creation** — `Character.spend_experience_on_skill` reuses `next_rank_cost`/`SKILL_RANK_COST` verbatim, just paid out of `experience` instead of `skill_points`. Still capped at `MAX_SKILL_RANK`.
+- **A stat has no such table, because it was never capped or costed above 1 point at creation.** `next_stat_cost(name)` prices the next point at `current_value - STARTING_STAT + 1` — 1, 2, 3, 4… — so a stat gets steadily pricier the higher a run pushes it, the same "escalating, not flat" shape skills already have, but as a formula rather than a table since a stat has no ceiling to size a table against. `spend_experience_on_stat` reuses the same body-health-bump invariant `spend_stat_point` has (factored into a shared private `_raise_stat`, alongside `_raise_skill_rank` for the skill side) — buying Body still carries current health up with the new ceiling.
+
+**`SkillsScreen` (`screens/info_screens.py`) is the spend surface** — exactly the screen the note above already flagged as the future hook. Each of its six stat columns gained a "Raise `<Stat>`" row atop the skill list (cost from `next_stat_cost`), and every skill row now passes `show_cost=True` to the same `_compact_skill_label` helper `CharacterCreationScreen`'s build columns already use, so both surfaces render cost identically. A refused buy (short XP, or a maxed skill) is never charged, same `next_rank_cost() is None` vs. "costs more than you have" split creation already makes. `CharacterSheet`'s persistent header line gained `Experience: {n}xp` alongside cash/rep, so the total is visible from every screen the way cash already is — `SkillsScreen` itself shows no separate total, to avoid the duplication.
+
+**Crew earns experience too, in parallel, not split from the player's.** `_take_crew_cut` (`screens/scene_screen.py`) — already the one place a completed job's final `Outcome` is checked against `Character.crew_for_job` to take each hire's cash cut — now also calls `Character.grant_crew_experience(hire.runner_id, outcome.experience_delta)` for every runner on that job's crew, the *full* amount, not divided by headcount: the player's own `gain_experience` already ran (via `apply_outcome`, ahead of `_take_crew_cut`) and isn't reduced by having help along. `Character.crew_experience: dict[runner_id, int]` is the ledger — but `runners.RivalRunner` has no stat/skill sheet at all to spend it on, so there is **no spend path for a hired runner yet**. This is the mechanism, waiting on a driver, the same pattern `gang_standing` predated `encounters.py`.
+
+`saves.SAVE_VERSION` 32: `Character` gained `experience`/`crew_experience`, and `scene.Outcome` gained `experience_delta` (a pre-v32 pickled Outcome — inside an accepted job, a fixer's offers, or a location's gig — lacks it, even though only jobs ever set it nonzero). **Not balance-simulated** — `JOB_XP_BASE` and the stat cost formula are first-slice numbers, sized only to feel roughly like "one skill rank per one or two completed jobs early on," not measured against a seed sweep.
 
 ### Check resolution
 
@@ -202,7 +217,7 @@ Two guards pin this down: the **last stage cannot be optional** (the cash/rep/st
 
 **Both terms are discounted by the recruiter's `Leadership`** (a `cool` skill — this is what gives that skill a surface; it's read, not rolled). `runners.recruit_wage`/`recruit_cut` shave `daily_cost`/`job_cut` by `skill_value("leadership")` above `LEADERSHIP_BASE` (2, the lowest a skill_value can be), `LEADERSHIP_TERMS_STEP` (3%) per point capped at `LEADERSHIP_TERMS_CAP` (20%), like `shops._standing_discount` but **one-directional — floored at zero, never a markup**: a runner's listed cost is what anyone with no Leadership pays (they're looking for work too), and investment only ever makes them cheaper. They take a plain `leadership` int (like `shops.buy_price(base, standing)`) so `runners.py` stays a leaf; **every** place that reads a runner's cost (`pay_crew_wages`, `_take_crew_cut`, `BarScreen._terms_items`) goes through them rather than `runner.daily_cost`/`.job_cut` raw, so the number shown is the number charged. Computed live off current Leadership (which only moves with gear, no XP), not locked in at hire.
 
-Neither costs anything upfront — the price is the (Leadership-discounted) wage or the cut, paid later. `Character.crew` is a list of `CrewHire(runner_id, job_id | None)` (`None` = indefinite); a runner has at most one live hire. For-job hires are discharged whenever their job leaves `accepted_jobs` (`_discharge_orphan_crew`, from `remove_job` and `rest`). **Still to come:** assigning a hire to a specific `Role.filled_by`, and the run-time effect — a crew member changes the job's economics but doesn't yet act on it. First-slice simplification: the whole roster is hireable at *any* bar; seating runners at particular bars the way `fixer.create_fixers` seats fixers is the natural follow-up.
+Neither costs anything upfront — the price is the (Leadership-discounted) wage or the cut, paid later. `Character.crew` is a list of `CrewHire(runner_id, job_id | None)` (`None` = indefinite); a runner has at most one live hire. For-job hires are discharged whenever their job leaves `accepted_jobs` (`_discharge_orphan_crew`, from `remove_job` and `rest`). A crew member does earn something concrete from a completed job now — see Post-creation experience's `Character.crew_experience` — but it has no spend path yet, same caveat as everything else below. **Still to come:** assigning a hire to a specific `Role.filled_by`, and the run-time effect — a crew member changes the job's economics but doesn't yet act on it. First-slice simplification: the whole roster is hireable at *any* bar; seating runners at particular bars the way `fixer.create_fixers` seats fixers is the natural follow-up.
 
 **A job stage is several `Approach`es, not one check.** Each stage holds a **pool** of `Approach`s (`skill`, `difficulty_delta`, `flavor`) — a hard/clean, a middling and an easy/bloody way through. The stage rolls its base difficulty **once** and every approach is offset from it, so a `difficulty_delta` means the same thing on every job.
 
@@ -583,7 +598,8 @@ An `Item` carries more than a flat stat bonus:
 
 ```
 src/shadowguy/
-  character.py   Character dataclass: core stats, health, skill ranks/points, advantage bank,
+  character.py   Character dataclass: core stats, health, skill ranks/points, post-creation
+                 experience (spend_experience_on_stat/skill) + crew_experience, advantage bank,
                  faction standing, local_standing, gang_standing, crew, inventory, owned_programs,
                  accepted_jobs, security_contracts
   archetypes.py  Enforcer/Hacker/Infiltrator creation presets; apply() spends via Character's own methods

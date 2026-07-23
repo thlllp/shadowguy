@@ -104,7 +104,12 @@ SAVE_SUFFIX = ".save"
 # gained the `rival_runner_locations` key -- the persistent runner_id ->
 # territory_id map rivals.py now uses to wander independent RivalRunners
 # around the map (a pre-v31 save lacks the key entirely).
-SAVE_VERSION = 31
+# v32 added post-creation experience (character.py): Character gained
+# `experience` (spent via spend_experience_on_stat/spend_experience_on_skill)
+# and `crew_experience` (a pre-v32 pickled Character lacks both), and
+# scene.Outcome gained an `experience_delta` field -- a pre-v32 pickled Outcome
+# (inside an accepted job, a fixer's offers, or a location's gig) lacks it.
+SAVE_VERSION = 32
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
