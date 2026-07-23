@@ -30,6 +30,7 @@ from shadowguy.combat import (
     player_defense,
     player_soak,
     resolve_hit,
+    smartlink_bonus,
 )
 from shadowguy.shops import Item
 from shadowguy.skills import skill_value
@@ -387,7 +388,7 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
     roll, damage = resolve_hit(
         rng,
         skill_value(state.character, weapon.skill),
-        0,
+        smartlink_bonus(state.character, weapon),
         difficulty,
         weapon.damage,
         target.enemy.toughness,

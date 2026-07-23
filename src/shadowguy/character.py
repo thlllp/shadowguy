@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from shadowguy.cybernetics import CyberSlot, installed_bonus, installed_skill_bonus
+from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
 from shadowguy.shops import (
     InventoryItem,
@@ -58,7 +58,13 @@ if set(SKILL_RANK_COST) != set(range(STARTING_SKILL_RANK + 1, MAX_SKILL_RANK + 1
 # The stats a skill can be layered on, and what gear/chem bonuses apply to. Checks
 # roll a *skill* (skills.skill_value), never one of these on its own.
 CORE_STATS = ("body", "strength", "agility", "perception", "intelligence", "cool")
-STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep"}
+# Every runner's starting (and, for now, only ever) Humanity. Unlike the core stats
+# it has no skills, no gear/temp bonus, and nothing in the game raises or lowers it
+# yet — a fixed baseline, laid down ahead of whatever eventually costs it (cyberware
+# is the obvious future spender; see cybernetics.py's own note on Humanity being
+# unwired).
+HUMANITY_BASELINE = 6
+STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep", "humanity"}
 
 # Unlike health (floored at 0 — there's no such thing as negative health), rep can go
 # into the red: a blown job or gig now costs it (see scene.apply_outcome, jobs.py's
@@ -73,6 +79,14 @@ REP_FLOOR = -10
 # would otherwise raise from stat() the first time something rolled it.
 if any(skill.stat not in CORE_STATS for skill in SKILLS):
     raise ValueError("every Skill.stat must be one of CORE_STATS")
+
+# Same reasoning as the guard above, applied to cybernetics.Cyberware.humanity_cost:
+# cybernetics.py can't check its catalog against HUMANITY_BASELINE without importing
+# this module back (a cycle), so the check that every CyberSlot has at least one
+# piece a baseline-Humanity runner can actually afford lives here instead.
+for _slot in CyberSlot:
+    if not any(c.slot is _slot and c.humanity_cost <= HUMANITY_BASELINE for c in CYBERWARE_CATALOG):
+        raise ValueError(f"no cyberware in {_slot} fits within HUMANITY_BASELINE")
 
 
 @dataclass
@@ -97,6 +111,7 @@ class Character:
     cool: int = STARTING_STAT
     cash: int = STARTING_CASH
     rep: int = 0
+    humanity: int = HUMANITY_BASELINE
     health: int | None = None
     # The run's clock: a continuous count of in-game hours spent, never reset.
     # Character.day (below) is derived from this rather than stored — see

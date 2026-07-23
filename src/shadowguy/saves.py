@@ -111,7 +111,10 @@ SAVE_SUFFIX = ".save"
 # (inside an accepted job, a fixer's offers, or a location's gig) lacks it.
 # v33 added cyberware (cybernetics.py): Character gained `installed_cyberware`
 # (a pre-v33 pickled Character lacks it).
-SAVE_VERSION = 33
+# v34 added Humanity (character.py): Character gained `humanity`, a fixed
+# baseline (HUMANITY_BASELINE, 6) with no gear/temp bonus and nothing yet to
+# raise or lower it (a pre-v34 pickled Character lacks it).
+SAVE_VERSION = 34
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

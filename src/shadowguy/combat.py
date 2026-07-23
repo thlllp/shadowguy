@@ -52,6 +52,7 @@ from shadowguy.checks import (
     resolve_check,
     resolve_rng,
 )
+from shadowguy.cybernetics import has_smartlink
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -72,6 +73,20 @@ from shadowguy.skills import skill_for, skill_value
 # from Dodge (skill_value, so gear and rank both count), which is what stops
 # Agility from being a stat you only spend on job approaches.
 DEFENSE_BASE = 12
+
+# Extra to-hit dice a Smartlink implant grants when firing a weapon that's
+# itself smartlinked (shops.Item.smartlinked) -- zero otherwise, including a
+# melee weapon or an unlinked gun. Conditional on *which* weapon this attack
+# uses, so it goes through resolve_hit's advantage parameter rather than
+# skill_gear_bonus (an unconditional per-check bonus with no way to express
+# "only with this weapon").
+SMARTLINK_ATTACK_BONUS = 2
+
+
+def smartlink_bonus(character: Character, weapon: Item) -> int:
+    if not weapon.smartlinked or not has_smartlink(character.installed_cyberware):
+        return 0
+    return SMARTLINK_ATTACK_BONUS
 
 # Empty-handed. A real weapon is strictly better, but there is always *an* attack:
 # a runner who sold their last knife can still fight, badly. Built by hand rather
@@ -541,7 +556,7 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     # you rounds rather than clicks. Grenades are how you hit the back of the pack.
     target = state.standing[0]
     weapon = action.weapon
-    bonus = state.next_attack_bonus
+    bonus = state.next_attack_bonus + smartlink_bonus(state.character, weapon)
     state.next_attack_bonus = 0
 
     roll, damage = resolve_hit(

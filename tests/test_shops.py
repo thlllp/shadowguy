@@ -13,6 +13,7 @@ from shadowguy.shops import (
     Program,
     Slot,
     active_deck_entry,
+    bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
@@ -358,3 +359,15 @@ def test_equipped_travel_reduction_reads_only_the_equipped_vehicle():
     assert equipped_travel_reduction(c.inventory) == 0.0
     c.inventory[0].equipped = True
     assert equipped_travel_reduction(c.inventory) == 0.10
+
+
+def test_pipe_pistol_is_the_smartlinked_weapon():
+    assert ITEMS_BY_ID["pipe_pistol"].smartlinked is True
+
+
+def test_bonus_text_flags_a_smartlinked_weapon():
+    assert "smartlinked" in bonus_text(ITEMS_BY_ID["pipe_pistol"])
+
+
+def test_bonus_text_omits_smartlinked_for_an_unlinked_weapon():
+    assert "smartlinked" not in bonus_text(ITEMS_BY_ID["combat_knife"])
