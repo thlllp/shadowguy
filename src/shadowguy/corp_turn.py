@@ -112,9 +112,8 @@ TERRITORY_INCOME_PER_VALUE = 15
 EXPANSION_COST_BASE = 150
 EXPANSION_COST_PER_VALUE = 100
 
-# Flat for now since nothing raises an Academy's tier yet (see corpmap.py). Same
-# cost regardless of which EmployeeCategory is trained.
-ACADEMY_TRAINING_COST = 200
+# ACADEMY_TRAINING_COST is defined further down, once EmployeeCategory/TRAINING_DAYS
+# exist to key it by.
 
 # A research facility seats this many working scientists for free, before any
 # lab is built.
@@ -383,6 +382,23 @@ TRAINING_DAYS = {
     EmployeeCategory.SCIENTIST: 9,
     EmployeeCategory.OPERATIVE: 6,
     EmployeeCategory.RESEARCH_ASSISTANT: 3,
+}
+
+# Cash cost of one training batch, per category. Used to be a single flat 200 --
+# same cost regardless of category made Research Assistants a dead pick once a
+# game runs long enough for the training slot's opportunity cost to matter: same
+# price as a Scientist, a third of the training time, but half the RP/day, so a
+# Scientist trained back-to-back always overtakes an Assistant trained in the same
+# stretch of slot-time (crossover ~day 15, and it never comes back). Pricing each
+# category off its own RESEARCH_PER_SCIENTIST/RESEARCH_PER_ASSISTANT rate keeps
+# cash-per-RP even across the two, so the real choice is capacity (lab_capacity vs
+# assistant_capacity) and how soon you want the hire, not a strictly dominated
+# option. Operative has no rate to peg to yet (no consumer wired up -- see the
+# module docstring), so it keeps the original flat price. Not balance-simulated.
+ACADEMY_TRAINING_COST = {
+    EmployeeCategory.SCIENTIST: 200,
+    EmployeeCategory.OPERATIVE: 200,
+    EmployeeCategory.RESEARCH_ASSISTANT: 100,
 }
 
 
@@ -719,9 +735,9 @@ def train_employees(
     if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = _owned_academy(corp_state, corp_map)
-    if academy is None or ACADEMY_TRAINING_COST > corp_state.cash:
+    if academy is None or ACADEMY_TRAINING_COST[category] > corp_state.cash:
         return False
-    corp_state.cash -= ACADEMY_TRAINING_COST
+    corp_state.cash -= ACADEMY_TRAINING_COST[category]
     corp_state.pending_recruit = PendingRecruit(
         category=category,
         count=academy.academy_tier or 0,

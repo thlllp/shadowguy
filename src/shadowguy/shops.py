@@ -250,7 +250,7 @@ class Consumable:
 _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.WEAPON_SHOP: [
         ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "blunt", 4, 5),
-        ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 4, 4),
+        ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 5, 4),
         ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "long_blade", 6, 1, True),
         # Trailing 0, True: program_slots (n/a), smartlinked — the one gun in the
         # catalog today, so it's what makes cybernetics.SMARTLINK_ID reachable at all.

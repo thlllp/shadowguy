@@ -326,7 +326,17 @@ def player_integrity(character: Character) -> int:
 
 
 def firewall_defense(character: Character) -> int:
-    return FIREWALL_BASE + skill_value(character, "infer") + _passive_bonus(character, "firewall_bonus")
+    """FIREWALL_BASE + Infer, minus the equipped deck's own Intelligence bonus: a
+    better deck should make your hacking sharper (player_attack_damage), not your
+    firewall too -- left in, the same deck rating was compounding into player_
+    integrity, firewall_defense *and* the Hack roll all at once, which is what made
+    a decked-out hacker near-unhittable (see DESIGN.md's Data Heist section)."""
+    return (
+        FIREWALL_BASE
+        + skill_value(character, "infer")
+        - equipped_deck_rating(character.inventory)
+        + _passive_bonus(character, "firewall_bonus")
+    )
 
 
 def firewall_soak(character: Character) -> int:
