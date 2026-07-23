@@ -594,6 +594,14 @@ An `Item` carries more than a flat stat bonus:
 
 **Healing is deliberately *not* usable in combat**, and it's the interesting exclusion, because a Health Kit is the obvious combat item in most games. Health comes back slowly and mostly costs days (the hospital — see Rest, lodging & property), which means a fight would be the cheapest place to spend a kit — top up, swing again, top up — turning a fight from something you survive into something you grind, and making health (the resource the entire `DAMAGE_FOR_DELTA` curve is denominated in) refundable mid-encounter. You patch yourself up *after*. Chems are out for the same reason.
 
+### Cyberware (`shadowguy/cybernetics.py`) — first-slice system, not yet acquirable in-run
+
+Persistent body modifications, distinct from `shops.Item`: cyberware is **installed**, not equipped/unequipped — there's no `InventoryItem.equipped` toggle, because a surgically-installed piece is always active. `CyberSlot` (`NEURALWARE`/`OPTICS`/`ARMS`/`INTERNAL`) is the cyberware counterpart to `shops.Slot`'s wearable slots, one piece per slot, tracked on `Character.installed_cyberware: dict[CyberSlot, str]`. `CYBERWARE_CATALOG` is hand-authored like `shops.CATALOG`, each `Cyberware` carrying `bonuses`/`skill_bonuses` in the exact same shape `shops.Item` uses.
+
+**It's load-bearing today, not inert data.** `Character.stat()` folds `cybernetics.installed_bonus` in right alongside `shops.equipped_bonus`, and `skill_gear_bonus()` does the same with `installed_skill_bonus` — so installed cyberware strengthens checks immediately, the same as worn gear. `install_cyberware`/`remove_cyberware` are real functions: installing charges cash and fails closed if the slot's already occupied or it's unaffordable; removing frees the slot with no refund (ripping cyberware out is surgery, not a sale).
+
+**What's deliberately missing is acquisition** — no `LocationKind` (a ripperdoc clinic), no `ShopScreen` wiring, no `min_standing` gate, and no Humanity/cyberpsychosis cost. Adding a shop kind touches `corpmap.py`'s name pools, `LOCATION_SKILL`, `GENERATED_KINDS`, `jobs.LEGWORK_APPROACH_TEXT` and `gigs._GIG_TEMPLATES` all at once (see Shops' own opening note on `SHOP_KINDS`) — real wiring, deliberately deferred rather than bolted on early. Nothing in the game calls `install_cyberware` yet; it's reachable only from tests and a future screen. `saves.SAVE_VERSION` 33 added `Character.installed_cyberware`.
+
 ### Codebase layout
 
 ```
@@ -647,6 +655,8 @@ src/shadowguy/
   shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate), consumables,
                  Program catalog (cyberdeck program_slots, buy/install/uninstall_program), buy/sell/equip,
                  standing-scaled pricing, hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
+  cybernetics.py Cyberware catalog (CyberSlot, bonuses/skill_bonuses like shops.Item), install_cyberware/
+                 remove_cyberware onto Character.installed_cyberware; no shop/screen wired to it yet; leaf
   saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
   app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state,
                  corp_only -> which home screen to reopen, spend_time/_apply_day_tick);
