@@ -384,11 +384,25 @@ Faction standing (above) is the player's actions moving the corps; `rivals.py` i
 
 Claiming is `corpmap.claim_territory(territory, faction_id, rng)`: flips `owner`, reseeds `modifiers` through the same `_corp_modifiers` generation uses (neutral ground's flat Unrest-`MODIFIER_MAX` profile no longer describes corp-held ground), and clears `gang_id` — a corp moving in displaces whatever street presence was there. `value` is left untouched (the corp hasn't built the block up yet) and **locations are not regenerated** — a claimed territory keeps whatever shops/bar/etc. it rolled at generation; re-rolling specialty locations or HQ eligibility on ownership change is out of scope for this slice. `CorpMapScreen` needs no wiring for this to show up: it's a fresh screen instance each time it's pushed and reads `Territory.owner` live, so the next time the player opens the corp map it already reflects overnight claims.
 
-**Independent runners are still an inert stub.** Every `runners.RIVAL_RUNNERS` (the hireable roster — Specter, Juncture, Mireille) gets a `RivalAction` too, *except* while on the player's `Character.crew` (`on_crew`) — indefinite and for-job hires both count as engaged, since either way they're working for the player that day, not freelancing on their own. Their action carries no `territory_id` and has no other effect yet; nothing here gives them a decision beyond "did they act." `ShadowguyApp.rival_actions` holds the latest day's list (overwritten, not accumulated — nothing reads history yet), part of the save bundle (`saves.STATE_KEYS`, `SAVE_VERSION` 19).
+**Independent runners still have no decision logic, but they do have a position now.** Every `runners.RIVAL_RUNNERS` (the hireable roster — Specter, Juncture, Mireille) gets a `RivalAction` too, *except* while on the player's `Character.crew` (`on_crew`) — indefinite and for-job hires both count as engaged, since either way they're working for the player that day, not freelancing on their own. Each independent runner wanders (`rivals._wander`): placed on a random territory the first time they're seen, then each day a `RUNNER_MOVE_CHANCE` (0.3, first-slice, not balance-simulated) coin flip either hops them to one of their current territory's connections or leaves them put. That position is tracked in `ShadowguyApp.rival_runner_locations` (`dict[runner_id, territory_id]`), passed into `resolve_rival_day` and mutated in place so it persists day to day — `rivals.py` itself stays leaf-ish, the dict's *persistence* is the caller's problem, same as `rival_actions`. `RivalAction.territory_id` for a `"runner"` kind now always carries their post-wander position (previously always `None`); a caller that omits `rival_runner_locations` (mostly tests) gets a fresh dict each call, so wandering happens but nothing carries over. There's still no decision logic beyond the wander — the natural next step is a runner AI (taking their own jobs). `ShadowguyApp.rival_actions` holds the latest day's list (overwritten, not accumulated — nothing reads history yet), part of the save bundle (`saves.STATE_KEYS`, `SAVE_VERSION` 19); `rival_runner_locations` joined it at `SAVE_VERSION` 31.
 
-**Still deliberately inert past that:** no UI surfaces a faction's claim (no `notify()`), and independent runners have no decision logic of their own — the natural next steps are a runner AI (taking their own jobs) and a way for the player to actually *see* a corp's expansion, neither bundled in here.
+**Still deliberately inert past the wander:** no UI surfaces a faction's claim (no `notify()`) — the natural next step is a way for the player to actually *see* a corp's expansion, not bundled in here. (A runner's wander position, unlike a faction's claim, *is* now surfaced — see Surveillance detection, below.)
 
 **Once the player takes over a Faction (see Corp mode turn loop, below), that faction drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, `continue`s past that faction inside the `for faction in FACTIONS` loop, and records no `RivalAction` for it — its daily move is the player's own decision from `CorpScreen` now, not a roll here. Default `None` keeps every pre-existing call site (and test) working unchanged.
+
+### Surveillance detection (`shadowguy/surveillance.py`)
+
+The first reader of `corpmap.TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own gates (`raise_development`'s threshold, `raise_surveillance`'s target list) — and the first thing that actually *does* something with a district being watched. A parallel resolution module like `rivals.py`/`security.py`, not a `Scene`: `resolve_surveillance_day` is called once per day tick, right after `resolve_rival_day` has moved the independent runner roster for the day, so a wandering runner's `rival_runner_locations` entry is already settled by the time Surveillance rolls against it.
+
+**Scoped to the corp the player is actually running.** `resolve_surveillance_day` takes `CorpState | None` and is a no-op when it's `None` — Surveillance detection is a Corp-mode mechanic, and an AI-controlled faction has no reader for a sighting logged against it (the same "no consequence without a reader" restraint `rivals.py`'s inert stubs already apply). While a corp *is* set, every territory it owns rolls a detection check against two kinds of "known runner" standing on it: the player (`Character.location_id`) and every `runners.RIVAL_RUNNERS` entry (via its `rival_runner_locations` position, wherever `rivals.py` last wandered it to — a hired runner's location goes stale while on crew, same as their `RivalAction`s pausing).
+
+**Detection is a flat, Surveillance-level-indexed chance, not an opposed check.** `SURVEILLANCE_DETECTION_CHANCE` is a 6-entry tuple (index = the territory's current Surveillance, 0..`MODIFIER_MAX`), guarded at import to cover every level. There's deliberately no player-side counter-roll yet (a Concealment/Stealth skill is the obvious next hook) — this only reads the corp's own investment, the same one-sided "world acts on you" shape `encounters.py`'s toll/attack split uses before a fight even opens. First-slice numbers, not balance-simulated: even a maxed-out district (level 5, `0.65`) misses more often than not.
+
+**A hit is purely informational — nothing else moves.** `corp_turn.Sighting` (`kind`, `actor_id`, `territory_id`, `day`) is plain data living in `corp_turn.py` rather than `surveillance.py` itself, the same reason `scene.Role` holds no `jobs.StageType`: `CorpState.sightings` (a `list[Sighting]`, most-recent-first, capped at `surveillance.MAX_SIGHTINGS_LOG`) needs somewhere to live that doesn't make `corp_turn.py` import `surveillance.py` back (a cycle, since `surveillance.py` needs `CorpState`). No standing/rep/combat consequence is wired to a sighting yet — the same "mechanism built ahead of its driver" pattern `gang_standing` and `CorpMap.relations` started as; a future driver (a security response, a standing hit) belongs here, not as a second detection pipeline.
+
+**Surfaced as a Surveillance Log panel** — a fifth `Collapsible` in `CorpScreen`/`CorpMainMenu` (`#surveillance_panel`/`#surveillance_list`), collapsed by default (unlike the other four panels) since it's read-only history rather than an action list, and `CorpScreen`'s row budget is already tight (see Corp mode turn loop). Each row reads `"Day {day} — {who} spotted in {territory}"`, `who` resolved at display time (`"You"` for the player, `runners.RUNNERS_BY_ID[actor_id].name` for a runner) rather than stored on the `Sighting` — the same derive-at-point-of-use principle `jobs.archetype_specialist()` and every `corp_turn.Technology` effect already follow. `app.notify()`s once per day with just a count (`"Surveillance logged N sighting(s) in your territory today."`) rather than one toast per sighting, so a day that catches all three rival runners at once doesn't spam the corner of the screen — the log panel is where the detail lives.
+
+`saves.SAVE_VERSION` 31: `CorpState` gained `sightings`, and `ShadowguyApp` gained the `rival_runner_locations` key. **Not balance-simulated** — the detection curve, `MAX_SIGHTINGS_LOG` (10), and `rivals.RUNNER_MOVE_CHANCE` (0.3) are all first-slice numbers.
 
 ### Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`)
 
@@ -597,13 +611,19 @@ src/shadowguy/
   relations.py   generate_relations(): seeded standing between every Faction/Gang pair, independent
                  of the player; symmetric one-value-per-pair, stored on CorpMap.relations; leaf module
   rivals.py      daily-action pipeline: resolve_rival_day() lets every Faction push onto bordering
-                 neutral territory (claim_territory) and gives every independent (not-hired)
-                 RivalRunner a stub turn, each day-advance (not Scene-based); skips a Faction the
-                 player has taken over via corp_turn.py
+                 neutral territory (claim_territory) and wanders every independent (not-hired)
+                 RivalRunner one step across corpmap connections, each day-advance (not
+                 Scene-based); skips a Faction the player has taken over via corp_turn.py
   corp_turn.py   the player's own Corp turn: CorpState (cash/research_points/scientists/
-                 operatives/research_assistants), collect_income/collect_research,
+                 operatives/research_assistants/sightings), collect_income/collect_research,
                  expand_into/train_employees/build_lab/build_efficiency_upgrade sharing one
-                 daily_action_used slot (not Scene-based); leaf, imports corpmap only
+                 daily_action_used slot; also Sighting (plain data for surveillance.py's log,
+                 kept here to avoid a corp_turn<->surveillance import cycle) (not Scene-based);
+                 leaf, imports corpmap only
+  surveillance.py  daily Surveillance detection: resolve_surveillance_day() rolls a
+                 TerritoryModifier.SURVEILLANCE-scaled chance against the player and every
+                 wandering RivalRunner standing in the player's own corp's territory, logging
+                 a hit to CorpState.sightings (not Scene-based, informational only for now)
   corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ,
                  one RESEARCH_FACILITY and one ACADEMY per faction, one GANG_DEN per gang;
                  lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);

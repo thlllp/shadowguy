@@ -17,6 +17,7 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.menu_screens import QuitMenu, TitleMenu
 from shadowguy.security import resolve_security_night
+from shadowguy.surveillance import resolve_surveillance_day
 
 
 class ShadowguyApp(App):
@@ -37,6 +38,7 @@ class ShadowguyApp(App):
         self.location_gigs: dict[str, Scene] = {}
         refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         self.rival_actions: list[RivalAction] = []
+        self.rival_runner_locations: dict[str, str] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
 
@@ -85,11 +87,18 @@ class ShadowguyApp(App):
         refresh_security_offers(self.fixers, day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         player_faction_id = self.corp_state.faction_id if self.corp_state else None
-        self.rival_actions += resolve_rival_day(self.character, self.corp_map, day, self.rng, player_faction_id)
+        self.rival_actions += resolve_rival_day(
+            self.character, self.corp_map, day, self.rng, player_faction_id, self.rival_runner_locations
+        )
         if self.corp_state:
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
             self.corp_state.daily_action_used = False
+            sightings = resolve_surveillance_day(
+                self.character, self.corp_map, self.corp_state, self.rival_runner_locations, day, self.rng
+            )
+            if sightings:
+                self.notify(f"Surveillance logged {len(sightings)} sighting(s) in your territory today.")
 
         if skip_night_effects:
             return
@@ -149,6 +158,7 @@ class ShadowguyApp(App):
             "fixers": self.fixers,
             "location_gigs": self.location_gigs,
             "rival_actions": self.rival_actions,
+            "rival_runner_locations": self.rival_runner_locations,
             "corp_state": self.corp_state,
             "corp_only": self.corp_only,
         }
@@ -161,6 +171,7 @@ class ShadowguyApp(App):
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
         self.location_gigs = location_gigs
         self.rival_actions = state["rival_actions"]
+        self.rival_runner_locations = state["rival_runner_locations"]
         self.corp_state = state["corp_state"]
         self.corp_only = state["corp_only"]
         unspent = self.character.stat_points + self.character.skill_points

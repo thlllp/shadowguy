@@ -33,6 +33,7 @@ from shadowguy.corp_turn import (
 )
 from shadowguy.corpmap import TerritoryModifier, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID
 
 from . import PANEL_NAV_BINDINGS, PanelNav, _replace_items
 from .corp_map_screen import CorpMapScreen
@@ -43,6 +44,12 @@ def _plural(category: EmployeeCategory) -> str:
     """research_assistant -> "research assistants"; scientist/operative have
     no underscore to begin with, so this just adds the s."""
     return f"{category.replace('_', ' ')}s"
+
+
+def _sighting_label(sighting, corp_map) -> str:
+    who = "You" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
+    territory_name = corp_map.territories[sighting.territory_id].name
+    return f"Day {sighting.day} — {who} spotted in {territory_name}"
 
 
 class CorpScreen(Screen):
@@ -67,11 +74,11 @@ class CorpScreen(Screen):
     # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
     # each to its actual item count instead.
     CSS = """
-    #corp_list, #academy_list, #research_list, #tech_list {
+    #corp_list, #academy_list, #research_list, #tech_list, #surveillance_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel, #tech_panel {
+    #academy_panel, #research_panel, #tech_panel, #surveillance_panel {
         height: auto;
     }
     """
@@ -85,6 +92,9 @@ class CorpScreen(Screen):
             ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
         )
         yield Collapsible(ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel")
+        yield Collapsible(
+            ListView(id="surveillance_list"), title="Surveillance Log", collapsed=True, id="surveillance_panel"
+        )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -110,14 +120,17 @@ class CorpScreen(Screen):
             await _replace_items(academy_list, [])
             await _replace_items(research_list, [])
             await _replace_items(self.query_one("#tech_list", ListView), [])
+            await _replace_items(self.query_one("#surveillance_list", ListView), [])
             self.query_one("#academy_panel").display = False
             self.query_one("#research_panel").display = False
             self.query_one("#tech_panel").display = False
+            self.query_one("#surveillance_panel").display = False
             return
 
         self.query_one("#academy_panel").display = True
         self.query_one("#research_panel").display = True
         self.query_one("#tech_panel").display = True
+        self.query_one("#surveillance_panel").display = True
 
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[corp_state.faction_id]
@@ -231,6 +244,15 @@ class CorpScreen(Screen):
                 research_items.append(ListItem(Static(label), id="build_efficiency"))
         await _replace_items(research_list, research_items)
 
+        if corp_state.sightings:
+            sighting_items = [
+                ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
+                for i, sighting in enumerate(corp_state.sightings)
+            ]
+        else:
+            sighting_items = [ListItem(Static("No sightings yet."), id="no_sightings")]
+        await _replace_items(self.query_one("#surveillance_list", ListView), sighting_items)
+
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
         if item_id.startswith("faction_"):
@@ -258,7 +280,7 @@ class CorpScreen(Screen):
             await self._refresh()
             return
 
-        if item_id.startswith("tech_done_"):
+        if item_id.startswith("tech_done_") or item_id.startswith("sighting_") or item_id == "no_sightings":
             return
 
         if item_id.startswith("tech_"):
@@ -347,7 +369,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
-    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "tech_list")
+    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "tech_list", "surveillance_list")
 
     CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts")]
 
@@ -378,11 +400,11 @@ class CorpMainMenu(PanelNav, CorpScreen):
         padding: 0 1;
     }
 
-    #corp_list, #academy_list, #research_list, #tech_list {
+    #corp_list, #academy_list, #research_list, #tech_list, #surveillance_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel, #tech_panel {
+    #academy_panel, #research_panel, #tech_panel, #surveillance_panel {
         height: auto;
     }
     """
@@ -405,6 +427,12 @@ class CorpMainMenu(PanelNav, CorpScreen):
                 ),
                 Collapsible(
                     ListView(id="tech_list"), title="Technology", collapsed=False, id="tech_panel"
+                ),
+                Collapsible(
+                    ListView(id="surveillance_list"),
+                    title="Surveillance Log",
+                    collapsed=True,
+                    id="surveillance_panel",
                 ),
                 id="main_panel",
             ),

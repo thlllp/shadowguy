@@ -67,12 +67,20 @@ Both are strictly sequential — LAB_UPGRADE_COSTS/EFFICIENCY_UPGRADE_COSTS are
 indexed by labs_built/efficiency_upgrades, so the second tier's cost isn't
 reachable until the first is built.
 
+CorpState.sightings is a log of Surveillance hits, but corp_turn.py doesn't roll
+them: surveillance.py is what reads TerritoryModifier.SURVEILLANCE and appends a
+Sighting here, once per day tick, the same "parallel resolution module" shape as
+rivals.py/security.py. Sighting itself lives here anyway (plain data, like
+scene.Role) so CorpState can hold a list of them without corp_turn.py importing
+surveillance.py back.
+
 Leaf-ish: imports corpmap only, never scene or app.
 """
 
 import random
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 
 from shadowguy.corpmap import (
     MODIFIER_MAX,
@@ -225,6 +233,23 @@ if any(tech.cost <= 0 for tech in TECHNOLOGIES):
     raise ValueError("a Technology must cost research points to be worth researching")
 
 
+@dataclass
+class Sighting:
+    """One Surveillance hit: a known runner (the player, or a runners.RivalRunner)
+    that surveillance.py caught inside this corp's own territory on a given day.
+
+    Plain data, the same reason scene.Role holds no jobs.StageType rather than a
+    real jobs.StageType field: corp_turn.py stays a leaf (imports corpmap only),
+    so surveillance.py -- which does the actual detecting, and needs CorpState in
+    turn -- can hold a list of these on CorpState without corp_turn.py importing
+    surveillance.py back (that would be a cycle)."""
+
+    kind: Literal["player", "runner"]
+    actor_id: str  # "player", or a runners.RivalRunner.id
+    territory_id: str
+    day: int
+
+
 class EmployeeCategory(StrEnum):
     """What a training session at the Academy produces — nothing reads which
     category a hire belongs to yet beyond research_assistants feeding
@@ -256,6 +281,11 @@ class CorpState:
     # same shape Character.owned_programs/discovered_fixers use. Research is
     # permanent — nothing takes a tech back.
     researched: set[str] = field(default_factory=set)
+    # Surveillance sightings logged against this corp's own territory,
+    # most-recent-first, capped by surveillance.MAX_SIGHTINGS_LOG. Stays empty
+    # until surveillance.resolve_surveillance_day actually catches someone —
+    # corp_turn.py never appends to this itself.
+    sightings: list[Sighting] = field(default_factory=list)
 
 
 def has_technology(corp_state: CorpState, technology_id: str) -> bool:
