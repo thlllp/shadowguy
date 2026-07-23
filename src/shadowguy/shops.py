@@ -149,6 +149,13 @@ class Item:
     # meaningful when slot is None (the "a None slot is a deck" convention
     # equipped_deck_rating already relies on) — enforced at import.
     program_slots: int = 0
+    # Whether this weapon carries a smartgun interface — only meaningful (and only
+    # valid, enforced at import) on a firearm (skill == "firearms"). combat.py's
+    # smartlink_bonus() reads this alongside cybernetics.has_smartlink to grant a
+    # to-hit bonus only when both the weapon and the runner's implant agree; an
+    # unlinked gun gets nothing from the cyberware, and the cyberware does
+    # nothing for an unlinked one.
+    smartlinked: bool = False
 
 
 @dataclass
@@ -182,6 +189,8 @@ def bonus_text(item: Item) -> str:
         parts.append(f"+{item.defense} defense")
     if item.travel_reduction:
         parts.append(f"-{item.travel_reduction:.0%} travel time")
+    if item.smartlinked:
+        parts.append("smartlinked")
     return ", ".join(parts)
 
 
@@ -243,7 +252,9 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "blunt", 4, 5),
         ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 4, 4),
         ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "long_blade", 6, 1, True),
-        ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "firearms", 5, 4, False, {}, 0, 0, 0, 0, "old tech"),
+        # Trailing 0, True: program_slots (n/a), smartlinked — the one gun in the
+        # catalog today, so it's what makes cybernetics.SMARTLINK_ID reachable at all.
+        ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "firearms", 5, 4, False, {}, 0, 0, 0, 0, "old tech", 0, True),
         ("leather_jacket", "Leather Jacket", 200, {}, Slot.TORSO, 3),
         ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 5),
         ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
@@ -445,6 +456,8 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: program_slots is only valid on a deck (slot is None)")
     if _item.program_slots < 0:
         raise ValueError(f"{_item.id}: program_slots must be >= 0")
+    if _item.smartlinked and _item.skill != "firearms":
+        raise ValueError(f"{_item.id}: smartlinked is only valid on a firearms weapon")
 
 
 # id, name, price, effect, amount, stat, min_standing

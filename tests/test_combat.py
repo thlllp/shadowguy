@@ -6,6 +6,7 @@ import random
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult
 from shadowguy.combat import (
+    SMARTLINK_ATTACK_BONUS,
     ActionKind,
     CombatOutcome,
     Drop,
@@ -15,9 +16,11 @@ from shadowguy.combat import (
     drop_for_result,
     equipped_weapons,
     resolve_hit,
+    smartlink_bonus,
     start_combat,
     take_turn,
 )
+from shadowguy.cybernetics import CyberSlot, install_cyberware
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 
 
@@ -187,3 +190,34 @@ def test_flee_parting_shot_is_from_one_enemy_not_the_whole_squad():
     take_turn(state, flee_action, rng=AlwaysOne())
     # Worst case: one thug's damage(2) plus margin, definitely not 5 thugs' worth.
     assert before - c.health <= 12
+
+
+# --- smartlink_bonus ---
+
+
+def test_smartlink_bonus_zero_with_no_implant():
+    character = Character(name="t")
+    pistol = ITEMS_BY_ID["pipe_pistol"]
+    assert smartlink_bonus(character, pistol) == 0
+
+
+def test_smartlink_bonus_zero_on_an_unlinked_weapon():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, "smartlink")
+    assert smartlink_bonus(character, UNARMED) == 0
+
+
+def test_smartlink_bonus_applies_with_implant_and_a_smartlinked_weapon():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, "smartlink")
+    pistol = ITEMS_BY_ID["pipe_pistol"]
+    assert pistol.smartlinked is True
+    assert smartlink_bonus(character, pistol) == SMARTLINK_ATTACK_BONUS
+
+
+def test_smartlink_bonus_zero_with_a_different_implant_in_the_slot():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, "cybereye_scanner")
+    assert character.installed_cyberware[CyberSlot.OPTICS] == "cybereye_scanner"
+    pistol = ITEMS_BY_ID["pipe_pistol"]
+    assert smartlink_bonus(character, pistol) == 0

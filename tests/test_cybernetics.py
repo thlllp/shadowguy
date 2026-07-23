@@ -2,13 +2,18 @@
 Character.stat()/skill_value wiring (character.py folds installed_bonus/
 installed_skill_bonus in alongside worn gear -- see the module docstring)."""
 
-from shadowguy.character import Character
+from shadowguy.character import HUMANITY_BASELINE, Character
 from shadowguy.cybernetics import (
     CYBERWARE_BY_ID,
     CYBERWARE_CATALOG,
+    SMARTLINK_ID,
+    VALID_CYBERWARE_TIERS,
     CyberSlot,
+    free_humanity,
+    has_smartlink,
     install_cyberware,
     installed_bonus,
+    installed_humanity_cost,
     installed_skill_bonus,
     remove_cyberware,
 )
@@ -87,7 +92,7 @@ def test_installed_bonus_is_zero_with_nothing_installed():
 
 
 def test_installed_skill_bonus_reads_the_right_piece():
-    cyberware = _first_for_slot(CyberSlot.OPTICS, with_skill_bonus=True)
+    cyberware = _first_for_slot(CyberSlot.ARMS, with_skill_bonus=True)
     skill_id = next(iter(cyberware.skill_bonuses))
     installed = {CyberSlot.OPTICS: cyberware.id}
     assert installed_skill_bonus(installed, skill_id) == cyberware.skill_bonuses[skill_id]
@@ -113,3 +118,128 @@ def test_character_skill_value_folds_in_installed_cyberware_skill_bonus():
 
 def test_cyberware_ids_are_unique():
     assert len(CYBERWARE_BY_ID) == len(CYBERWARE_CATALOG)
+
+
+def test_free_humanity_starts_at_the_baseline_with_nothing_installed():
+    character = Character(name="t")
+    assert character.humanity == HUMANITY_BASELINE
+    assert free_humanity(character) == HUMANITY_BASELINE
+
+
+def test_installing_cyberware_spends_free_humanity():
+    cyberware = _first_for_slot(CyberSlot.OPTICS)
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, cyberware.id)
+    assert installed_humanity_cost(character.installed_cyberware) == cyberware.humanity_cost
+    assert free_humanity(character) == HUMANITY_BASELINE - cyberware.humanity_cost
+
+
+def test_install_cyberware_fails_when_it_would_exceed_humanity_capacity():
+    character = Character(name="t", cash=100_000, humanity=1)
+    expensive = next(c for c in CYBERWARE_CATALOG if c.humanity_cost > 1)
+    assert install_cyberware(character, expensive.id) is False
+    assert character.installed_cyberware == {}
+    assert character.cash == 100_000
+
+
+def test_install_cyberware_succeeds_exactly_at_remaining_capacity():
+    cyberware = _first_for_slot(CyberSlot.INTERNAL)
+    character = Character(name="t", cash=10_000, humanity=cyberware.humanity_cost)
+    assert install_cyberware(character, cyberware.id) is True
+    assert free_humanity(character) == 0
+
+
+def test_removing_cyberware_frees_its_humanity_cost():
+    cyberware = _first_for_slot(CyberSlot.ARMS)
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, cyberware.id)
+    remove_cyberware(character, CyberSlot.ARMS)
+    assert free_humanity(character) == HUMANITY_BASELINE
+
+
+def test_smartlink_costs_half_a_point_of_humanity():
+    assert CYBERWARE_BY_ID[SMARTLINK_ID].humanity_cost == 0.5
+
+
+def test_installing_smartlink_leaves_a_fractional_remainder():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, SMARTLINK_ID)
+    assert free_humanity(character) == HUMANITY_BASELINE - 0.5
+
+
+def test_has_smartlink_false_with_nothing_installed():
+    assert has_smartlink({}) is False
+
+
+def test_has_smartlink_false_with_a_different_optics_piece():
+    assert has_smartlink({CyberSlot.OPTICS: "cybereye_scanner"}) is False
+
+
+def test_has_smartlink_true_once_installed():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, SMARTLINK_ID)
+    assert has_smartlink(character.installed_cyberware) is True
+
+
+# --- tiers ---
+
+
+def test_every_catalog_entry_has_a_valid_tier():
+    assert {c.tier for c in CYBERWARE_CATALOG} <= set(VALID_CYBERWARE_TIERS)
+
+
+def test_every_tier_1_piece_has_a_tier_2_3_and_4_variant():
+    tier_1 = [c for c in CYBERWARE_CATALOG if c.tier == 1]
+    for base in tier_1:
+        for tier in (2, 3, 4):
+            assert f"{base.id}_t{tier}" in CYBERWARE_BY_ID
+
+
+def test_higher_tier_keeps_the_same_effect_as_tier_1():
+    base = CYBERWARE_BY_ID["reflex_coprocessor"]
+    for tier in (2, 3, 4):
+        variant = CYBERWARE_BY_ID[f"{base.id}_t{tier}"]
+        assert variant.slot is base.slot
+        assert variant.bonuses == base.bonuses
+        assert variant.skill_bonuses == base.skill_bonuses
+        assert variant.tier == tier
+
+
+def test_tier_2_is_the_same_price_and_10_percent_less_humanity():
+    base = CYBERWARE_BY_ID["neural_processor"]
+    tier_2 = CYBERWARE_BY_ID["neural_processor_t2"]
+    assert tier_2.price == base.price
+    assert tier_2.humanity_cost == round(base.humanity_cost * 0.9, 2)
+
+
+def test_tier_3_is_25_percent_cheaper_and_10_percent_more_humanity():
+    base = CYBERWARE_BY_ID["neural_processor"]
+    tier_3 = CYBERWARE_BY_ID["neural_processor_t3"]
+    assert tier_3.price == round(base.price * 0.75)
+    assert tier_3.humanity_cost == round(base.humanity_cost * 1.10, 2)
+
+
+def test_tier_4_is_50_percent_cheaper_and_60_percent_more_humanity():
+    base = CYBERWARE_BY_ID["neural_processor"]
+    tier_4 = CYBERWARE_BY_ID["neural_processor_t4"]
+    assert tier_4.price == round(base.price * 0.5)
+    assert tier_4.humanity_cost == round(base.humanity_cost * 1.6, 2)
+
+
+def test_every_tier_smartlink_still_grants_smartlink():
+    for tier in (2, 3, 4):
+        assert CYBERWARE_BY_ID[f"smartlink_t{tier}"].grants_smartlink is True
+
+
+def test_has_smartlink_true_for_a_higher_tier_smartlink():
+    character = Character(name="t", cash=10_000)
+    install_cyberware(character, "smartlink_t4")
+    assert has_smartlink(character.installed_cyberware) is True
+
+
+def test_install_cyberware_works_with_a_tier_4_id():
+    character = Character(name="t", cash=10_000)
+    variant = CYBERWARE_BY_ID["cybereye_scanner_t4"]
+    assert install_cyberware(character, variant.id) is True
+    assert character.cash == 10_000 - variant.price
+    assert character.installed_cyberware[CyberSlot.OPTICS] == variant.id
