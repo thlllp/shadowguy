@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from shadowguy.cybernetics import CyberSlot, installed_bonus, installed_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
 from shadowguy.shops import (
     InventoryItem,
@@ -132,6 +133,11 @@ class Character:
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
     # Only entries with equipped=True contribute their bonus via stat().
     inventory: list[InventoryItem] = field(default_factory=list)
+    # CyberSlot -> installed cyberware id (cybernetics.CYBERWARE_BY_ID), one piece per
+    # slot. Unlike inventory there's no equipped flag -- cyberware is surgically
+    # installed, not worn, so whatever's here is always active. Empty until
+    # cybernetics.install_cyberware is called (no shop wired to it yet).
+    installed_cyberware: dict[CyberSlot, str] = field(default_factory=dict)
     # Owned consumables, ids from shops.CONSUMABLES_BY_ID. Duplicates allowed.
     # Removed (via shops.use_consumable) once used, unlike persistent gear.
     consumables: list[str] = field(default_factory=list)
@@ -281,7 +287,9 @@ class Character:
         return self.skill_ranks.get(skill_id, STARTING_SKILL_RANK)
 
     def skill_gear_bonus(self, skill_id: str) -> int:
-        return equipped_skill_bonus(self.inventory, skill_id)
+        return equipped_skill_bonus(self.inventory, skill_id) + installed_skill_bonus(
+            self.installed_cyberware, skill_id
+        )
 
     def at_max_rank(self, skill_id: str) -> bool:
         skill_for(skill_id)
@@ -418,5 +426,6 @@ class Character:
         value = getattr(self, name)
         if name in CORE_STATS:
             value += equipped_bonus(self.inventory, name)
+            value += installed_bonus(self.installed_cyberware, name)
             value += self.temp_bonuses.get(name, 0)
         return value
