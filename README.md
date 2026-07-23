@@ -37,7 +37,8 @@ Death is permanent. No meta-progression between runs.
 | **Crew** | Hire runners at a bar — indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. |
 | **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
 | **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
-| **Corp mode** | Take over one of the three rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, or train scientists/operatives at your Academy. A Research Facility generates research points passively. Neither resource is spent on anything yet. |
+| **Gangs** | Four street gangs hold scattered turf (no contiguous territory, unlike the corps). Walk onto ground held by one you've crossed and you can be tolled or jumped outright, depending how badly. |
+| **Corp mode** | Take over one of the three rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, or train scientists/operatives at your Academy. A Research Facility generates research points, spent on a two-chain technology tree (territory income, research rate) plus direct Security/Development bumps on held ground. |
 
 ## Controls
 
@@ -45,11 +46,12 @@ Rows and menus are driven with the arrow keys and `enter`. Screen-specific:
 
 | Key | Screen | Action |
 |---|---|---|
-| `m` / `r` / `i` / `k` / `c` | Main menu | Corp map / Run a Corp / Gear / Skills / Contacts |
+| `m` / `r` / `i` / `d` / `k` / `c` | Main menu | Corp map / Run a Corp / Gear / Cyberdeck / Skills / Contacts |
 | `←` `→` | Main menu, creation, contacts | Previous / next panel |
 | `r` / `b` | Character creation | Reset build / begin run |
 | `←↑→↓` | Corp map | Move cursor (`*`); `@` is you |
-| `enter` | Corp map | Travel to cursor (costs stamina unless a vehicle covers it) |
+| `enter` | Corp map | Travel to cursor (costs hours, cut by an equipped vehicle) |
+| `t` | Corp screen | Research Tree (spend research points) |
 | `←↑→↓` / `f` / `e` / `l` | Tactical fight | Move / attack / end turn / leave via exit |
 | `q` | Most screens | Menu (save, load, quit) |
 | `escape` | Most screens | Back |
@@ -58,8 +60,10 @@ Rows and menus are driven with the arrow keys and `enter`. Screen-specific:
 
 ```
 src/shadowguy/
-  app.py          Textual App: on_mount, save/load_state, advance_day/end_day; every screen lives under screens/
-  character.py    Character dataclass: stats, health, skills, inventory, crew, standing, accepted jobs
+  app.py          Textual App: on_mount, save/load_state, spend_time (the one chokepoint that advances
+                  the clock and fires day-boundary effects); every screen lives under screens/
+  character.py    Character dataclass: stats, health, skills, experience, inventory, crew, standing
+                  (faction/gang/local/fixer), accepted jobs, security contracts
   archetypes.py   Enforcer/Hacker/Infiltrator creation presets
   skills.py       Skill table (32 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
@@ -73,10 +77,16 @@ src/shadowguy/
   security.py     Multi-night security contract generation and nightly resolution (not Scene-based)
   runners.py      Hireable NPC runners (crew)
   factions.py     Rival corps, standing rules, HQ officer ladder
-  rivals.py       Daily rival-Faction territory expansion + independent-runner stub turns
-  corp_turn.py    The player's own Corp turn: territory income, one directed move/day (expand or train), research
+  gangs.py        Street gangs holding scattered turf (no territory); den staffing lives in corpmap.py
+  relations.py    Seeded standing between every corp/gang pair, independent of the player
+  rivals.py       Daily rival-Faction territory expansion + independent-runner wander turns
+  encounters.py   Gang turf-entry encounters: toll or attack when standing is negative
+  corp_turn.py    The player's own Corp turn: territory income, one directed move/day (expand or train),
+                  research spent on a technology tree, Security/Surveillance/Development purchases
+  surveillance.py Daily chance a corp spots the player or a rival runner on its own territory
   corpmap.py      Procedural territory map (38 nodes), ASCII renderer, locations, property/lodging
   shops.py        Item and consumable catalogs, buy/sell/equip, standing pricing, hospital care
+  cybernetics.py  Cyberware catalog and install/remove; load-bearing but not yet acquirable in a run
   saves.py        Pickle-based save/load
 ```
 
