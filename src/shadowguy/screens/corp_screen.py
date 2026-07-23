@@ -8,6 +8,8 @@ from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
     SURVEILLANCE_BUMP_COST,
+    TECHNOLOGIES,
+    TECHNOLOGIES_BY_ID,
     CorpState,
     EmployeeCategory,
     assistant_capacity,
@@ -17,6 +19,7 @@ from shadowguy.corp_turn import (
     development_targets,
     expand_into,
     expansion_cost,
+    has_technology,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
@@ -25,6 +28,7 @@ from shadowguy.corp_turn import (
     raise_development,
     raise_surveillance,
     research_rate,
+    research_technology,
     surveillance_targets,
     technology_tree_layout,
     train_employees,
@@ -36,7 +40,6 @@ from shadowguy.runners import RUNNERS_BY_ID
 from . import PANEL_NAV_BINDINGS, PanelNav, _boxed_text, _replace_items
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
-from .technology_screen import TechnologyScreen
 
 
 def _plural(category: EmployeeCategory) -> str:
@@ -60,24 +63,30 @@ class CorpScreen(Screen):
 
     Actions are grouped by the thing they're attached to, not left in one flat
     list: territory expansion + end-day stay in #corp_list, Academy training
-    goes in the #academy_list collapsible, and Research Facility upgrades go in
-    the #research_list collapsible — both always present once a corp is picked,
-    since every faction's territory carries one guaranteed Academy and one
-    guaranteed Research Facility from the start (corp_turn.py)."""
+    goes in the #academy_list collapsible, Research Facility upgrades go in
+    the #research_list collapsible, and a read-only Surveillance Log goes in
+    #surveillance_list — all three always present once a corp is picked, since
+    every faction's territory carries one guaranteed Academy and one
+    guaranteed Research Facility from the start (corp_turn.py). Technology
+    itself lives on its own pushed ResearchTreeScreen, below."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back"), ("t", "technology", "Technology")]
+    BINDINGS = [
+        ("q", "quit_menu", "Menu"),
+        ("escape", "back", "Back"),
+        ("t", "research_tree", "Research Tree"),
+    ]
 
-    # ListView defaults to height: 1fr, which -- with two of them stacked as
-    # siblings (corp_list plus the two Collapsible-wrapped ones) -- squashes each
+    # ListView defaults to height: 1fr, which -- with three of them stacked as
+    # siblings (corp_list plus the Collapsible-wrapped ones) -- squashes each
     # to a sliver and lets the Collapsibles overlap on top of it. height: auto
     # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
     # each to its actual item count instead.
     CSS = """
-    #corp_list, #academy_list, #research_list {
+    #corp_list, #academy_list, #research_list, #surveillance_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel {
+    #academy_panel, #research_panel, #surveillance_panel {
         height: auto;
     }
     """
@@ -90,6 +99,12 @@ class CorpScreen(Screen):
         yield Collapsible(
             ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
         )
+        yield Collapsible(
+            ListView(id="surveillance_list"),
+            title="Surveillance Log",
+            collapsed=True,
+            id="surveillance_panel",
+        )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -98,9 +113,9 @@ class CorpScreen(Screen):
     def action_back(self) -> None:
         self.app.pop_screen()
 
-    def action_technology(self) -> None:
+    def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
-            self.app.push_screen(TechnologyScreen())
+            self.app.push_screen(ResearchTreeScreen())
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state
@@ -118,12 +133,15 @@ class CorpScreen(Screen):
             await _replace_items(list_view, items)
             await _replace_items(academy_list, [])
             await _replace_items(research_list, [])
+            await _replace_items(self.query_one("#surveillance_list", ListView), [])
             self.query_one("#academy_panel").display = False
             self.query_one("#research_panel").display = False
+            self.query_one("#surveillance_panel").display = False
             return
 
         self.query_one("#academy_panel").display = True
         self.query_one("#research_panel").display = True
+        self.query_one("#surveillance_panel").display = True
 
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[corp_state.faction_id]
@@ -234,6 +252,9 @@ class CorpScreen(Screen):
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
+        if item_id.startswith("sighting_") or item_id == "no_sightings":
+            return
+
         if item_id.startswith("faction_"):
             faction_id = item_id.removeprefix("faction_")
             self.app.corp_state = CorpState(faction_id=faction_id)
@@ -321,22 +342,25 @@ class CorpMainMenu(PanelNav, CorpScreen):
     legwork) apply. Laid out like MainMenu -- a left-hand category sidebar next to
     the main panel -- rather than dropping the player straight into the corp's
     action list. "Corp" renders inline (CorpScreen's own info/action list, grouped
-    into Academy/Research Facility collapsibles, inherited unchanged); "Corp Map"/
-    "Contacts" push their own screens, same as MainMenu's equivalent categories."""
+    into Academy/Research Facility/Surveillance Log collapsibles, inherited
+    unchanged); "Corp Map"/"Contacts"/"Technology" push their own screens, same as
+    MainMenu's equivalent categories."""
 
     # CorpScreen's escape->back is redeclared here (not just omitted) with show=False:
     # Textual merges BINDINGS across the class hierarchy, so leaving it out would still
     # leave the inherited binding live -- this is the top-level screen for a pure-corp
     # game, with nothing below it worth popping back to (see action_back's override).
+    # The "t" binding isn't redeclared here -- CorpScreen's own ("t", "research_tree",
+    # "Research Tree") is inherited unchanged, same as the merge rule that spared
+    # escape from needing this comment twice.
     BINDINGS = [
         ("q", "quit_menu", "Menu"),
         ("m", "corp_map", "Corp Map"),
         ("c", "contacts", "Contacts"),
-        ("t", "research_tree", "Research Tree"),
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
-    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list")
+    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "surveillance_list")
 
     CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts"), ("tech", "Technology")]
 
@@ -367,11 +391,11 @@ class CorpMainMenu(PanelNav, CorpScreen):
         padding: 0 1;
     }
 
-    #corp_list, #academy_list, #research_list {
+    #corp_list, #academy_list, #research_list, #surveillance_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel {
+    #academy_panel, #research_panel, #surveillance_panel {
         height: auto;
     }
     """
@@ -391,6 +415,12 @@ class CorpMainMenu(PanelNav, CorpScreen):
                     title="Research Facility",
                     collapsed=False,
                     id="research_panel",
+                ),
+                Collapsible(
+                    ListView(id="surveillance_list"),
+                    title="Surveillance Log",
+                    collapsed=True,
+                    id="surveillance_panel",
                 ),
                 id="main_panel",
             ),
@@ -424,7 +454,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
             elif key == "contacts":
                 self.app.push_screen(ContactsScreen())
             elif key == "tech":
-                self.action_technology()
+                self.action_research_tree()
             return
         await super().on_list_view_selected(event)
 
