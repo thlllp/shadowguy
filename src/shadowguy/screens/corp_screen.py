@@ -220,10 +220,11 @@ class CorpScreen(BackScreen):
             )
         else:
             for category in EmployeeCategory:
-                label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {ACADEMY_TRAINING_COST}eb"
+                cost = ACADEMY_TRAINING_COST[category]
+                label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {cost}eb"
                 if corp_state.daily_action_used:
                     label += " (already acted today)"
-                elif ACADEMY_TRAINING_COST > corp_state.cash:
+                elif cost > corp_state.cash:
                     label += " (can't afford)"
                 academy_items.append(ListItem(Static(label), id=f"train_{category}"))
         await _replace_items(academy_list, academy_items)

@@ -244,7 +244,7 @@ def test_train_employees_queues_a_batch_and_charges_cash():
     )
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
     assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=5) is True
-    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST
+    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST[EmployeeCategory.SCIENTIST]
     assert corp_state.daily_action_used is True
     # The hires don't land yet -- they're queued behind the training delay.
     assert corp_state.scientists == 0
@@ -332,7 +332,7 @@ def test_train_employees_trains_one_batch_at_a_time():
     corp_state.daily_action_used = False
     assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is False
     assert corp_state.pending_recruit.category is EmployeeCategory.SCIENTIST
-    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST
+    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST[EmployeeCategory.SCIENTIST]
 
 
 def test_train_employees_fails_with_no_academy():
