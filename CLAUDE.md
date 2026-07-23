@@ -90,8 +90,6 @@ Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Per
 
 **Nothing rolls a core stat directly.** Each stat carries skills (`skills.SKILLS`, **32** total); a `Choice` names a *skill*, and `skills.skill_value()` is what the dice see: the skill's tied stat (gear included) plus the rank invested in that specific skill. Perception carries two extras beyond five — `Firearms` (a gun is aimed, not swung, so it rolls the same faculty as `Sight`) and `Misc Weapons`. Nothing enforces five-per-stat, and cost is per-skill anyway, so extras make perception *broader*, not stronger. `Character.skill_ranks` is `dict[skill_id, int]`, fully populated (every skill starts at `STARTING_SKILL_RANK`). A skill id absent from `SKILLS_BY_ID` raises from `skills.skill_for()`, the single chokepoint — `Scene.__post_init__` runs it over every choice, so a typo fails when the scene is *built*, not mid-roll.
 
-`skills.py` is deliberately a **leaf module** (imports nothing from the package at runtime), because `character.py → shops.py → corpmap.py` all import it. That's why the "every `Skill.stat` is a real core stat" guard lives in `character.py`, the one module that can see both tables. Don't add a runtime `character` import to `skills.py`; it's a cycle.
-
 `Rep` is global standing in the street. `Character.standing` is a separate `dict[faction_id, int]` of per-corp standing (see Faction standing) — the two are not interchangeable.
 
 **`Rep` is floored at `REP_FLOOR` (-10), not 0** — unlike health, it's allowed into the red. A blown job or gig costs a point of it (`Character.adjust_rep`, called from `scene.apply_outcome` and, for the knockout path that bypasses `Outcome`s, directly from `screens.scene_screen.SceneScreen._on_combat_end`): the last stage's plain failure or fleeing any of a job's fights costs `jobs.JOB_FAILURE_REP_HIT` (-1) alongside `JOB_FAILURE_TRUST_HIT` (-1) with the sending fixer; either kind of gig failure costs `gigs.GIG_FAIL_REP_HIT` (-1) alongside `GIG_FAIL_STANDING_HIT` (-1) with the gig's owner. A mid-job stage failure that isn't the last one doesn't trigger this (the job carries on — see Fixers & job generation). Live consequence: `factions.CORP_OFFICER_TIERS`' reception gate is `min_rep = 0`, so a runner whose rep has gone negative gets turned away even from the public lobby (see Corporate HQs & officers).
@@ -126,11 +124,11 @@ Both pools are **spent once and never refill**. Load-bearing consequences:
 - **Skill** — next rank costs exactly what it would at creation (`spend_experience_on_skill` reuses `next_rank_cost`/`SKILL_RANK_COST`), still capped at 10.
 - **Stat** — no table (never capped/costed above 1 point at creation): `next_stat_cost(name)` = `current_value - STARTING_STAT + 1` (1, 2, 3, 4…), the same escalating shape as a formula rather than a table. `spend_experience_on_stat` reuses the body-health-bump invariant via a shared private `_raise_stat`/`_raise_skill_rank`.
 
-**`SkillsScreen` is the spend surface** — each stat column gained a "Raise `<Stat>`" row (cost from `next_stat_cost`), skill rows pass `show_cost=True` to the same `_compact_skill_label` helper creation uses. A refused buy is never charged. `CharacterSheet`'s header gained `Experience: {n}xp` alongside cash/rep.
+**`SkillsScreen` is the spend surface** — each stat column carries a "Raise `<Stat>`" row (cost from `next_stat_cost`), skill rows pass `show_cost=True` to the same `_compact_skill_label` helper creation uses. A refused buy is never charged. `CharacterSheet`'s header shows `Experience: {n}xp` alongside cash/rep.
 
 **Crew earns experience too, in parallel.** `_take_crew_cut` (`screens/scene_screen.py`) also calls `Character.grant_crew_experience(hire.runner_id, outcome.experience_delta)` for every runner on a completed job's crew — the *full* amount, not divided by headcount. `Character.crew_experience: dict[runner_id, int]` is the ledger, but `runners.RivalRunner` has no sheet to spend it on — **no spend path yet** (a mechanism waiting on a driver, the same pattern `gang_standing` predated `encounters.py`).
 
-`saves.SAVE_VERSION` 32: `Character` gained `experience`/`crew_experience`, `scene.Outcome` gained `experience_delta` (pre-v32 pickled Outcomes lack it). **Not balance-simulated** — first-slice numbers sized to feel like "one skill rank per one or two completed jobs early on," not seed-swept.
+**Not balance-simulated** — first-slice numbers sized to feel like "one skill rank per one or two completed jobs early on," not seed-swept.
 
 ### Check resolution
 
@@ -148,7 +146,7 @@ Both pools are **spent once and never refill**. Load-bearing consequences:
 All three share the same `Scene`/`Stage`/`Choice`/`Outcome` data model, distinguished by `Scene.kind`. A stage of any of them can be a **fight** or a **tactical map** instead of a set of choices (`Stage.combat` / `Stage.tactical`) — a property of the stage, not the `SceneKind`.
 
 - **Job** (`SceneKind.JOB`) — multi-stage, choices branch on skill checks, failure can end it early. Not freely pickable: procedurally generated by Fixers and accepted before they show up as a runnable activity. Every stage carries a fight beside it, reachable by ambush or by critically failing an approach.
-- **Gig** — small single-stage activity for quick resources, no Fixer needed. **Procedurally generated per-Location** by `gigs.generate_gig` from a per-`LocationKind` template. Attached to a place *and* a person — spawns at a `Location`, owned by one of its `LocalCharacter`s, rewards standing with them. Optional and self-selected, so it **may** theme its choices on one stat (unlike a job stage); offers a random 1..`GIG_MAX_APPROACHES` (3) subset. Lives on `app.location_gigs: dict[location_id, Scene]` (not on `Location` — corpmap is a leaf that can't import scene), refreshed by `gigs.refresh_gigs` on run-start and each rest, consumed one-shot. `MainMenu` lists the current territory's gigs, gated only by being there.
+- **Gig** — small single-stage activity for quick resources, no Fixer needed. **Procedurally generated per-Location** by `gigs.generate_gig` from a per-`LocationKind` template. Attached to a place *and* a person — spawns at a `Location`, owned by one of its `LocalCharacter`s, rewards standing with them. Optional and self-selected, so it **may** theme its choices on one stat (unlike a job stage); offers a random 1..`GIG_MAX_APPROACHES` (3) subset. Lives on `app.location_gigs: dict[location_id, Scene]`, not on `Location` (see Module layering), refreshed by `gigs.refresh_gigs` on run-start and each rest, consumed one-shot. `MainMenu` lists the current territory's gigs, gated only by being there.
 
   **The cash-stake gate exists but no current gig uses it.** `Scene.max_cash_loss` (the worst `cash_delta` any path can charge, derived from the outcomes) lets `MainMenu` refuse a gig the runner can't cover — `apply_outcome` subtracts a loss straight off cash, and **cash is not floored the way health is** (flooring would let a broke runner ride every losing outcome for free). Health and rep *are* floored (rep at `REP_FLOOR`, see Stats and skills, above) — only cash is allowed to go unaffordable-and-refused instead. Today's gigs cost only health on failure so the gate never bites, but it's live the moment any scene charges cash — a job/legwork scene that charges cash needs the same gate.
 - **Legwork** — single-stage prep banking an `advantage` bonus for a *specific* job (`Scene.prepares_for`), consumed on that job's first check only. `Character.advantage` is `dict[job_id, int]`, so advantage can't leak into an unrelated job or gig. Generated per accepted job (`jobs.generate_legwork_for_job`). Its choices are the `Location`s of the job's target territory: casing the job's own site is the hardest check for the most advantage, scouting a neighbour easier for less — why it takes the job's `Scene` and the `CorpMap` rather than a job id. **Can turn violent**: a critical failure gets you jumped (`LEGWORK_FIGHT_STAGE`) by a *street-tier* pair of locals, not the corp response team. No ambush option, no way to *win* an advantage — a fight here means it went wrong, and the best you get is out.
@@ -179,7 +177,7 @@ This is the second thing to read `TerritoryModifier.DEVELOPMENT` for real (see C
 
 Runner mode has no stamina and no manual "End the day" button. `Character.elapsed_hours: float` is a continuous, never-reset clock; `Character.day` is **derived** (`int(elapsed_hours // HOURS_PER_DAY) + 1`, `HOURS_PER_DAY` = 24) — nothing increments it directly. Travel and every job/gig/legwork spend **hours**, not stamina, with **no exhaustion cap** — deadlines, health and rep are the pacing pressure now, not a stamina wall.
 
-**`ShadowguyApp.spend_time(hours, *, skip_night_effects=False, protect_job_id=None)` is the single chokepoint** advancing the clock, replacing the old `Character.rest()` + `advance_day()`/`end_day()` trio. It bumps `elapsed_hours`, then loops once per day boundary crossed, calling `_apply_day_tick(day, skip_night_effects, protect_job_id)` for each. **A day tick firing is a side effect of crossing midnight**, at wherever the runner currently is. The loop only ever runs once today (nothing spends ≥2×`HOURS_PER_DAY` in one call), kept as the generically-correct form — a direct test (`test_spend_time_fires_the_day_tick_once_per_boundary_crossed`) proves it iterates when needed. `rival_actions` is reset once before the loop and accumulated with `+=` per iteration, same as `CorpState.cash`/`research_points`.
+**`ShadowguyApp.spend_time(hours, *, skip_night_effects=False, protect_job_id=None)` is the single chokepoint** advancing the clock. It bumps `elapsed_hours`, then loops once per day boundary crossed, calling `_apply_day_tick(day, skip_night_effects, protect_job_id)` for each. **A day tick firing is a side effect of crossing midnight**, at wherever the runner currently is. The loop only ever runs once today (nothing spends ≥2×`HOURS_PER_DAY` in one call), kept as the generically-correct form — a direct test (`test_spend_time_fires_the_day_tick_once_per_boundary_crossed`) proves it iterates when needed. `rival_actions` is reset once before the loop and accumulated with `+=` per iteration, same as `CorpState.cash`/`research_points`.
 
 `_apply_day_tick` folds together: `Character.on_new_day(protect_job_id)`, crew wages, `expire_offers`/`refresh_offers`/`refresh_security_offers`/`refresh_gigs`, `resolve_rival_day`, corp income/research + `daily_action_used` reset, and — unless `skip_night_effects` — the lodging charge + security-contract night resolution. **Call-site ordering**: every caller spends time *before* the accompanying mutation (e.g. `action_travel` spends before moving `location_id`) — a boundary crossed mid-trip resolves at the *origin* territory, not the destination.
 
@@ -187,11 +185,9 @@ Runner mode has no stamina and no manual "End the day" button. `Character.elapse
 
 **An explicit "Rest" action remains** (`MainMenu`/`CorpScreen`), spending exactly `HOURS_PER_DAY` — guarantees advancing exactly one day, but it's just another `spend_time` call, not a refill button. Rest **restores nothing** — every side effect fires identically from any midnight-crossing action.
 
-**Vehicles cut travel time by a percentage, not a daily allowance.** `shops.Item.travel_reduction` (`Slot.VEHICLE` only) replaced the old free-hops-per-day counter: `equipped_travel_reduction` applies fresh to `TRAVEL_HOURS_COST` (2.0) each hop. Catalog: Beater Bike -10%, Tuned Coupe -20%, Armored Towncar -25%. `corp_map_screen._travel_hours(character)` is the one place the formula lives — both the charge and the pre-travel hint call it.
+**Vehicles cut travel time by a percentage, not a daily allowance.** `shops.Item.travel_reduction` (`Slot.VEHICLE` only): `equipped_travel_reduction` applies fresh to `TRAVEL_HOURS_COST` (2.0) each hop. Catalog: Beater Bike -10%, Tuned Coupe -20%, Armored Towncar -25%. `corp_map_screen._travel_hours(character)` is the one place the formula lives — both the charge and the pre-travel hint call it.
 
 **First-slice hour costs, not balance-simulated**: `TRAVEL_HOURS_COST` 2.0, `Scene.hours_cost` default 4 (gigs/legwork), job `hours_cost` 8/12 (tier 0 / 1+), Rest/hospital exactly `HOURS_PER_DAY`. `JobTiming.deadline_day`/`scheduled_day` windows (`randint(2,5)`/`randint(1,4)` days) were tuned against the old stamina pace and may feel tighter now — worth a playtest, not a pre-emptive numbers change.
-
-`saves.SAVE_VERSION` bumped to 29: a pre-v29 pickled `Character` has `day`/`stamina`/`free_travel_used` instead of `elapsed_hours`.
 
 ### Fixers & job generation (`shadowguy/fixer.py`, `shadowguy/jobs.py`)
 
@@ -203,7 +199,7 @@ Jobs are gated behind a persistent Fixer roster (`fixer.FIXER_ROSTER` / `create_
 
 Two import-time guards: the **last stage cannot be optional** (the final stage carries all reward), and each stage's `prompt` is `.format`-checked over the real field set (a bad `{field}` fails at import, not mid-job).
 
-**Crew roles (`scene.Role`/`Posture`, `jobs._role_for_stage`).** Every generated job carries `Scene.roles`: one `Role` per beat — a `beat` label, the fitting runner `specialist` (Netrunner/Solo/Infiltrator), and a `Posture` (`ON_SITE`/`REMOTE`). **Derived, not tabulated**: `_role_for_stage` reads the beat's lead (cleanest) approach, maps its skill's stat through `SPECIALIST_FOR_STAT`, marks `REMOTE` iff that skill is in `REMOTE_SKILLS` (just `hack`). Derived from the template pool's lead, so roles don't vary with which approaches an offer drew. `Role` is plain data in `scene.py` (strings + `Posture`, not `jobs.StageType`) so `scene.py` needn't import `jobs`.
+**Crew roles (`scene.Role`/`Posture`, `jobs._role_for_stage`).** Every generated job carries `Scene.roles`: one `Role` per beat — a `beat` label, the fitting runner `specialist` (Netrunner/Solo/Infiltrator), and a `Posture` (`ON_SITE`/`REMOTE`). **Derived, not tabulated**: `_role_for_stage` reads the beat's lead (cleanest) approach, maps its skill's stat through `SPECIALIST_FOR_STAT`, marks `REMOTE` iff that skill is in `REMOTE_SKILLS` (just `hack`). Derived from the template pool's lead, so roles don't vary with which approaches an offer drew.
 
 **Crew capacity runs along `Posture`**: several `ON_SITE` runners but at most one `REMOTE` — free rather than enforced, since only `hack` beats are `REMOTE` and a job has one objective.
 
@@ -266,8 +262,6 @@ Combat is the **only part of the game that isn't a single check** — but it's s
 
 **A fight is a `Stage`.** `Stage.combat` holds an `Encounter` (prompt, enemies, victory/escape `Outcome`), routed to by an ordinary `next_stage`. A stage is *exactly one* of choices, a fight, or a tactical map, never mixed (guarded in `Scene.__post_init__`) — a combat stage's "choices" are `combat.available_actions`, from the runner's gear/skills, not the scene.
 
-`Encounter` lives in **`scene.py`, not `combat.py`** (it holds `Outcome`s; `combat.py` must not import `scene`). `combat` owns *how* a fight resolves; `Encounter` owns *what winning or running is worth*, via an ordinary `Outcome`.
-
 **Two doors into a fight:**
 
 - **You chose it (ambush).** `generate_job` appends `AMBUSH_LABEL` ("Take them first") to *every* stage on top of the drawn pool — a Tactics check, guaranteeing a bleeding-but-real route through for every build.
@@ -297,7 +291,7 @@ Combat is the **only part of the game that isn't a single check** — but it's s
 
 A **third kind of stage**: some job fights play out on a grid. It is emphatically **not a second combat model** — every attack still goes through `combat.resolve_hit` (shared, so *one hit formula, two surfaces*), enemies are `combat.Enemy`, damage/soak/health unchanged. The grid only adds *position*: LOS and range gate legal attacks, and **cover is nothing but a raised to-hit difficulty** (verified to swing hit rate ~91%→74%).
 
-**The module split mirrors combat exactly.** `tactical.py` is a leaf owning *how space works* (`Grid`/`Tile`, tcod FOV+A*, turn engine), imports no `scene`. `scene.TacticalStage` is the grid analogue of `Encounter` (holds `Outcome`s, routed by `next_stage`). `TacticalScreen` is the `CombatScreen` counterpart.
+**The module split mirrors combat exactly.** `tactical.py` owns *how space works* (`Grid`/`Tile`, tcod FOV+A*, turn engine); `scene.TacticalStage` is the grid analogue of `Encounter` (holds `Outcome`s, routed by `next_stage`); `TacticalScreen` is the `CombatScreen` counterpart.
 
 **LOS and range are separate gates, deliberately.** `has_line_of_sight` is unlimited-radius FOV obstruction; weapon reach is an explicit distance check (`weapon_range`) — tcod's FOV radius is Euclidean and excludes the exact-radius cell, so reading range off it would be off by one. Firearms kite; melee has to close.
 
@@ -315,7 +309,7 @@ A **fourth kind of stage**, the second to break the "text list of Choices" mold:
 
 **The entrance check resolves the instant it's picked, before any walk.** `scene.Entrance` is `Choice`-shaped plus a `spawn: Coord`; `resolve_entrance` applies health/cash/rep/standing immediately, only stage advancement (`next_stage`) waits on the walk (the walk is spatial risk on top of the check, not a second roll). Burglary's one departure: `BurglaryStage.spotted`, a second `Outcome` that can fire if a guard's sightline catches the walk, stacking on whatever the entrance check already did — keep its cost modest.
 
-**Three doors into the fight stage.** Critical failure on a real entrance routes to `fight_id`, same as any stage. So does the guaranteed "Take them first" ambush entrance. And `BurglaryStage.spotted` is a third route, triggered positionally rather than by roll. `SceneScreen._on_entrance_picked` tells fight-routing apart from a normal advance by checking whether the *target* stage is combat/tactical, not the `CheckResult` — covers both cases without `scene_screen.py` needing to know `jobs.py`'s naming convention. (A real double-apply bug lived here during development — fixed by routing through the ordinary `_await_continue`, same as any other stage's critical failure.)
+**Three doors into the fight stage.** Critical failure on a real entrance routes to `fight_id`, same as any stage. So does the guaranteed "Take them first" ambush entrance. And `BurglaryStage.spotted` is a third route, triggered positionally rather than by roll. `SceneScreen._on_entrance_picked` tells fight-routing apart from a normal advance by checking whether the *target* stage is combat/tactical, not the `CheckResult` — covers both cases without `scene_screen.py` needing to know `jobs.py`'s naming convention. Route through the ordinary `_await_continue` like any other stage's critical failure; bypassing it double-applies the outcome.
 
 **The interior is generated by `tactical.generate_building`, not `generate_map`** — several distinct entrance rooms (one per `Entrance`, draw order) converging on one objective room, with up to `BURGLARY_GUARD_COUNT` (1, fixed not tier-scaled) placed elsewhere. Reuses `_bsp_rooms`/`_carve_room`/`_carve_tunnel`/`_scatter_cover` verbatim. Reachability is re-verified for *every* entrance (not `generate_map`'s single-source `_verify_map`), same retry approach.
 
@@ -331,7 +325,7 @@ A **fourth kind of stage**, the second to break the "text list of Choices" mold:
 
 **Data Heist** is the 7th `jobs.ARCHETYPES` entry (after Burglary), a second Netrunner specialist beside Intrusion — but where Intrusion resolves as ordinary checks and meat fights, a Data Heist's fights **are matrix combat**. A **remote** hack — the netrunner never enters the building, so `_role_for_stage` marks every beat `REMOTE` (`hack` is the lone `REMOTE_SKILLS` member).
 
-**Matrix combat is a third *fight surface*, not a new stage-type pipeline.** Abstract `Encounter`, tactical grid, and matrix are the three things a `{stage}_fight` can hold; `scene.MatrixStage` is the ICE analogue (holds `Outcome`s; `matrix.py` mustn't import `scene`), joins the "exactly one mode" guard. `archetype.matrix` (a whole-job flag, unlike per-stage `JobStage.burglary`) makes every fight a `MatrixStage` and suppresses the tactical roll — no meatspace enemies to roll.
+**Matrix combat is a third *fight surface*, not a new stage-type pipeline.** Abstract `Encounter`, tactical grid, and matrix are the three things a `{stage}_fight` can hold; `scene.MatrixStage` is the ICE analogue, joining the "exactly one mode" guard. `archetype.matrix` (a whole-job flag, unlike per-stage `JobStage.burglary`) makes every fight a `MatrixStage` and suppresses the tactical roll — no meatspace enemies to roll.
 
 **A matrix fight is a node network** (`MatrixNetwork`/`MatrixNode`/`generate_matrix_network`), ~5–10 nodes, more like `corpmap`'s territory graph than a tile grid, fresh per fight. `MatrixNodeRole`: `ENTRY` (never guarded), `SLAVE` (free waypoint), `IC` (guarded, must clear), `DATA` (objective), `CPU` (optional, tougher, hangs off `DATA` by a flat chance — a detour past the objective, not a gate), `CACHE` (optional side loot off any ordinary waypoint — gates nothing). Generation guarantees an `ENTRY`→`DATA` spine plus a few branching edges.
 
@@ -362,15 +356,28 @@ A **fourth kind of stage**, the second to break the "text list of Choices" mold:
 
 Only the **active deck** matters (`shops.active_deck_entry`, the best-rated equipped deck). A passive program's bonus folds into the corresponding base formula; an action program shows as a `MatrixActionKind.PROGRAM` row, gated on remaining charges (`MatrixState.program_uses`, seeded at first node engagement, carried forward like integrity). `available_matrix_actions` takes `program_uses` as an optional second arg (matches `combat.available_actions`'s shape), so pre-existing call sites are unaffected. A damage program lands with no roll (guaranteed hit for the charge); a skip-ICE program increments `ice_skip_rounds` (same field a clean breach already grants). `action_analyze` is navigation-mode only, never offered mid-fight.
 
-**Today's catalog (`shops.PROGRAM_CATALOG`, Computer Store): Sleaze, Extract, Analyze, Icebreaker** — every program is now active (the earlier passive-buff roster is gone). **Sleaze** (`action_sleaze`) is a flat three-way success/fail/critical-fail split (not via `resolve_check`), shifting (`SLEAZE_MARGIN_STEP`, capped by `SLEAZE_MAX_SHIFT`) with the margin between `hack` and the ICE's defense — only the success/crit-fail tails move, fail stays fixed. Success drops the ICE outright; crit failure alerts it into an extra bite. **Extract** (`action_extract`) is aimed at the node's data — legal only when `MatrixState.is_extractable` (current node is `DATA` or `CACHE`); a landed hit ignores the target's soak entirely. Unlimited-use; every missed roll adds `SECURITY_PER_FAILED_EXTRACT` to `MatrixState.security` instead (risk, not charges). **Analyze** is the navigation-mode node-reveal program (below). **Icebreaker** (`action_damage`) is the old guaranteed-hit program, now unlimited-use.
+**Today's catalog (`shops.PROGRAM_CATALOG`, Computer Store): Sleaze, Extract, Analyze, Icebreaker** — every one active; the passive branch is mechanism without a catalog entry. **Sleaze** (`action_sleaze`) is a flat three-way success/fail/critical-fail split (not via `resolve_check`), shifting (`SLEAZE_MARGIN_STEP`, capped by `SLEAZE_MAX_SHIFT`) with the margin between `hack` and the ICE's defense — only the success/crit-fail tails move, fail stays fixed. Success drops the ICE outright; crit failure alerts it into an extra bite. **Extract** (`action_extract`) is aimed at the node's data — legal only when `MatrixState.is_extractable` (current node is `DATA` or `CACHE`); a landed hit ignores the target's soak entirely. Unlimited-use; every missed roll adds `SECURITY_PER_FAILED_EXTRACT` to `MatrixState.security` instead (risk, not charges). **Analyze** is the navigation-mode node-reveal program (below). **Icebreaker** (`action_damage`) lands a guaranteed hit, unlimited-use.
 
 **`MatrixState.security` is a run-wide alert ratchet, never reset per-node.** Raised by a missed Extract roll and by **Sentinel ICE** (`security_per_round` on `Ice`, 0.3/round — a guardian that never bites integrity, just logs presence each round it survives). Security rides along as every ICE's attack advantage this fight (`int(state.security)` bonus dice, floored). Cross `SECURITY_HOSTILE_THRESHOLD` (3) and every subsequent node opens hostile (`Drop.ENEMY`) instead of neutral, checked once per new engagement, never un-trips.
 
 **A matrix node's role is hidden until revealed.** `MatrixRunState.revealed_node_ids` (kept on the run, not `MatrixState`, since `ENTRY` is never guarded) gates what `_matrix_node_label` prints — unrevealed shows neither role nor guarded/clear status. Two reveal paths: physically arriving (`_enter_node`, unconditional), or the installed Analyze program reading a connected node remotely (`analyze_node`, same `ANALYZE_DIFFICULTY`/`hack` roll as the in-fight action, aimed at a node instead) — a miss costs nothing. `analyze_uses` is the navigation-mode counterpart to `program_uses`.
 
-**`CyberdeckScreen` (`screens/info_screens.py`) is where a deck's programs get installed/uninstalled** — its own sidebar category + `d` binding. Moved out of `InventoryScreen` because `active_deck_entry` is a cyberdeck-specific question; `InventoryScreen` keeps the generic equip/stow toggle. Adding this 10th sidebar category needed a fix: `MainMenu`'s `#categories` `ListView` could show only 9 rows at 80×24, clipping `corp` silently — fixed by matching `#sidebar`'s padding to `#main_panel`'s. **Lesson: a tight row budget fails silently — drive the real screen at `size=(80, 24)` and check container vs. virtual size.**
+**`CyberdeckScreen` (`screens/info_screens.py`) is where a deck's programs get installed/uninstalled** — its own sidebar category + `d` binding, split from `InventoryScreen` because `active_deck_entry` is a cyberdeck-specific question. **A tight sidebar row budget fails silently**: `MainMenu`'s `#categories` fit only 9 rows at 80×24 and clipped the 10th without error. Drive the real screen at `size=(80, 24)` and check container vs. virtual size.
 
 **None of `security_per_round`, the Sleaze odds curve, `SECURITY_HOSTILE_THRESHOLD`, or the catalog's prices are balance-simulated.**
+
+### Relationship values
+
+Six separate standings, easy to confuse. `Rep` (global street standing, see Stats and skills) is a seventh thing and none of these:
+
+| Value | Between | Shape |
+|---|---|---|
+| `Character.standing` | player ↔ corp Faction | fans out — a hit on one corp is a favour to rivals (`standing_shift`) |
+| `Character.fixer_trust` | player ↔ Fixer | direct, one-person |
+| `Character.local_standing` | player ↔ `LocalCharacter` | direct, one-person |
+| `Character.gang_standing` | player ↔ Gang | direct, one-gang |
+| `Character.crew_experience` | player ↔ hired runner | a ledger, not a standing — no spend path yet |
+| `CorpMap.relations` | Faction ↔ Gang | **not player-facing**; symmetric, one value per pair |
 
 ### Faction standing (`shadowguy/factions.py`, `shadowguy/scene.py`, `shadowguy/character.py`)
 
@@ -390,7 +397,7 @@ The world's other actors getting a turn of their own (Faction standing above is 
 
 Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
 
-**Independent runners have a position now.** Every `RIVAL_RUNNERS` entry gets a `RivalAction` too, except while on the player's crew. Each wanders (`rivals._wander`): placed randomly on first sight, then a `RUNNER_MOVE_CHANCE` (0.3, first-slice) coin flip per day either hops them to a connected territory or leaves them put. Position tracked in `ShadowguyApp.rival_runner_locations` (`dict[runner_id, territory_id]`), mutated in place (persistence is the caller's problem, same as `rival_actions`). No decision logic beyond the wander yet — a runner AI is the natural next step. `rival_actions` is overwritten each day (no history read), part of the save bundle (`SAVE_VERSION` 19; `rival_runner_locations` joined at 31).
+**Independent runners have a position now.** Every `RIVAL_RUNNERS` entry gets a `RivalAction` too, except while on the player's crew. Each wanders (`rivals._wander`): placed randomly on first sight, then a `RUNNER_MOVE_CHANCE` (0.3, first-slice) coin flip per day either hops them to a connected territory or leaves them put. Position tracked in `ShadowguyApp.rival_runner_locations` (`dict[runner_id, territory_id]`), mutated in place (persistence is the caller's problem, same as `rival_actions`). No decision logic beyond the wander yet — a runner AI is the natural next step. `rival_actions` is overwritten each day (no history read).
 
 **Still deliberately inert past the wander**: no UI surfaces a faction's claim. (A runner's wander position *is* now surfaced — see Surveillance detection.)
 
@@ -404,15 +411,15 @@ The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own
 
 **Detection is a flat, Surveillance-level-indexed chance, not an opposed check.** `SURVEILLANCE_DETECTION_CHANCE` is a 6-entry tuple (index = the territory's Surveillance, 0..`MODIFIER_MAX`), guarded at import. No player-side counter-roll yet (a Concealment/Stealth skill is the obvious hook). First-slice: even a maxed district (level 5, 0.65) misses more often than not.
 
-**A hit is purely informational.** `corp_turn.Sighting` (`kind`, `actor_id`, `territory_id`, `day`) lives in `corp_turn.py` (avoids a corp_turn↔surveillance import cycle). `CorpState.sightings` is a list, most-recent-first, capped at `MAX_SIGHTINGS_LOG`. No standing/rep/combat consequence wired yet.
+**A hit is purely informational.** `corp_turn.Sighting` is `kind`/`actor_id`/`territory_id`/`day`; `CorpState.sightings` is a list, most-recent-first, capped at `MAX_SIGHTINGS_LOG`. No standing/rep/combat consequence wired yet.
 
 **Surfaced as a Surveillance Log panel** — a collapsed-by-default `Collapsible` in `CorpScreen`/`CorpMainMenu` (read-only history, unlike Academy/Research Facility). Each row: `"Day {day} — {who} spotted in {territory}"`, resolved at display time. `app.notify()`s once/day with just a count, not one toast per sighting.
 
-`saves.SAVE_VERSION` 31: `CorpState` gained `sightings`, `ShadowguyApp` gained `rival_runner_locations`. **Not balance-simulated** — the detection curve, `MAX_SIGHTINGS_LOG` (10), `RUNNER_MOVE_CHANCE` (0.3) are all first-slice.
+**Not balance-simulated** — the detection curve, `MAX_SIGHTINGS_LOG` (10), `RUNNER_MOVE_CHANCE` (0.3) are all first-slice.
 
 ### Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`)
 
-The other half of Rival AI: once the player takes over a Faction, they get the same kind of daily move plus more. A parallel resolution module — leaf-ish (imports `corpmap` only, never `scene`/`app`).
+The other half of Rival AI: once the player takes over a Faction, they get the same kind of daily move plus more. A parallel resolution module, not a `Scene`.
 
 **Taking over is a plain menu pick, not an earned one yet.** `CorpScreen` (MainMenu `r`/"Corp") lists the 3 `FACTIONS`; picking sets `ShadowguyApp.corp_state = CorpState(faction_id=...)`. No in-fiction coup mechanic — the same shortcut-before-the-real-gate precedent `TestMenu` sets. Once set, `resolve_rival_day` stops rolling for that faction.
 
@@ -458,7 +465,7 @@ The other half of Rival AI: once the player takes over a Faction, they get the s
 
 `CorpScreen` renders four stacked sections (territory actions + Academy/Research Facility/Surveillance Log — Technology moved to its own screen), overflowing a single 80×24 viewport (it scrolls; click-position UI tests should drive a taller size, since the map's unseeded rng varies row counts).
 
-**Scientists and operatives still buy nothing directly** beyond feeding research (research assistants) — operatives remain a mechanism ahead of its driver. `saves.SAVE_VERSION` climbed once per shape change: 20 (`corp_state`), 21 (`research_tier`/`research_points`), 22 (`academy_tier`, `daily_action_used` rename, a since-replaced `employees` field), 23 (split into `scientists`/`operatives`), 24 (`labs_built`), 25 (`efficiency_upgrades`), 26 (`research_assistants`, float `research_points`), 27 (`corp_only`), 30 (`researched`).
+**Scientists and operatives still buy nothing directly** beyond feeding research (research assistants) — operatives remain a mechanism ahead of its driver.
 
 ### Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
@@ -524,15 +531,15 @@ The criminal-underworld counterpart to Factions, on the opposite premise: **a ga
 
 **Map/menu presence, plus one live consequence.** A territory carrying gang turf shows a `gang: <name>` suffix alongside `owner:` in both `CorpMapScreen` and `MainMenu`. Beyond display, gangs have standing and a turf-entry encounter (below) — still no gigs, jobs, or dialogue.
 
-**Gang standing & turf encounters (`shadowguy/encounters.py`, `Character.gang_standing`, `CorpMapScreen`).** `gang_standing: dict[gang_id, int]` is a fifth relationship value — direct, one-gang, no rival fan-out. **Nothing moves it negative yet** (mechanism ahead of driver). When negative, `encounters.py` resolves entry: `action_travel`, after moving onto gang turf, calls `roll_gang_encounter` (flat `GANG_ENCOUNTER_CHANCE` 0.25). A hit at standing **-1…-4** offers an escalating toll (`toll_for` = `TOLL_BASE` 40 + `TOLL_STEP` 30 × depth) via `GangTollScreen` (pay, refuse, or fail into a fight); standing **-5 or worse** (`ATTACK_STANDING`) skips the toll and attacks outright. The fight is `gang_attack`: street-tier (`ENCOUNTER_ENEMY_TIER` 0) `Encounter` with `Drop.ENEMY`, via ordinary `CombatScreen` with a map-side `_on_gang_combat_end` mirroring `SceneScreen`'s death/knockout handling. `saves.SAVE_VERSION` 16 for the new field. **Not balance-simulated.**
+**Gang standing & turf encounters (`shadowguy/encounters.py`, `Character.gang_standing`, `CorpMapScreen`).** **Nothing moves `gang_standing` negative yet** (mechanism ahead of driver). When negative, `encounters.py` resolves entry: `action_travel`, after moving onto gang turf, calls `roll_gang_encounter` (flat `GANG_ENCOUNTER_CHANCE` 0.25). A hit at standing **-1…-4** offers an escalating toll (`toll_for` = `TOLL_BASE` 40 + `TOLL_STEP` 30 × depth) via `GangTollScreen` (pay, refuse, or fail into a fight); standing **-5 or worse** (`ATTACK_STANDING`) skips the toll and attacks outright. The fight is `gang_attack`: street-tier (`ENCOUNTER_ENEMY_TIER` 0) `Encounter` with `Drop.ENEMY`, via ordinary `CombatScreen` with a map-side `_on_gang_combat_end` mirroring `SceneScreen`'s death/knockout handling. **Not balance-simulated.**
 
 ### Faction/gang relations (`shadowguy/relations.py`, `shadowguy/corpmap.py`)
 
-A **sixth relationship value**, and the only one that isn't player-facing: standing between every corp Faction and street Gang, independent of the runner entirely (recall `standing_shift` = player vs. corp; `gang_standing`/`local_standing`/`fixer_trust` = player vs. gang/person/fixer — this is corps and gangs' standing with **each other**).
+The only standing that isn't player-facing: corps and gangs' standing with **each other**, independent of the runner entirely.
 
-`relations.py` is a leaf (imports only `factions.py`/`gangs.py`) holding `ENTITY_IDS` (every Faction + Gang id) and `generate_relations(rng)`, seeding one value per unordered pair (`combinations`) within `RELATION_MIN`/`RELATION_MAX` (-2..2) — symmetric, same shape every other standing value uses. `relation(relations, a_id, b_id)` is the order-independent accessor (`frozenset` key).
+`relations.py` holds `ENTITY_IDS` (every Faction + Gang id) and `generate_relations(rng)`, seeding one value per unordered pair (`combinations`) within `RELATION_MIN`/`RELATION_MAX` (-2..2) — symmetric, same shape every other standing value uses. `relation(relations, a_id, b_id)` is the order-independent accessor (`frozenset` key).
 
-Generated once per run inside `generate_corp_map`, stored as `CorpMap.relations`, round-trips via the existing `"corp_map"` save key (`saves.SAVE_VERSION` 28 for the field). Defaults to `{}` so hand-built test fixtures don't need updating.
+Generated once per run inside `generate_corp_map`, stored as `CorpMap.relations`, round-trips via the existing `"corp_map"` save key. Defaults to `{}` so hand-built test fixtures don't need updating.
 
 **Data only for now — nothing reads or moves these values yet.** Natural next hooks: `rivals.py`'s expansion roll favoring/avoiding a disliked/liked neighbor, or a gang's turf-entry encounter softening near a friendly corp.
 
@@ -540,7 +547,7 @@ Generated once per run inside `generate_corp_map`, stored as `CorpMap.relations`
 
 Every `Location` carries `LocalCharacter`s. `_make_characters` gives a shop exactly one (its owner), every other kind 1–2 (`MAX_CHARACTERS_PER_LOCATION` = 2), named from `CHARACTER_NAMES` with a per-kind `role` from `LOCATION_ROLES` (import-time guards: every kind present, non-shop kinds need ≥2 roles). Ids are location-scoped and unique (`{location_id}_p{i}`), so they key standing cleanly despite repeatable names. `CorpMap.characters()` is the enumeration point.
 
-`Character.local_standing: dict[character_id, int]` is a **fourth relationship value**, mirroring `fixer_trust` — direct, one-person, no rival effect. Moved by `Outcome.local_standing_delta` → `target_character_id`, applied in `apply_outcome`, validated in `Scene.__post_init__` (a delta with no target character raises), shown in ContactsScreen's **Locals** panel (gated on nonzero standing).
+`Character.local_standing: dict[character_id, int]` is moved by `Outcome.local_standing_delta` → `target_character_id`, applied in `apply_outcome`, validated in `Scene.__post_init__` (a delta with no target character raises), shown in ContactsScreen's **Locals** panel (gated on nonzero standing).
 
 **Three things consume standing today.** Gigs *grant* it. Shops *read* it twice: bends prices (`buy_price`/`sell_price`) and **gates stock** (`Item.min_standing`/`Consumable.min_standing`). Info-gating is still an unbuilt hook.
 
@@ -574,90 +581,102 @@ Persistent body modifications, distinct from `shops.Item`: cyberware is **instal
 
 **Four quality tiers, generated rather than hand-authored per tier**: `CYBERWARE_TIER_MULTIPLIERS` maps a tier to `(price_mult, humanity_mult)`, both relative to the same piece's **Tier 1** row — Tier 2: same price/-10% humanity; Tier 3: -25% price/+10% humanity; Tier 4 (cruder): -50% price/+60% humanity. A tier changes only cost, never effect — enforced by generating higher tiers via `dataclasses.replace(tier_1_row, ...)`. `Cyberware.tier` validated against `VALID_CYBERWARE_TIERS`; ids follow `{base_id}_t{tier}` (e.g. `smartlink_t4`).
 
-**What's deliberately missing is acquisition** — no `LocationKind` (a ripperdoc clinic), no `ShopScreen` wiring, no `min_standing` gate — real wiring deferred (adding a shop kind touches corpmap's name pools, `LOCATION_SKILL`, `GENERATED_KINDS`, legwork text, and gig templates all at once). Nothing calls `install_cyberware` yet outside tests/a future screen. `saves.SAVE_VERSION` 34 added `Character.humanity` (33 added `installed_cyberware`).
+**What's deliberately missing is acquisition** — no `LocationKind` (a ripperdoc clinic), no `ShopScreen` wiring, no `min_standing` gate — real wiring deferred (adding a shop kind touches corpmap's name pools, `LOCATION_SKILL`, `GENERATED_KINDS`, legwork text, and gig templates all at once). Nothing calls `install_cyberware` yet outside tests/a future screen.
 
 ### Codebase layout
 
+Orientation only — each module's own section above carries the detail.
+
 ```
 src/shadowguy/
-  character.py   Character dataclass: core stats, health, humanity (cyberware capacity, fixed),
-                 skill ranks/points, post-creation experience (spend_experience_on_stat/skill) +
-                 crew_experience, advantage bank, faction standing, local_standing, gang_standing,
-                 crew, inventory, owned_programs, accepted_jobs, security_contracts
-  archetypes.py  Enforcer/Hacker/Infiltrator creation presets; apply() spends via Character's own methods
-  checks.py      resolve_check(): opposed d6 pool; pool_for_difficulty() converts legacy DCs
-  skills.py      Skill table (32 skills), skill_value(), skill_for(); leaf module, imports nothing
-  combat.py      Enemy roster, rounds, the six-stat action set, Drop/CombatOutcome, shared resolve_hit,
-                 smartlink_bonus (cybernetics.has_smartlink + a smartlinked weapon); imports no scene
-  tactical.py    grid combat: Grid/Tile, tcod FOV+A*, turn engine (reuses combat.resolve_hit), BSP generate_map;
-                 also generate_building/BurglaryWalkState (Burglary jobs, no combat); imports no scene
-  matrix.py      matrix combat (Data Heist): MatrixNetwork/generate_matrix_network (node graph),
-                 MatrixRunState navigation (move_to/extract/jack_out) wrapping the per-node
-                 MatrixState/ICE-roster engine, integrity pool (not health, run-wide not per-node),
-                 Int-family actions, cyberdeck Program bonuses/action slots, SEIZED/EJECTED (no death);
-                 reuses combat.resolve_hit; leaf, imports no scene
-  scene.py       Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/MatrixStage/Role data
-                 model, resolve_choice()/resolve_entrance(), apply_outcome()
-  jobs.py        procedural job generation + timing (JobTiming) + per-job legwork generator; matrix=Data Heist
-  gigs.py        procedural per-Location gig generation (per-kind templates), owned by a LocalCharacter; refresh_gigs
-  fixer.py       Fixer/JobOffer persistent roster, offer refresh/expiry; also Fixer.security_offers
-  security.py    procedural multi-night Security contract generation + nightly resolution (not Scene-based)
-  encounters.py  gang turf-entry encounters: toll-or-attack when the runner enters a Gang's turf they're negative with (not Scene-based)
-  runners.py     hireable runner roster (specialist/rating; daily_cost + job_cut, Leadership-scaled via recruit_wage/recruit_cut); recruited onto Character.crew (CrewHire)
-  factions.py    rival corp Factions (id/name/specialty); HQ officer ladder (rep+standing) + dialogue
-  gangs.py       street Gangs (id/name/description) that hold no territory; GANG_RANKS (soldier/lieutenant)
-                 staffing a den; leaf module — turf placement and den staffing live in corpmap.py
-  relations.py   generate_relations(): seeded standing between every Faction/Gang pair, independent
-                 of the player; symmetric one-value-per-pair, stored on CorpMap.relations; leaf module
-  rivals.py      daily-action pipeline: resolve_rival_day() lets every Faction push onto bordering
-                 neutral territory (claim_territory) and wanders every independent (not-hired)
-                 RivalRunner one step across corpmap connections, each day-advance (not
-                 Scene-based); skips a Faction the player has taken over via corp_turn.py
-  corp_turn.py   the player's own Corp turn: CorpState (cash/research_points/scientists/
-                 operatives/research_assistants/sightings), collect_income/collect_research,
-                 expand_into/train_employees/build_lab/build_efficiency_upgrade sharing one
-                 daily_action_used slot; also Sighting (plain data for surveillance.py's log,
-                 kept here to avoid a corp_turn<->surveillance import cycle) (not Scene-based);
-                 leaf, imports corpmap only
-  surveillance.py  daily Surveillance detection: resolve_surveillance_day() rolls a
-                 TerritoryModifier.SURVEILLANCE-scaled chance against the player and every
-                 wandering RivalRunner standing in the player's own corp's territory, logging
-                 a hit to CorpState.sightings (not Scene-based, informational only for now)
-  corpmap.py     procedural territory map + ASCII renderer; Location, LocalCharacter, one CORP_HQ,
-                 one RESEARCH_FACILITY and one ACADEMY per faction, one GANG_DEN per gang;
-                 lodging_cost/has_home/add_safehouse/safehouse_price (property + rest);
-                 claim_territory (rivals.py's/corp_turn.py's expansion mutator)
-  shops.py       retail LocationKinds: Item catalog (bonuses/weapon profile/travel/standing gate,
-                 smartlinked flag for combat.smartlink_bonus), consumables, Program catalog (cyberdeck
-                 program_slots, buy/install/uninstall_program), buy/sell/equip, standing-scaled pricing,
-                 hospital_stay, equipped_deck_rating/active_deck_entry (matrix)
-  cybernetics.py Cyberware catalog (CyberSlot, bonuses/skill_bonuses like shops.Item, humanity_cost as
-                 install capacity, four generated quality tiers), install_cyberware/remove_cyberware
-                 onto Character.installed_cyberware, has_smartlink; no shop/screen wired to it yet; leaf
-  saves.py       pickle-based whole-run save/load (SAVE_VERSION, STATE_KEYS); leaf, imports no game classes
-  app.py         Textual App: just the ShadowguyApp class (on_mount -> TitleMenu, save/load_state,
-                 corp_only -> which home screen to reopen, spend_time/_apply_day_tick);
-                 every screen now lives under screens/, not here
+  character.py   the run's whole mutable state: stats, health, humanity, skill ranks,
+                 experience, every standing, crew, inventory, accepted work
+  archetypes.py  Enforcer/Hacker/Infiltrator creation presets
+  checks.py      resolve_check() — the one place any check resolves
+  skills.py      the 32-skill table, skill_value(), skill_for()
+  scene.py       Scene/Stage/Choice/Outcome + the four fight/stage wrappers; apply_outcome()
+
+  combat.py      fight surface 1: abstract rounds, enemy roster, shared resolve_hit
+  tactical.py    fight surface 2: grid (tcod FOV+A*); also generate_building for Burglary walks
+  matrix.py      fight surface 3: ICE, node networks, integrity pool, cyberdeck programs
+
+  jobs.py        job generation + JobTiming + per-job legwork
+  gigs.py        per-Location gig generation
+  fixer.py       the Fixer roster holding job and security offers
+  runners.py     the hireable-runner roster
+
+  factions.py    corp Factions + the HQ officer ladder
+  gangs.py       street Gangs + GANG_RANKS
+  relations.py   seeded Faction<->Gang standing
+  corpmap.py     the territory map, its Locations/LocalCharacters, and the ASCII renderer
+
+  security.py    parallel resolution: multi-night security contracts
+  encounters.py  parallel resolution: gang turf-entry toll-or-attack
+  rivals.py      parallel resolution: faction expansion + runner wander, once a day
+  surveillance.py parallel resolution: detection rolls in the player corp's territory
+  corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action
+
+  shops.py       the retail catalogs (items, consumables, programs) + pricing
+  cybernetics.py the Cyberware catalog + install/remove; no shop wired to it yet
+  saves.py       pickle-based whole-run save/load
+  app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
+
   screens/
     creation_screen.py   CharacterCreationScreen
     main_menu.py         MainMenu
-    menu_screens.py      TitleMenu (entry point) + ModeSelectScreen (Runner/Corp) + CorpSelectScreen
-                         + TestMenu (standalone tactical/matrix test fights) + QuitMenu + LoadMenu
+    menu_screens.py      TitleMenu (entry point) + ModeSelect + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen
     tactical_screen.py   TacticalScreen
     matrix_screen.py     MatrixScreen
-    burglary_screens.py  EntrancePickScreen + BurglaryWalkScreen
+    burglary_screens.py  EntrancePick + BurglaryWalk
     corp_map_screen.py   CorpMapScreen + GangTollScreen
-    corp_screen.py       CorpScreen (play as a corp: pick a Faction, expand/train/upgrade research)
-                         + CorpMainMenu (subclasses it; home screen for a corp-only run)
-                         + ResearchTreeScreen (spend research points; pushed from either with 't')
-    shop_screens.py      FixerOffersScreen + ShopScreen + BarScreen + CorpHQScreen + HospitalScreen
-                         + RealEstateScreen + SafehouseScreen
-    info_screens.py      ContactsScreen + InventoryScreen + CyberdeckScreen + SkillsScreen
+    corp_screen.py       CorpScreen + CorpMainMenu (subclasses it) + ResearchTreeScreen
+    shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate + Safehouse
+    info_screens.py      Contacts + Inventory + Cyberdeck + Skills
 ```
 
-`saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change.
+The four **parallel resolution** modules are a deliberate category: day-advance pipelines that resolve outside the `Scene` model entirely, because nothing in `scene.py` is day-aware.
+
+### Module layering
+
+`scene.py` owns *what an outcome is worth* (`Outcome`, and the `Encounter`/`TacticalStage`/`BurglaryStage`/`MatrixStage` wrappers that hold them). The engines own *how a fight resolves* and **must never import `scene`** — that split is why `Encounter` lives in `scene.py` rather than beside the code that runs it.
+
+Leaf modules, and why each has to stay one:
+
+- **`skills.py`** — imports nothing from the package; `character.py → shops.py → corpmap.py` all import it. The "every `Skill.stat` is a real core stat" guard therefore lives in `character.py`, the one module seeing both tables. A runtime `character` import here is a cycle.
+- **`combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
+- **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`.
+- **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle.
+- **`relations.py`** — imports only `factions.py`/`gangs.py`.
+- **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
+- **`saves.py`** — imports no game classes.
+
+`scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`).
+
+### Save versions
+
+`saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change. What each bump added:
+
+| v | Change |
+|---|---|
+| 16 | `Character.gang_standing` |
+| 19 | `rival_actions` (part of the save bundle) |
+| 20 | `corp_state` |
+| 21 | `research_tier`, `research_points` |
+| 22 | `academy_tier`, `daily_action_used` rename, a since-replaced `employees` field |
+| 23 | `employees` split into `scientists`/`operatives` |
+| 24 | `labs_built` |
+| 25 | `efficiency_upgrades` |
+| 26 | `research_assistants`, float `research_points` |
+| 27 | `corp_only` |
+| 28 | `CorpMap.relations` |
+| 29 | `elapsed_hours` **replacing** `day`/`stamina`/`free_travel_used` |
+| 30 | `CorpState.researched` |
+| 31 | `CorpState.sightings`, `ShadowguyApp.rival_runner_locations` |
+| 32 | `Character.experience`/`crew_experience`, `Outcome.experience_delta` |
+| 33 | `Character.installed_cyberware` |
+| 34 | `Character.humanity` |
 
 ### Verifying changes
 
