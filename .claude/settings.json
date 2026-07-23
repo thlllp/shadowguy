@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh pr *)",
+      "Bash(uv run *)",
+      "Bash(uv add *)",
+      "Bash(uvx ruff *)",
+      "Bash(python3 *)",
+      "Bash(python -c *)",
+      "Bash(grep *)",
+      "Bash(tmux *)",
+      "Skill(run)",
+      "Skill(code-review)"
+    ]
+  }
+}
