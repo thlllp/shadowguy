@@ -20,7 +20,7 @@ from shadowguy.matrix import (
 )
 from shadowguy.scene import MatrixStage
 
-from . import CharacterSheet, _boxed_action_text, _replace_items
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_action_text, _replace_items
 
 MATRIX_LOG_LINES = 8
 NAV_LOG_LINES = 3
@@ -35,7 +35,7 @@ class MatrixScreen(Screen):
     EJECTED); SceneScreen maps those onto the MatrixStage's victory/escape
     Outcomes — unchanged from before this screen went node-based."""
 
-    BINDINGS = [("q", "quit_menu", "Menu")]
+    BINDINGS = MENU_QUIT_BINDINGS
 
     CSS = """
     #matrix_columns {

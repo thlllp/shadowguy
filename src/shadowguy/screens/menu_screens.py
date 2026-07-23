@@ -11,7 +11,7 @@ from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import MatrixStage, Outcome, TacticalStage
 from shadowguy.tactical import TacticalOutcome, generate_map
 
-from . import _menu_css
+from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .corp_screen import CorpMainMenu
 from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
@@ -92,7 +92,7 @@ class LoadMenu(ModalScreen):
 
 
 class TitleMenu(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu")]
+    BINDINGS = MENU_QUIT_BINDINGS
     CSS = _menu_css("TitleMenu", "title_dialog")
 
     OPTIONS = [
@@ -126,13 +126,13 @@ class TitleMenu(Screen):
             self.notify("Settings aren't implemented yet.")
 
 
-class ModeSelectScreen(Screen):
+class ModeSelectScreen(BackScreen):
     """New Game's first choice: build a Runner the usual way, or set up as a
     Corp instead by picking one of the 3 seeded Factions -- Corp mode has no
     runner to build, so that path skips CharacterCreationScreen entirely and
     drops straight into CorpMainMenu."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("ModeSelectScreen", "mode_dialog")
 
     def compose(self) -> ComposeResult:
@@ -147,9 +147,6 @@ class ModeSelectScreen(Screen):
         )
         yield Footer()
 
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "runner":
             self.app.push_screen(CharacterCreationScreen())
@@ -157,7 +154,7 @@ class ModeSelectScreen(Screen):
             self.app.push_screen(CorpSelectScreen())
 
 
-class CorpSelectScreen(Screen):
+class CorpSelectScreen(BackScreen):
     """Pick which Faction to run. Corp mode has no runner to build -- picking
     a Faction assigns app.corp_state, sets app.corp_only so save/load knows to
     reopen the same screen, and switches straight to CorpMainMenu, skipping
@@ -165,7 +162,7 @@ class CorpSelectScreen(Screen):
     normally spend are zeroed here instead, so there's nothing left unspent to
     (pointlessly) force creation back open on a later save/load."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("CorpSelectScreen", "corp_select_dialog")
 
     def compose(self) -> ComposeResult:
@@ -182,9 +179,6 @@ class CorpSelectScreen(Screen):
         )
         yield Footer()
 
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         faction_id = event.item.id.removeprefix("faction_")
         self.app.corp_state = CorpState(faction_id=faction_id)
@@ -194,8 +188,8 @@ class CorpSelectScreen(Screen):
         self.app.switch_screen(CorpMainMenu())
 
 
-class TestMenu(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+class TestMenu(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("TestMenu", "test_dialog")
 
     def compose(self) -> ComposeResult:
@@ -215,9 +209,6 @@ class TestMenu(Screen):
             id="test_dialog",
         )
         yield Footer()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id

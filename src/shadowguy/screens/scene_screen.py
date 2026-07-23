@@ -14,7 +14,7 @@ from shadowguy.skills import skill_value
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.tactical import TacticalOutcome
 
-from . import CharacterSheet, _replace_items
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 from .burglary_screens import BurglaryWalkResult, BurglaryWalkScreen, EntrancePickScreen
 from .combat_screen import CombatScreen
 from .matrix_screen import MatrixScreen
@@ -22,7 +22,7 @@ from .tactical_screen import TacticalScreen
 
 
 class SceneScreen(Screen):
-    BINDINGS = [("q", "quit_menu", "Menu")]
+    BINDINGS = MENU_QUIT_BINDINGS
 
     def __init__(self, scene: Scene) -> None:
         super().__init__()

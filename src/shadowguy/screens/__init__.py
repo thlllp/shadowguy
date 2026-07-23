@@ -1,6 +1,7 @@
 import re
 
 from rich.text import Text
+from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
@@ -95,6 +96,20 @@ PANEL_NAV_BINDINGS = [
     ("left", "focus_panel(-1)", "Prev panel"),
     ("right", "focus_panel(1)", "Next panel"),
 ]
+
+# The two footer bindings almost every screen shares: "q" quits to the main menu
+# (app.action_quit_menu), "escape" pops the screen (BackScreen.action_back).
+MENU_QUIT_BINDINGS = [("q", "quit_menu", "Menu")]
+MENU_BACK_BINDINGS = [*MENU_QUIT_BINDINGS, ("escape", "back", "Back")]
+
+
+class BackScreen(Screen):
+    """Screen whose back action pops itself off the stack — the default for any screen
+    reachable via `escape`. Subclasses needing different back behavior override
+    action_back (e.g. CorpMainMenu's no-op, BarScreen's async unwind)."""
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
 
 def _in_collapsed_section(widget) -> bool:

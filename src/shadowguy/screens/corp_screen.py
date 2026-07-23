@@ -1,7 +1,6 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
@@ -37,7 +36,15 @@ from shadowguy.corpmap import TerritoryModifier, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.runners import RUNNERS_BY_ID
 
-from . import PANEL_NAV_BINDINGS, PanelNav, _boxed_text, _replace_items
+from . import (
+    MENU_BACK_BINDINGS,
+    MENU_QUIT_BINDINGS,
+    PANEL_NAV_BINDINGS,
+    BackScreen,
+    PanelNav,
+    _boxed_text,
+    _replace_items,
+)
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
 
@@ -54,7 +61,7 @@ def _sighting_label(sighting, corp_map) -> str:
     return f"Day {sighting.day} — {who} spotted in {territory_name}"
 
 
-class CorpScreen(Screen):
+class CorpScreen(BackScreen):
     """Play as a corp instead of the runner: pick one of the 3 seeded Factions
     to run (a plain menu choice for now — there's no in-fiction takeover yet,
     see corp_turn.py), then spend one directed move a day on either the same
@@ -71,8 +78,7 @@ class CorpScreen(Screen):
     itself lives on its own pushed ResearchTreeScreen, below."""
 
     BINDINGS = [
-        ("q", "quit_menu", "Menu"),
-        ("escape", "back", "Back"),
+        *MENU_BACK_BINDINGS,
         ("t", "research_tree", "Research Tree"),
     ]
 
@@ -109,9 +115,6 @@ class CorpScreen(Screen):
 
     async def on_mount(self) -> None:
         await self._refresh()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
@@ -354,7 +357,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
     # "Research Tree") is inherited unchanged, same as the merge rule that spared
     # escape from needing this comment twice.
     BINDINGS = [
-        ("q", "quit_menu", "Menu"),
+        *MENU_QUIT_BINDINGS,
         ("m", "corp_map", "Corp Map"),
         ("c", "contacts", "Contacts"),
         Binding("escape", "back", "Back", show=False),
@@ -459,7 +462,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
         await super().on_list_view_selected(event)
 
 
-class ResearchTreeScreen(Screen):
+class ResearchTreeScreen(BackScreen):
     """The corp's Technology tree (see corp_turn.TECHNOLOGIES/technology_tree_layout),
     reached from CorpScreen/CorpMainMenu with 't'. One Collapsible per prereq-chain
     depth ("Tier 0", "Tier 1", ...) rather than a single flat list, so the tree reads
@@ -475,7 +478,7 @@ class ResearchTreeScreen(Screen):
     The one thing worth calling out on the box itself is a prereq that isn't met yet,
     since no amount of RP would make selecting it succeed."""
 
-    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+    BINDINGS = MENU_BACK_BINDINGS
 
     CSS = """
     ListView {
@@ -519,9 +522,6 @@ class ResearchTreeScreen(Screen):
 
     async def on_screen_resume(self) -> None:
         await self._refresh()
-
-    def action_back(self) -> None:
-        self.app.pop_screen()
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state

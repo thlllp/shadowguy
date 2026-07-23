@@ -16,6 +16,7 @@ from shadowguy.jobs import generate_legwork_for_job
 from shadowguy.scene import Scene
 
 from . import (
+    MENU_QUIT_BINDINGS,
     PANEL_NAV_BINDINGS,
     CharacterSheet,
     PanelNav,
@@ -40,7 +41,7 @@ from .shop_screens import (
 
 class MainMenu(PanelNav, Screen):
     BINDINGS = [
-        ("q", "quit_menu", "Menu"),
+        *MENU_QUIT_BINDINGS,
         ("m", "corp_map", "Corp Map (preview)"),
         ("r", "run_corp", "Run a Corp"),
         ("i", "inventory", "Gear"),
