@@ -29,17 +29,23 @@ Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility
 generates research_points every day too, at 1 RP per tier — collect_research is
 the read side of that, and research_technology is what finally spends it.
 
-TECHNOLOGIES is the researchable list; both entries are available from the start
-(there's no prerequisite system, and nothing needs one yet). A tech's *effect*
-isn't a field on Technology — it's read wherever it applies, keyed off the id:
-  - Worker Surveillance: collect_income adds WORKER_SURVEILLANCE_INCOME_BONUS
-    per held territory, and surveillance_targets/raise_surveillance only work
-    once it's researched.
-  - Brains 2: scientist_base_rate/assistant_rate return the better per-head
-    research rates, which research_rate and collect_research read. It replaces
-    the base rates rather than stacking with them, but facility efficiency
-    upgrades still stack on top of the scientist rate — the two paths compose.
-    Note this one compounds: faster research buys techs faster.
+TECHNOLOGIES is the researchable list: two three-deep chains gated by
+Technology.prereqs, rendered as a tree by
+screens.corp_screen.ResearchTreeScreen (see technology_tree_layout). Only the
+two roots — Worker Surveillance and Brains 2 — are available from day one; each
+of their two follow-on techs requires the one before it in its own chain. A
+tech's *effect* isn't a field on Technology — it's read wherever it applies,
+keyed off the id:
+  - Worker Surveillance / Panopticon Grid / Shadow Economy: collect_income sums
+    whichever of the three per-territory income bonuses are researched, and
+    surveillance_targets/raise_surveillance only work once Worker Surveillance
+    itself is researched (the two follow-ons are pure income, no new ability).
+  - Brains 2 / Brains 3 / Cognitive Uplink: scientist_base_rate/assistant_rate
+    return the highest-tier-researched per-head research rate, which
+    research_rate and collect_research read. Each tier replaces the one before
+    it rather than stacking, but facility efficiency upgrades still stack on
+    top of the scientist rate — the two paths compose. Note this chain
+    compounds: faster research buys the next tier faster.
 
 Neither research_technology nor the two territory bumps below touch
 daily_action_used: RP and cash are their own gates, and the day's one *directed
@@ -136,7 +142,10 @@ RESEARCH_PER_ASSISTANT = 0.5
 class Technology:
     """One researchable corp technology. `cost` is in research points — this is
     the first thing in the game that actually spends them (collect_research had
-    been accruing RP against nothing).
+    been accruing RP against nothing). `prereqs` names other Technology ids that
+    must already be researched before this one can be — a tuple so a tech can
+    (today doesn't, but could) name more than one — and is what turns the flat
+    catalog into the tree screens/corp_screen.ResearchTreeScreen renders.
 
     Effects are *not* fields here: a tech's effect is read where it applies
     (collect_income for the income bonus, raise_surveillance for the ability),
@@ -149,37 +158,87 @@ class Technology:
     id: str
     name: str
     cost: int  # research points
+    prereqs: tuple[str, ...]
     description: str
 
 
 WORKER_SURVEILLANCE_ID = "worker_surveillance"
+PANOPTICON_GRID_ID = "panopticon_grid"
+SHADOW_ECONOMY_ID = "shadow_economy"
 BRAINS_2_ID = "brains_2"
+BRAINS_3_ID = "brains_3"
+COGNITIVE_UPLINK_ID = "cognitive_uplink"
 
-# id, name, cost (RP), description. Both are researchable from the start —
-# there's no prerequisite system, and nothing here needs one yet.
+# id, name, cost (RP), prereqs, description — two independent chains (income via
+# surveillance, research rate via "brains"), each 3 deep. Worker Surveillance and
+# Brains 2 are the two roots (empty prereqs, researchable from day one); every
+# other row names the one tech directly below it in its own chain. A row's
+# prereqs must already have appeared earlier in this tuple — enforced below,
+# because technology_tree_layout() (and the topological loop that builds
+# TECHNOLOGIES itself) both assume a prereq's own row is already processed by
+# the time a dependent reads it.
 _TECHNOLOGY_ROWS = (
     (
         WORKER_SURVEILLANCE_ID,
         "Worker Surveillance",
         10,
+        (),
         "Every territory you hold earns +{income}/day, and you can pay {bump}eb "
         "to raise Surveillance by 1 in any district you hold that isn't already at "
         f"{MODIFIER_MAX}.",
     ),
     (
+        PANOPTICON_GRID_ID,
+        "Panopticon Grid",
+        20,
+        (WORKER_SURVEILLANCE_ID,),
+        "Every territory you hold earns another +{panopticon_income}/day on top "
+        "of Worker Surveillance's bonus.",
+    ),
+    (
+        SHADOW_ECONOMY_ID,
+        "Shadow Economy",
+        35,
+        (PANOPTICON_GRID_ID,),
+        "Every territory you hold earns another +{shadow_income}/day on top of "
+        "Worker Surveillance and Panopticon Grid's bonuses.",
+    ),
+    (
         BRAINS_2_ID,
         "Brains 2",
         10,
-        "Every working scientist produces {scientist}rp/day instead of "
-        "{base_scientist}, and every working research assistant {assistant}rp/day "
+        (),
+        "Every working scientist produces {scientist2}rp/day instead of "
+        "{base_scientist}, and every working research assistant {assistant2}rp/day "
         "instead of {base_assistant}.",
+    ),
+    (
+        BRAINS_3_ID,
+        "Brains 3",
+        20,
+        (BRAINS_2_ID,),
+        "Every working scientist produces {scientist3}rp/day and every working "
+        "research assistant {assistant3}rp/day, replacing Brains 2's rates.",
+    ),
+    (
+        COGNITIVE_UPLINK_ID,
+        "Cognitive Uplink",
+        35,
+        (BRAINS_3_ID,),
+        "Every working scientist produces {scientist4}rp/day and every working "
+        "research assistant {assistant4}rp/day, replacing Brains 3's rates.",
     ),
 )
 
 # What Worker Surveillance is worth, in the two places it lands. The income bonus
 # is per *territory* (it exactly doubles TERRITORY_INCOME_BASE), so the tech keeps
-# paying as the corp expands rather than becoming a rounding error.
+# paying as the corp expands rather than becoming a rounding error. Panopticon
+# Grid and Shadow Economy stack more of the same on top rather than replacing it
+# (unlike the Brains chain below) — collect_income sums whichever of the three
+# are researched.
 WORKER_SURVEILLANCE_INCOME_BONUS = 10
+PANOPTICON_GRID_INCOME_BONUS = 15
+SHADOW_ECONOMY_INCOME_BONUS = 25
 # Cash per Surveillance bump. Deliberately NOT on the daily_action_used slot —
 # unlike expand/train/build, this is repeatable within a day and cash is its only
 # gate, so the tech's own income bonus partly funds its use.
@@ -198,34 +257,59 @@ DEVELOPMENT_MIN_SECURITY = 3
 DEVELOPMENT_MIN_SURVEILLANCE = 3
 DEVELOPMENT_BUMP_COST = 800
 
-# Brains 2 replaces both per-head research rates outright rather than adding to
-# them — a flat better rate, not a stacking bonus, so there's one number in
-# effect at a time and scientist_base_rate/assistant_rate just pick which.
-# Efficiency upgrades still stack on top of the scientist rate (see
-# research_rate), so the two upgrade paths compose rather than compete.
-# Unlike Worker Surveillance's cash payoff this compounds — it makes research
-# itself faster — which is why it costs the same 10 RP despite looking smaller.
+# Each Brains tier replaces both per-head research rates outright rather than
+# adding to them — a flat better rate, not a stacking bonus, so there's one
+# number in effect at a time and scientist_base_rate/assistant_rate just pick
+# the highest tier researched. Efficiency upgrades still stack on top of the
+# scientist rate (see research_rate), so the building path and this tech chain
+# compose rather than compete. Unlike the surveillance chain's cash payoff this
+# compounds — it makes research itself faster, which is why Brains 2 costs the
+# same 10 RP as Worker Surveillance despite looking smaller on paper.
 # First-slice numbers, not balance-simulated.
 BRAINS_2_RESEARCH_PER_SCIENTIST = 1.25
 BRAINS_2_RESEARCH_PER_ASSISTANT = 0.75
+BRAINS_3_RESEARCH_PER_SCIENTIST = 1.5
+BRAINS_3_RESEARCH_PER_ASSISTANT = 0.9
+COGNITIVE_UPLINK_RESEARCH_PER_SCIENTIST = 2.0
+COGNITIVE_UPLINK_RESEARCH_PER_ASSISTANT = 1.2
 
 # Descriptions are filled in from the constants above rather than repeating the
 # numbers as prose, so a retune can't leave the shop text lying about the effect.
+_TECHNOLOGY_DESCRIPTION_ARGS = dict(
+    income=WORKER_SURVEILLANCE_INCOME_BONUS,
+    panopticon_income=PANOPTICON_GRID_INCOME_BONUS,
+    shadow_income=SHADOW_ECONOMY_INCOME_BONUS,
+    bump=SURVEILLANCE_BUMP_COST,
+    scientist2=BRAINS_2_RESEARCH_PER_SCIENTIST,
+    assistant2=BRAINS_2_RESEARCH_PER_ASSISTANT,
+    scientist3=BRAINS_3_RESEARCH_PER_SCIENTIST,
+    assistant3=BRAINS_3_RESEARCH_PER_ASSISTANT,
+    scientist4=COGNITIVE_UPLINK_RESEARCH_PER_SCIENTIST,
+    assistant4=COGNITIVE_UPLINK_RESEARCH_PER_ASSISTANT,
+    base_scientist=RESEARCH_PER_SCIENTIST,
+    base_assistant=RESEARCH_PER_ASSISTANT,
+)
+
+# A row's prereqs must already have been seen — i.e. defined earlier in
+# _TECHNOLOGY_ROWS — both so the tree only ever points "backward" (no cycles)
+# and so technology_tree_layout() can assume a prereq's own position is already
+# known by the time a dependent asks for it.
+_seen_ids: set[str] = set()
+for _row in _TECHNOLOGY_ROWS:
+    if any(prereq not in _seen_ids for prereq in _row[3]):
+        raise ValueError(f"{_row[0]}'s prereqs must be defined earlier in _TECHNOLOGY_ROWS")
+    _seen_ids.add(_row[0])
+del _seen_ids, _row
+
 TECHNOLOGIES = [
     Technology(
         id=tech_id,
         name=name,
         cost=cost,
-        description=description.format(
-            income=WORKER_SURVEILLANCE_INCOME_BONUS,
-            bump=SURVEILLANCE_BUMP_COST,
-            scientist=BRAINS_2_RESEARCH_PER_SCIENTIST,
-            base_scientist=RESEARCH_PER_SCIENTIST,
-            assistant=BRAINS_2_RESEARCH_PER_ASSISTANT,
-            base_assistant=RESEARCH_PER_ASSISTANT,
-        ),
+        prereqs=prereqs,
+        description=description.format(**_TECHNOLOGY_DESCRIPTION_ARGS),
     )
-    for tech_id, name, cost, description in _TECHNOLOGY_ROWS
+    for tech_id, name, cost, prereqs, description in _TECHNOLOGY_ROWS
 ]
 TECHNOLOGIES_BY_ID = {tech.id: tech for tech in TECHNOLOGIES}
 
@@ -233,21 +317,30 @@ if any(tech.cost <= 0 for tech in TECHNOLOGIES):
     raise ValueError("a Technology must cost research points to be worth researching")
 
 
-@dataclass
-class Sighting:
-    """One Surveillance hit: a known runner (the player, or a runners.RivalRunner)
-    that surveillance.py caught inside this corp's own territory on a given day.
+def technology_tree_layout() -> dict[str, tuple[int, int]]:
+    """(column, row) position for every Technology, for
+    screens.corp_screen.ResearchTreeScreen's tiered display: column is prereq-
+    chain depth (0 for a root technology), row keeps a technology in the same
+    lane as its first prereq so a chain reads as one row all the way down. Every
+    technology in the table today has at most one prereq, so "first prereq's
+    row" is exact, not an approximation; a technology with two differently-laned
+    prereqs would just inherit the first one's lane rather than something
+    fancier, since nothing here needs more than that yet.
 
-    Plain data, the same reason scene.Role holds no jobs.StageType rather than a
-    real jobs.StageType field: corp_turn.py stays a leaf (imports corpmap only),
-    so surveillance.py -- which does the actual detecting, and needs CorpState in
-    turn -- can hold a list of these on CorpState without corp_turn.py importing
-    surveillance.py back (that would be a cycle)."""
-
-    kind: Literal["player", "runner"]
-    actor_id: str  # "player", or a runners.RivalRunner.id
-    territory_id: str
-    day: int
+    Walks TECHNOLOGIES in order, which is safe because _TECHNOLOGY_ROWS is
+    checked at import to list a prereq before anything that depends on it."""
+    depth: dict[str, int] = {}
+    row: dict[str, int] = {}
+    next_root_row = 0
+    for technology in TECHNOLOGIES:
+        if not technology.prereqs:
+            depth[technology.id] = 0
+            row[technology.id] = next_root_row
+            next_root_row += 1
+        else:
+            depth[technology.id] = 1 + max(depth[p] for p in technology.prereqs)
+            row[technology.id] = row[technology.prereqs[0]]
+    return {technology.id: (depth[technology.id], row[technology.id]) for technology in TECHNOLOGIES}
 
 
 class EmployeeCategory(StrEnum):
@@ -292,9 +385,17 @@ def has_technology(corp_state: CorpState, technology_id: str) -> bool:
     return technology_id in corp_state.researched
 
 
+def prereqs_met(corp_state: CorpState, technology: Technology) -> bool:
+    """Whether every one of a Technology's prereqs is already researched — True
+    for a root technology (empty prereqs) for free, since all() of nothing is
+    True."""
+    return all(has_technology(corp_state, prereq) for prereq in technology.prereqs)
+
+
 def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     """Spend research points to unlock a Technology permanently. Fails closed (no
-    charge, no mutation) if it's already researched or the corp can't afford it.
+    charge, no mutation) if it's already researched, its prereqs aren't all
+    researched yet, or the corp can't afford it.
 
     Deliberately NOT on the daily_action_used slot: RP is its own pacing gate
     (10 RP is ~10 days of research at the base rate), and double-gating a
@@ -303,7 +404,9 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     bumps below make.
     """
     technology = TECHNOLOGIES_BY_ID[technology_id]
-    if has_technology(corp_state, technology_id) or technology.cost > corp_state.research_points:
+    if has_technology(corp_state, technology_id) or not prereqs_met(corp_state, technology):
+        return False
+    if technology.cost > corp_state.research_points:
         return False
     corp_state.research_points -= technology.cost
     corp_state.researched.add(technology_id)
@@ -312,12 +415,19 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
 
 def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     """Flat daily income from every territory the player's faction holds, plus
-    WORKER_SURVEILLANCE_INCOME_BONUS per territory once that tech is researched
-    — per territory, not once, so the tech keeps paying as the corp expands."""
+    whichever of the surveillance chain's per-territory bonuses are researched
+    (WORKER_SURVEILLANCE_INCOME_BONUS, then PANOPTICON_GRID_INCOME_BONUS, then
+    SHADOW_ECONOMY_INCOME_BONUS — summed, not replaced, unlike the Brains
+    chain's research rates) — per territory, not once, so each tech keeps
+    paying as the corp expands."""
     owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
-    bonus = (
-        WORKER_SURVEILLANCE_INCOME_BONUS if has_technology(corp_state, WORKER_SURVEILLANCE_ID) else 0
-    )
+    bonus = 0
+    if has_technology(corp_state, WORKER_SURVEILLANCE_ID):
+        bonus += WORKER_SURVEILLANCE_INCOME_BONUS
+    if has_technology(corp_state, PANOPTICON_GRID_ID):
+        bonus += PANOPTICON_GRID_INCOME_BONUS
+    if has_technology(corp_state, SHADOW_ECONOMY_ID):
+        bonus += SHADOW_ECONOMY_INCOME_BONUS
     return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
@@ -357,7 +467,13 @@ def next_lab_cost(facility: Location) -> int | None:
 
 def scientist_base_rate(corp_state: CorpState) -> float:
     """RP/day one working scientist adds before any facility efficiency upgrade —
-    RESEARCH_PER_SCIENTIST, or Brains 2's better rate once that's researched."""
+    RESEARCH_PER_SCIENTIST, or the best-researched Brains tier's rate. The chain
+    replaces rather than stacks (see the Brains constants above), so this picks
+    the highest tier held rather than summing them."""
+    if has_technology(corp_state, COGNITIVE_UPLINK_ID):
+        return COGNITIVE_UPLINK_RESEARCH_PER_SCIENTIST
+    if has_technology(corp_state, BRAINS_3_ID):
+        return BRAINS_3_RESEARCH_PER_SCIENTIST
     if has_technology(corp_state, BRAINS_2_ID):
         return BRAINS_2_RESEARCH_PER_SCIENTIST
     return RESEARCH_PER_SCIENTIST
@@ -365,7 +481,12 @@ def scientist_base_rate(corp_state: CorpState) -> float:
 
 def assistant_rate(corp_state: CorpState) -> float:
     """RP/day one working research assistant adds. Flat regardless of facility —
-    efficiency upgrades boost scientists only — but Brains 2 raises it."""
+    efficiency upgrades boost scientists only — but the Brains chain raises it,
+    same highest-tier-wins rule as scientist_base_rate."""
+    if has_technology(corp_state, COGNITIVE_UPLINK_ID):
+        return COGNITIVE_UPLINK_RESEARCH_PER_ASSISTANT
+    if has_technology(corp_state, BRAINS_3_ID):
+        return BRAINS_3_RESEARCH_PER_ASSISTANT
     if has_technology(corp_state, BRAINS_2_ID):
         return BRAINS_2_RESEARCH_PER_ASSISTANT
     return RESEARCH_PER_ASSISTANT
