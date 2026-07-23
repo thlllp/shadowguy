@@ -903,7 +903,9 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             scientists_before = app.corp_state.scientists
             await pilot.click("#train_scientist")
             await pilot.pause()
-            assert app.corp_state.scientists > scientists_before
+            # Training queues rather than resolving instantly -- see corp_turn.py.
+            assert app.corp_state.scientists == scientists_before
+            assert app.corp_state.pending_recruit is not None
             assert app.corp_state.daily_action_used is True
 
     run(body())

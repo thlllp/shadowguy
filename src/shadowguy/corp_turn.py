@@ -20,10 +20,15 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
     rivals.py's AI factions make (reusing corpmap.expansion_candidates/
     claim_territory).
   - train_employees at the corp's one guaranteed ACADEMY (corpmap._make_academy),
-    spending cash to grow one of CorpState.scientists/operatives/
-    research_assistants (EmployeeCategory picks which — three separate pools,
-    not one, since they're meant to eventually do different things for the
-    corp).
+    spending cash to queue a training session that grows one of
+    CorpState.scientists/operatives/research_assistants (EmployeeCategory picks
+    which — three separate pools, not one, since they're meant to eventually do
+    different things for the corp). The Academy has exactly one training slot
+    (CorpState.pending_recruit): train_employees refuses a second recruit while
+    one's already in progress, and TRAINING_DAYS (3/6/10 days by category) is
+    the real pacing lever here, not daily_action_used — resolve_training credits
+    the slot once its complete_day arrives, called once per day tick like
+    collect_income/collect_research.
 
 Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility)
 generates research_points every day too, at 1 RP per tier — collect_research is
@@ -113,6 +118,16 @@ EXPANSION_COST_PER_VALUE = 100
 # Flat for now since nothing raises an Academy's tier yet (see corpmap.py). Same
 # cost regardless of which EmployeeCategory is trained.
 ACADEMY_TRAINING_COST = 200
+
+# Days a training session takes to complete, keyed by EmployeeCategory --
+# train_employees queues a PendingRecruit rather than crediting headcount on the
+# spot, and the Academy only ever has the one slot (CorpState.pending_recruit),
+# so this delay -- not daily_action_used -- is what actually paces how often a
+# corp grows. Scientists are the corp's core research asset and take the
+# longest; research assistants are the quick, low-commitment hire.
+SCIENTIST_TRAINING_DAYS = 10
+OPERATIVE_TRAINING_DAYS = 6
+RESEARCH_ASSISTANT_TRAINING_DAYS = 3
 
 # A research facility seats this many working scientists for free, before any
 # lab is built.
@@ -373,6 +388,38 @@ class EmployeeCategory(StrEnum):
     RESEARCH_ASSISTANT = "research_assistant"
 
 
+# EmployeeCategory -> how many days a training session in that category takes
+# (see the constants above). A dict rather than three parallel ifs, the same
+# "one table, not tabulated twice" shape TECHNOLOGIES_BY_ID uses.
+TRAINING_DAYS = {
+    EmployeeCategory.SCIENTIST: SCIENTIST_TRAINING_DAYS,
+    EmployeeCategory.OPERATIVE: OPERATIVE_TRAINING_DAYS,
+    EmployeeCategory.RESEARCH_ASSISTANT: RESEARCH_ASSISTANT_TRAINING_DAYS,
+}
+
+
+def employee_category_plural(category: EmployeeCategory) -> str:
+    """research_assistant -> "research assistants"; scientist/operative have no
+    underscore to begin with, so this just adds the s. The one place this is
+    spelled out, so screens/corp_screen.py and app.py's completion notify() can't
+    drift apart on how a category reads."""
+    return f"{category.replace('_', ' ')}s"
+
+
+@dataclass
+class PendingRecruit:
+    """One in-progress Academy training session. The Academy has exactly one
+    training slot (CorpState.pending_recruit) -- train_employees queues this
+    instead of crediting headcount immediately, and resolve_training credits it
+    once `complete_day` arrives. `count` is locked in at queue time (the
+    Academy's tier when training started), the same way a job stage's
+    difficulty is rolled once and every approach offsets from it."""
+
+    category: EmployeeCategory
+    count: int
+    complete_day: int
+
+
 @dataclass
 class CorpState:
     """The player's own corp: which Faction they run, its cash/research points/
@@ -396,6 +443,10 @@ class CorpState:
     # until surveillance.resolve_surveillance_day actually catches someone —
     # corp_turn.py never appends to this itself.
     sightings: list[Sighting] = field(default_factory=list)
+    # The Academy's one training slot -- None when idle. train_employees refuses
+    # to queue a second recruit while this is set, and resolve_training clears it
+    # once PendingRecruit.complete_day arrives.
+    pending_recruit: PendingRecruit | None = None
 
 
 def has_technology(corp_state: CorpState, technology_id: str) -> bool:
@@ -671,28 +722,49 @@ def _owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
     return None
 
 
-def train_employees(corp_state: CorpState, corp_map: CorpMap, category: EmployeeCategory) -> bool:
-    """Spend cash on one training session at the corp's Academy, gaining that
+def train_employees(
+    corp_state: CorpState, corp_map: CorpMap, category: EmployeeCategory, day: int
+) -> bool:
+    """Spend cash to queue one training session at the corp's Academy, for that
     many scientists, operatives or research assistants (whichever `category`
-    picks) equal to the Academy's tier. Shares expand_into's once-a-day slot —
-    fails closed if the corp's already made its move today, holds no Academy
-    (it always does once its territory has been claimed at all), or can't
-    afford it."""
-    if corp_state.daily_action_used:
+    picks) equal to the Academy's tier -- credited later by resolve_training,
+    not on the spot. Shares expand_into's once-a-day slot — fails closed if the
+    corp's already made its move today, a recruit is already training
+    (CorpState.pending_recruit -- the Academy has exactly one slot), holds no
+    Academy (it always does once its territory has been claimed at all), or
+    can't afford it."""
+    if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = _owned_academy(corp_state, corp_map)
     if academy is None or ACADEMY_TRAINING_COST > corp_state.cash:
         return False
     corp_state.cash -= ACADEMY_TRAINING_COST
     gained = academy.academy_tier or 0
-    if category is EmployeeCategory.SCIENTIST:
-        corp_state.scientists += gained
-    elif category is EmployeeCategory.OPERATIVE:
-        corp_state.operatives += gained
-    else:
-        corp_state.research_assistants += gained
+    corp_state.pending_recruit = PendingRecruit(
+        category=category, count=gained, complete_day=day + TRAINING_DAYS[category]
+    )
     corp_state.daily_action_used = True
     return True
+
+
+def resolve_training(corp_state: CorpState, day: int) -> PendingRecruit | None:
+    """Credit the Academy's in-progress training session once its complete_day
+    arrives, freeing the slot for the next one. Called once per day tick
+    (app._apply_day_tick), same as collect_income/collect_research. Returns the
+    completed PendingRecruit (for the caller to notify() with) or None if
+    nothing finished today -- there's only one slot, so at most one completion a
+    day."""
+    pending = corp_state.pending_recruit
+    if pending is None or pending.complete_day > day:
+        return None
+    if pending.category is EmployeeCategory.SCIENTIST:
+        corp_state.scientists += pending.count
+    elif pending.category is EmployeeCategory.OPERATIVE:
+        corp_state.operatives += pending.count
+    else:
+        corp_state.research_assistants += pending.count
+    corp_state.pending_recruit = None
+    return pending
 
 
 def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:

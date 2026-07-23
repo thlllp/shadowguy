@@ -17,6 +17,7 @@ from shadowguy.corp_turn import (
     build_efficiency_upgrade,
     build_lab,
     development_targets,
+    employee_category_plural,
     expand_into,
     expansion_cost,
     has_technology,
@@ -40,12 +41,6 @@ from shadowguy.runners import RUNNERS_BY_ID
 from . import PANEL_NAV_BINDINGS, PanelNav, _boxed_text, _replace_items
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
-
-
-def _plural(category: EmployeeCategory) -> str:
-    """research_assistant -> "research assistants"; scientist/operative have
-    no underscore to begin with, so this just adds the s."""
-    return f"{category.replace('_', ' ')}s"
 
 
 def _sighting_label(sighting, corp_map) -> str:
@@ -207,13 +202,21 @@ class CorpScreen(Screen):
         await _replace_items(list_view, items)
 
         academy_items = []
-        for category in EmployeeCategory:
-            label = f"Train {_plural(category)} — {ACADEMY_TRAINING_COST}eb"
-            if corp_state.daily_action_used:
-                label += " (already acted today)"
-            elif ACADEMY_TRAINING_COST > corp_state.cash:
-                label += " (can't afford)"
-            academy_items.append(ListItem(Static(label), id=f"train_{category}"))
+        if corp_state.pending_recruit is not None:
+            pending = corp_state.pending_recruit
+            label = (
+                f"Training {pending.count} {employee_category_plural(pending.category)} — "
+                f"ready day {pending.complete_day}"
+            )
+            academy_items.append(ListItem(Static(label), id="pending_recruit"))
+        else:
+            for category in EmployeeCategory:
+                label = f"Train {employee_category_plural(category)} — {ACADEMY_TRAINING_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif ACADEMY_TRAINING_COST > corp_state.cash:
+                    label += " (can't afford)"
+                academy_items.append(ListItem(Static(label), id=f"train_{category}"))
         await _replace_items(academy_list, academy_items)
 
         research_items = []
@@ -252,7 +255,7 @@ class CorpScreen(Screen):
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
-        if item_id.startswith("sighting_") or item_id == "no_sightings":
+        if item_id.startswith("sighting_") or item_id in ("no_sightings", "pending_recruit"):
             return
 
         if item_id.startswith("faction_"):
@@ -305,8 +308,10 @@ class CorpScreen(Screen):
         if item_id.startswith("train_"):
             corp_state = self.app.corp_state
             category = EmployeeCategory(item_id.removeprefix("train_"))
-            if train_employees(corp_state, self.app.corp_map, category):
-                self.notify(f"Trained a new batch of {_plural(category)} at the Academy.")
+            if train_employees(corp_state, self.app.corp_map, category, self.app.character.day):
+                self.notify(f"Queued training for a batch of {employee_category_plural(category)} at the Academy.")
+            elif corp_state.pending_recruit is not None:
+                self.notify("The Academy is already training someone.", severity="warning")
             elif corp_state.daily_action_used:
                 self.notify("Already made your move today.", severity="warning")
             else:

@@ -109,7 +109,10 @@ SAVE_SUFFIX = ".save"
 # and `crew_experience` (a pre-v32 pickled Character lacks both), and
 # scene.Outcome gained an `experience_delta` field -- a pre-v32 pickled Outcome
 # (inside an accepted job, a fixer's offers, or a location's gig) lacks it.
-SAVE_VERSION = 32
+# v33 made Academy training take days instead of resolving instantly:
+# CorpState gained `pending_recruit` (the Academy's one training slot, a
+# corp_turn.PendingRecruit | None) -- a pre-v33 pickled CorpState lacks it.
+SAVE_VERSION = 33
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
