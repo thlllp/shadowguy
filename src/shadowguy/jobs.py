@@ -37,14 +37,24 @@ TARGETS = [
 
 DIFFICULTY_BASE = (10, 13, 16)
 REWARD_BASE = (250, 450, 700)
+# Character.experience paid by a completed job, same tier domain as REWARD_BASE and
+# scaled by the same success/critical-success multiplier _payout applies to cash —
+# jobs are the only activity that pays XP at all (gigs/legwork/security don't, on
+# purpose: a job is the thing worth grinding for growth, not a gig's quick cash).
+# First-slice numbers, not balance-simulated.
+JOB_XP_BASE = (10, 15, 20)
 
-# One tier domain, three tables: a job's difficulty, its pay, and who turns up to its
-# fights (combat.ENEMY_TIERS) are all indexed by the tier _tier_for_day yields. The
-# last one lives in another module that can't import this one, so the drift is caught
-# here — extending the tiers in one table without the others should fail on import,
-# not KeyError inside a fixer's offer refresh.
-if len(DIFFICULTY_BASE) != len(REWARD_BASE) or set(ENEMY_TIERS) != set(range(len(DIFFICULTY_BASE))):
-    raise ValueError("DIFFICULTY_BASE, REWARD_BASE and combat.ENEMY_TIERS must cover the same tiers")
+# One tier domain, four tables: a job's difficulty, its cash pay, its XP pay, and who
+# turns up to its fights (combat.ENEMY_TIERS) are all indexed by the tier
+# _tier_for_day yields. The last one lives in another module that can't import this
+# one, so the drift is caught here — extending the tiers in one table without the
+# others should fail on import, not KeyError inside a fixer's offer refresh.
+if (
+    len(DIFFICULTY_BASE) != len(REWARD_BASE)
+    or len(DIFFICULTY_BASE) != len(JOB_XP_BASE)
+    or set(ENEMY_TIERS) != set(range(len(DIFFICULTY_BASE)))
+):
+    raise ValueError("DIFFICULTY_BASE, REWARD_BASE, JOB_XP_BASE and combat.ENEMY_TIERS must cover the same tiers")
 # matrix.ICE_TIERS is the third fight-population table (see combat.ENEMY_TIERS above) — a
 # matrix job's fights draw from it by the same day tier, so it has to span the same tiers.
 if set(ICE_TIERS) != set(range(len(DIFFICULTY_BASE))):
@@ -845,6 +855,7 @@ def generate_job(
                 text=text,
                 next_stage=ns,
                 cash_delta=int(reward_base * multiplier) if last else 0,
+                experience_delta=int(JOB_XP_BASE[tier] * multiplier) if last else 0,
                 rep_delta=rep if last else 0,
                 standing_delta=JOB_STANDING_HIT if last else 0,
                 fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,

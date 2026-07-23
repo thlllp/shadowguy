@@ -11,6 +11,7 @@ from shadowguy.jobs import (
     ARCHETYPES,
     DAMAGE_FOR_DELTA,
     JOB_STANDING_HIT,
+    JOB_XP_BASE,
     LEGWORK_FIGHT_STAGE,
     NEARBY_DIFFICULTY,
     SITE_DIFFICULTY,
@@ -55,6 +56,53 @@ def test_generated_job_last_non_fight_stage_carries_the_payout(corp_map, seed):
         assert choice.success.cash_delta > 0
         assert choice.success.rep_delta > 0
         assert choice.success.standing_delta == JOB_STANDING_HIT
+        assert choice.success.experience_delta > 0
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_job_critical_success_pays_more_experience_than_plain_success(corp_map, seed):
+    """critical_success uses the same 1.5x multiplier experience_delta shares with
+    cash_delta, so a clean critical always pays more XP than a plain success."""
+    scene, _timing = generate_job(day=10, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    stage_ids = sorted(
+        (sid for sid in scene.stages if not sid.endswith("_fight")),
+        key=lambda sid: int(sid.removeprefix("stage_")),
+    )
+    last = scene.stages[stage_ids[-1]]
+    non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
+    for choice in non_ambush:
+        assert choice.critical_success.experience_delta > choice.success.experience_delta
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_job_plain_success_pays_exactly_tier_zero_xp_on_day_one(corp_map, seed):
+    """day=1 is tier 0, and a plain success uses multiplier 1.0, so the payout
+    should be exactly JOB_XP_BASE[0] with no rounding surprises."""
+    scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    stage_ids = sorted(
+        (sid for sid in scene.stages if not sid.endswith("_fight")),
+        key=lambda sid: int(sid.removeprefix("stage_")),
+    )
+    last = scene.stages[stage_ids[-1]]
+    non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
+    for choice in non_ambush:
+        assert choice.success.experience_delta == JOB_XP_BASE[0]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generated_job_non_last_stage_pays_no_experience(corp_map, seed):
+    """Only the final stage's payout carries XP — an earlier stage's success just
+    advances the job, same as it does for cash/rep/standing."""
+    scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    stage_ids = sorted(
+        (sid for sid in scene.stages if not sid.endswith("_fight")),
+        key=lambda sid: int(sid.removeprefix("stage_")),
+    )
+    if len(stage_ids) < 2:
+        return
+    first = scene.stages[stage_ids[0]]
+    for choice in first.choices:
+        assert choice.success.experience_delta == 0
 
 
 def _stage_options(stage):

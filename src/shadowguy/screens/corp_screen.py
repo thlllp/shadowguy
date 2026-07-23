@@ -1,6 +1,6 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
@@ -21,16 +21,19 @@ from shadowguy.corp_turn import (
     next_efficiency_cost,
     next_lab_cost,
     owned_research_facility,
+    prereqs_met,
     raise_development,
     raise_surveillance,
     research_rate,
     surveillance_targets,
+    technology_tree_layout,
     train_employees,
 )
 from shadowguy.corpmap import TerritoryModifier, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID
 
-from . import PANEL_NAV_BINDINGS, PanelNav, _replace_items
+from . import PANEL_NAV_BINDINGS, PanelNav, _boxed_text, _replace_items
 from .corp_map_screen import CorpMapScreen
 from .info_screens import ContactsScreen
 from .technology_screen import TechnologyScreen
@@ -40,6 +43,12 @@ def _plural(category: EmployeeCategory) -> str:
     """research_assistant -> "research assistants"; scientist/operative have
     no underscore to begin with, so this just adds the s."""
     return f"{category.replace('_', ' ')}s"
+
+
+def _sighting_label(sighting, corp_map) -> str:
+    who = "You" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
+    territory_name = corp_map.territories[sighting.territory_id].name
+    return f"Day {sighting.day} — {who} spotted in {territory_name}"
 
 
 class CorpScreen(Screen):
@@ -214,6 +223,15 @@ class CorpScreen(Screen):
                 research_items.append(ListItem(Static(label), id="build_efficiency"))
         await _replace_items(research_list, research_items)
 
+        if corp_state.sightings:
+            sighting_items = [
+                ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
+                for i, sighting in enumerate(corp_state.sightings)
+            ]
+        else:
+            sighting_items = [ListItem(Static("No sightings yet."), id="no_sightings")]
+        await _replace_items(self.query_one("#surveillance_list", ListView), sighting_items)
+
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
         if item_id.startswith("faction_"):
@@ -314,6 +332,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
         ("q", "quit_menu", "Menu"),
         ("m", "corp_map", "Corp Map"),
         ("c", "contacts", "Contacts"),
+        ("t", "research_tree", "Research Tree"),
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
@@ -408,3 +427,128 @@ class CorpMainMenu(PanelNav, CorpScreen):
                 self.action_technology()
             return
         await super().on_list_view_selected(event)
+
+
+class ResearchTreeScreen(Screen):
+    """The corp's Technology tree (see corp_turn.TECHNOLOGIES/technology_tree_layout),
+    reached from CorpScreen/CorpMainMenu with 't'. One Collapsible per prereq-chain
+    depth ("Tier 0", "Tier 1", ...) rather than a single flat list, so the tree reads
+    top-to-bottom as it deepens; each box's own "Requires: ..." line is what shows the
+    edge back to its prereq — with two independent chains today that's always exactly
+    one name, not worth the ASCII connector/hit-test machinery corpmap.py/matrix.py
+    carry for an actual graph with branches.
+
+    A box is never hard-disabled — selecting it always attempts
+    corp_turn.research_technology(), the same "fails closed, notify() why" shape every
+    other corp purchase in CorpScreen already uses — so a box short on RP stays
+    selectable and reports the shortfall via its own label rather than going inert.
+    The one thing worth calling out on the box itself is a prereq that isn't met yet,
+    since no amount of RP would make selecting it succeed."""
+
+    BINDINGS = [("q", "quit_menu", "Menu"), ("escape", "back", "Back")]
+
+    CSS = """
+    ListView {
+        height: auto;
+    }
+
+    ListItem.tech_box {
+        height: auto;
+        border: round $accent;
+        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+
+    ListItem.tech_box.-researched {
+        border: round $success;
+    }
+
+    ListItem.tech_box.-locked {
+        border: round $panel;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id="tree_info")
+        max_tier = max(col for col, _ in technology_tree_layout().values())
+        panels = [
+            Collapsible(
+                ListView(id=f"tier_{tier}_list"),
+                title=f"Tier {tier}",
+                collapsed=False,
+                id=f"tier_{tier}_panel",
+            )
+            for tier in range(max_tier + 1)
+        ]
+        yield ScrollableContainer(*panels, id="tiers")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    async def _refresh(self) -> None:
+        corp_state = self.app.corp_state
+        self.query_one("#tree_info", Static).update(f"{corp_state.research_points:g}rp available.")
+
+        layout = technology_tree_layout()
+        max_tier = max(col for col, _ in layout.values())
+        by_tier: dict[int, list] = {tier: [] for tier in range(max_tier + 1)}
+        for technology in TECHNOLOGIES:
+            by_tier[layout[technology.id][0]].append(technology)
+
+        for tier, technologies in by_tier.items():
+            list_view = self.query_one(f"#tier_{tier}_list", ListView)
+            items = [self._tech_item(corp_state, technology) for technology in technologies]
+            await _replace_items(list_view, items)
+
+    def _tech_item(self, corp_state: CorpState, technology) -> ListItem:
+        researched = has_technology(corp_state, technology.id)
+        locked = not researched and not prereqs_met(corp_state, technology)
+
+        detail_lines = []
+        if researched:
+            detail_lines.append("Researched")
+        elif locked:
+            names = ", ".join(TECHNOLOGIES_BY_ID[prereq].name for prereq in technology.prereqs)
+            detail_lines.append(f"Locked — requires {names}")
+        else:
+            cost_line = f"{technology.cost}rp"
+            if technology.cost > corp_state.research_points:
+                short = technology.cost - corp_state.research_points
+                cost_line += f" (need {short:g}rp more)"
+            detail_lines.append(cost_line)
+        detail_lines.append(technology.description)
+
+        item = ListItem(
+            Static(_boxed_text(technology.name, "\n".join(detail_lines))),
+            id=f"tech_{technology.id}",
+            classes="tech_box",
+        )
+        if researched:
+            item.add_class("-researched")
+        elif locked:
+            item.add_class("-locked")
+        return item
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        technology_id = event.item.id.removeprefix("tech_")
+        corp_state = self.app.corp_state
+        technology = TECHNOLOGIES_BY_ID[technology_id]
+
+        if has_technology(corp_state, technology_id):
+            return
+        if not prereqs_met(corp_state, technology):
+            self.notify("Research the prerequisites first.", severity="warning")
+            return
+        if research_technology(corp_state, technology_id):
+            self.notify(f"Researched {technology.name}.")
+        else:
+            self.notify("Not enough research points.", severity="warning")
+        await self._refresh()

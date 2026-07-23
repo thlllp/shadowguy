@@ -36,7 +36,7 @@ from shadowguy.corp_turn import (
     collect_income,
     has_technology,
 )
-from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen
+from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
@@ -49,7 +49,8 @@ from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
 from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
 from shadowguy.gangs import GANGS
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen
+from shadowguy.scene import Outcome
+from shadowguy.screens.info_screens import ContactsScreen, InventoryScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
 from shadowguy.screens.technology_screen import TechnologyScreen
@@ -735,6 +736,80 @@ def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_
             assert offer in app.character.accepted_jobs  # not pruned out from under itself
             assert app.character.on_crew("runner_specter")  # crew hire survived too
 
+
+def test_completed_job_xp_is_not_split_with_crew_but_each_crew_member_earns_it_too():
+    """The player's own XP (credited via scene.apply_outcome, ahead of
+    _take_crew_cut) is never reduced by having crew along, and every crew member
+    hired for that job separately earns the same full amount into their own
+    Character.crew_experience -- not divided out of a shared pot."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            scene, _timing = generate_job(day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(0))
+            app.character.hire_for_job("runner_specter", scene.id)
+            app.character.hire_for_job("runner_juncture", scene.id)
+            app.push_screen(SceneScreen(scene))
+            await pilot.pause()
+
+            outcome = Outcome(text="done", cash_delta=100, experience_delta=20, next_stage=None)
+            app.character.gain_experience(outcome.experience_delta)
+            app.screen._take_crew_cut(outcome)
+
+            assert app.character.experience == 20
+            assert app.character.crew_experience == {"runner_specter": 20, "runner_juncture": 20}
+
+
+def test_skills_screen_spends_experience_on_a_stat_and_a_skill():
+    """SkillsScreen is the post-creation spend surface: a 'Raise <Stat>' row and
+    every skill row both draw on Character.experience rather than the one-shot
+    creation pools."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.character.experience = 100
+            body_before = app.character.body
+            hack_rank_before = app.character.skill_rank("hack")
+
+            app.push_screen(SkillsScreen())
+            await pilot.pause()
+
+            await pilot.click("#stat_body")
+            await pilot.pause()
+            assert app.character.body == body_before + 1
+            xp_after_stat = app.character.experience
+            assert xp_after_stat == 99  # first point on a fresh stat costs 1
+
+            await pilot.click("#skill_hack")
+            await pilot.pause()
+            assert app.character.skill_rank("hack") == hack_rank_before + 1
+            assert app.character.experience < xp_after_stat
+
+    run(body())
+
+
+def test_skills_screen_refuses_unaffordable_stat_without_charging():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.character.experience = 0
+            body_before = app.character.body
+
+            app.push_screen(SkillsScreen())
+            await pilot.pause()
+            await pilot.click("#stat_body")
+            await pilot.pause()
+
+            assert app.character.body == body_before
+            assert app.character.experience == 0
+
+    run(body())
+
     run(body())
 
 
@@ -1061,9 +1136,10 @@ def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
 
 
 def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
-    """The Technology panel spends research points, and the tech's two effects show
-    up where they land: income rises per territory, and Surveillance rows appear in
-    the territory list (they don't exist at all before researching)."""
+    """The Research Tree screen ('t' from CorpScreen) spends research points, and
+    the tech's effects show up where they land: income rises per territory,
+    Surveillance rows appear in the territory list (they don't exist at all before
+    researching), and researching unlocks the tier behind it (Panopticon Grid)."""
 
     async def body():
         app = ShadowguyApp()
@@ -1086,7 +1162,7 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await app.screen._refresh()
             await pilot.pause()
 
-            # Nothing to raise, and the tech row reports the shortfall.
+            # Nothing to raise yet.
             corp_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert not any(i.startswith("surveil_") for i in corp_ids)
 
@@ -1117,10 +1193,23 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
                 WORKER_SURVEILLANCE_INCOME_BONUS * len(owned)
             )
 
-            # The row flips to the researched state, and surveillance rows appear.
-            # Only the researched one flips; the other stays offered.
-            tech_ids = {item.id for item in app.screen.query_one("#tech_list", ListView).children}
-            assert tech_ids == {"tech_done_worker_surveillance", "tech_brains_2"}
+            # The researched box flips state; Brains 2 stays offered untouched, and
+            # Panopticon Grid (Tier 1, gated behind Worker Surveillance) is now on
+            # the tree at all.
+            tier0_item = next(
+                item
+                for item in app.screen.query_one("#tier_0_list", ListView).children
+                if item.id == "tech_worker_surveillance"
+            )
+            assert tier0_item.has_class("-researched")
+            tier1_ids = {item.id for item in app.screen.query_one("#tier_1_list", ListView).children}
+            assert "tech_panopticon_grid" in tier1_ids
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpScreen)
+            await app.screen._refresh()
+            await pilot.pause()
 
             await pilot.press("escape")
             await pilot.pause()

@@ -236,6 +236,10 @@ class SceneScreen(Screen):
             cut = min(int(recruit_cut(runner, leadership) * outcome.cash_delta), character.cash)
             character.cash -= cut
             self.notify(f"{runner.name} takes {cut}eb — their cut of the job.")
+            # Not split with the player's own XP (character.gain_experience already
+            # credited the full amount via apply_outcome) — a crew member earns the
+            # same job the same way the player did, in parallel, not out of a shared pot.
+            character.grant_crew_experience(hire.runner_id, outcome.experience_delta)
 
     async def _advance(self) -> None:
         if self._pending_next_stage is None:

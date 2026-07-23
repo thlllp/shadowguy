@@ -99,12 +99,32 @@ SAVE_SUFFIX = ".save"
 # v30 added corp technology (corp_turn.TECHNOLOGIES, the first thing to spend
 # research points): CorpState gained a `researched` set of technology ids (a
 # pre-v30 pickled CorpState lacks it).
-SAVE_VERSION = 30
+# v31 added Surveillance detection (surveillance.py): CorpState gained a
+# `sightings` list (a pre-v31 pickled CorpState lacks it), and ShadowguyApp
+# gained the `rival_runner_locations` key -- the persistent runner_id ->
+# territory_id map rivals.py now uses to wander independent RivalRunners
+# around the map (a pre-v31 save lacks the key entirely).
+# v32 added post-creation experience (character.py): Character gained
+# `experience` (spent via spend_experience_on_stat/spend_experience_on_skill)
+# and `crew_experience` (a pre-v32 pickled Character lacks both), and
+# scene.Outcome gained an `experience_delta` field -- a pre-v32 pickled Outcome
+# (inside an accepted job, a fixer's offers, or a location's gig) lacks it.
+SAVE_VERSION = 32
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
 STATE_KEYS = frozenset(
-    {"rng", "corp_map", "character", "fixers", "location_gigs", "rival_actions", "corp_state", "corp_only"}
+    {
+        "rng",
+        "corp_map",
+        "character",
+        "fixers",
+        "location_gigs",
+        "rival_actions",
+        "rival_runner_locations",
+        "corp_state",
+        "corp_only",
+    }
 )
 
 

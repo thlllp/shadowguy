@@ -56,6 +56,10 @@ class Outcome:
     # Applied to the scene's target_character_id (a corpmap.LocalCharacter). Like fixer
     # trust: a direct, one-person relationship, no rival effect.
     local_standing_delta: int = 0
+    # Character.experience gained. Currently only jobs.py sets this (see JOB_XP_BASE) —
+    # gigs/legwork/security deliberately don't pay XP, unlike cash, which every activity
+    # type can grant.
+    experience_delta: int = 0
     next_stage: str | None = None
 
 
@@ -380,6 +384,7 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
     # cover (Scene.max_cash_loss), so a losing outcome always has the cash to take.
     # Flooring here instead would hand a broke runner every loss for free.
     character.cash += outcome.cash_delta
+    character.gain_experience(outcome.experience_delta)
     # Floored, like health, but not at 0: a blown job or gig can now push rep
     # negative (see character.REP_FLOOR) rather than stopping at "nobody."
     character.adjust_rep(outcome.rep_delta)
