@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from shadowguy.checks import resolve_rng
+from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.corpmap import SHOP_KINDS, LocationKind
-from shadowguy.skills import skill_for
+from shadowguy.skills import skill_for, skill_value
 
 if TYPE_CHECKING:
     from shadowguy.character import Character
@@ -370,14 +370,35 @@ CATALOG: dict[LocationKind, list[Item]] = {
 # Loot-only items: never stocked in any shop's buy catalog (ShopScreen only ever
 # lists CATALOG.get(location.kind, []), never ITEMS_BY_ID directly), but still
 # resolvable through ITEMS_BY_ID so the existing Pawn Shop sell_item flow can price
-# and sell them exactly like anything else. Today just matrix.py's optional
-# CACHE-node reward — a matrix run grants one straight into inventory, unequipped,
-# on top of (and independent from) whatever the run's own Outcome pays out.
+# and sell them exactly like anything else. matrix.py's optional CACHE-node reward
+# grants STOLEN_DATASHARD_ID straight into inventory, unequipped, on top of (and
+# independent from) whatever the run's own Outcome pays out; scavenge() below (a
+# Junkyard's one action) does the same with SCAVENGE_MATERIALS.
 STOLEN_DATASHARD_ID = "stolen_datashard"
+
+# Raw salvage: no bonuses at all (bare `{}`), unlike everything in CATALOG — there's
+# nothing to equip here yet. Sellable today (like any Item); the intended sink is
+# crafting/repair systems that don't exist yet, so these are pure future-hooks, same
+# deferred-hook shape as cybernetics.py before install_cyberware had a caller. No named
+# id constants (unlike STOLEN_DATASHARD_ID) since nothing outside this block refers to
+# one by name — SCAVENGE_MATERIALS below is derived from these rows, not retyped.
+_SCAVENGE_ROWS: list[tuple] = [
+    ("armor_plating", "Armor Plating", 50, {}),
+    ("rubber", "Rubber", 15, {}),
+    ("salvaged_optics", "Salvaged Optics", 60, {}),
+    ("wire", "Wire", 20, {}),
+    ("screws", "Screws", 10, {}),
+]
 _LOOT_ROWS: list[tuple] = [
     (STOLEN_DATASHARD_ID, "Stolen Datashard", 180, {}),
+    *_SCAVENGE_ROWS,
 ]
 LOOT_ITEMS = [Item(*row) for row in _LOOT_ROWS]
+
+# What a Junkyard's scavenge() can turn up. Derived from _SCAVENGE_ROWS (not the full
+# LOOT_ITEMS list) so STOLEN_DATASHARD_ID -- matrix.py's own loot, unrelated to
+# scavenging -- can't turn up from a Junkyard, nor scavenged material from a Cache node.
+SCAVENGE_MATERIALS = tuple(row[0] for row in _SCAVENGE_ROWS)
 
 ITEMS_BY_ID = {item.id: item for items in (*CATALOG.values(), LOOT_ITEMS) for item in items}
 
@@ -784,6 +805,33 @@ def hospital_stay(character: "Character", rng: random.Random | None = None) -> s
     before = character.health
     character.adjust_health(roll + character.body)
     return f"A day in the ward: +{character.health - before} Health for {HOSPITAL_STAY_COST}eb."
+
+
+# A JUNKYARD (corpmap.LocationKind.JUNKYARD) is a rare, neutral-only spot with one
+# action: pick through the scrap with the scrapper who works it. Rolled against
+# Tinkering — an eye for what's actually repairable versus junk — at legwork's
+# NEARBY_DIFFICULTY (11), since it's the same "casing a place" tier of check.
+SCAVENGE_SKILL = "tinkering"
+SCAVENGE_DIFFICULTY = 11
+SCAVENGE_HOURS_COST = 4
+SCAVENGE_CRITICAL_FINDS = 2
+
+
+def scavenge(character: "Character", rng: random.Random | None = None) -> str:
+    """Pick through a Junkyard's scrap. A made check turns up one random entry from
+    SCAVENGE_MATERIALS; a critical turns up SCAVENGE_CRITICAL_FINDS distinct ones. A
+    miss costs nothing but the trip — the caller still spends the time either way,
+    same as a gig or a piece of legwork."""
+    rng = resolve_rng(rng)
+    roll = resolve_check(stat_value=skill_value(character, SCAVENGE_SKILL), difficulty=SCAVENGE_DIFFICULTY, rng=rng)
+    if not roll.result.passed:
+        return "Nothing but rust and rot."
+    count = SCAVENGE_CRITICAL_FINDS if roll.result is CheckResult.CRITICAL_SUCCESS else 1
+    found = rng.sample(SCAVENGE_MATERIALS, count)
+    for item_id in found:
+        character.inventory.append(InventoryItem(item_id, equipped=False))
+    names = ", ".join(ITEMS_BY_ID[item_id].name for item_id in found)
+    return f"You scavenge up: {names}."
 
 
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:

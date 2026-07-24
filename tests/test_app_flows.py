@@ -52,8 +52,8 @@ from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome
 from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
-from shadowguy.screens.shop_screens import HospitalScreen, ShopScreen
-from shadowguy.shops import HOSPITAL_STAY_COST
+from shadowguy.screens.shop_screens import HospitalScreen, JunkyardScreen, ShopScreen
+from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
 from textual.widgets import Collapsible, ListView
 
 
@@ -717,6 +717,38 @@ def test_hospital_stay_advances_one_day_and_skips_the_lodging_charge():
             assert app.character.health > hurt_health
             # Only the flat hospital fee was charged -- no separate lodging on top.
             assert app.character.cash == cash_before - HOSPITAL_STAY_COST
+
+    run(body())
+
+
+def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
+    """A Junkyard's one action costs SCAVENGE_HOURS_COST, not a full day like a hospital
+    stay -- and a runner with a sky-high Tinkering value is certain to clear the check
+    (opposing pool is a fixed handful of dice at SCAVENGE_DIFFICULTY), so the resulting
+    inventory gain is a real assertion, not a coin flip."""
+
+    class AlwaysSix(random.Random):
+        def randint(self, a, b):
+            return 6
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            app.rng = AlwaysSix()
+            app.character.intelligence = 20
+            hours_before = app.character.elapsed_hours
+
+            junkyard_location = Location(id="test_junkyard", name="Test Yard", kind=LocationKind.JUNKYARD)
+            app.push_screen(JunkyardScreen(junkyard_location))
+            await pilot.pause()
+            await pilot.click("#scavenge")
+            await pilot.pause()
+
+            assert app.character.elapsed_hours == hours_before + SCAVENGE_HOURS_COST
+            assert app.character.inventory
+            assert all(entry.item_id in SCAVENGE_MATERIALS for entry in app.character.inventory)
 
     run(body())
 
