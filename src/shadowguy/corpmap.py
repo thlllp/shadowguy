@@ -551,6 +551,9 @@ LOCATION_PREFIXES = [
     "Redline", "Verge", "Saint Lazarus", "Copperhead", "Mirage", "Low Tide",
     "Gantry", "Hollow Point", "Tin City", "Nightjar", "Sunken", "Vector",
     "Cinder", "Palisade", "Ashline", "Dead Man's",
+    "Greywire", "Split Lip", "Backdraft", "Rustline", "Cold Front", "Deadbolt",
+    "Riptide", "Foxfire", "Ninth Circuit", "Salt Line", "Chrome Row", "Widow's Walk",
+    "Last Call", "Old Pier",
 ]
 
 # Street handles for the people who run/haunt locations. Sampled distinct within one
