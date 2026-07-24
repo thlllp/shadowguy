@@ -380,12 +380,16 @@ def equipped_weapons(character: Character) -> list[Item]:
     return weapons or [UNARMED]
 
 
-def _combat_consumables(character: Character) -> list[tuple[int, Consumable]]:
+def combat_consumables(character: Character) -> list[tuple[int, Consumable]]:
     """The grenades, and only the grenades — see shops.COMBAT_ONLY_EFFECTS.
 
     Notably not health kits: healing mid-fight would make a fight the cheapest place
     to spend one, and health does not come back fast enough in this game for that to
     be anything but a grind.
+
+    Public (not underscore-private) because tactical.py's grenade-throw action reuses
+    it too — same reason resolve_hit is public: one list of "what's a grenade", two
+    fight surfaces.
     """
     return [
         (index, CONSUMABLES_BY_ID[consumable_id])
@@ -435,7 +439,7 @@ def available_actions(
             label=f"Throw {consumable.name}",
             consumable_index=index,
         )
-        for index, consumable in _combat_consumables(character)
+        for index, consumable in combat_consumables(character)
     )
     actions.append(Action(kind=ActionKind.FLEE, label="Break and run (Dodge)", skill="dodge"))
     return actions

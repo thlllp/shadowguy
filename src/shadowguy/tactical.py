@@ -26,13 +26,14 @@ from shadowguy.character import Character
 from shadowguy.checks import resolve_rng
 from shadowguy.combat import (
     Enemy,
+    combat_consumables,
     equipped_weapons,
     player_defense,
     player_soak,
     resolve_hit,
     smartlink_bonus,
 )
-from shadowguy.shops import Item
+from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
 
 Coord = tuple[int, int]  # (x, y)
@@ -219,6 +220,14 @@ ENEMY_SPEED = 4
 FULL_COVER = 4
 HALF_COVER = 2
 
+# A thrown grenade's reach and blast, both in chebyshev distance (see targets_for's use
+# of the same metric for weapon range). RADIUS=1 is a literal 3x3 square centered on the
+# target tile — every enemy within one step of where it lands, not just the one tile.
+# First-slice tuning, like the grenade catalog itself (shops.py's _CONSUMABLE_ROWS
+# comment) — not yet balance-simulated.
+GRENADE_RANGE = 5
+GRENADE_RADIUS = 1
+
 
 class Side(StrEnum):
     PLAYER = "player"
@@ -245,6 +254,10 @@ class Unit:
     speed: int
     enemy: Enemy | None = None
     health: int = 0
+    # Enemy-only, set by a thrown Webbing/Flash-family grenade (EffectKind.COMBAT_STUN):
+    # this unit sits out its next `stunned_rounds` enemy phases entirely — no move, no
+    # attack — same "a round they owe you" meaning as combat.Fighter.stunned_rounds.
+    stunned_rounds: int = 0
 
     @property
     def is_enemy(self) -> bool:
@@ -264,6 +277,14 @@ class TacticalState:
     log: list[str] = field(default_factory=list)
     moves_left: int = 0
     acted: bool = False
+    # Grenade tile-targeting, in progress between begin_grenade_aim and
+    # confirm_grenade_aim/cancel_grenade_aim. Non-None means the screen is in aim mode:
+    # arrow keys move this cursor instead of the player (tactical_screen.action_move).
+    # Neither field costs the turn's action on its own — only a resolved throw
+    # (throw_grenade, called by confirm_grenade_aim) sets `acted`, so backing out of an
+    # aim is free.
+    aim_cursor: Coord | None = None
+    pending_grenade_index: int | None = None
 
     @property
     def player(self) -> Unit:
@@ -404,6 +425,115 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
     _settle(state)
 
 
+# The two grenade effects a blast radius actually applies to. COMBAT_ESCAPE isn't aimed
+# at anyone (walking out isn't a target), so it's the one grenade throw_grenade resolves
+# with no tile at all — same three-way split as combat._throw, this is just the subset
+# that also needs a place to land first.
+_TARGETED_GRENADE_EFFECTS = frozenset({EffectKind.COMBAT_STUN, EffectKind.COMBAT_DAMAGE_ALL})
+
+
+def grenade_needs_target(consumable: Consumable) -> bool:
+    """Whether throwing this grenade means picking a tile first (begin_grenade_aim)
+    rather than resolving immediately. Only the two area effects are targeted; a smoke
+    grenade gets the runner out with nothing to aim at."""
+    return consumable.effect in _TARGETED_GRENADE_EFFECTS
+
+
+def legal_grenade_target(state: TacticalState, coord: Coord) -> bool:
+    """Whether `coord` is a tile the player could actually land a grenade on right now:
+    in bounds, within GRENADE_RANGE, and in sight — the same shape as targets_for's
+    range+LOS gate on a weapon, just against a tile instead of a unit."""
+    return (
+        state.grid.in_bounds(coord)
+        and chebyshev(state.player.coord, coord) <= GRENADE_RANGE
+        and has_line_of_sight(state.grid, state.player.coord, coord)
+    )
+
+
+def begin_grenade_aim(state: TacticalState, consumable_index: int) -> None:
+    """Enter tile-targeting mode for Character.consumables[consumable_index]: arrow keys
+    move state.aim_cursor instead of the player (tactical_screen.action_move) until
+    confirm_grenade_aim resolves the throw or cancel_grenade_aim backs out. Starts the
+    cursor on the player's own tile — always a legal target (range 0), a safe default
+    to nudge from. Doesn't touch Character.consumables or state.acted; only a resolved
+    throw spends either."""
+    if state.acted or state.is_over:
+        return
+    state.aim_cursor = state.player.coord
+    state.pending_grenade_index = consumable_index
+
+
+def move_aim_cursor(state: TacticalState, dx: int, dy: int) -> None:
+    """Nudge the aim cursor one cell, clamped to the grid. Bounds-only — unlike
+    legal_moves, the cursor isn't gated by range/LOS/occupancy while moving, only at
+    confirm (legal_grenade_target); a "you're out of range, back it up" cursor is more
+    useful mid-aim than one that refuses to go there at all."""
+    if state.aim_cursor is None:
+        return
+    x, y = state.aim_cursor
+    dest = (x + dx, y + dy)
+    if state.grid.in_bounds(dest):
+        state.aim_cursor = dest
+
+
+def cancel_grenade_aim(state: TacticalState) -> None:
+    """Back out of tile-targeting with nothing spent — see begin_grenade_aim."""
+    state.aim_cursor = None
+    state.pending_grenade_index = None
+
+
+def confirm_grenade_aim(state: TacticalState) -> bool:
+    """Resolve the pending grenade at the aim cursor. Returns False and leaves aim mode
+    running if the cursor isn't a legal_grenade_target right now, so the screen can
+    prompt the player to adjust rather than lose the throw to a bad tile."""
+    if state.aim_cursor is None or state.pending_grenade_index is None:
+        return False
+    if not legal_grenade_target(state, state.aim_cursor):
+        return False
+    index, target = state.pending_grenade_index, state.aim_cursor
+    state.aim_cursor = None
+    state.pending_grenade_index = None
+    throw_grenade(state, index, target)
+    return True
+
+
+def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | None = None) -> None:
+    """Resolve the player's one action as a grenade throw instead of an attack: pops
+    Character.consumables[consumable_index] and applies it exactly the way combat.py's
+    abstract fight does (see combat._throw), with one difference space adds — COMBAT_STUN
+    and COMBAT_DAMAGE_ALL land as a blast centered on `target`, hitting every enemy within
+    GRENADE_RADIUS of it (a 3x3 square) rather than everyone standing, while COMBAT_ESCAPE
+    stays positionless, same as the abstract fight, since walking out isn't aimed at
+    anyone. Call this directly (target=None) for an untargeted throw, or through
+    confirm_grenade_aim once a tile is picked, for the other two. Spends the action for
+    the turn, same as player_attack."""
+    if state.acted or state.is_over:
+        return
+    consumable = CONSUMABLES_BY_ID[state.character.consumables[consumable_index]]
+    if target is None and grenade_needs_target(consumable):
+        raise ValueError(f"{consumable.id}: needs a target tile (see begin_grenade_aim)")
+    state.acted = True
+    state.character.consumables.pop(consumable_index)
+    if consumable.effect is EffectKind.COMBAT_DAMAGE_ALL:
+        hit = [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+        state.log.append(f"{consumable.name} — {consumable.amount} to everything in the blast.")
+        for enemy in hit:
+            enemy.health = max(0, enemy.health - consumable.amount)
+        _settle(state)
+    elif consumable.effect is EffectKind.COMBAT_STUN:
+        hit = [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+        for enemy in hit:
+            enemy.stunned_rounds = consumable.amount
+        state.log.append(f"{consumable.name} — {len(hit)} pinned down for {consumable.amount}.")
+    elif consumable.effect is EffectKind.COMBAT_ESCAPE:
+        state.outcome = TacticalOutcome.ESCAPED
+        state.log.append(f"{consumable.name} — you slip out under cover.")
+    else:
+        # Same guard as combat._throw, from the other side: a new combat-only effect
+        # with no branch here would otherwise be popped and silently do nothing.
+        raise ValueError(f"consumable effect not handled in tactical combat: {consumable.effect}")
+
+
 def leave(state: TacticalState) -> bool:
     """Walk out — but only from an exit tile. Positional escape: getting to the door *is*
     the flee, so there's no roll and no parting shot; the risk was crossing the room to
@@ -442,6 +572,10 @@ def _enemy_phase(state: TacticalState, rng: random.Random) -> None:
     for enemy in state.enemies:
         if state.is_over:
             return
+        if enemy.stunned_rounds > 0:
+            enemy.stunned_rounds -= 1
+            state.log.append(f"{enemy.name} is still reeling.")
+            continue
         if not _can_hit_player(state, enemy):
             path = path_between(
                 state.grid, enemy.coord, state.player.coord, blocked=state.occupied(exclude=enemy)
@@ -500,6 +634,16 @@ def best_shot(state: TacticalState) -> tuple[Item, Unit] | None:
             if best is None or key < best[0]:
                 best = (key, weapon, target)
     return None if best is None else (best[1], best[2])
+
+
+def available_grenades(state: TacticalState) -> list[tuple[int, Consumable]]:
+    """The grenades throw_grenade is legal for right now: every combat-only consumable
+    the runner carries (combat.combat_consumables — the same set combat.py's abstract
+    fight offers), or none once the action for the turn is already spent. Same "fight
+    policy lives here, not the screen" reasoning as best_shot."""
+    if state.acted or state.is_over:
+        return []
+    return combat_consumables(state.character)
 
 
 # ---------------------------------------------------------------------------
