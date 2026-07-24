@@ -27,7 +27,7 @@ OWNER_TAGS = {
 # map without checking the 3-letter tag. Neutral ground gets no entry (and so no
 # override) — unclaimed is meant to look unclaimed, not tagged bright anything.
 # strict=True raises at import time if this list drifts out of sync with FACTIONS.
-_OWNER_COLOR_VALUES = ["red", "cyan", "green"]
+_OWNER_COLOR_VALUES = ["red", "cyan", "green", "yellow"]
 OWNER_COLORS = dict(zip((faction.id for faction in FACTIONS), _OWNER_COLOR_VALUES, strict=True))
 
 
@@ -41,6 +41,7 @@ class LocationKind(StrEnum):
     DATA = "data"
     LAB = "lab"
     DEPOT = "depot"
+    CYBER_CLINIC = "cyber_clinic"
     BAR = "bar"
     PAWN = "pawn"
     WEAPON_SHOP = "weapon_shop"
@@ -125,6 +126,7 @@ LOCATION_SKILL = {
     LocationKind.COMPUTER_STORE: "hack",
     LocationKind.HOSPITAL: "infer",
     LocationKind.REAL_ESTATE: "read_the_room",
+    LocationKind.CYBER_CLINIC: "infer",
 }
 if set(LOCATION_SKILL) != set(GENERATED_KINDS):
     raise ValueError("LOCATION_SKILL must have exactly one entry per generated LocationKind")
@@ -446,9 +448,9 @@ def render_ascii_map(
 
 # The grid is deliberately roomier than TERRITORY_COUNT: the leftover cells are
 # the holes that keep _grow_region's blob from degenerating into a full rectangle.
-GRID_COLS = 8
-GRID_ROWS = 6
-TERRITORY_COUNT = 38
+GRID_COLS = 11
+GRID_ROWS = 8
+TERRITORY_COUNT = 65
 TERRITORIES_PER_FACTION = 6
 
 # Every faction is handed exactly this multiset of values, so equal territory
@@ -496,6 +498,13 @@ DISTRICT_NAMES = [
     "Ember", "Solace", "Quarry", "Blackstack", "Neon", "Drydock",
     "Junction", "Marrow", "Halberd", "Verdant", "Slagworks", "Prospect",
     "Kingsway", "Ravine", "Tannery", "Cathode", "Bracken", "Silo",
+    "Underpass", "Wharf", "Millrace", "Chasm", "Vault", "Circuit",
+    "Static", "Undercroft", "Bastion", "Redwire", "Cinderfield", "Lockstep",
+    "Freeport", "Ashfall", "Crosscut", "Wellspring", "Backwater", "Fringeline",
+    "Outpost", "Nightmarket", "Rustbelt", "Corridor", "Threshold", "Deadline",
+    "Signal", "Causeway", "Greyline", "Stackyard", "Lowtide", "Highwater",
+    "Farrow", "Cordon", "Switchback", "Blacktide", "Coldwater", "Overpass",
+    "Trench",
 ]
 
 # A district holds a variable number of locations — roomier now there are more kinds to
@@ -519,6 +528,7 @@ LOCATION_KIND_FOR_SPECIALTY = {
     FactionSpecialty.WEAPONS: LocationKind.DEPOT,
     FactionSpecialty.HACKING: LocationKind.DATA,
     FactionSpecialty.PHARMA: LocationKind.LAB,
+    FactionSpecialty.CYBERNETICS: LocationKind.CYBER_CLINIC,
 }
 
 LOCATION_SUFFIXES = {
@@ -533,6 +543,7 @@ LOCATION_SUFFIXES = {
     LocationKind.COMPUTER_STORE: ["Computer Store", "Chip Shop", "Hardware Outlet", "Rig Emporium"],
     LocationKind.HOSPITAL: ["Hospital", "Trauma Center", "Emergency Room", "Med Center"],
     LocationKind.REAL_ESTATE: ["Realty", "Properties", "Holdings", "Estate Agency"],
+    LocationKind.CYBER_CLINIC: ["Augment Clinic", "Chrome Den", "Grafting Parlor", "Wetware Bazaar"],
 }
 
 LOCATION_PREFIXES = [
@@ -540,6 +551,9 @@ LOCATION_PREFIXES = [
     "Redline", "Verge", "Saint Lazarus", "Copperhead", "Mirage", "Low Tide",
     "Gantry", "Hollow Point", "Tin City", "Nightjar", "Sunken", "Vector",
     "Cinder", "Palisade", "Ashline", "Dead Man's",
+    "Greywire", "Split Lip", "Backdraft", "Rustline", "Cold Front", "Deadbolt",
+    "Riptide", "Foxfire", "Ninth Circuit", "Salt Line", "Chrome Row", "Widow's Walk",
+    "Last Call", "Old Pier",
 ]
 
 # Street handles for the people who run/haunt locations. Sampled distinct within one
@@ -567,6 +581,7 @@ LOCATION_ROLES: dict[LocationKind, tuple[str, ...]] = {
     LocationKind.COMPUTER_STORE: ("techie",),
     LocationKind.HOSPITAL: ("trauma surgeon", "triage nurse", "orderly"),
     LocationKind.REAL_ESTATE: ("realtor", "property broker", "landlord"),
+    LocationKind.CYBER_CLINIC: ("augmetics doc", "chrome dealer", "grafter"),
 }
 
 # The most locations of one kind a map can want: the faction whose specialty it is

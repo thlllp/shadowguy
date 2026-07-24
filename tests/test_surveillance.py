@@ -18,7 +18,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.surveillance import MAX_SIGHTINGS_LOG, resolve_surveillance_day
 
-IRONCLAD, GHOSTWIRE, MERIDIAN = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
 
 
 class ForcedChance(random.Random):

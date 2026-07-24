@@ -17,7 +17,7 @@ from shadowguy.factions import FACTIONS
 from shadowguy.rivals import EXPANSION_CHANCE, resolve_rival_day
 from shadowguy.runners import RIVAL_RUNNERS
 
-IRONCLAD, GHOSTWIRE, MERIDIAN = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
 
 
 class ForcedChance(random.Random):

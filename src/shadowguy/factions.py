@@ -8,6 +8,7 @@ class FactionSpecialty(StrEnum):
     WEAPONS = "weapons"
     HACKING = "hacking"
     PHARMA = "pharma"
+    CYBERNETICS = "cybernetics"
 
 
 @dataclass
@@ -36,6 +37,12 @@ FACTIONS = [
         name="Meridian Biochem",
         specialty=FactionSpecialty.PHARMA,
         description="Pharmaceutical conglomerate pushing combat stims and black-clinic wetware.",
+    ),
+    Faction(
+        id="faction_prometheus",
+        name="Prometheus Cybernetics",
+        specialty=FactionSpecialty.CYBERNETICS,
+        description="Augmentation conglomerate grafting grey-market chrome into anyone who can pay.",
     ),
 ]
 
