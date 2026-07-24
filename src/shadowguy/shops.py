@@ -518,6 +518,19 @@ _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, 
         ("grenade_smoke", "Smoke Grenade", 100, EffectKind.COMBAT_ESCAPE, 0, None),
         ("grenade_flash", "Flash Grenade", 120, EffectKind.COMBAT_STUN, 1, None),
         ("grenade_frag", "Fragmentation Grenade", 200, EffectKind.COMBAT_DAMAGE_ALL, 5, None),
+        # Tier 2 — requires standing 2 with the gunsmith to browse the back room.
+        # A stronger COMBAT_STUN than Flash Grenade: on the tactical grid (see
+        # tactical.throw_grenade) that's a longer-stunning blast in the same
+        # GRENADE_RADIUS 3x3 square any grenade lands in, which is what makes
+        # "impedes mobility in a 3x3 radius" literal there. Abstract combat has no
+        # grid at all, so there it's just a stronger version of Flash Grenade's stun.
+        ("grenade_webbing", "Webbing Grenade", 240, EffectKind.COMBAT_STUN, 2, None, 2),
+        # EMP Grenade / Mk2 — a stronger COMBAT_DAMAGE_ALL pair above Fragmentation
+        # Grenade, same reasoning as Webbing above: no enemy carries a
+        # cyberware/robotic flag today, so there's nothing for "vs electronics" to
+        # hook into beyond a bigger blast.
+        ("grenade_emp", "EMP Grenade", 350, EffectKind.COMBAT_DAMAGE_ALL, 7, None, 2),
+        ("grenade_emp_mk2", "EMP Grenade Mk2", 550, EffectKind.COMBAT_DAMAGE_ALL, 9, None, 3),
     ],
 }
 
