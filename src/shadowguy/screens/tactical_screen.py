@@ -1,22 +1,32 @@
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Static
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Header, ListItem, ListView, Static
 
+from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
 from shadowguy.tactical import (
+    GRENADE_RADIUS,
     Side,
     TacticalOutcome,
     Tile,
+    available_grenades,
+    begin_grenade_aim,
     best_shot,
+    cancel_grenade_aim,
+    confirm_grenade_aim,
     end_turn,
+    grenade_needs_target,
     leave,
+    legal_grenade_target,
+    move_aim_cursor,
     move_player,
     player_attack,
     start_tactical,
+    throw_grenade,
 )
 
-from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text, _menu_css
 
 _TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _TAC_END_TEXT = {
@@ -27,6 +37,40 @@ _TAC_END_TEXT = {
 TACTICAL_LOG_LINES = 6
 
 
+class GrenadePickScreen(ModalScreen):
+    """Which carried grenade to throw, when there's more than one kind — the tactical
+    counterpart of GangTollScreen's pay/refuse pick (corp_map_screen.py), same
+    dismiss-a-value shape. Dismisses the chosen Character.consumables index, or None
+    if cancelled. Skipped entirely when the runner carries exactly one kind (see
+    TacticalScreen.action_throw_grenade) — no need to ask when there's nothing to ask."""
+
+    BINDINGS = [("escape", "cancel", "Back")]
+    CSS = _menu_css("GrenadePickScreen", "grenade_dialog")
+
+    def __init__(self, grenades: list[tuple[int, Consumable]]) -> None:
+        super().__init__()
+        self._grenades = grenades
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Throw which grenade?"),
+            ListView(
+                *(
+                    ListItem(Static(consumable.name), id=f"grenade_{i}")
+                    for i, (_, consumable) in enumerate(self._grenades)
+                ),
+            ),
+            id="grenade_dialog",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        picked = int(event.item.id.removeprefix("grenade_"))
+        self.dismiss(self._grenades[picked][0])
+
+
 class TacticalScreen(Screen):
     BINDINGS = [
         ("up", "move('up')", "Move"),
@@ -34,9 +78,11 @@ class TacticalScreen(Screen):
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
         ("f", "fire", "Attack"),
+        ("g", "throw_grenade", "Grenade"),
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
-        ("enter", "continue", "Continue"),
+        ("enter", "continue", "Continue / confirm throw"),
+        ("escape", "cancel_aim", "Cancel throw"),
         *MENU_QUIT_BINDINGS,
     ]
 
@@ -68,6 +114,7 @@ class TacticalScreen(Screen):
         yield Horizontal(
             Static(id="tac_box_move", classes="tac_box"),
             Static(id="tac_box_attack", classes="tac_box"),
+            Static(id="tac_box_grenade", classes="tac_box"),
             Static(id="tac_box_end", classes="tac_box"),
             Static(id="tac_box_leave", classes="tac_box"),
             Static(id="tac_box_enemies", classes="tac_box"),
@@ -91,12 +138,16 @@ class TacticalScreen(Screen):
         if self.state.is_over:
             return
         dx, dy = self.DIRECTIONS[direction]
+        if self.state.aim_cursor is not None:
+            move_aim_cursor(self.state, dx, dy)
+            self._refresh()
+            return
         px, py = self.state.player.coord
         move_player(self.state, (px + dx, py + dy))
         self._refresh()
 
     def action_fire(self) -> None:
-        if self.state.is_over:
+        if self.state.is_over or self.state.aim_cursor is not None:
             return
         shot = best_shot(self.state)
         if shot is None:
@@ -108,22 +159,62 @@ class TacticalScreen(Screen):
         player_attack(self.state, target, weapon, self.app.rng)
         self._refresh()
 
+    def action_throw_grenade(self) -> None:
+        if self.state.is_over or self.state.aim_cursor is not None:
+            return
+        grenades = available_grenades(self.state)
+        if not grenades:
+            self.notify(
+                "You've already acted this turn." if self.state.acted else "No grenades carried."
+            )
+            return
+        if len(grenades) == 1:
+            self._start_or_throw(*grenades[0])
+            self._refresh()
+            return
+        self.app.push_screen(GrenadePickScreen(grenades), self._on_grenade_picked)
+
+    def _on_grenade_picked(self, consumable_index: int | None) -> None:
+        if consumable_index is not None:
+            consumable = CONSUMABLES_BY_ID[self.app.character.consumables[consumable_index]]
+            self._start_or_throw(consumable_index, consumable)
+        self._refresh()
+
+    def _start_or_throw(self, index: int, consumable: Consumable) -> None:
+        """Either resolve the throw immediately (an untargeted effect, e.g. a smoke
+        grenade — see grenade_needs_target) or enter tile-aiming mode for one that
+        needs a landing spot. The caller refreshes after."""
+        if grenade_needs_target(consumable):
+            begin_grenade_aim(self.state, index)
+        else:
+            throw_grenade(self.state, index)
+
     def action_end_turn(self) -> None:
-        if self.state.is_over:
+        if self.state.is_over or self.state.aim_cursor is not None:
             return
         end_turn(self.state, self.app.rng)
         self._refresh()
 
     def action_leave(self) -> None:
-        if self.state.is_over:
+        if self.state.is_over or self.state.aim_cursor is not None:
             return
         if not leave(self.state):
             self.notify("You're not standing on an exit.")
         self._refresh()
 
     def action_continue(self) -> None:
+        if self.state.aim_cursor is not None:
+            if not confirm_grenade_aim(self.state):
+                self.notify("Out of range or blocked — pick another tile.")
+            self._refresh()
+            return
         if self.state.is_over:
             self.dismiss(self.state.outcome)
+
+    def action_cancel_aim(self) -> None:
+        if self.state.aim_cursor is not None:
+            cancel_grenade_aim(self.state)
+            self._refresh()
 
     def _map_text(self) -> Text:
         state = self.state
@@ -142,12 +233,35 @@ class TacticalScreen(Screen):
                 glyphs[uy][ux], styles[(uy, ux)] = "E", "bold red"
             else:
                 glyphs[uy][ux], styles[(uy, ux)] = "x", "grey37"
+
+        # While aiming a grenade: shade the 3x3 blast around the cursor and mark the
+        # cursor itself, in a color that says whether it's a legal_grenade_target right
+        # now (green) or not (red) -- so the player sees the throw's actual reach and
+        # radius before committing, not just where their cursor happens to be sitting.
+        cursor: tuple[int, int] | None = None
+        cursor_style = ""
+        blast: frozenset[tuple[int, int]] = frozenset()
+        if state.aim_cursor is not None:
+            cx, cy = state.aim_cursor
+            cursor = (cy, cx)
+            blast = frozenset(
+                (by, bx)
+                for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
+                for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
+            )
+            cursor_style = "bold green underline" if legal_grenade_target(state, state.aim_cursor) else "bold red underline"
+
         text = Text()
         for y in range(grid.height):
             for x in range(grid.width):
                 ch = glyphs[y][x]
                 default = "grey30" if ch in ("#", "%") else "grey50"
-                text.append(ch, style=styles.get((y, x), default))
+                style = styles.get((y, x), default)
+                if (y, x) == cursor:
+                    style = cursor_style
+                elif (y, x) in blast:
+                    style = f"{style} on grey15"
+                text.append(ch, style=style)
             text.append("\n")
         return text
 
@@ -164,15 +278,24 @@ class TacticalScreen(Screen):
                 f"{_TAC_END_TEXT[state.outcome]}  —  press Enter to continue."
             )
             return
-        self.query_one("#tac_end", Static).update("")
         status.display = True
 
-        on_exit = state.player.coord in state.exits
-        attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
-        self.query_one("#tac_box_move", Static).update(
-            _boxed_text("Move (arrows)", f"{state.moves_left}/{state.player.speed} left")
+        aiming = state.aim_cursor is not None
+        self.query_one("#tac_end", Static).update(
+            "Aiming — arrows move the target, Enter to throw, Esc to cancel." if aiming else ""
         )
+
+        on_exit = state.player.coord in state.exits
+        move_detail = "aiming target" if aiming else f"{state.moves_left}/{state.player.speed} left"
+        attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
+        grenades = available_grenades(state)
+        if aiming:
+            grenade_detail = "aiming — enter/esc"
+        else:
+            grenade_detail = "used" if state.acted else (f"{len(grenades)} ready" if grenades else "none carried")
+        self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows)", move_detail))
         self.query_one("#tac_box_attack", Static).update(_boxed_text("Attack (f)", attack_detail))
+        self.query_one("#tac_box_grenade", Static).update(_boxed_text("Grenade (g)", grenade_detail))
         self.query_one("#tac_box_end", Static).update(_boxed_text("End turn (e)", "advance the round"))
         self.query_one("#tac_box_leave", Static).update(
             _boxed_text("Leave (l)", "on exit" if on_exit else "not here")
