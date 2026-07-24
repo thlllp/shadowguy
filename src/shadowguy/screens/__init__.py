@@ -4,7 +4,7 @@ from rich.text import Text
 from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
-from shadowguy.character import FATIGUE_STAT_PENALTY_CAP, MAX_SKILL_RANK, Character
+from shadowguy.character import MAX_SKILL_RANK, Character
 from shadowguy.factions import FACTIONS
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
@@ -79,11 +79,7 @@ class CharacterSheet(Static):
             ITEMS_BY_ID[entry.item_id].name if entry.equipped else f"{ITEMS_BY_ID[entry.item_id].name} (stowed)"
             for entry in c.inventory
         ) or "none"
-        fatigue = (
-            "Rested"
-            if c.fatigue == 0
-            else f"Fatigued: {c.fatigue} (-{min(FATIGUE_STAT_PENALTY_CAP, c.fatigue)} to stats)"
-        )
+        fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
         return (
             f"{c.name}\n"
             f"Day {c.day}, {c.hour_of_day:02d}:00   Health: {c.health}/{c.max_health}   {fatigue}\n"

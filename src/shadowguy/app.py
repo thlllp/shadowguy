@@ -86,6 +86,13 @@ class ShadowguyApp(App):
         active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
         return 0 if active_here else lodging_cost(here)
 
+    def rest_label(self) -> str:
+        """The "Rest" menu item's text for MainMenu/CorpScreen, previewing rest_cost()."""
+        cost = self.rest_cost()
+        if not cost:
+            return f"Rest ({REST_HOURS_COST}h)"
+        return f"Rest ({REST_HOURS_COST}h, {cost}eb lodging)"
+
     def rest(self) -> None:
         """Shared "Rest" action wiring for MainMenu and CorpScreen. Spends exactly
         REST_HOURS_COST hours, wherever the runner currently is — same lodging pricing
@@ -104,8 +111,7 @@ class ShadowguyApp(App):
             here = self.corp_map.territories[character.location_id]
             self.notify(f"Paid {paid}eb for lodging in {here.name}.")
         self.spend_time(REST_HOURS_COST)
-        character.last_rest_hour = character.elapsed_hours
-        character.fatigue //= 2
+        character.mark_rested()
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that used to fire from a deliberate "End the day" click —

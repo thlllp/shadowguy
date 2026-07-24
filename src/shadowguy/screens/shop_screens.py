@@ -440,8 +440,7 @@ class HospitalScreen(BackScreen):
         self.app.spend_time(HOURS_PER_DAY, skip_night_effects=True)
         # A day in a hospital bed is still a night's sleep — counts as rest the same
         # as app.rest() (halves fatigue, doesn't clear it).
-        character.last_rest_hour = character.elapsed_hours
-        character.fatigue //= 2
+        character.mark_rested()
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()

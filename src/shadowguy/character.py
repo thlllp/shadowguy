@@ -466,6 +466,19 @@ class Character:
         ]
         self._discharge_orphan_crew()
 
+    @property
+    def fatigue_penalty(self) -> int:
+        """The felt penalty from fatigue -- capped, unlike the raw counter itself
+        (see `fatigue`'s field comment). The one place this clamp is computed;
+        `stat()` and `screens.CharacterSheet` both read it rather than re-deriving it."""
+        return min(FATIGUE_STAT_PENALTY_CAP, self.fatigue)
+
+    def mark_rested(self) -> None:
+        """Record a completed rest -- called by app.rest() and a hospital stay alike.
+        Halves fatigue rather than clearing it (see `fatigue`'s field comment)."""
+        self.last_rest_hour = self.elapsed_hours
+        self.fatigue //= 2
+
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:
             raise ValueError(f"unknown stat: {name!r}")
@@ -474,5 +487,5 @@ class Character:
             value += equipped_bonus(self.inventory, name)
             value += installed_bonus(self.installed_cyberware, name)
             value += self.temp_bonuses.get(name, 0)
-            value -= min(FATIGUE_STAT_PENALTY_CAP, self.fatigue)
+            value -= self.fatigue_penalty
         return value

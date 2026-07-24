@@ -324,18 +324,24 @@ def test_fatigue_growth_compounds():
     assert increments[-1] > increments[0]
 
 
-def test_rest_halves_fatigue_instead_of_clearing_it():
-    """A burnout sticks a little: resting only halves the accumulated total, not a
-    full reset -- see app.rest()/HospitalScreen, which both do this directly since
-    Character has no rest() of its own (resting needs corp_map for lodging cost)."""
+def test_mark_rested_halves_fatigue_instead_of_clearing_it():
+    """A burnout sticks a little: mark_rested() (called by app.rest() and a hospital
+    stay alike) only halves the accumulated total, not a full reset."""
     c = Character(name="t")
     c.fatigue = 7
-    c.fatigue //= 2
+    c.mark_rested()
     assert c.fatigue == 3
-    c.fatigue //= 2
+    c.mark_rested()
     assert c.fatigue == 1
-    c.fatigue //= 2
+    c.mark_rested()
     assert c.fatigue == 0
+
+
+def test_mark_rested_resets_last_rest_hour():
+    c = Character(name="t")
+    c.elapsed_hours = 40
+    c.mark_rested()
+    assert c.last_rest_hour == 40
 
 
 def test_on_crew_hire_indefinite_and_for_job():
