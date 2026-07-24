@@ -215,6 +215,18 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             _GigApproach("deception", "Stage the place to lie", "Fresh paint over the damp and they never look twice.", "The buyer spots the cover-up and bolts."),
         ),
     ),
+    LocationKind.CYBER_CLINIC: _GigTemplate(
+        titles=("Off-Label Graft", "Rejection Watch"),
+        prompts=(
+            "{who}, the {role} at {place}, needs a botched install fixed before the client wakes up.",
+            "A shipment of grey-market chrome came into {place} hot, and {who} needs it checked before it's grafted into anyone.",
+        ),
+        approaches=(
+            _GigApproach("infer", "Read the diagnostics", "The rig's telling you exactly what's wrong with it.", "The readout lies to you and you guess wrong."),
+            _GigApproach("tinkering", "Rework the install by hand", "Steady hands, clean seat, done.", "You nick a nerve line and the client feels it."),
+            _GigApproach("resist_disease", "Ride out the rejection yourself", "Your body burns through it and {who} pays for the test.", "You spend the next day sweating it out."),
+        ),
+    ),
 }
 
 if set(_GIG_TEMPLATES) != set(GENERATED_KINDS):

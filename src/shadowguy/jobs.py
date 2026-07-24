@@ -1063,6 +1063,7 @@ LEGWORK_APPROACH_TEXT = {
     LocationKind.COMPUTER_STORE: "Sift the sales records at {name}",
     LocationKind.HOSPITAL: "Pull the admissions log at {name}",
     LocationKind.REAL_ESTATE: "Pose as a buyer at {name}",
+    LocationKind.CYBER_CLINIC: "Pose as a client at {name}",
 }
 if set(LEGWORK_APPROACH_TEXT) != set(GENERATED_KINDS):
     raise ValueError("LEGWORK_APPROACH_TEXT must have exactly one entry per generated LocationKind")

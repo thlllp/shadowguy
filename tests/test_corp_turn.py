@@ -72,7 +72,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 
-IRONCLAD, GHOSTWIRE, MERIDIAN = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, PROMETHEUS = (f.id for f in FACTIONS)
 
 SEEDS = range(150)
 

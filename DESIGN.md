@@ -394,19 +394,19 @@ The other half of Rival AI: once the player takes over a Faction, they get the s
 
 ## Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
-The board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (38) nodes on an 8×6 (`GRID_COLS`×`GRID_ROWS`) grid, one contiguous blob, wired by a random spanning tree (always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops. The grid is deliberately larger than `TERRITORY_COUNT` — leftover cells are the holes that stop the blob becoming a solid rectangle.
+The board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (65) nodes on an 11×8 (`GRID_COLS`×`GRID_ROWS`) grid, one contiguous blob, wired by a random spanning tree (always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops. The grid is deliberately larger than `TERRITORY_COUNT` — leftover cells are the holes that stop the blob becoming a solid rectangle.
 
-The three factions: Ironclad Dynamics (weapons), Ghostwire Collective (hacking), Meridian Biochem (pharma).
+The four factions: Ironclad Dynamics (weapons), Ghostwire Collective (hacking), Meridian Biochem (pharma), Prometheus Cybernetics (cybernetics).
 
 **The runner owns nothing and starts nowhere.** `_player_start` picks an unclaimed rim node (`_on_grid_edge`) — no `"player"` owner exists on the map; `@` marks presence, not ownership. `_grow_blocs` reserves the start cell (no faction seeds/expands onto it), falling through to the neutral branch for value and modifiers like any open district. (The runner does get an `APARTMENT` location there — a place, not a holding.)
 
 The rim start demands `MIN_START_DEGREE` (2) connections — over 2000 seeds, always neutral/rim/degree 2–3.
 
-At 38 nodes: 18 corp (`TERRITORIES_PER_FACTION` 6×3) + 20 unclaimed (one = runner start). `FACTION_VALUE_SPREAD` (3,3,2,2,1,1) must match `TERRITORIES_PER_FACTION` in length — that's what makes fairness free.
+At 65 nodes: 24 corp (`TERRITORIES_PER_FACTION` 6×4) + 41 unclaimed (one = runner start). `FACTION_VALUE_SPREAD` (3,3,2,2,1,1) must match `TERRITORIES_PER_FACTION` in length — that's what makes fairness free.
 
 **The tuning constants guard each other at import time**: raises if `TERRITORY_COUNT` outgrows the grid or `DISTRICT_NAMES`, if `FACTION_VALUE_SPREAD`/`TERRITORIES_PER_FACTION` drift, or if the name pool can't cover `MAX_SAME_KIND_LOCATIONS`. Only the faction-count guard depends on the caller (stays in `generate_corp_map`). The name-pool guard is load-bearing: `_make_locations` retries an unbounded `while True` on a collision — an exhausted pool **hangs generation instead of raising**, so grow name pools alongside `TERRITORY_COUNT`.
 
-Faction starts are fair **by construction, not by search**: one contiguous bloc per faction races outward from random seeds, then every bloc gets the same value multiset — can't come out unbalanced. A boxed-in bloc reseeds/retries (~29% of maps need at least one retry, never more than four). Value is assigned *after* ownership — don't invert that order.
+Faction starts are fair **by construction, not by search**: one contiguous bloc per faction races outward from random seeds, then every bloc gets the same value multiset — can't come out unbalanced. A boxed-in bloc reseeds/retries (~27% of maps need at least one retry, seen up to five). Value is assigned *after* ownership — don't invert that order.
 
 District names must be single words (id = lowercased name, used in Textual widget ids).
 
@@ -424,9 +424,9 @@ Each Territory carries `modifiers`: Security/Surveillance/Unrest/Development/Res
 
 Consequences of the profiles: no district ever at Unrest 3–4 (held 0–2, neutral exactly 5); Security/Surveillance/Development never reach `MODIFIER_MAX` (best corp district: value 3 + 1 jitter = 4). To make 5 reachable, raise `FACTION_VALUE_SPREAD`'s top rather than special-case the modifier. Per-faction modifier totals aren't equal by construction (unlike value) — a live balance question now that Development prices property. Remaining unread hooks: Security→job difficulty, Surveillance→legwork difficulty, Unrest→flipping ownership, Restricted→market price/availability.
 
-**`CorpMapScreen`'s row budget is exact at 80×24** — `#modifiers` renders its five levers as two lines (bare `n/MODIFIER_MAX` scores) rather than a row each, no vertical padding anywhere, no bar gauge — every row the panels take is a row of the (11-line) board the player can't see. Traps: a wrapping row silently doubles panel height and **`Static.content` won't catch it** (compare `content_size.height`; `#territory_info`'s Locations line does wrap at 80 cols); always drive the real screen at `size=(80, 24)` and compare `#map_scroll`'s `content_size.height` to the map's line count, not panels in isolation.
+**`CorpMapScreen`'s row budget no longer fits 80×24** — at `TERRITORY_COUNT` 65 the board itself is 15 lines tall (was 11 at 38 nodes), taller than `#map_scroll`'s ~12-row share of an 80×24 screen once `#territory_info`/`#modifiers` take their rows, so the map now needs a few rows of *vertical* scroll too, not just horizontal. `#modifiers` renders its five levers as two lines (bare `n/MODIFIER_MAX` scores) rather than a row each, no vertical padding anywhere, no bar gauge. Traps: a wrapping row silently doubles panel height and **`Static.content` won't catch it** (compare `content_size.height`; `#territory_info`'s Locations line does wrap at 80 cols); always drive the real screen at `size=(80, 24)` and compare `#map_scroll`'s `content_size.height` to the map's line count, not panels in isolation.
 
-`render_ascii_map` returns a `RenderedMap` (text + per-label `NodeSpan` with line/column/absolute offsets) for mouse hit-testing/highlighting — kept ASCII (not per-node widgets) so connectors survive. At 38 nodes it renders 128–162 columns wide (mean ~151), living in a horizontally-scrollable container (horizontal scroll expected, vertical is the thing to avoid). `_refresh` only re-renders on cursor/runner move; hover just restyles the cached `RenderedMap`.
+`render_ascii_map` returns a `RenderedMap` (text + per-label `NodeSpan` with line/column/absolute offsets) for mouse hit-testing/highlighting — kept ASCII (not per-node widgets) so connectors survive. At 65 nodes it renders 196–253 columns wide (mean ~238) and a constant 15 lines tall, living in a scrollable container (horizontal scroll always expected; vertical scroll is now also routine, unlike at the old 38-node size). `_refresh` only re-renders on cursor/runner move; hover just restyles the cached `RenderedMap`.
 
 Known quirk: the spanning tree + extra edges leaves plenty of degree-1 dead ends elsewhere (fine — only the *start* node is guaranteed an out, since that's the one the time budget can't recover from).
 
