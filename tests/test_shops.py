@@ -1,14 +1,20 @@
 """Tests for shops.py: standing-scaled pricing, slot capacity, buy/sell/equip flows."""
 
+import random
 
 from shadowguy.character import Character
+from shadowguy.checks import CRITICAL_MARGIN, pool_for_difficulty
 from shadowguy.shops import (
     CATALOG,
     ITEMS_BY_ID,
     PAWN_SELL_FRACTION,
     PROGRAMS_BY_ID,
+    SCAVENGE_CRITICAL_FINDS,
+    SCAVENGE_DIFFICULTY,
+    SCAVENGE_MATERIALS,
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
+    STOLEN_DATASHARD_ID,
     InventoryItem,
     Program,
     Slot,
@@ -22,6 +28,7 @@ from shadowguy.shops import (
     free_program_slots,
     install_program,
     installed_programs_for,
+    scavenge,
     sell_item,
     sell_price,
     slot_usage,
@@ -371,3 +378,59 @@ def test_bonus_text_flags_a_smartlinked_weapon():
 
 def test_bonus_text_omits_smartlinked_for_an_unlinked_weapon():
     assert "smartlinked" not in bonus_text(ITEMS_BY_ID["combat_knife"])
+
+
+# --- scavenge() ---
+
+
+def _character_with_tinkering_value(value: int) -> Character:
+    """A fresh Character with skill_value("tinkering") forced to an exact value, by
+    zeroing its rank and setting the tied stat (intelligence) directly -- same trick
+    as test_security.py's _character_with_skill_value."""
+    character = Character(name="t")
+    character.skill_ranks["tinkering"] = 0
+    character.intelligence = value
+    return character
+
+
+class AlwaysSix(random.Random):
+    def randint(self, a, b):
+        return 6
+
+
+class AlwaysOne(random.Random):
+    def randint(self, a, b):
+        return 1
+
+
+def test_scavenge_on_failure_adds_nothing_to_inventory():
+    character = _character_with_tinkering_value(0)
+    message = scavenge(character, rng=AlwaysOne())
+    assert character.inventory == []
+    assert "rust" in message.lower()
+
+
+def test_scavenge_on_success_adds_exactly_one_material():
+    # margin 1 (below CRITICAL_MARGIN) with AlwaysSix (every die a success on both
+    # sides) gives a plain, non-critical success.
+    opposing_pool = pool_for_difficulty(SCAVENGE_DIFFICULTY)
+    character = _character_with_tinkering_value(opposing_pool + 1)
+    message = scavenge(character, rng=AlwaysSix())
+    assert len(character.inventory) == 1
+    assert character.inventory[0].item_id in SCAVENGE_MATERIALS
+    assert character.inventory[0].equipped is False
+    assert message != "Nothing but rust and rot."
+
+
+def test_scavenge_on_critical_success_adds_distinct_materials():
+    opposing_pool = pool_for_difficulty(SCAVENGE_DIFFICULTY)
+    character = _character_with_tinkering_value(opposing_pool + CRITICAL_MARGIN)
+    scavenge(character, rng=AlwaysSix())
+    found = [entry.item_id for entry in character.inventory]
+    assert len(found) == SCAVENGE_CRITICAL_FINDS
+    assert len(set(found)) == SCAVENGE_CRITICAL_FINDS
+    assert all(item_id in SCAVENGE_MATERIALS for item_id in found)
+
+
+def test_scavenge_never_grants_the_matrix_only_datashard():
+    assert STOLEN_DATASHARD_ID not in SCAVENGE_MATERIALS

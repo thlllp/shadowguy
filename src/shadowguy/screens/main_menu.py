@@ -33,6 +33,7 @@ from .shop_screens import (
     CorpHQScreen,
     FixerOffersScreen,
     HospitalScreen,
+    JunkyardScreen,
     RealEstateScreen,
     SafehouseScreen,
     ShopScreen,
@@ -311,6 +312,8 @@ class MainMenu(PanelNav, Screen):
                 self.app.push_screen(ShopScreen(location))
             elif location.kind == LocationKind.HOSPITAL:
                 self.app.push_screen(HospitalScreen(location))
+            elif location.kind == LocationKind.JUNKYARD:
+                self.app.push_screen(JunkyardScreen(location))
             elif location.kind == LocationKind.REAL_ESTATE:
                 self.app.push_screen(RealEstateScreen(location))
             elif location.kind == LocationKind.CORP_HQ:

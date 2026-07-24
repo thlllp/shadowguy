@@ -15,12 +15,14 @@ from shadowguy.corpmap import (
     FACTION_VALUE_SPREAD,
     GANG_TURF_MAX,
     GANG_TURF_MIN,
+    JUNKYARD_ROLE,
     MIN_START_DEGREE,
     MODIFIER_MAX,
     STARTING_ACADEMY_TIER,
     STARTING_RESEARCH_TIER,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
+    TILES_PER_JUNKYARD,
     LocationKind,
     Territory,
     TerritoryModifier,
@@ -156,6 +158,48 @@ def test_every_gang_den_is_staffed_with_both_ranks(seed):
         assert {member.role for member in den.characters} == set(GANG_RANKS)
         names = {member.name for member in den.characters}
         assert len(names) == len(den.characters)
+
+
+def _junkyards(corp_map):
+    return [
+        (territory, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.JUNKYARD
+    ]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_junkyards_are_neutral_and_never_the_start(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for territory, _location in _junkyards(corp_map):
+        assert territory.owner == "neutral"
+        assert territory.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_junkyard_count_matches_neutral_density(seed):
+    """TILES_PER_JUNKYARD is a ratio of *unclaimed* districts, not TERRITORY_COUNT --
+    checked against the map's own neutral, non-start territory count rather than a
+    hardcoded number, so this stays correct if TERRITORY_COUNT/TERRITORIES_PER_FACTION
+    or the faction count ever changes."""
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    neutral_count = sum(
+        1
+        for t in corp_map.territories.values()
+        if t.owner == "neutral" and t.id != corp_map.player_start_id
+    )
+    expected = max(1, round(neutral_count / TILES_PER_JUNKYARD))
+    assert len(_junkyards(corp_map)) == expected
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_junkyard_has_exactly_one_scrapper(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    junkyards = _junkyards(corp_map)
+    assert junkyards
+    for _territory, location in junkyards:
+        assert [c.role for c in location.characters] == [JUNKYARD_ROLE]
 
 
 @pytest.mark.parametrize("seed", SEEDS)

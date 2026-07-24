@@ -458,6 +458,20 @@ The criminal-underworld counterpart to Factions, on the opposite premise: **a ga
 
 **Gang standing & turf encounters (`shadowguy/encounters.py`, `Character.gang_standing`, `CorpMapScreen`).** **Nothing moves `gang_standing` negative yet** (mechanism ahead of driver). When negative, `encounters.py` resolves entry: `action_travel`, after moving onto gang turf, calls `roll_gang_encounter` (flat `GANG_ENCOUNTER_CHANCE` 0.25). A hit at standing **-1…-4** offers an escalating toll (`toll_for` = `TOLL_BASE` 40 + `TOLL_STEP` 30 × depth) via `GangTollScreen` (pay, refuse, or fail into a fight); standing **-5 or worse** (`ATTACK_STANDING`) skips the toll and attacks outright. The fight is `gang_attack`: street-tier (`ENCOUNTER_ENEMY_TIER` 0) `Encounter` with `Drop.ENEMY`, via ordinary `CombatScreen` with a map-side `_on_gang_combat_end` mirroring `SceneScreen`'s death/knockout handling. **Not balance-simulated.**
 
+## Junkyards (`shadowguy/corpmap.py`, `shadowguy/shops.py`, `screens/shop_screens.py`'s `JunkyardScreen`)
+
+A rare, neutral-only place with one action: scavenge it.
+
+**Placement mirrors the hospital's out-of-band injection, but scoped to unclaimed ground only.** `JUNKYARD` sits in `UNROLLED_KINDS`/out of `GENERATED_KINDS` — no `LOCATION_SKILL`/`LOCATION_ROLES`/legwork/gig entry, so it's never a job target and `gigs.refresh_gigs` already skips it (same "any other injected kind" branch that skips `CORP_HQ`/`GANG_DEN`). `_plan_injections` draws `junkyard_count` (`max(1, round(neutral_count / TILES_PER_JUNKYARD))`, `TILES_PER_JUNKYARD` = 10 — roughly one in ten *unclaimed* districts, not one in `TERRITORY_COUNT`) from neutral, non-start territories only, so a corp bloc never rolls one regardless of how that ratio is tuned.
+
+**Never doubles up with a hospital or gang den on the same tile.** Both of those already stack a neutral tile to `generate_corp_map`'s reserved-slot ceiling (`MAX_LOCATIONS_PER_TERRITORY - MIN_LOCATIONS_PER_TERRITORY` = 2) — a third reservation would drop `MAX_LOCATIONS_PER_TERRITORY - reserved` below `MIN` and make its `rng.randint` call raise. `junkyard_candidates` excludes both pools before sampling.
+
+**One `LocalCharacter`** (`_make_junkyard`, role `JUNKYARD_ROLE` = "scrapper"), same `_characters_for_roles` helper as `_make_officers`/`_make_gang_members`. Unique-named via the normal `LOCATION_SUFFIXES`/`_unique_location_name` machinery (Junkyard/Scrapyard/Wrecking Yard/Salvage Yard), even though it's injected rather than rolled.
+
+**The one action is `shops.scavenge`**, wired through `JunkyardScreen` (`MainMenu`'s Local-tab routing, alongside `HospitalScreen`). Rolled against Tinkering at `SCAVENGE_DIFFICULTY` (11, legwork's `NEARBY_DIFFICULTY` tier) — an eye for what's actually usable versus rust. A made check adds one random `SCAVENGE_MATERIALS` entry to inventory; a critical adds `SCAVENGE_CRITICAL_FINDS` (2) distinct ones; a miss adds nothing. Costs `SCAVENGE_HOURS_COST` (4) — a gig-length activity, not a full day like a hospital stay — spent either way, win or miss, same as a gig or legwork.
+
+**`SCAVENGE_MATERIALS`** (Armor Plating, Rubber, Salvaged Optics, Wire, Screws) are `shops.LOOT_ITEMS` entries with bare `{}` bonuses — no equip effect exists for them yet. Sellable today through the ordinary Pawn Shop `sell_item` flow (any `Item` can be); the intended sink is a future crafting/repair system, the same deferred-hook shape as `cybernetics.py` before `install_cyberware` had a caller. `LOOT_ITEMS` also holds `STOLEN_DATASHARD_ID` (matrix.py's unrelated CACHE-node reward) — `SCAVENGE_MATERIALS` is a narrower tuple so a Junkyard can't turn up a datashard, nor a Cache node scavenged material.
+
 ## Faction/gang relations (`shadowguy/relations.py`, `shadowguy/corpmap.py`)
 
 The only standing that isn't player-facing: corps and gangs' standing with **each other**, independent of the runner entirely.

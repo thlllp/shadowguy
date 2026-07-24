@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import generate_corp_map
+from shadowguy.corpmap import GENERATED_KINDS, generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.gigs import (
     GIG_CRIT_MULT,
@@ -87,11 +87,15 @@ def test_gig_critical_failure_costs_health_unlike_plain_failure(corp_map, seed):
 def test_refresh_gigs_fills_every_eligible_location_exactly_once(corp_map, seed):
     gigs: dict[str, object] = {}
     refresh_gigs(corp_map, gigs, day=1, rng=random.Random(seed))
+    # Mirrors refresh_gigs' own eligibility test (location.kind not in _GIG_TEMPLATES,
+    # gigs.py) via the public equivalent, GENERATED_KINDS -- so a future UNROLLED_KINDS
+    # addition (another injected kind with characters but no gig template) doesn't need
+    # this test hand-edited to match, the way corp_hq/gang_den/junkyard each did.
     eligible = [
         location
         for territory in corp_map.territories.values()
         for location in territory.locations
-        if location.characters and location.kind not in ("corp_hq", "gang_den")
+        if location.characters and location.kind in GENERATED_KINDS
     ]
     assert len(gigs) == len(eligible)
 

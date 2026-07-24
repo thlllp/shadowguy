@@ -21,12 +21,14 @@ from shadowguy.shops import (
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     PROGRAM_CATALOG,
+    SCAVENGE_HOURS_COST,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
     buy_program,
     hospital_stay,
+    scavenge,
     sell_item,
     sell_price,
 )
@@ -434,6 +436,40 @@ class HospitalScreen(BackScreen):
             self.notify("Can't afford a night's care.", severity="warning")
             return
         self.app.spend_time(HOURS_PER_DAY, skip_night_effects=True)
+        self.notify(message)
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class JunkyardScreen(BackScreen):
+    BINDINGS = MENU_BACK_BINDINGS
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="junkyard_info")
+        yield ListView(id="junkyard_actions")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        row = ListItem(Static(f"Scavenge the scrap ({SCAVENGE_HOURS_COST} hours)"), id="scavenge")
+        await _replace_items(self.query_one("#junkyard_actions", ListView), [row])
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id != "scavenge":
+            return
+        message = scavenge(self.app.character, self.app.rng)
+        self.app.spend_time(SCAVENGE_HOURS_COST)
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()

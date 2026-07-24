@@ -56,6 +56,7 @@ class LocationKind(StrEnum):
     GANG_DEN = "gang_den"
     RESEARCH_FACILITY = "research_facility"
     ACADEMY = "academy"
+    JUNKYARD = "junkyard"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -68,8 +69,9 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 # none of the per-kind world tables below: the runner's own places, each corp's HQ
 # (which has its own officers and screen — see _make_hq / app.CorpHQScreen), each
 # gang's den (see _make_gang_den), each corp's research facility (see
-# _make_research_facility / corp_turn.collect_research), and each corp's academy
-# (see _make_academy / corp_turn.train_employees). None of these four is
+# _make_research_facility / corp_turn.collect_research), each corp's academy
+# (see _make_academy / corp_turn.train_employees), and a rare scavenging spot on
+# unclaimed ground (see _make_junkyard / shops.scavenge). None of these is
 # player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
 UNROLLED_KINDS = (
     *PLAYER_OWNED_KINDS,
@@ -77,6 +79,7 @@ UNROLLED_KINDS = (
     LocationKind.GANG_DEN,
     LocationKind.RESEARCH_FACILITY,
     LocationKind.ACADEMY,
+    LocationKind.JUNKYARD,
 )
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
@@ -481,6 +484,11 @@ REAL_ESTATE_LISTING_COUNT = 4
 TILES_PER_HOSPITAL = 5
 HOSPITAL_COUNT = round(TERRITORY_COUNT / TILES_PER_HOSPITAL)
 
+# Junkyards are rarer, and neutral-only (see _plan_injections): roughly one in this
+# many *unclaimed* districts, not one in TERRITORY_COUNT overall — a corp bloc never
+# rolls one no matter how this ratio is tuned.
+TILES_PER_JUNKYARD = 10
+
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
@@ -544,6 +552,7 @@ LOCATION_SUFFIXES = {
     LocationKind.HOSPITAL: ["Hospital", "Trauma Center", "Emergency Room", "Med Center"],
     LocationKind.REAL_ESTATE: ["Realty", "Properties", "Holdings", "Estate Agency"],
     LocationKind.CYBER_CLINIC: ["Augment Clinic", "Chrome Den", "Grafting Parlor", "Wetware Bazaar"],
+    LocationKind.JUNKYARD: ["Junkyard", "Scrapyard", "Wrecking Yard", "Salvage Yard"],
 }
 
 LOCATION_PREFIXES = [
@@ -799,6 +808,22 @@ def _make_gang_den(territory_id: str, gang: Gang, rng: random.Random) -> Locatio
     )
 
 
+JUNKYARD_ROLE = "scrapper"
+
+
+def _make_junkyard(territory_id: str, rng: random.Random, used_names: set[str]) -> Location:
+    """A rare scavenging spot on unclaimed ground — one scrapper, no shop, no gig/job/
+    legwork surface (see shops.scavenge for its one action). Placed out of band like the
+    hospital (see TILES_PER_JUNKYARD / _plan_injections), never rolled as filler."""
+    location_id = f"{territory_id}_junkyard"
+    return Location(
+        id=location_id,
+        name=_unique_location_name(LocationKind.JUNKYARD, rng, used_names),
+        kind=LocationKind.JUNKYARD,
+        characters=_characters_for_roles(location_id, [JUNKYARD_ROLE], rng),
+    )
+
+
 def _clamp(level: int) -> int:
     return max(0, min(MODIFIER_MAX, level))
 
@@ -1006,6 +1031,7 @@ class _InjectionPlan:
     academy_ids: dict[str, str]
     den_ids: dict[str, str]
     gang_ids: dict[str, str]
+    junkyard_ids: set[str]
 
 
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
@@ -1021,6 +1047,15 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
     for tid, gang_id in gang_ids.items():
         gang_turf.setdefault(gang_id, []).append(tid)
     den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
+
+    # Junkyards draw from neutral ground only, and skip any tile already reserved for
+    # a hospital or a gang den: those two already stack to the reserved-slot ceiling a
+    # neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY - MIN_LOCATIONS_PER_TERRITORY
+    # == 2) — a third reservation on the same tile would make generate_corp_map's
+    # `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop below MIN and raise.
+    junkyard_candidates = [tid for tid in neutral_ids if tid not in hospital_ids and tid not in den_ids]
+    junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
+    junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
 
     top_value = max(FACTION_VALUE_SPREAD)
     hq_ids: dict[str, str] = {}
@@ -1045,6 +1080,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         academy_ids=academy_ids,
         den_ids=den_ids,
         gang_ids=gang_ids,
+        junkyard_ids=junkyard_ids,
     )
 
 
@@ -1085,6 +1121,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid in plan.den_ids)
             + (tid in plan.research_ids)
             + (tid in plan.academy_ids)
+            + (tid in plan.junkyard_ids)
         )
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
@@ -1100,6 +1137,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
 
     for tid in plan.hospital_ids:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))
+    for tid in plan.junkyard_ids:
+        territories[tid].locations.append(_make_junkyard(tid, rng, used_names))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
     for tid, faction_id in plan.research_ids.items():
