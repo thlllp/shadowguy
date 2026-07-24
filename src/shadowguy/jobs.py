@@ -8,7 +8,7 @@ from enum import StrEnum
 from shadowguy.character import CORE_STATS
 from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
-from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind
+from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind, territory_distance
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.matrix import ICE_TIERS, generate_matrix_network
 from shadowguy.scene import (
@@ -115,6 +115,13 @@ JOB_FAILURE_REP_HIT = -1
 AMBUSH_SKILL = "tactics"
 AMBUSH_DIFFICULTY = 12
 AMBUSH_LABEL = "Take them first"
+
+# How often a JobStage.vigilance beat (currently only Bodyguard) actually rolls a
+# check at all: the rest of the time it's a scene.Stage.narration beat instead --
+# no roll, nothing to click, just prose and a Continue. Escorting a client
+# shouldn't force a check at every single stop; most of them should just pass.
+VIGILANCE_THREAT_CHANCE = 0.25
+VIGILANCE_QUIET_TEXT = "Nothing catches your eye. The stop passes without incident."
 
 # Fighting through a stage is a way *past* it, not a way to skip the job: winning
 # rejoins the job at the next stage, and winning the last stage pays it out like any
@@ -267,6 +274,16 @@ class JobArchetype:
     # instead of gunmen, and suppresses the tactical/abstract roll for the job. A remote
     # hack has no body in the building, so there's nobody to meet in meatspace.
     matrix: bool = False
+    # Flat hours cost overriding the shared tier-based default (8/12, see
+    # generate_job) -- None for every archetype except Bodyguard, which is meant to
+    # be a low-time-commitment job regardless of tier (see that row's comment).
+    hours_cost: int | None = None
+    # True only for Bodyguard (set at ARCHETYPES construction, not authored per-row)
+    # -- a whole-job property, unlike JobStage.burglary's per-stage one: every stage
+    # rolls VIGILANCE_THREAT_CHANCE for whether anything even happens at all, rather
+    # than always presenting its pool. Quiet legs become a scene.Stage.narration
+    # beat: no roll, nothing to click, just prose and a Continue.
+    vigilance: bool = False
 
 
 # name, verb, then one row per stage: (StageType, prompt, approach pool).
@@ -617,6 +634,99 @@ _ARCHETYPE_ROWS = (
             ),
         ),
     ),
+    (
+        # A three-stage job, not four: no COMPLICATION row at all, so a Bodyguard
+        # contract is always exactly APPROACH -> OBJECTIVE -> EXFIL -- meet the
+        # client, the exposed stop, get them home. Every stage also carries
+        # vigilance=True (set in the ARCHETYPES comprehension below), so most legs
+        # pass with nothing to click at all (see VIGILANCE_THREAT_CHANCE) rather than
+        # forcing a check at every single stop; when a threat does roll, it's a full
+        # stage with the pool below. Leads with perception (a second Infiltrator
+        # specialist alongside Recon -- "on the lookout" is what this job is), but
+        # strength/combat skills get real weight too as the way to actually deal with
+        # what you spotted, not just spot it.
+        "Bodyguard",
+        "guard",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("sight", 1, "Clock the meet point before they arrive"),
+                    ("negotiations", 0, "Talk the client into moving on your timeline, not theirs"),
+                    ("toughness", -2, "Push through the crowd at their side and eat the jostling"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You're at {location}, and your principal is exposed for exactly as long as you let them be.",
+                (
+                    ("pattern_seeking", 1, "Spot the one face that's shown up twice"),
+                    ("tactics", 0, "Read the room's exits before you need one"),
+                    ("grapple", -2, "Put a hand on the first person who gets too close"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "Your principal is still breathing. Getting them clear is the last part of the job.",
+                (
+                    ("listening", 1, "Hear the follow before it closes the distance"),
+                    ("intimidation", 0, "Make it very clear this isn't worth it"),
+                    ("short_blade", -2, "Put down whoever's still following and keep walking"),
+                ),
+            ),
+        ),
+    ),
+    (
+        # The Infiltrator specialist (every beat leads with a perception skill, which
+        # SPECIALIST_FOR_STAT maps to Infiltrator) -- Netrunner has two of these
+        # (Intrusion, Data Heist), Bodyguard above is the other Infiltrator job.
+        # Perception is also the most underused stat in the generic pool (see the
+        # balance notes in DESIGN.md), so leading every beat with it does double duty:
+        # it gives Infiltrator a contract of their own and it's the direct fix for that
+        # gap. The other two approaches on each beat still sit on different stats, same
+        # as every other specialist archetype.
+        "Recon",
+        "case",
+        (
+            (
+                StageType.APPROACH,
+                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
+                (
+                    ("sight", 1, "Pick your vantage before anyone knows you're watching"),
+                    ("forgery", 0, "Walk in on a badge that says you belong"),
+                    ("toughness", -2, "Push through wherever the crowd's thinnest"),
+                ),
+            ),
+            (
+                StageType.OBJECTIVE,
+                "You've got eyes on {target}. Getting the read you actually need means holding position.",
+                (
+                    ("pattern_seeking", 1, "Read the rotation until you know it cold"),
+                    ("infer", 0, "Piece together what the layout's telling you"),
+                    ("lift", -2, "Force the one lock that's actually in your way"),
+                ),
+            ),
+            (
+                StageType.COMPLICATION,
+                "Something moves that wasn't supposed to be there.",
+                (
+                    ("listening", 1, "Catch the change in the chatter before it catches you"),
+                    ("stealth", 0, "Go still and let it pass you by"),
+                    ("intimidation", -2, "Brazen it out before anyone thinks to ask"),
+                ),
+            ),
+            (
+                StageType.EXFIL,
+                "You have what you came for. Getting clear without being made is the other half of the job.",
+                (
+                    ("read_the_room", 1, "Feel the exit clear before you take it"),
+                    ("deception", 0, "Walk out looking like you belong"),
+                    ("acrobatics", -2, "Take the fast way down and don't look back"),
+                ),
+            ),
+        ),
+    ),
 )
 
 ARCHETYPES = [
@@ -633,6 +743,8 @@ ARCHETYPES = [
             for stage_type, prompt, approaches in stages
         ),
         matrix=(name == "Data Heist"),
+        hours_cost=4 if name == "Bodyguard" else None,
+        vigilance=(name == "Bodyguard"),
     )
     for name, verb, stages in _ARCHETYPE_ROWS
 ]
@@ -785,6 +897,56 @@ def _random_timing(day: int, rng: random.Random) -> JobTiming:
     return JobTiming()
 
 
+# Standing gained with the gang that hired you, on a successful delivery. A
+# gang isn't robbed the way a job's corp target is (JOB_STANDING_HIT), it's the
+# client, so completing its job moves standing the other direction. Missing the
+# deadline costs the same amount instead of gaining it -- see
+# Character.smuggling_job / app._apply_day_tick.
+GANG_JOB_STANDING_GAIN = 2
+
+# How many days out a Smuggling delivery's deadline sits, scaled by how far the
+# destination actually is from the pickup (corpmap.territory_distance) -- a
+# cross-map run gets more time than a next-door one. First-slice numbers, not
+# balance-simulated.
+SMUGGLING_BASE_DEADLINE_DAYS = 2
+SMUGGLING_DEADLINE_DAYS_PER_HOP = 1
+
+
+@dataclass
+class SmugglingJob:
+    """A gang delivery, tracked directly on Character rather than as a Scene --
+    there's no staged approach/objective/complication/exfil to it (see the
+    conversation this replaced: it used to be a JobArchetype). The runner picks
+    it up in person at a gang's den (GangDenScreen) and delivers it in person at
+    the destination territory (MainMenu's "Deliver" action) -- nothing about it
+    resolves through checks."""
+
+    gang_id: str
+    item: str  # flavor text for the cargo, drawn from TARGETS
+    destination_territory_id: str
+    deadline_day: int
+    reward_cash: int
+
+
+def generate_smuggling_job(
+    gang_id: str, pickup_territory_id: str, corp_map: CorpMap, day: int, rng: random.Random | None = None
+) -> SmugglingJob:
+    """Called when the runner takes the job in person at the gang's den
+    (pickup_territory_id is wherever that den actually is -- there's no separate
+    pickup roll, they're already standing there). The destination is any other
+    territory on the map, regardless of owner."""
+    rng = resolve_rng(rng)
+    destination = rng.choice([t for t in corp_map.territories.values() if t.id != pickup_territory_id])
+    hops = territory_distance(corp_map, pickup_territory_id, destination.id)
+    return SmugglingJob(
+        gang_id=gang_id,
+        item=rng.choice(TARGETS),
+        destination_territory_id=destination.id,
+        deadline_day=day + SMUGGLING_BASE_DEADLINE_DAYS + SMUGGLING_DEADLINE_DAYS_PER_HOP * hops,
+        reward_cash=REWARD_BASE[_tier_for_day(day)],
+    )
+
+
 def generate_job(
     day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
 ) -> tuple[Scene, JobTiming]:
@@ -805,6 +967,10 @@ def generate_job(
     target = rng.choice(TARGETS)
     tier = _tier_for_day(day)
     difficulty_base = DIFFICULTY_BASE[tier]
+    if archetype.hours_cost is not None:
+        hours_cost = archetype.hours_cost
+    else:
+        hours_cost = 8 if tier == 0 else 12
 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     # Which beats this job actually has. An optional stage that doesn't make the cut
@@ -830,6 +996,32 @@ def generate_job(
         is_last = i == len(stage_ids) - 1
         next_stage = None if is_last else stage_ids[i + 1]
         fight_id = f"{stage_ids[i]}_fight"
+
+        def _payout(text: str, multiplier: float, rep: int, ns: str | None, last: bool) -> Outcome:
+            return Outcome(
+                text=text,
+                next_stage=ns,
+                cash_delta=int(reward_base * multiplier) if last else 0,
+                experience_delta=int(JOB_XP_BASE[tier] * multiplier) if last else 0,
+                rep_delta=rep if last else 0,
+                standing_delta=JOB_STANDING_HIT if last else 0,
+                fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
+            )
+
+        if archetype.vigilance and rng.random() >= VIGILANCE_THREAT_CHANCE:
+            # Nothing to click, nothing to fail: most legs of an escort should pass
+            # without incident rather than forcing a check at every stop (see
+            # VIGILANCE_THREAT_CHANCE). Decided before any pool/difficulty work below,
+            # since a quiet stage needs none of it -- and no fight beside this stage
+            # either, since with no roll nothing can ever route to one.
+            stages[stage_ids[i]] = Stage(
+                id=stage_ids[i],
+                prompt="",  # narration carries the prose; a narration stage has no choices
+                choices=[],
+                narration=_payout(VIGILANCE_QUIET_TEXT, 1.0, 1, next_stage, is_last),
+            )
+            continue
+
         # Which ways through this job happens to leave open. Kept in pool order so
         # the clean approach still reads before the bloody one.
         pool = job_stage.approaches
@@ -849,17 +1041,6 @@ def generate_job(
         # so an Approach's difficulty_delta means the same thing on every job.
         ramp = round(STAGE_DIFFICULTY_RAMP * i / (len(job_stages) - 1)) if i else 0
         difficulty = difficulty_base + ramp + rng.randint(-1, 2)
-
-        def _payout(text: str, multiplier: float, rep: int, ns: str | None, last: bool) -> Outcome:
-            return Outcome(
-                text=text,
-                next_stage=ns,
-                cash_delta=int(reward_base * multiplier) if last else 0,
-                experience_delta=int(JOB_XP_BASE[tier] * multiplier) if last else 0,
-                rep_delta=rep if last else 0,
-                standing_delta=JOB_STANDING_HIT if last else 0,
-                fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
-            )
 
         def _approach_failure(approach: Approach, text: str) -> Outcome:
             return Outcome(
@@ -1033,7 +1214,7 @@ def generate_job(
         id=job_id,
         title=f"{archetype.name}: {faction.name} ({territory.name})",
         kind=SceneKind.JOB,
-        hours_cost=8 if tier == 0 else 12,
+        hours_cost=hours_cost,
         start_stage=stage_ids[0],
         stages=stages,
         target_faction_id=faction.id,

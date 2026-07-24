@@ -47,6 +47,9 @@ class SceneScreen(Screen):
         if stage.burglary is not None:
             await self._show_burglary(stage)
             return
+        if stage.narration is not None:
+            await self._show_narration(stage)
+            return
         await self._show_stage()
 
     def _current_stage(self):
@@ -131,6 +134,13 @@ class SceneScreen(Screen):
     async def _show_burglary(self, stage) -> None:
         self.stage_id = stage.id
         self.app.push_screen(EntrancePickScreen(stage.burglary), self._on_entrance_picked)
+
+    async def _show_narration(self, stage) -> None:
+        """No roll, nothing to click -- the beat's Outcome applies immediately and the
+        player just reads it. _finish_stage_outcome already does everything a plain
+        beat with a resolved Outcome needs (combat/tactical/matrix reuse it too)."""
+        self.stage_id = stage.id
+        await self._finish_stage_outcome(stage.narration)
 
     async def _on_entrance_picked(self, chosen_index: int) -> None:
         stage = self._current_stage()
@@ -262,6 +272,9 @@ class SceneScreen(Screen):
             return
         if stage.burglary is not None:
             await self._show_burglary(stage)
+            return
+        if stage.narration is not None:
+            await self._show_narration(stage)
             return
 
         self.stage_id = self._pending_next_stage

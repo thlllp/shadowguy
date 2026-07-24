@@ -12,7 +12,7 @@ from shadowguy.corpmap import (
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
-from shadowguy.jobs import generate_legwork_for_job
+from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.scene import Scene
 
 from . import (
@@ -32,6 +32,7 @@ from .shop_screens import (
     BarScreen,
     CorpHQScreen,
     FixerOffersScreen,
+    GangDenScreen,
     HospitalScreen,
     JunkyardScreen,
     RealEstateScreen,
@@ -245,6 +246,15 @@ class MainMenu(PanelNav, Screen):
         self.query_one("#local_locations_panel").display = self.selected_category == "local"
         self.query_one("#local_fixers_panel").display = self.selected_category == "local"
 
+        if character.smuggling_job is not None:
+            job = character.smuggling_job
+            destination = self.app.corp_map.territories[job.destination_territory_id]
+            if character.location_id == job.destination_territory_id:
+                label = f"Deliver the package (due by day {job.deadline_day})"
+            else:
+                label = f"Deliver the package — travel to {destination.name} (due by day {job.deadline_day})"
+            items.append(ListItem(Static(label), id="deliver_package"))
+
         items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(self.query_one("#activities", ListView), items)
 
@@ -261,6 +271,15 @@ class MainMenu(PanelNav, Screen):
 
         if item_id == "rest":
             self.app.rest()
+            await self._refresh()
+            return
+
+        if item_id == "deliver_package":
+            if character.location_id != character.smuggling_job.destination_territory_id:
+                return
+            job = character.deliver_smuggling_job(GANG_JOB_STANDING_GAIN)
+            self.notify(f"Delivered. +{job.reward_cash}eb.")
+            self.query_one(CharacterSheet).refresh()
             await self._refresh()
             return
 
@@ -320,6 +339,8 @@ class MainMenu(PanelNav, Screen):
                 self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[here.owner]))
             elif location.kind == LocationKind.BAR:
                 self.app.push_screen(BarScreen(location))
+            elif location.kind == LocationKind.GANG_DEN:
+                self.app.push_screen(GangDenScreen(location, GANGS_BY_ID[here.gang_id]))
             elif location.kind in PLAYER_OWNED_KINDS:
                 self.app.push_screen(SafehouseScreen(location))
             return

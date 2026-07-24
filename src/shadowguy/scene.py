@@ -217,9 +217,9 @@ class Stage:
     id: str
     prompt: str
     choices: list[Choice]
-    # A stage is a set of choices, a fight, a tactical map, a burglary, or a matrix
-    # fight -- exactly one, never a mix (guarded in Scene.__post_init__). A
-    # fight's/map's "choices" come from the runner's own gear and skills
+    # A stage is a set of choices, a fight, a tactical map, a burglary, a matrix
+    # fight, or narration -- exactly one, never a mix (guarded in Scene.__post_init__).
+    # A fight's/map's "choices" come from the runner's own gear and skills
     # (combat.available_actions / matrix.available_matrix_actions / the grid), not the
     # scene; a burglary's choices are its Entrances, picked on a diagram screen rather
     # than a text list.
@@ -227,6 +227,12 @@ class Stage:
     tactical: TacticalStage | None = None
     burglary: BurglaryStage | None = None
     matrix: MatrixStage | None = None
+    # A beat with nothing to decide: its Outcome applies immediately (no roll), the
+    # player just reads it and continues. For beats that shouldn't force a check every
+    # single time they come up (see jobs.VIGILANCE_THREAT_CHANCE) -- reused rather than
+    # built as a one-off, so any future scene that sometimes has an uneventful beat can
+    # use it too.
+    narration: Outcome | None = None
 
 
 @dataclass
@@ -272,12 +278,14 @@ class Scene:
 
     def _validate_stage(self, stage: Stage) -> None:
         modes = sum(
-            1 for mode in (stage.choices, stage.combat, stage.tactical, stage.burglary, stage.matrix) if mode
+            1
+            for mode in (stage.choices, stage.combat, stage.tactical, stage.burglary, stage.matrix, stage.narration)
+            if mode
         )
         if modes > 1:
             raise ValueError(
                 f"{self.id}: stage {stage.id!r} must be exactly one of choices, a fight, "
-                "a tactical map, a burglary, or a matrix run"
+                "a tactical map, a burglary, a matrix run, or narration"
             )
         if stage.combat is not None and not stage.combat.enemies:
             raise ValueError(f"{self.id}: stage {stage.id!r} is a fight with nobody in it")
@@ -348,6 +356,8 @@ class Scene:
                     if outcome is not None:
                         yield outcome
             yield stage.burglary.spotted
+        if stage.narration is not None:
+            yield stage.narration
 
     @property
     def has_matrix(self) -> bool:

@@ -12,6 +12,8 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS_BY_ID, Faction, officer_dialogue, officer_gate, officer_unlocked
 from shadowguy.fixer import Fixer
+from shadowguy.gangs import Gang
+from shadowguy.jobs import generate_smuggling_job
 from shadowguy.security import SecurityContract
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, recruit_cut, recruit_wage
 from shadowguy.skills import skill_value
@@ -556,6 +558,56 @@ class JunkyardScreen(BackScreen):
         self.app.spend_time(SCAVENGE_HOURS_COST)
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
+
+class GangDenScreen(BackScreen):
+    """A gang's den (corpmap.LocationKind.GANG_DEN) -- the source of a Smuggling
+    delivery (jobs.SmugglingJob). One job at a time: the den just tells the runner
+    to come back once they're clear."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+
+    def __init__(self, location: Location, gang: Gang) -> None:
+        super().__init__()
+        self.location = location
+        self.gang = gang
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(id="gang_info")
+        yield ListView(id="gang_actions")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        standing = character.gang_standing_with(self.gang.id)
+        self.query_one("#gang_info", Static).update(
+            f"{self.gang.name} — {self.gang.description}  (standing {standing:+d})"
+        )
+        if character.smuggling_job is not None:
+            row = ListItem(Static("Already carrying a job for them — deliver it or wait it out."), id="busy")
+        else:
+            row = ListItem(Static("Take a delivery job"), id="take_job")
+        await _replace_items(self.query_one("#gang_actions", ListView), [row])
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id != "take_job":
+            return
+        character = self.app.character
+        character.smuggling_job = generate_smuggling_job(
+            self.gang.id, character.location_id, self.app.corp_map, character.day, self.app.rng
+        )
+        job = character.smuggling_job
+        destination = self.app.corp_map.territories[job.destination_territory_id]
+        self.notify(f"{self.gang.name} hands you {job.item}. Get it to {destination.name} by day {job.deadline_day}.")
         await self._refresh()
 
 

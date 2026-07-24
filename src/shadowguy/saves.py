@@ -119,7 +119,9 @@ SAVE_SUFFIX = ".save"
 # v36 decoupled Rest from the midnight tick and added fatigue (character.py):
 # Character gained `last_rest_hour` and `fatigue` (a pre-v36 pickled Character
 # lacks both).
-SAVE_VERSION = 36
+# v37 added gang delivery jobs (jobs.py): Character gained `smuggling_job`
+# (a pre-v37 pickled Character lacks it, None when idle).
+SAVE_VERSION = 37
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
