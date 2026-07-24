@@ -91,9 +91,68 @@ class LoadMenu(ModalScreen):
         self.app.load_state(state)
 
 
+BANNER = r"""
+         ███             ███             ███             ███
+       ███░            ███░            ███░            ███░
+     ███░            ███░            ███░            ███░
+   ███░            ███░            ███░            ███░
+ ███░            ███░            ███░            ███░            █
+██░            ███░            ███░            ███░            ███
+░            ███░            ███░            ███░            ███░
+            ░░░             ░░░             ░░░             ░░░
+     ██____  _  _   __██ ____   __   _██_   ___  _  _██_  _
+   ███/ ___)/ )( \ / _\ (    \ /  \█/ )( \ / __)/ )( \( \/ )
+ ███░ \___ \) __ (/    \ ) D ((  O )\ /\ /( (_ \) \/ ( )  /      █
+██░   (____/\_)(_/\_/\_/(____/ \__/ (_/\_) \___/\____/(__/     ███
+░            ███░            ███░            ███░            ███░
+           ███░            ███░            ███░            ███░
+         ███░            ███░            ███░            ███░
+        ░░░             ░░░             ░░░             ░░░
+ ███             ███             ███             ███             █
+██░            ███░            ███░            ███░            ███
+░            ███░            ███░            ███░            ███░
+           ███░            ███░            ███░            ███░
+""".strip("\n")
+
+
 class TitleMenu(Screen):
     BINDINGS = MENU_QUIT_BINDINGS
-    CSS = _menu_css("TitleMenu", "title_dialog")
+    CSS = """
+TitleMenu {
+    align: center middle;
+}
+
+#title_dialog {
+    width: auto;
+    height: auto;
+    margin-top: 3;
+}
+
+#banner_box {
+    width: auto;
+    height: auto;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#banner {
+    width: auto;
+    text-wrap: nowrap;
+}
+
+#menu_box {
+    width: auto;
+    height: auto;
+    border: round $accent;
+    padding: 1 2;
+    margin-top: 2;
+}
+
+#menu_box ListView {
+    width: 28;
+    height: auto;
+}
+"""
 
     OPTIONS = [
         ("new_game", "New Game"),
@@ -105,8 +164,11 @@ class TitleMenu(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            Static("Shadowguy"),
-            ListView(*(ListItem(Static(label), id=option_id) for option_id, label in self.OPTIONS)),
+            Vertical(Static(BANNER, id="banner"), id="banner_box"),
+            Vertical(
+                ListView(*(ListItem(Static(label), id=option_id) for option_id, label in self.OPTIONS)),
+                id="menu_box",
+            ),
             id="title_dialog",
         )
         yield Footer()
