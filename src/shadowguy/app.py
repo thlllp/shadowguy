@@ -3,7 +3,7 @@ import random
 from textual.app import App
 from textual.screen import Screen
 
-from shadowguy.character import HOURS_PER_DAY, Character
+from shadowguy.character import REST_HOURS_COST, Character
 from shadowguy.corp_turn import (
     CorpState,
     advance_training,
@@ -77,10 +77,35 @@ class ShadowguyApp(App):
             for day in range(old_day + 1, new_day + 1):
                 self._apply_day_tick(day, skip_night_effects, protect_job_id)
 
+    def rest_cost(self) -> int:
+        """What Rest would charge for lodging right now, wherever the runner is —
+        also read by MainMenu/CorpScreen to preview it on the menu item. Free under
+        an active security contract here, same as an owned home (corpmap.lodging_cost)."""
+        character = self.character
+        here = self.corp_map.territories[character.location_id]
+        active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
+        return 0 if active_here else lodging_cost(here)
+
     def rest(self) -> None:
-        """Shared "Rest" action wiring for MainMenu and CorpScreen — spends exactly
-        one day, same as any other spend_time call."""
-        self.spend_time(HOURS_PER_DAY)
+        """Shared "Rest" action wiring for MainMenu and CorpScreen. Spends exactly
+        REST_HOURS_COST hours, wherever the runner currently is — same lodging pricing
+        as the old midnight charge (corpmap.lodging_cost), just paid at the moment of
+        resting instead of at whatever territory happened to hold the runner at
+        midnight.
+
+        Resting only halves accumulated fatigue rather than clearing it (see
+        Character.fatigue) — a bad stretch of skipped rest still costs a few more
+        nights to fully shake off."""
+        character = self.character
+        cost = self.rest_cost()
+        if cost:
+            paid = min(cost, character.cash)
+            character.cash -= paid
+            here = self.corp_map.territories[character.location_id]
+            self.notify(f"Paid {paid}eb for lodging in {here.name}.")
+        self.spend_time(REST_HOURS_COST)
+        character.last_rest_hour = character.elapsed_hours
+        character.fatigue //= 2
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that used to fire from a deliberate "End the day" click —
@@ -114,14 +139,15 @@ class ShadowguyApp(App):
 
         if skip_night_effects:
             return
-        # A hospital stay skips this block (it already covers room and board) —
-        # everything above still fires the same as any other crossing.
+        # A hospital stay skips this block (nothing progresses on a contract you're
+        # not on-site for) — everything above still fires the same as any other
+        # crossing.
         character = self.character
         here_id = character.location_id
         here = self.corp_map.territories[here_id]
-        # Computed before any resolution/removal below: a contract that completes
-        # tonight must still count toward tonight's free lodging, since it was
-        # active here when the night started.
+        # Snapshotted before any resolution/removal below: a contract that completes
+        # tonight must still count toward tonight's resolution, since it was active
+        # here when the night started.
         active_here = [c for c in character.security_contracts if c.territory_id == here_id]
         for contract in active_here:
             result = resolve_security_night(character, contract, self.rng)
@@ -148,12 +174,6 @@ class ShadowguyApp(App):
             if contract.territory_id != here_id:
                 elsewhere = self.corp_map.territories[contract.territory_id]
                 self.notify(f"Not on-site for the {elsewhere.name} contract tonight — no progress.")
-
-        cost = 0 if active_here else lodging_cost(here)
-        if cost:
-            paid = min(cost, character.cash)
-            character.cash -= paid
-            self.notify(f"Paid {paid}eb for lodging in {here.name}.")
 
     def action_quit_menu(self) -> None:
         self.push_screen(QuitMenu())

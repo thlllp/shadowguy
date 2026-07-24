@@ -202,7 +202,9 @@ class CorpScreen(BackScreen):
                 label += " (can't afford)"
             items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
 
-        items.append(ListItem(Static("Rest"), id="rest"))
+        rest_cost = self.app.rest_cost()
+        rest_label = "Rest (8h)" if not rest_cost else f"Rest (8h, {rest_cost}eb lodging)"
+        items.append(ListItem(Static(rest_label), id="rest"))
         await _replace_items(list_view, items)
 
         academy_items = []

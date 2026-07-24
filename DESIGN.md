@@ -88,15 +88,26 @@ The MainMenu **Local** category lists the runner's node's `Location`s. Screens: 
 
 ## Rest, lodging & property (`shadowguy/corpmap.py`, `shadowguy/shops.py`, `screens/main_menu.py`, `screens/shop_screens.py` — `HospitalScreen`/`RealEstateScreen`/`SafehouseScreen`)
 
-A day boundary crossed at night is a *transaction*: whichever action pushes the clock past midnight charges `corpmap.lodging_cost(here)` unless the crossing came from a `skip_night_effects` spend (a hospital stay).
+Lodging is charged by `ShadowguyApp.rest()`, not by the midnight tick. The runner can Rest wherever they are, whenever they want — it's an ordinary menu action (`MainMenu`/`CorpScreen`), not something that fires as a side effect of some other action crossing midnight.
 
-- **Lodging** is `LODGING_COST_PER_DEVELOPMENT` (5) × the district's Development — free where `corpmap.has_home(territory)` (an owned `APARTMENT`/`SAFEHOUSE`). **Resting must never be blocked**: the handler pays `min(cost, cash)` and moves on.
+- **Lodging** is `LODGING_COST_PER_DEVELOPMENT` (5) × the district's Development — free where `corpmap.has_home(territory)` (an owned `APARTMENT`/`SAFEHOUSE`) or under an active security contract there. **Resting must never be blocked**: `rest()` pays `min(cost, cash)` and moves on. `ShadowguyApp.rest_cost()` is the one place the formula lives — both the charge and the menu-item preview (`MainMenu`/`CorpScreen`) call it.
 - **`Character.on_new_day()` does not heal.** It resets `health_kit_used_today`/`temp_bonuses`, expires jobs and discharges orphan crew, once per day boundary. Health is deliberately excluded.
-- **The hospital is the main way health comes back** (`shops.hospital_stay`, `HospitalScreen`): `HOSPITAL_STAY_COST` (20), heals `1d6 + raw Body`. Spends exactly `HOURS_PER_DAY` with `skip_night_effects=True` (already covers room/board, so no double lodging charge). A Health Kit is a small one-off top-up, capped once/day (`health_kit_used_today`).
+- **The hospital is the main way health comes back** (`shops.hospital_stay`, `HospitalScreen`): `HOSPITAL_STAY_COST` (20), heals `1d6 + raw Body`. Spends exactly `HOURS_PER_DAY` with `skip_night_effects=True` (skips security-contract night resolution — the runner isn't on-site). It also counts as rest (see Fatigue below): the handler resets `last_rest_hour` and halves `fatigue` itself, the same as `rest()`.
 - **Property**: a `REAL_ESTATE` office lists safehouses *across the map* (`Location.listings`). Buying calls `corpmap.add_safehouse` → `has_home` true there. `safehouse_price` = `SAFEHOUSE_BASE_PRICE` (200) + `SAFEHOUSE_PRICE_PER_DEVELOPMENT` (75) × Development + `SAFEHOUSE_PRICE_PER_VALUE` (50) × value. Districts with an existing home drop off the listing.
 - `SafehouseScreen` is a **stub** — rest/stash functions land later.
 
 This is the second thing to read `TerritoryModifier.DEVELOPMENT` for real (see Corp map) — Development is no longer decoration.
+
+### Fatigue (`shadowguy/character.py`)
+
+The runner is meant to take one `REST_HOURS_COST` (8-hour) Rest at least every `FATIGUE_GRACE_HOURS` (24) — not tied to calendar midnight, a rolling window measured from `Character.last_rest_hour`. Nothing blocks the player from ignoring it; going overdue instead builds `Character.fatigue`, a stored, sticky counter (not something recomputed fresh each time):
+
+- **Growth compounds.** `Character.on_new_day()` checks once per day boundary whether `elapsed_hours - last_rest_hour > FATIGUE_GRACE_HOURS`; if so, `fatigue += 1 + fatigue // FATIGUE_GROWTH_DIVISOR` (3) — the more run-down the runner already is, the faster the next overdue day adds to it.
+- **A rest only halves it.** `rest()` and a hospital stay both do `fatigue //= 2` (and reset `last_rest_hour`) instead of clearing it outright — one good night's sleep takes the edge off a bad stretch, it doesn't erase it. A deep burnout costs several rests in a row to fully work off.
+- **The felt penalty caps** at `FATIGUE_STAT_PENALTY_CAP` (3), subtracted from every core stat in `Character.stat()` — the same chokepoint gear/cyberware/temp bonuses already go through, so every check, combat roll, and skill value feels it for free. The raw counter can (and does) climb past the cap while ignored; it just takes longer to halve back down through it than to hit it, which is the point.
+- `screens.CharacterSheet` shows "Rested" or "Fatigued: N (-P to stats)" so the player isn't tracking this blind.
+
+**Not balance-simulated** — the grace window, growth divisor, and cap are first-slice numbers, easy to retune (all named constants in `character.py`) once there's a feel for how often runners actually skip rest in play.
 
 ## Time & the day clock (`shadowguy/character.py`, `shadowguy/app.py`)
 
@@ -104,15 +115,15 @@ Runner mode has no stamina and no manual "End the day" button. `Character.elapse
 
 **`ShadowguyApp.spend_time(hours, *, skip_night_effects=False, protect_job_id=None)` is the single chokepoint** advancing the clock. It bumps `elapsed_hours`, then loops once per day boundary crossed, calling `_apply_day_tick(day, skip_night_effects, protect_job_id)` for each. **A day tick firing is a side effect of crossing midnight**, at wherever the runner currently is. The loop only ever runs once today (nothing spends ≥2×`HOURS_PER_DAY` in one call), kept as the generically-correct form — a direct test (`test_spend_time_fires_the_day_tick_once_per_boundary_crossed`) proves it iterates when needed. `rival_actions` is reset once before the loop and accumulated with `+=` per iteration, same as `CorpState.cash`/`research_points`.
 
-`_apply_day_tick` folds together: `Character.on_new_day(protect_job_id)`, crew wages, `expire_offers`/`refresh_offers`/`refresh_security_offers`/`refresh_gigs`, `resolve_rival_day`, corp income/research + `daily_action_used` reset, and — unless `skip_night_effects` — the lodging charge + security-contract night resolution. **Call-site ordering**: every caller spends time *before* the accompanying mutation (e.g. `action_travel` spends before moving `location_id`) — a boundary crossed mid-trip resolves at the *origin* territory, not the destination.
+`_apply_day_tick` folds together: `Character.on_new_day(protect_job_id)` (also where fatigue grows — see Fatigue above), crew wages, `expire_offers`/`refresh_offers`/`refresh_security_offers`/`refresh_gigs`, `resolve_rival_day`, corp income/research + `daily_action_used` reset, and — unless `skip_night_effects` — security-contract night resolution. **Lodging is not part of this tick** — see Rest, lodging & property above; it's charged by `rest()` itself, whenever the player takes it, not by whichever action happens to cross midnight. **Call-site ordering**: every caller spends time *before* the accompanying mutation (e.g. `action_travel` spends before moving `location_id`) — a boundary crossed mid-trip resolves at the *origin* territory, not the destination.
 
 **Running a job (or its legwork) must not expire itself.** `MainMenu` calls `spend_time(scene.hours_cost, protect_job_id=job.scene.id)` *before* pushing `SceneScreen` — a `scheduled_day` job run late on its one legal day (8–12h cost) could otherwise get pruned by its own time cost before the scene starts. `protect_job_id` exempts that one job (matched by `Scene.id`) from this tick's expiry check only — it's still removed normally once its scene resolves.
 
-**An explicit "Rest" action remains** (`MainMenu`/`CorpScreen`), spending exactly `HOURS_PER_DAY` — guarantees advancing exactly one day, but it's just another `spend_time` call, not a refill button. Rest **restores nothing** — every side effect fires identically from any midnight-crossing action.
+**An explicit "Rest" action remains** (`MainMenu`/`CorpScreen`), spending `REST_HOURS_COST` (8) hours — just another `spend_time` call, so it can still cross a midnight boundary (firing every *other* day-tick effect above) but doesn't have to. Rest restores no health — see Fatigue above for what it does reset. `ShadowguyApp.rest_cost()` previews the lodging charge on the menu item before the player commits.
 
 **Vehicles cut travel time by a percentage, not a daily allowance.** `shops.Item.travel_reduction` (`Slot.VEHICLE` only): `equipped_travel_reduction` applies fresh to `TRAVEL_HOURS_COST` (2.0) each hop. Catalog: Beater Bike -10%, Tuned Coupe -20%, Armored Towncar -25%. `corp_map_screen._travel_hours(character)` is the one place the formula lives — both the charge and the pre-travel hint call it.
 
-**First-slice hour costs, not balance-simulated**: `TRAVEL_HOURS_COST` 2.0, `Scene.hours_cost` default 4 (gigs/legwork), job `hours_cost` 8/12 (tier 0 / 1+), Rest/hospital exactly `HOURS_PER_DAY`. `JobTiming.deadline_day`/`scheduled_day` windows (`randint(2,5)`/`randint(1,4)` days) were tuned against the old stamina pace and may feel tighter now — worth a playtest, not a pre-emptive numbers change.
+**First-slice hour costs, not balance-simulated**: `TRAVEL_HOURS_COST` 2.0, `Scene.hours_cost` default 4 (gigs/legwork), job `hours_cost` 8/12 (tier 0 / 1+), hospital exactly `HOURS_PER_DAY`, Rest `REST_HOURS_COST` (8). `JobTiming.deadline_day`/`scheduled_day` windows (`randint(2,5)`/`randint(1,4)` days) were tuned against the old stamina pace and may feel tighter now — worth a playtest, not a pre-emptive numbers change.
 
 ## Fixers & job generation (`shadowguy/fixer.py`, `shadowguy/jobs.py`)
 
