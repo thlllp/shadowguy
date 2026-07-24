@@ -202,7 +202,7 @@ class CorpScreen(BackScreen):
                 label += " (can't afford)"
             items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
 
-        items.append(ListItem(Static("Rest"), id="rest"))
+        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(list_view, items)
 
         academy_items = []

@@ -13,7 +13,7 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
-from shadowguy.character import HOURS_PER_DAY
+from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST
 from shadowguy.combat import ENEMY_TIERS, ActionKind
 from shadowguy.corpmap import (
     Location,
@@ -717,6 +717,51 @@ def test_hospital_stay_advances_one_day_and_skips_the_lodging_charge():
             assert app.character.health > hurt_health
             # Only the flat hospital fee was charged -- no separate lodging on top.
             assert app.character.cash == cash_before - HOSPITAL_STAY_COST
+            # A day in a hospital bed counts as rest, same as app.rest().
+            assert app.character.last_rest_hour == app.character.elapsed_hours
+
+    run(body())
+
+
+def test_rest_charges_lodging_immediately_not_at_a_midnight_crossing():
+    """Lodging used to be a side effect of whichever action crossed midnight; now it's
+    charged by rest() itself, at whatever territory the runner is standing in when
+    they take it -- even though REST_HOURS_COST (8) alone doesn't cross a day
+    boundary from a fresh character's elapsed_hours=0."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test():
+            territory = next(
+                t for t in app.corp_map.territories.values()
+                if not has_home(t) and lodging_cost(t) > 0
+            )
+            app.character.location_id = territory.id
+            cash_before = app.character.cash
+            day_before = app.character.day
+
+            app.rest()
+
+            assert app.character.day == day_before  # no midnight crossed
+            assert app.character.cash == cash_before - lodging_cost(territory)
+
+    run(body())
+
+
+def test_rest_is_free_at_home_and_resets_fatigue_by_half():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test():
+            # The start tile always carries the runner's free apartment.
+            assert has_home(app.corp_map.territories[app.character.location_id])
+            app.character.fatigue = 6
+            cash_before = app.character.cash
+
+            app.rest()
+
+            assert app.character.cash == cash_before
+            assert app.character.fatigue == 3
+            assert app.character.last_rest_hour == app.character.elapsed_hours == REST_HOURS_COST
 
     run(body())
 
@@ -908,8 +953,11 @@ def test_corp_screen_pick_faction_expand_and_rest():
             day_before = app.character.day
             hours_before = app.character.elapsed_hours
             cash_before = app.corp_state.cash
-            await pilot.click("#rest")
-            await pilot.pause()
+            # Rest is 8 hours now, not a full day -- click it enough times (3 * 8 =
+            # HOURS_PER_DAY) to actually cross a day boundary and fire the tick.
+            for _ in range(HOURS_PER_DAY // REST_HOURS_COST):
+                await pilot.click("#rest")
+                await pilot.pause()
             assert app.character.day == day_before + 1
             assert app.character.elapsed_hours == hours_before + HOURS_PER_DAY
             assert app.corp_state.daily_action_used is False

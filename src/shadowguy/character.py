@@ -17,9 +17,30 @@ if TYPE_CHECKING:
 BASE_HEALTH = 10
 HEALTH_PER_BODY = 5
 # Length of a day for Character.day's derivation from elapsed_hours (below) — also
-# how many hours Rest/a hospital stay spend, so either one deterministically
-# advances the day by exactly one (see app.spend_time).
+# how many hours a hospital stay spends, deterministically advancing the day by
+# exactly one (see app.spend_time). Rest is shorter — see REST_HOURS_COST.
 HOURS_PER_DAY = 24
+
+# How long a Rest action spends (app.ShadowguyApp.rest) — one sleep "chunk". The
+# runner is meant to take one of these every FATIGUE_GRACE_HOURS, wherever they are,
+# not just at midnight — see Character.fatigue.
+REST_HOURS_COST = 8
+
+# How long the runner can go since their last rest before fatigue starts
+# accumulating (Character.on_new_day). 24, not tied to HOURS_PER_DAY by name since
+# they mean different things: this is "time since you last slept", not "a calendar
+# day" — they happen to share a value.
+FATIGUE_GRACE_HOURS = 24
+# Fatigue compounds while overdue rather than climbing by a flat step each day: the
+# growth added each overdue day-tick is 1 plus a fraction of the fatigue already
+# built up, so a runner who's already run down burns out faster. A rest only halves
+# the accumulated total (Character.rest note in app.py) rather than clearing it, so
+# a bad stretch leaves the runner worse for a few more rests, not just one bad night.
+FATIGUE_GROWTH_DIVISOR = 3
+# Cap on how much fatigue can subtract from a stat (Character.stat) — the raw
+# counter can still climb higher than this while overdue (and takes longer to
+# fully work off via halving), but the felt penalty stops getting worse.
+FATIGUE_STAT_PENALTY_CAP = 3
 
 # Everything starts at 1 and is bought up from there. Both pools are spent at
 # character creation (app.CharacterCreationScreen) and never refill — the build
@@ -187,6 +208,14 @@ class Character:
     # top-up, not a stack you burn to full — one per day (shops.use_consumable enforces
     # it), cleared on on_new_day(). Real recovery is time in a hospital ward.
     health_kit_used_today: bool = False
+    # elapsed_hours at the runner's last completed Rest (or hospital stay) — see
+    # app.rest(). Starts at 0 so a fresh character is assumed to have just slept.
+    last_rest_hour: float = 0.0
+    # Accumulated burnout from skipping rest — see FATIGUE_GROWTH_DIVISOR and
+    # Character.stat(). A stored, sticky counter rather than something derived fresh
+    # from last_rest_hour each time, since a rest only halves it (app.rest()) instead
+    # of clearing it outright.
+    fatigue: int = 0
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -428,12 +457,27 @@ class Character:
         """
         self.health_kit_used_today = False
         self.temp_bonuses = {}
+        if self.elapsed_hours - self.last_rest_hour > FATIGUE_GRACE_HOURS:
+            self.fatigue += 1 + self.fatigue // FATIGUE_GROWTH_DIVISOR
         self.accepted_jobs = [
             job
             for job in self.accepted_jobs
             if job.scene.id == protect_job_id or not job.timing.is_expired(day)
         ]
         self._discharge_orphan_crew()
+
+    @property
+    def fatigue_penalty(self) -> int:
+        """The felt penalty from fatigue -- capped, unlike the raw counter itself
+        (see `fatigue`'s field comment). The one place this clamp is computed;
+        `stat()` and `screens.CharacterSheet` both read it rather than re-deriving it."""
+        return min(FATIGUE_STAT_PENALTY_CAP, self.fatigue)
+
+    def mark_rested(self) -> None:
+        """Record a completed rest -- called by app.rest() and a hospital stay alike.
+        Halves fatigue rather than clearing it (see `fatigue`'s field comment)."""
+        self.last_rest_hour = self.elapsed_hours
+        self.fatigue //= 2
 
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:
@@ -443,4 +487,5 @@ class Character:
             value += equipped_bonus(self.inventory, name)
             value += installed_bonus(self.installed_cyberware, name)
             value += self.temp_bonuses.get(name, 0)
+            value -= self.fatigue_penalty
         return value

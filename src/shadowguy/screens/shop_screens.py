@@ -432,11 +432,15 @@ class HospitalScreen(BackScreen):
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id != "stay":
             return
-        message = hospital_stay(self.app.character)
+        character = self.app.character
+        message = hospital_stay(character)
         if message is None:
             self.notify("Can't afford a night's care.", severity="warning")
             return
         self.app.spend_time(HOURS_PER_DAY, skip_night_effects=True)
+        # A day in a hospital bed is still a night's sleep — counts as rest the same
+        # as app.rest() (halves fatigue, doesn't clear it).
+        character.mark_rested()
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()

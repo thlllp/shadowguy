@@ -5,6 +5,8 @@ import pytest
 from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
+    FATIGUE_GRACE_HOURS,
+    FATIGUE_STAT_PENALTY_CAP,
     HEALTH_PER_BODY,
     HOURS_PER_DAY,
     MAX_SKILL_RANK,
@@ -240,6 +242,17 @@ def test_stat_rejects_unknown_name():
         c.stat("luck")
 
 
+def test_stat_subtracts_fatigue_penalty_capped_below_raw_fatigue():
+    """The raw fatigue counter can climb past FATIGUE_STAT_PENALTY_CAP, but the felt
+    penalty on a stat never does -- burning out further than the cap only means it
+    takes longer to halve back down through it, not a worse penalty."""
+    c = Character(name="t", strength=10)
+    c.fatigue = FATIGUE_STAT_PENALTY_CAP
+    assert c.stat("strength") == 10 - FATIGUE_STAT_PENALTY_CAP
+    c.fatigue = FATIGUE_STAT_PENALTY_CAP * 5
+    assert c.stat("strength") == 10 - FATIGUE_STAT_PENALTY_CAP
+
+
 def test_standing_and_local_standing_and_trust_default_to_zero_and_adjust():
     c = Character(name="t")
     assert c.standing_with("faction_x") == 0
@@ -279,6 +292,56 @@ def test_on_new_day_does_not_heal():
     hurt = c.health
     c.on_new_day(c.day)
     assert c.health == hurt
+
+
+def test_on_new_day_leaves_fatigue_alone_within_grace():
+    """Resting isn't overdue yet -- on_new_day must not grow fatigue just because a
+    day boundary happened to pass."""
+    c = Character(name="t")
+    c.elapsed_hours = FATIGUE_GRACE_HOURS
+    c.on_new_day(c.day)
+    assert c.fatigue == 0
+
+
+def test_on_new_day_grows_fatigue_once_overdue():
+    c = Character(name="t")
+    c.elapsed_hours = FATIGUE_GRACE_HOURS + 1
+    c.on_new_day(c.day)
+    assert c.fatigue == 1
+
+
+def test_fatigue_growth_compounds():
+    """Each additional overdue day-tick adds more than the last, since the growth
+    added is 1 plus a fraction of the fatigue already built up."""
+    c = Character(name="t")
+    c.elapsed_hours = FATIGUE_GRACE_HOURS + 1
+    increments = []
+    for _ in range(4):
+        before = c.fatigue
+        c.on_new_day(c.day)
+        increments.append(c.fatigue - before)
+    assert increments == sorted(increments)
+    assert increments[-1] > increments[0]
+
+
+def test_mark_rested_halves_fatigue_instead_of_clearing_it():
+    """A burnout sticks a little: mark_rested() (called by app.rest() and a hospital
+    stay alike) only halves the accumulated total, not a full reset."""
+    c = Character(name="t")
+    c.fatigue = 7
+    c.mark_rested()
+    assert c.fatigue == 3
+    c.mark_rested()
+    assert c.fatigue == 1
+    c.mark_rested()
+    assert c.fatigue == 0
+
+
+def test_mark_rested_resets_last_rest_hour():
+    c = Character(name="t")
+    c.elapsed_hours = 40
+    c.mark_rested()
+    assert c.last_rest_hour == 40
 
 
 def test_on_crew_hire_indefinite_and_for_job():

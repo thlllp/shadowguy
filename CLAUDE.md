@@ -191,6 +191,7 @@ Leaf modules, and why each has to stay one:
 | 33 | `Character.installed_cyberware` |
 | 34 | `Character.humanity` |
 | 35 | `CorpState.pending_recruit` (Academy training takes days) |
+| 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
 
 ### Verifying changes
 

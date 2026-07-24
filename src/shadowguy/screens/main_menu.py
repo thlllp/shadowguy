@@ -245,7 +245,7 @@ class MainMenu(PanelNav, Screen):
         self.query_one("#local_locations_panel").display = self.selected_category == "local"
         self.query_one("#local_fixers_panel").display = self.selected_category == "local"
 
-        items.append(ListItem(Static("Rest"), id="rest"))
+        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(self.query_one("#activities", ListView), items)
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:

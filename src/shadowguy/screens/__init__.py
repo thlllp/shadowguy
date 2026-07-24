@@ -79,9 +79,10 @@ class CharacterSheet(Static):
             ITEMS_BY_ID[entry.item_id].name if entry.equipped else f"{ITEMS_BY_ID[entry.item_id].name} (stowed)"
             for entry in c.inventory
         ) or "none"
+        fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
         return (
             f"{c.name}\n"
-            f"Day {c.day}, {c.hour_of_day:02d}:00   Health: {c.health}/{c.max_health}\n"
+            f"Day {c.day}, {c.hour_of_day:02d}:00   Health: {c.health}/{c.max_health}   {fatigue}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
             f"Cool: {c.stat('cool')}\n"
