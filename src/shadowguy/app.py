@@ -14,7 +14,9 @@ from shadowguy.corp_turn import (
 from shadowguy.corpmap import generate_corp_map, lodging_cost
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
+from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
+from shadowguy.jobs import GANG_JOB_STANDING_GAIN
 from shadowguy.rivals import RivalAction, resolve_rival_day
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
@@ -117,6 +119,12 @@ class ShadowguyApp(App):
         """Everything that used to fire from a deliberate "End the day" click —
         now fired once per day boundary crossed, by whatever action crossed it."""
         self.character.on_new_day(day, protect_job_id)
+        expired = self.character.expire_smuggling_job(day, GANG_JOB_STANDING_GAIN)
+        if expired is not None:
+            self.notify(
+                f"{GANGS_BY_ID[expired.gang_id].name} isn't happy — the delivery never showed.",
+                severity="warning",
+            )
         for name in self.character.pay_crew_wages():
             self.notify(f"{name} walked off the crew — you missed payroll.", severity="warning")
         expire_offers(self.fixers, day)

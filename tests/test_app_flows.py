@@ -25,7 +25,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import JobOffer
-from shadowguy.jobs import JobTiming, generate_job
+from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
@@ -47,12 +47,12 @@ from shadowguy.tactical import TacticalOutcome
 # in a warning) to collect it as a test class, since its name starts with "Test".
 from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
 from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
-from shadowguy.gangs import GANGS
+from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome
 from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
-from shadowguy.screens.shop_screens import HospitalScreen, JunkyardScreen, ShopScreen
+from shadowguy.screens.shop_screens import GangDenScreen, HospitalScreen, JunkyardScreen, ShopScreen
 from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
 from textual.widgets import Collapsible, ListView
 
@@ -794,6 +794,106 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
             assert app.character.elapsed_hours == hours_before + SCAVENGE_HOURS_COST
             assert app.character.inventory
             assert all(entry.item_id in SCAVENGE_MATERIALS for entry in app.character.inventory)
+
+    run(body())
+
+
+def _find_gang_den(app):
+    """The first real gang den on this run's generated map, and the territory it's
+    seated in -- corpmap._make_gang_den only builds one per gang (den_ids), so a
+    hand-set Territory.gang_id (see _stage_gang_turf) wouldn't have a Location to
+    click on."""
+    return next(
+        (t, loc)
+        for t in app.corp_map.territories.values()
+        for loc in t.locations
+        if loc.kind == LocationKind.GANG_DEN
+    )
+
+
+def test_taking_a_smuggling_job_sets_it_and_den_refuses_a_second():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            den_territory, den_location = _find_gang_den(app)
+            app.character.location_id = den_territory.id
+            gang = GANGS_BY_ID[den_territory.gang_id]
+
+            app.push_screen(GangDenScreen(den_location, gang))
+            await pilot.pause()
+            await pilot.click("#take_job")
+            await pilot.pause()
+
+            job = app.character.smuggling_job
+            assert job is not None
+            assert job.gang_id == gang.id
+            assert job.destination_territory_id != den_territory.id
+
+            # A second den visit while one's already running offers no new job.
+            await pilot.click("#busy")
+            await pilot.pause()
+            assert app.character.smuggling_job is job
+
+    run(body())
+
+
+def test_delivering_a_smuggling_job_only_pays_out_on_site():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            den_territory, den_location = _find_gang_den(app)
+            gang = GANGS_BY_ID[den_territory.gang_id]
+            app.character.location_id = den_territory.id
+
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            app.push_screen(GangDenScreen(den_location, gang))
+            await pilot.pause()
+            await pilot.click("#take_job")
+            await pilot.pause()
+            job = app.character.smuggling_job
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            # Not at the destination yet -- clicking must not pay out.
+            cash_before = app.character.cash
+            standing_before = app.character.gang_standing_with(gang.id)
+            await pilot.click("#deliver_package")
+            await pilot.pause()
+            assert app.character.smuggling_job is job
+            assert app.character.cash == cash_before
+
+            app.character.location_id = job.destination_territory_id
+            await app.screen._refresh()
+            await pilot.pause()
+            await pilot.click("#deliver_package")
+            await pilot.pause()
+
+            assert app.character.smuggling_job is None
+            assert app.character.cash == cash_before + job.reward_cash
+            assert app.character.gang_standing_with(gang.id) == standing_before + GANG_JOB_STANDING_GAIN
+
+    run(body())
+
+
+def test_missing_a_smuggling_deadline_clears_it_and_costs_gang_standing():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test():
+            den_territory, _den_location = _find_gang_den(app)
+            gang_id = den_territory.gang_id
+            job = generate_smuggling_job(gang_id, den_territory.id, app.corp_map, app.character.day, app.rng)
+            app.character.smuggling_job = job
+            standing_before = app.character.gang_standing_with(gang_id)
+
+            days_to_pass = job.deadline_day - app.character.day + 1
+            app.spend_time(HOURS_PER_DAY * days_to_pass)
+
+            assert app.character.smuggling_job is None
+            assert app.character.gang_standing_with(gang_id) == standing_before - GANG_JOB_STANDING_GAIN
 
     run(body())
 

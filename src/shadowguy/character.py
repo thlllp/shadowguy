@@ -12,6 +12,7 @@ from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
+    from shadowguy.jobs import SmugglingJob
     from shadowguy.security import SecurityContract
 
 BASE_HEALTH = 10
@@ -216,6 +217,12 @@ class Character:
     # from last_rest_hour each time, since a rest only halves it (app.rest()) instead
     # of clearing it outright.
     fatigue: int = 0
+    # A gang delivery in progress (jobs.SmugglingJob) -- one at a time. Picked up in
+    # person at a gang's den (screens.GangDenScreen), delivered in person at
+    # smuggling_job.destination_territory_id (MainMenu's "Deliver" action). Missing
+    # the deadline (checked in app._apply_day_tick) clears it and costs gang standing
+    # instead of gaining it.
+    smuggling_job: "SmugglingJob | None" = None
 
     def __post_init__(self) -> None:
         if self.health is None:
@@ -432,6 +439,29 @@ class Character:
 
     def remove_security_contract(self, contract_id: str) -> None:
         self.security_contracts = [c for c in self.security_contracts if c.id != contract_id]
+
+    def deliver_smuggling_job(self, standing_gain: int) -> "SmugglingJob":
+        """Complete the active smuggling_job on a successful delivery: pay out and
+        raise gang standing by `standing_gain` (jobs.GANG_JOB_STANDING_GAIN, passed
+        in rather than imported -- jobs.py already imports character.py). Caller
+        (MainMenu) has already checked location_id == destination_territory_id."""
+        job = self.smuggling_job
+        self.cash += job.reward_cash
+        self.adjust_gang_standing(job.gang_id, standing_gain)
+        self.smuggling_job = None
+        return job
+
+    def expire_smuggling_job(self, day: int, standing_loss: int) -> "SmugglingJob | None":
+        """Called once per day tick (app._apply_day_tick): clears smuggling_job once
+        its deadline has passed, dropping gang standing by `standing_loss` (the
+        mirror of deliver_smuggling_job's gain) instead of raising it. Returns the
+        job that expired, for the caller to notify about, or None if nothing did."""
+        job = self.smuggling_job
+        if job is None or day <= job.deadline_day:
+            return None
+        self.smuggling_job = None
+        self.adjust_gang_standing(job.gang_id, -standing_loss)
+        return job
 
     def _discharge_orphan_crew(self) -> None:
         """Drop any for-job hire whose job is no longer accepted (completed, blown, expired).

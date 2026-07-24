@@ -1,5 +1,5 @@
 import random
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -326,6 +326,26 @@ def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
             and neighbor.id != corp_map.player_start_id
         }
     )
+
+
+def territory_distance(corp_map: CorpMap, from_id: str, to_id: str) -> int:
+    """Hop count between two territories over the connection graph (BFS), 0 if
+    they're the same one. The map is fully connected by construction (every
+    territory reaches every other), so a path always exists. Used by jobs.py to
+    price a Smuggling job's travel by how far apart its pickup and drop actually are."""
+    if from_id == to_id:
+        return 0
+    visited = {from_id}
+    frontier = deque([(from_id, 0)])
+    while frontier:
+        territory_id, distance = frontier.popleft()
+        for neighbor_id in corp_map.territories[territory_id].connections:
+            if neighbor_id == to_id:
+                return distance + 1
+            if neighbor_id not in visited:
+                visited.add(neighbor_id)
+                frontier.append((neighbor_id, distance + 1))
+    raise ValueError(f"no path between {from_id!r} and {to_id!r}")
 
 
 def _owner_tag(owner: str) -> str:

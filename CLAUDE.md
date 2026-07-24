@@ -192,6 +192,7 @@ Leaf modules, and why each has to stay one:
 | 34 | `Character.humanity` |
 | 35 | `CorpState.pending_recruit` (Academy training takes days) |
 | 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
+| 37 | `Character.smuggling_job` (gang delivery jobs) |
 
 ### Verifying changes
 

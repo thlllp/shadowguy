@@ -4,8 +4,9 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, generate_corp_map
+from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, generate_corp_map, territory_distance
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.gangs import GANGS
 from shadowguy.jobs import (
     AMBUSH_LABEL,
     ARCHETYPES,
@@ -15,11 +16,14 @@ from shadowguy.jobs import (
     LEGWORK_FIGHT_STAGE,
     NEARBY_DIFFICULTY,
     SITE_DIFFICULTY,
+    SMUGGLING_BASE_DEADLINE_DAYS,
+    SMUGGLING_DEADLINE_DAYS_PER_HOP,
     SPECIALIST_FOR_STAT,
     JobTiming,
     archetype_specialist,
     generate_job,
     generate_legwork_for_job,
+    generate_smuggling_job,
 )
 from shadowguy.skills import skill_for
 
@@ -37,8 +41,11 @@ def test_generated_job_runs_three_or_four_stages(corp_map, seed):
     fight_stages = {sid for sid in scene.stages if sid.endswith("_fight")}
     non_fight = len(scene.stages) - len(fight_stages)
     assert non_fight in (3, 4)
-    # Every non-fight stage has exactly one fight beside it.
-    assert len(fight_stages) == non_fight
+    # A narration stage (see JobStage.vigilance) never rolls, so nothing can ever
+    # route into a fight beside it -- generate_job doesn't build one. Every other
+    # non-fight stage still has exactly one.
+    checkable = sum(1 for sid, s in scene.stages.items() if not sid.endswith("_fight") and s.narration is None)
+    assert len(fight_stages) == checkable
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -49,6 +56,14 @@ def test_generated_job_last_non_fight_stage_carries_the_payout(corp_map, seed):
         key=lambda sid: int(sid.removeprefix("stage_")),
     )
     last = scene.stages[stage_ids[-1]]
+    if last.narration is not None:
+        # A quiet vigilance beat (see JobStage.vigilance) still has to pay out if it
+        # lands on the last stage -- nothing went wrong, so the job still completes.
+        assert last.narration.cash_delta > 0
+        assert last.narration.rep_delta > 0
+        assert last.narration.standing_delta == JOB_STANDING_HIT
+        assert last.narration.experience_delta > 0
+        return
     # The last stage's success outcome must actually pay cash/rep/standing.
     non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
     assert non_ambush, "last stage must have at least one non-ambush choice"
@@ -129,7 +144,9 @@ def test_generated_job_stage_approaches_have_distinct_stats(corp_map, seed):
 def test_generated_job_ambush_choice_present_on_every_non_fight_stage(corp_map, seed):
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     for sid, stage in scene.stages.items():
-        if sid.endswith("_fight"):
+        if sid.endswith("_fight") or stage.narration is not None:
+            # A narration beat (see JobStage.vigilance) never rolls, so there's
+            # nothing to force into a fight -- no ambush choice to offer.
             continue
         labels = [o.label for o in _stage_options(stage)]
         assert any(label.startswith(AMBUSH_LABEL) for label in labels)
@@ -183,7 +200,10 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
         pytest.skip("generic archetype, no lead to pin")
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     for sid, stage in scene.stages.items():
-        if sid.endswith("_fight"):
+        if sid.endswith("_fight") or stage.narration is not None:
+            # A quiet vigilance beat (see JobStage.vigilance) has no choices at all --
+            # the specialist's guaranteed way through only means something where
+            # there's a check to withhold it from.
             continue
         non_ambush = [c for c in stage.choices if not c.label.startswith(AMBUSH_LABEL)]
         stats = {skill_for(c.skill).stat for c in non_ambush}
@@ -298,3 +318,26 @@ def test_legwork_critical_failure_routes_to_a_real_combat_stage(corp_map, seed):
     fight_stage = legwork.stages[LEGWORK_FIGHT_STAGE]
     assert fight_stage.combat is not None
     assert fight_stage.combat.enemies
+
+
+# --- Smuggling (jobs.SmugglingJob -- a gang delivery, not a Scene) ---
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generate_smuggling_job_destination_is_never_the_pickup(corp_map, seed):
+    pickup_id = corp_map.player_start_id
+    job = generate_smuggling_job(GANGS[0].id, pickup_id, corp_map, day=1, rng=random.Random(seed))
+    assert job.destination_territory_id != pickup_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_generate_smuggling_job_deadline_scales_with_distance(corp_map, seed):
+    pickup_id = corp_map.player_start_id
+    job = generate_smuggling_job(GANGS[0].id, pickup_id, corp_map, day=1, rng=random.Random(seed))
+    hops = territory_distance(corp_map, pickup_id, job.destination_territory_id)
+    assert job.deadline_day == 1 + SMUGGLING_BASE_DEADLINE_DAYS + SMUGGLING_DEADLINE_DAYS_PER_HOP * hops
+
+
+def test_generate_smuggling_job_carries_the_gang_that_gave_it(corp_map):
+    job = generate_smuggling_job(GANGS[0].id, corp_map.player_start_id, corp_map, day=1, rng=random.Random(0))
+    assert job.gang_id == GANGS[0].id
