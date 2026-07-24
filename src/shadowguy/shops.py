@@ -104,14 +104,11 @@ class Item:
     # an unlimited-slot item like a deck). Not restricted to Slot.TORSO — armor is
     # the common case, but any wearable can carry it.
     defense: int = 0
-    # The next three are what make a weapon a weapon, and are meaningless (and
-    # rejected) on anything else: `skill` is the skill id its attack rolls,
-    # `damage` (4-10) is the health it takes off an enemy on a hit, and
-    # `concealment` (1-5, higher = easier to keep out of sight) is seeded for
-    # later — nothing reads it yet, same as corpmap's Territory modifiers. This
-    # is the only place a weapon's combat profile is written — combat.py reads
-    # it rather than keeping a second table of its own that would have to agree
-    # with this one.
+    # `skill` and `damage` are what make a weapon a weapon, and are meaningless
+    # (and rejected) on anything else — `concealment` is valid for weapons and
+    # armor alike. This is the only place a weapon's combat profile is written —
+    # combat.py reads it rather than keeping a second table of its own that
+    # would have to agree with this one.
     skill: str | None = None
     damage: int = 0
     concealment: int = 0
@@ -235,15 +232,15 @@ class Consumable:
 
 
 # id, name, price, bonuses, slot, defense, then for weapons only: skill, damage,
-# concealment, two_handed, then skill_bonuses (a wearable's per-skill bonus, e.g.
-# Slippers' Stealth), then travel_reduction (a Slot.VEHICLE item's percentage cut
-# off travel time, e.g. Beater Bike), then min_standing (tier gate), then
-# recharge_rounds (weapon cooldown between shots), and finally stun_damage
-# (non-lethal knockout damage). A weapon's skill is what its attack rolls in combat and
-# its damage is what a hit takes off — the pool spans blunt/short_blade/long_blade/
-# firearms, so no build is stuck swinging a weapon it can't use. The bloodiest one
-# is two-handed, which costs both weapon slots (SLOT_CAPACITY). Weapons carry no
-# stat bonus by default — damage/skill/concealment are their whole profile — so
+# then concealment (weapons and wearables both), two_handed, then skill_bonuses (a
+# wearable's per-skill bonus, e.g. Slippers' Stealth), then travel_reduction (a
+# Slot.VEHICLE item's percentage cut off travel time, e.g. Beater Bike), then
+# min_standing (tier gate), then recharge_rounds (weapon cooldown between shots), and
+# finally stun_damage (non-lethal knockout damage). A weapon's skill is what its attack
+# rolls in combat and its damage is what a hit takes off — the pool spans blunt/
+# short_blade/long_blade/firearms, so no build is stuck swinging a weapon it can't use.
+# The bloodiest one is two-handed, which costs both weapon slots (SLOT_CAPACITY).
+# Weapons carry no stat bonus by default — damage/skill are their whole profile — so
 # `bonuses` is {} unless a specific weapon deliberately earns one. Armor is the same
 # shop's other business: `defense` (1-8) adds straight onto combat.player_defense()
 # while equipped, and it's not restricted to Slot.TORSO — any wearable can carry it.
@@ -256,8 +253,10 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         # catalog today, so it's what makes cybernetics.SMARTLINK_ID reachable at all.
         ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "firearms", 5, 4, False, {}, 0, 0, 0, 0, "old tech", 0, True),
         ("leather_jacket", "Leather Jacket", 200, {}, Slot.TORSO, 3),
-        ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 5),
+        ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 3, None, 0, 4),
         ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
+        ("armored_suit_i", "Armored Suit I", 700, {}, Slot.TORSO, 4, None, 0, 5, False, {}, 0, 2),
+        ("armored_suit_ii", "Armored Suit II", 1100, {}, Slot.TORSO, 5, None, 0, 5, False, {}, 0, 3),
         ("reinforced_helmet", "Reinforced Helmet", 250, {}, Slot.HEADWEAR, 3),
         ("kevlar_helmet", "Kevlar Helmet", 120, {}, Slot.HEADWEAR, 1),
         ("steel_toe_boots", "Steel Toe Boots", 120, {}, Slot.BOOTS, 1),
@@ -421,8 +420,8 @@ if any(item.two_handed and item.slot is not Slot.WEAPON for item in ITEMS_BY_ID.
     raise ValueError("two_handed items must have slot=Slot.WEAPON")
 
 # A weapon's combat profile and its slot have to agree, both ways round. A Slot.WEAPON
-# item with no skill/damage/concealment/stun would be an attack the combat screen can
-# offer but never resolve; a skill, damage, or concealment on a non-weapon would be a
+# item with no skill/damage/stun would be an attack the combat screen can
+# offer but never resolve; a skill, damage, or stun on a non-weapon would be a
 # combat profile nothing can ever reach, since combat only ever swings what's equipped
 # in Slot.WEAPON. The skill id goes through skill_for, so a typo'd weapon skill fails on
 # import rather than mid-fight. Defense is the wearable counterpart to a weapon's
@@ -447,12 +446,20 @@ for _item in ITEMS_BY_ID.values():
             f" or {MIN_STUN_DAMAGE}-{MAX_STUN_DAMAGE} stun_damage (or both)"
         )
     if not _is_weapon and (
-        _item.skill is not None or _item.damage or _item.stun_damage or _item.concealment
+        _item.skill is not None or _item.damage or _item.stun_damage
     ):
         raise ValueError(
             f"{_item.id}: only a Slot.WEAPON item can have a combat skill, damage,"
-            " stun_damage, or concealment"
+            " or stun_damage"
         )
+    if not _is_weapon and _item.concealment:
+        if _item.slot not in WEARABLE_SLOTS:
+            raise ValueError(f"{_item.id}: only a weapon or wearable item can have concealment")
+        if not (MIN_WEAPON_CONCEALMENT <= _item.concealment <= MAX_WEAPON_CONCEALMENT):
+            raise ValueError(
+                f"{_item.id}: concealment must be"
+                f" {MIN_WEAPON_CONCEALMENT}-{MAX_WEAPON_CONCEALMENT}"
+            )
     if _item.skill is not None:
         skill_for(_item.skill)
     if _item.defense and _item.slot not in WEARABLE_SLOTS:
