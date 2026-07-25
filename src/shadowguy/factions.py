@@ -57,10 +57,15 @@ FACTIONS_BY_ID = {faction.id: faction for faction in FACTIONS}
 # officer_dialogue) — but it does care whether the street knows your name at all: min_rep
 # 0 means a runner whose rep has gone negative (a blown job or gig costs rep now — see
 # character.REP_FLOOR) gets turned away even from the lobby. Talking is flavor only for now.
+# Named because the takeover gate below keys off this specific rung — the exec suite is
+# where a corp actually changes hands. Referenced in the table rather than repeated, so
+# a rename can't leave the two disagreeing.
+EXECUTIVE_ROLE = "executive"
+
 CORP_OFFICER_TIERS = (
     ("receptionist", 0, None),
     ("operations manager", 5, 3),
-    ("executive", 12, 8),
+    (EXECUTIVE_ROLE, 12, 8),
 )
 
 # Keyed by role rather than position: an HQ's officers (corpmap._make_officers) and this
@@ -74,6 +79,47 @@ def officer_unlocked(rep: int, standing: int, role: str) -> bool:
     lobby — rep-gated only, open even when the corp is hostile (see CORP_OFFICER_TIERS)."""
     min_rep, min_standing = _CORP_OFFICER_TIERS_BY_ROLE[role]
     return rep >= min_rep and (min_standing is None or standing >= min_standing)
+
+
+# What it takes for a runner to be handed a corp from the inside — the terms the
+# executive names once they'll actually see you (screens/shop_screens.CorpHQScreen).
+# Deliberately *above* the executive tier's own gate: reaching the exec suite buys the
+# conversation, not the company.
+#
+# Rep and standing rise together for a runner working a corp's rivals — a completed job
+# is +1 rep and, via factions.standing_shift, +1 standing with every rival of the corp it
+# hit — so these two land at roughly the same point in a run by design rather than
+# stacking into two separate grinds. The cash is the part you have to deliberately save
+# for, and it's the gate most likely to need tuning: at roughly 30 completed jobs of gross
+# income (jobs.REWARD_BASE) it sits an order of magnitude past the priciest thing in any
+# shop (1400eb), which is the point — a corp is not a purchase you make in passing.
+#
+# CLAUDE.md: switching modes is "meant to be difficult — neither mode is a straight upgrade
+# over the other". These are first-slice numbers, not balance-simulated.
+TAKEOVER_MIN_REP = 20
+TAKEOVER_MIN_STANDING = 15
+TAKEOVER_COST = 15000
+
+
+def can_take_over(rep: int, standing: int, cash: int) -> bool:
+    """Whether this runner can buy a controlling stake in a corp today. Takes plain ints
+    (like officer_unlocked) so factions.py stays a leaf — the caller reads them off the
+    Character."""
+    return rep >= TAKEOVER_MIN_REP and standing >= TAKEOVER_MIN_STANDING and cash >= TAKEOVER_COST
+
+
+def takeover_gate(rep: int, standing: int, cash: int) -> str:
+    """What's still standing between this runner and the corp, for the locked label —
+    only the unmet requirements, so the line shrinks as they close in on it rather than
+    restating the whole wall every time."""
+    missing = []
+    if rep < TAKEOVER_MIN_REP:
+        missing.append(f"rep {TAKEOVER_MIN_REP} (you have {rep})")
+    if standing < TAKEOVER_MIN_STANDING:
+        missing.append(f"standing {TAKEOVER_MIN_STANDING:+d} (you have {standing:+d})")
+    if cash < TAKEOVER_COST:
+        missing.append(f"{TAKEOVER_COST}eb (you have {cash})")
+    return ", ".join(missing)
 
 
 def officer_gate(role: str) -> str:

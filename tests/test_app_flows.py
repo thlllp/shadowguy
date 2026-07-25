@@ -23,7 +23,13 @@ from shadowguy.corpmap import (
     has_home,
     lodging_cost,
 )
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import (
+    FACTIONS,
+    FACTIONS_BY_ID,
+    TAKEOVER_COST,
+    TAKEOVER_MIN_REP,
+    TAKEOVER_MIN_STANDING,
+)
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
@@ -31,6 +37,7 @@ from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.corp_turn import (
     TECHNOLOGIES_BY_ID,
+    CorpState,
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     collect_income,
@@ -52,7 +59,13 @@ from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome
 from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
-from shadowguy.screens.shop_screens import GangDenScreen, HospitalScreen, JunkyardScreen, ShopScreen
+from shadowguy.screens.shop_screens import (
+    CorpHQScreen,
+    GangDenScreen,
+    HospitalScreen,
+    JunkyardScreen,
+    ShopScreen,
+)
 from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
@@ -1033,7 +1046,7 @@ def test_skills_screen_refuses_unaffordable_stat_without_charging():
     run(body())
 
 
-def test_corp_screen_pick_faction_expand_and_rest():
+def test_corp_screen_expand_and_rest():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
@@ -1057,9 +1070,11 @@ def test_corp_screen_pick_faction_expand_and_rest():
                     break
             assert faction_id is not None, "no faction had an eligible neutral neighbor"
 
-            await pilot.click(f"#faction_{faction_id}")
+            # A corp is taken at its HQ now (CorpHQScreen, gated on rep/standing/cash);
+            # this test is about what you do once you have one, so stage it directly.
+            app.corp_state = CorpState(faction_id=faction_id)
+            await app.screen._refresh()
             await pilot.pause()
-            assert app.corp_state is not None
             assert app.corp_state.faction_id == faction_id
 
             # Give the corp room to afford the move regardless of the target's value.
@@ -1104,7 +1119,10 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             await pilot.pause()
 
             faction = FACTIONS[0]
-            await pilot.click(f"#faction_{faction.id}")
+            # A corp is taken at its HQ now (CorpHQScreen, gated on rep/standing/cash);
+            # this test is about what you do once you have one, so stage it directly.
+            app.corp_state = CorpState(faction_id=faction.id)
+            await app.screen._refresh()
             await pilot.pause()
             app.corp_state.cash = 1_000_000
             await app.screen._refresh()
@@ -1385,7 +1403,10 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.pause()
 
             faction = FACTIONS[0]
-            await pilot.click(f"#faction_{faction.id}")
+            # A corp is taken at its HQ now (CorpHQScreen, gated on rep/standing/cash);
+            # this test is about what you do once you have one, so stage it directly.
+            app.corp_state = CorpState(faction_id=faction.id)
+            await app.screen._refresh()
             await pilot.pause()
             app.corp_state.cash = 1_000_000
             await app.screen._refresh()
@@ -1526,5 +1547,106 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
             assert f"{territory.name}, running Server Pull" in working
             unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
             assert "whereabouts unknown" in unknown
+
+    run(body())
+
+
+def _find_corp_hq(app):
+    """The first CORP_HQ location on this run's map, with its owning faction."""
+    for territory in app.corp_map.territories.values():
+        for location in territory.locations:
+            if location.kind is LocationKind.CORP_HQ:
+                return location, FACTIONS_BY_ID[territory.owner]
+    raise AssertionError("no corp HQ found on the map")
+
+
+def test_corp_screen_no_longer_hands_a_runner_a_corp():
+    """The free menu pick is gone: with no corp, CorpScreen lists the corps as
+    read-only standing readouts and selecting one only points at its HQ."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(MainMenu())
+            await pilot.pause()
+            await pilot.click("#cat_corp")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpScreen)
+
+            rows = app.screen.query_one("#corp_list", ListView)
+            assert [row.id for row in rows.children] == [
+                f"corpinfo_{faction.id}" for faction in FACTIONS
+            ]
+            rows.index = 0
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.corp_state is None  # selecting a corp must not hand it over
+
+    run(body())
+
+
+def test_hq_takeover_is_locked_until_rep_standing_and_cash_are_all_met():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            location, faction = _find_corp_hq(app)
+            character = app.character
+
+            # Below the executive's own gate there's no offer on the table at all.
+            app.push_screen(CorpHQScreen(location, faction))
+            await pilot.pause()
+            assert len(app.screen.query("#takeover")) == 0
+            app.pop_screen()
+            await pilot.pause()
+
+            # Executive-visible but short on every takeover gate: shown, locked.
+            character.rep = 12
+            character.standing[faction.id] = 8
+            character.cash = 0
+            app.push_screen(CorpHQScreen(location, faction))
+            await pilot.pause()
+            label = str(app.screen.query_one("#takeover").query_one(Static).content)
+            assert "locked" in label
+            assert f"rep {TAKEOVER_MIN_REP}" in label
+            assert f"{TAKEOVER_COST}eb" in label
+
+            # Selecting it while locked must not hand over the corp.
+            rows = app.screen.query_one("#hq_officers", ListView)
+            rows.index = len(rows.children) - 1
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.corp_state is None
+            assert character.cash == 0
+
+    run(body())
+
+
+def test_hq_takeover_buys_the_corp_and_charges_for_it():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            location, faction = _find_corp_hq(app)
+            character = app.character
+            character.rep = TAKEOVER_MIN_REP
+            character.standing[faction.id] = TAKEOVER_MIN_STANDING
+            character.cash = TAKEOVER_COST + 500
+
+            app.push_screen(CorpHQScreen(location, faction))
+            await pilot.pause()
+            rows = app.screen.query_one("#hq_officers", ListView)
+            assert str(rows.children[-1].query_one(Static).content).startswith("Move on the board")
+
+            rows.index = len(rows.children) - 1
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.corp_state is not None
+            assert app.corp_state.faction_id == faction.id
+            assert character.cash == 500  # charged exactly the stake
+            # The offer is gone once taken -- you can't run two corps.
+            assert len(app.screen.query("#takeover")) == 0
 
     run(body())
