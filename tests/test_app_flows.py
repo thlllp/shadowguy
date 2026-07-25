@@ -87,6 +87,25 @@ def run(coro):
     return asyncio.run(coro)
 
 
+async def _settle(pilot) -> None:
+    """Let the opening screen finish laying out before anything is clicked.
+
+    run_test() hands back a pilot while the first layout is still pending, and
+    a single pilot.pause() isn't enough to flush it: pause() *ends* by calling
+    screen._on_timer_update(), which is what actually runs the layout. Meanwhile
+    pilot.click(selector) reads the target's .region once, up front, then pauses
+    between the MouseDown/MouseUp/Click it posts -- so a click can be aimed with
+    a pre-layout region and delivered against the post-layout screen.
+
+    On TitleMenu that shifted #new_game between y=18 and y=17 and put the click
+    one row low, opening Load Game instead of New Game in ~2% of runs (measured:
+    3/150). The second pause runs the pending layout before any coordinates are
+    taken. Use this instead of a bare pause() wherever the first thing a test
+    does after boot is a coordinate-based click.
+    """
+    await pilot.pause()
+    await pilot.pause()
+
 
 def test_app_boots_to_title_menu():
     async def body():
@@ -102,7 +121,7 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             assert isinstance(app.screen, ModeSelectScreen)
@@ -128,7 +147,7 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#runner")
@@ -146,7 +165,7 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -178,7 +197,7 @@ def test_corp_main_menu_has_sidebar_categories():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -402,7 +421,7 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
@@ -417,7 +436,7 @@ def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, TitleMenu)
 
             await pilot.click("#test")
@@ -452,7 +471,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
             await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
@@ -1131,7 +1150,7 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -1440,7 +1459,7 @@ def _boot_runner_game(pilot, app):
     playable runner game."""
 
     async def go():
-        await pilot.pause()
+        await _settle(pilot)
         await pilot.click("#new_game")
         await pilot.pause()
         await pilot.click("#runner")
