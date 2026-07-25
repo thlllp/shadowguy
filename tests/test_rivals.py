@@ -16,8 +16,6 @@ lightweight-fixture style), not a full generate_corp_map — none of this cares
 about the rest of a real map's generated content.
 """
 
-import random
-
 from shadowguy.character import Character
 from shadowguy.corpmap import CorpMap, Location, LocationKind, Territory
 from shadowguy.factions import FACTIONS
@@ -33,19 +31,9 @@ from shadowguy.rivals import (
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.scene import Scene, Stage
 
+from helpers import ForcedChance
+
 IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
-
-
-class ForcedChance(random.Random):
-    """A Random whose random() always returns `value`; choice()/randint() still
-    work normally, so a fixed value forces the expansion roll to hit or miss."""
-
-    def __init__(self, value: float) -> None:
-        super().__init__(0)
-        self._value = value
-
-    def random(self) -> float:
-        return self._value
 
 
 HIT = ForcedChance(0.0)  # 0.0 < EXPANSION_CHANCE -> always triggers

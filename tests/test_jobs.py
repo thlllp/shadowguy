@@ -4,8 +4,8 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, generate_corp_map, territory_distance
-from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, territory_distance
+from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.gangs import GANGS
 from shadowguy.jobs import (
     AMBUSH_LABEL,
@@ -28,11 +28,6 @@ from shadowguy.jobs import (
 from shadowguy.skills import skill_for
 
 SEEDS = range(150)
-
-
-@pytest.fixture(scope="module")
-def corp_map():
-    return generate_corp_map(FACTIONS, random.Random(0))
 
 
 @pytest.mark.parametrize("seed", SEEDS)

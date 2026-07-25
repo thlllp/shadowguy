@@ -72,17 +72,7 @@ from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.widgets import Collapsible, ListView, Static
 
-
-class ForcedChance(random.Random):
-    """A Random whose random() is fixed, so the flat gang-encounter chance can be forced
-    to fire; randint/choice still work for the enemy roll."""
-
-    def __init__(self, value: float) -> None:
-        super().__init__(0)
-        self._value = value
-
-    def random(self) -> float:
-        return self._value
+from helpers import ForcedChance
 
 
 def _stage_gang_turf(app, standing: int) -> str:

@@ -4,10 +4,9 @@ import random
 
 import pytest
 
-from shadowguy.character import Character
 from shadowguy.checks import CRITICAL_MARGIN, CheckResult, day_tier
-from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, generate_corp_map
-from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, RIVAL_WEIGHT
+from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS
+from shadowguy.factions import FACTIONS_BY_ID, RIVAL_WEIGHT
 from shadowguy.security import (
     BLOWN_FIXER_TRUST_HIT,
     BLOWN_REP_HIT,
@@ -26,13 +25,9 @@ from shadowguy.security import (
     generate_security_contract,
     resolve_security_night,
 )
+from helpers import AlwaysSix, character_with_skill_value
 
 SEEDS = range(150)
-
-
-@pytest.fixture(scope="module")
-def corp_map():
-    return generate_corp_map(FACTIONS, random.Random(0))
 
 
 # --- Generation invariants ---
@@ -99,25 +94,9 @@ def _make_contract(skill: str, difficulty: int, nights_total: int = 3) -> Securi
     )
 
 
-def _character_with_skill_value(skill_id: str, value: int) -> Character:
-    """A fresh Character with the given skill forced to an exact skill_value, by
-    zeroing its rank and setting the tied stat directly (bypasses spend_*, fine for
-    a resolution test that only cares about the resulting pool size)."""
-    character = Character(name="t")
-    character.skill_ranks[skill_id] = 0
-    character.perception = value  # every WATCH_SKILLS entry ties to perception or intelligence
-    character.intelligence = value
-    return character
-
-
-class AlwaysSix(random.Random):
-    def randint(self, a, b):
-        return 6
-
-
 def test_resolve_security_night_critical_success_pays_bonus_and_advances():
     contract = _make_contract(skill="sight", difficulty=9)  # opposing pool 0
-    character = _character_with_skill_value("sight", CRITICAL_MARGIN)  # pool == CRITICAL_MARGIN
+    character = character_with_skill_value("sight", CRITICAL_MARGIN)  # pool == CRITICAL_MARGIN
     result = resolve_security_night(character, contract, rng=AlwaysSix())
     assert result.roll.result is CheckResult.CRITICAL_SUCCESS
     assert result.pay == round(contract.nightly_pay * CRITICAL_SUCCESS_PAY_MULT)
@@ -130,7 +109,7 @@ def test_resolve_security_night_critical_success_pays_bonus_and_advances():
 
 def test_resolve_security_night_success_completes_contract_on_last_night():
     contract = _make_contract(skill="sight", difficulty=9, nights_total=1)
-    character = _character_with_skill_value("sight", 1)  # margin 1: plain success, not crit
+    character = character_with_skill_value("sight", 1)  # margin 1: plain success, not crit
     result = resolve_security_night(character, contract, rng=AlwaysSix())
     assert result.roll.result is CheckResult.SUCCESS
     assert result.pay == contract.nightly_pay
@@ -146,7 +125,7 @@ def test_resolve_security_night_success_completes_contract_on_last_night():
 
 def test_resolve_security_night_plain_failure_costs_health_no_pay_but_still_advances():
     contract = _make_contract(skill="sight", difficulty=9)
-    character = _character_with_skill_value("sight", 0)  # pool 0 both sides -> margin 0 -> FAILURE
+    character = character_with_skill_value("sight", 0)  # pool 0 both sides -> margin 0 -> FAILURE
     result = resolve_security_night(character, contract, rng=random.Random(0))
     assert result.roll.result is CheckResult.FAILURE
     assert result.pay == 0
@@ -162,7 +141,7 @@ def test_resolve_security_night_failure_on_the_last_night_still_completes_the_co
     the final night is a failure -- not keep demanding extra nights because only a
     successful night was ever checked for completion."""
     contract = _make_contract(skill="sight", difficulty=9, nights_total=1)
-    character = _character_with_skill_value("sight", 0)  # margin 0 -> FAILURE
+    character = character_with_skill_value("sight", 0)  # margin 0 -> FAILURE
     result = resolve_security_night(character, contract, rng=random.Random(0))
     assert result.roll.result is CheckResult.FAILURE
     assert result.pay == 0
@@ -176,7 +155,7 @@ def test_resolve_security_night_failure_on_the_last_night_still_completes_the_co
 def test_resolve_security_night_critical_failure_blows_the_contract():
     difficulty = 9 + 2 * CRITICAL_MARGIN  # opposing pool == CRITICAL_MARGIN
     contract = _make_contract(skill="sight", difficulty=difficulty)
-    character = _character_with_skill_value("sight", 0)  # player pool 0 -> 0 successes always
+    character = character_with_skill_value("sight", 0)  # player pool 0 -> 0 successes always
     result = resolve_security_night(character, contract, rng=AlwaysSix())
     assert result.roll.result is CheckResult.CRITICAL_FAILURE
     assert result.pay == 0
@@ -198,7 +177,7 @@ def test_resolve_security_night_critical_failure_rival_factions_move_the_opposit
     hurting/helping one corp is a favour/harm to its rivals at half weight."""
     difficulty = 9 + 2 * CRITICAL_MARGIN
     contract = _make_contract(skill="sight", difficulty=difficulty)
-    character = _character_with_skill_value("sight", 0)
+    character = character_with_skill_value("sight", 0)
     resolve_security_night(character, contract, rng=AlwaysSix())
     rival_ids = [fid for fid in FACTIONS_BY_ID if fid != contract.faction_id]
     for rival_id in rival_ids:

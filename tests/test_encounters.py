@@ -17,19 +17,9 @@ from shadowguy.encounters import (
 )
 from shadowguy.gangs import GANGS
 
+from helpers import ForcedChance
+
 GANG_ID = GANGS[0].id
-
-
-class ForcedChance(random.Random):
-    """A Random whose random() always returns `value`; randint/choice still work (for the
-    enemy roll), so a fixed value forces the encounter chance to hit or miss on demand."""
-
-    def __init__(self, value: float) -> None:
-        super().__init__(0)
-        self._value = value
-
-    def random(self) -> float:
-        return self._value
 
 
 def _territory(gang_id):

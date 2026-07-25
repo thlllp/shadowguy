@@ -19,11 +19,6 @@ from shadowguy.gigs import (
 SEEDS = range(150)
 
 
-@pytest.fixture(scope="module")
-def corp_map():
-    return generate_corp_map(FACTIONS, random.Random(0))
-
-
 def _a_location_with_characters(corp_map):
     for territory in corp_map.territories.values():
         for location in territory.locations:
