@@ -36,8 +36,10 @@ from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.corp_turn import (
+    TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     CorpState,
+    FactionEvent,
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     collect_income,
@@ -60,6 +62,7 @@ from shadowguy.scene import Outcome
 from shadowguy.screens.info_screens import (
     AlarmClockScreen,
     ContactsScreen,
+    CorpWebsiteScreen,
     CyberdeckScreen,
     MessagesScreen,
     PhoneScreen,
@@ -1599,6 +1602,33 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
     run(body())
 
 
+def test_contacts_corps_panel_row_opens_that_corps_website():
+    """The other way to reach a corp's site besides Web -- Contacts' Corps
+    panel rows (faction_<id>) push the same CorpWebsiteScreen."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            faction = FACTIONS[0]
+
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+            corps_list = app.screen.query_one("#corps_list", ListView)
+            corps_list.focus()
+            corps_list.index = next(
+                i for i, item in enumerate(corps_list.children) if item.id == f"faction_{faction.id}"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, CorpWebsiteScreen)
+            assert app.screen.faction is faction
+
+    run(body())
+
+
 def test_web_screen_lists_cross_fixer_offers_and_accepting_one_takes_it():
     """Web aggregates open offers from every established (trust>0) fixer into one
     list; selecting one should behave exactly like FixerOffersScreen's own accept
@@ -1669,6 +1699,51 @@ def test_web_screen_lists_megacorp_apps_before_the_search_section():
             await pilot.press("enter")
             await pilot.pause()
             assert app.character.accepted_jobs == []  # an app shortcut, not a job accept
+            assert isinstance(app.screen, CorpWebsiteScreen)
+            assert app.screen.faction is FACTIONS[0]
+
+    run(body())
+
+
+def test_corp_website_screen_shows_no_updates_yet_with_an_empty_blog():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+
+            app.push_screen(CorpWebsiteScreen(FACTIONS[0]))
+            await pilot.pause()
+            blog_list = app.screen.query_one("#blog_list", ListView)
+            ids = [item.id for item in blog_list.children]
+            assert ids == ["no_blog_posts"]
+
+    run(body())
+
+
+def test_corp_website_screen_renders_faction_events_most_recent_first():
+    """Blog posts come straight from ShadowguyApp.faction_events, which
+    rivals.resolve_rival_day/CorpScreen/ResearchTreeScreen append to
+    most-recent-first — this screen just renders that order, it doesn't sort."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            faction = FACTIONS[0]
+            territory_id = next(iter(app.corp_map.territories))
+            technology_id = TECHNOLOGIES[0].id
+            app.faction_events[faction.id] = [
+                FactionEvent(kind="technology", day=7, technology_id=technology_id),
+                FactionEvent(kind="territory", day=3, territory_id=territory_id),
+            ]
+
+            app.push_screen(CorpWebsiteScreen(faction))
+            await pilot.pause()
+            blog_list = app.screen.query_one("#blog_list", ListView)
+            labels = [item.query_one(Static).content for item in blog_list.children]
+            assert f"Day 7 — Unveiled new technology: {TECHNOLOGIES[0].name}." in str(labels[0])
+            territory_name = app.corp_map.territories[territory_id].name
+            assert f"Day 3 — Expanded operations into {territory_name}." in str(labels[1])
 
     run(body())
 

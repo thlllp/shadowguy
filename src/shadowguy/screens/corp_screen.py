@@ -12,6 +12,7 @@ from shadowguy.corp_turn import (
     TRAINING_DAYS,
     CorpState,
     EmployeeCategory,
+    FactionEvent,
     assistant_capacity,
     assistant_rate,
     build_efficiency_upgrade,
@@ -22,6 +23,7 @@ from shadowguy.corp_turn import (
     expansion_cost,
     has_technology,
     lab_capacity,
+    log_faction_event,
     next_efficiency_cost,
     next_lab_cost,
     owned_research_facility,
@@ -301,6 +303,11 @@ class CorpScreen(BackScreen):
             territory = self.app.corp_map.territories[territory_id]
             if expand_into(corp_state, self.app.corp_map, territory_id, self.app.rng):
                 self.notify(f"Claimed {territory.name}.")
+                log_faction_event(
+                    self.app.faction_events,
+                    corp_state.faction_id,
+                    FactionEvent(kind="territory", day=self.app.character.day, territory_id=territory_id),
+                )
             elif corp_state.daily_action_used:
                 self.notify("Already made your move today.", severity="warning")
             else:
@@ -609,6 +616,11 @@ class ResearchTreeScreen(BackScreen):
             return
         if research_technology(corp_state, technology_id):
             self.notify(f"Researched {technology.name}.")
+            log_faction_event(
+                self.app.faction_events,
+                corp_state.faction_id,
+                FactionEvent(kind="technology", day=self.app.character.day, technology_id=technology_id),
+            )
         else:
             self.notify("Not enough research points.", severity="warning")
         await self._refresh()

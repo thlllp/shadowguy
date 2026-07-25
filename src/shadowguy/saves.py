@@ -129,7 +129,12 @@ SAVE_SUFFIX = ".save"
 # v39 replaced Contacts with the Phone screen (screens/info_screens.py) and added
 # its Alarm Clock tab: Character gained `alarm_hour` (a pre-v39 pickled Character
 # lacks it, None when no alarm is set).
-SAVE_VERSION = 39
+# v40 added each Faction's public website (WebScreen's webapp_ rows now push
+# CorpWebsiteScreen instead of a toast): ShadowguyApp gained `rival_researched`
+# (faction_id -> set of Technology ids a rival has "researched", rivals.py's
+# unstaffed flavor-only roll) and `faction_events` (faction_id -> list of
+# corp_turn.FactionEvent, the blog itself) -- a pre-v40 save lacks both keys.
+SAVE_VERSION = 40
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
@@ -142,6 +147,8 @@ STATE_KEYS = frozenset(
         "location_gigs",
         "rival_actions",
         "rival_runner_states",
+        "rival_researched",
+        "faction_events",
         "corp_state",
         "corp_only",
     }

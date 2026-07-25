@@ -439,6 +439,20 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 
 **Scientists and operatives still buy nothing directly** beyond feeding research (research assistants) — operatives remain a mechanism ahead of its driver.
 
+## Corp websites (`corp_turn.FactionEvent`, `shadowguy/rivals.py`, `screens/info_screens.py`'s `CorpWebsiteScreen`)
+
+Every `FACTIONS` corp has a public site — a blog of the newsworthy things it's done, readable whether or not the player is the one running it. Two entry points push the same `CorpWebsiteScreen(faction)`: `WebScreen`'s `webapp_<id>` rows (the Phone's Web app) and `ContactsScreen`'s Corps panel `faction_<id>` rows (also reached from the Phone, via Contacts) — picking either just opens the page, there's nothing screen-specific about it.
+
+**The blog itself is `ShadowguyApp.faction_events`** (`dict[faction_id, list[FactionEvent]]`), most-recent-first and capped at `corp_turn.MAX_FACTION_EVENTS` (15) per faction — same shape as `CorpState.sightings`/`MAX_SIGHTINGS_LOG`. `FactionEvent` is `kind` (`"territory"` or `"technology"`), `day`, and whichever of `territory_id`/`technology_id` applies. `log_faction_event(events, faction_id, event)` does the insert-and-trim; it lives in `corp_turn.py` (not `rivals.py`) so `CorpScreen`/`ResearchTreeScreen` can call it too without either of them importing `rivals`.
+
+**Every faction gets entries, not just the player's.** `rivals.resolve_rival_day` logs a `"territory"` event whenever its existing expansion roll (`EXPANSION_CHANCE`) claims ground, and now also rolls a **second, independent, unstaffed research check** (`RIVAL_RESEARCH_CHANCE`, 0.15) per faction per day: if it has any `corp_turn.TECHNOLOGIES` entry whose prereqs it already holds, it has a chance to "gain" one, logged as a `"technology"` event. This tracks `ShadowguyApp.rival_researched` (`dict[faction_id, {technology_id}]`) — a parallel, cosmetic-only shadow of `CorpState.researched` for factions the player doesn't run. No scientists, labs, or research points back it; it exists purely so a rival's site has something to say. Both new dicts are optional keyword args to `resolve_rival_day`, defaulting to a fresh dict like `rival_runner_states` — every pre-existing call site is unaffected.
+
+**The player's own corp logs itself from the UI layer, not from `corp_turn.py`.** `resolve_rival_day` skips whichever faction `player_faction_id` names, so the player's own `expand_into` (`CorpScreen`) and `research_technology` (`ResearchTreeScreen`) calls each append their own `FactionEvent` right after a successful call, at the same call site that already fires the success `notify()`. `corp_turn.py`'s functions themselves stay untouched — no event-logging parameter was added to them — keeping `expand_into`/`research_technology` leaf-simple and matching every other corp purchase's "fails closed, notify why" shape.
+
+**`CorpWebsiteScreen` is read-only rendering**, no state of its own (same shape as `MessagesScreen`): a masthead line (`Faction.name`/`.specialty`/`.description`) plus the faction's `faction_events` rendered oldest-never-reordered (the log is already most-recent-first) as `"Day {day} — Expanded operations into {territory}."` / `"Day {day} — Unveiled new technology: {technology}."`, falling back to `"No updates yet."` when empty.
+
+`SAVE_VERSION` 40 added `rival_researched`/`faction_events` to the save bundle.
+
 ## Corp map (`shadowguy/corpmap.py`, `shadowguy/factions.py`)
 
 The board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (65) nodes on an 11×8 (`GRID_COLS`×`GRID_ROWS`) grid, one contiguous blob, wired by a random spanning tree (always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops. The grid is deliberately larger than `TERRITORY_COUNT` — leftover cells are the holes that stop the blob becoming a solid rectangle.

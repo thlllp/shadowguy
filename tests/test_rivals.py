@@ -17,6 +17,7 @@ about the rest of a real map's generated content.
 """
 
 from shadowguy.character import Character
+from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent
 from shadowguy.corpmap import CorpMap, Location, LocationKind, Territory
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, JobOffer, expire_offers
@@ -24,6 +25,7 @@ from shadowguy.jobs import JobTiming
 from shadowguy.rivals import (
     EXPANSION_CHANCE,
     RECOVERY_DAYS,
+    RIVAL_RESEARCH_CHANCE,
     RunnerActivity,
     RunnerState,
     resolve_rival_day,
@@ -176,6 +178,77 @@ def test_chance_boundary_is_strict_less_than():
     boundary = ForcedChance(EXPANSION_CHANCE)
     actions = resolve_rival_day(Character(name="t"), corp_map, day=1, rng=boundary)
     assert _faction_action(actions, IRONCLAD).territory_id is None
+
+
+# Rival research (RIVAL_RESEARCH_CHANCE) and the faction_events blog log.
+
+
+def test_eligible_faction_gains_one_root_technology_on_a_research_hit():
+    corp_map = _map()
+    researched: dict[str, set[str]] = {}
+    events: dict[str, list[FactionEvent]] = {}
+    resolve_rival_day(
+        Character(name="t"), corp_map, day=4, rng=HIT, rival_researched=researched, faction_events=events
+    )
+    gained = researched[IRONCLAD]
+    assert len(gained) == 1
+    technology = next(t for t in TECHNOLOGIES if t.id in gained)
+    assert technology.prereqs == ()  # only a root tech is available on day one
+
+    tech_events = [e for e in events[IRONCLAD] if e.kind == "technology"]
+    assert len(tech_events) == 1
+    assert tech_events[0].technology_id == technology.id
+    assert tech_events[0].day == 4
+
+
+def test_no_faction_researches_on_a_research_miss():
+    corp_map = _map()
+    researched: dict[str, set[str]] = {}
+    resolve_rival_day(Character(name="t"), corp_map, day=1, rng=MISS, rival_researched=researched)
+    assert researched[IRONCLAD] == set()
+
+
+def test_a_faction_with_every_technology_already_researched_never_gains_more():
+    corp_map = _map()
+    all_ids = {tech.id for tech in TECHNOLOGIES}
+    researched = {IRONCLAD: set(all_ids)}
+    events: dict[str, list[FactionEvent]] = {}
+    resolve_rival_day(
+        Character(name="t"), corp_map, day=1, rng=HIT, rival_researched=researched, faction_events=events
+    )
+    assert researched[IRONCLAD] == all_ids
+    assert not any(e.kind == "technology" for e in events.get(IRONCLAD, []))
+
+
+def test_research_chance_boundary_is_strict_less_than():
+    corp_map = _map()
+    boundary = ForcedChance(RIVAL_RESEARCH_CHANCE)
+    researched: dict[str, set[str]] = {}
+    resolve_rival_day(Character(name="t"), corp_map, day=1, rng=boundary, rival_researched=researched)
+    assert researched[IRONCLAD] == set()
+
+
+def test_territory_claim_and_technology_gain_are_both_logged_to_faction_events():
+    corp_map = _map()
+    events: dict[str, list[FactionEvent]] = {}
+    resolve_rival_day(Character(name="t"), corp_map, day=6, rng=HIT, faction_events=events)
+    assert {e.kind for e in events[IRONCLAD]} == {"territory", "technology"}
+    assert all(e.day == 6 for e in events[IRONCLAD])
+
+
+def test_player_faction_is_excluded_from_the_research_roll_too():
+    corp_map = _map()
+    researched: dict[str, set[str]] = {}
+    resolve_rival_day(
+        Character(name="t"), corp_map, day=1, rng=HIT, player_faction_id=IRONCLAD, rival_researched=researched
+    )
+    assert IRONCLAD not in researched
+
+
+def test_omitted_rival_researched_and_faction_events_default_gracefully():
+    """Every pre-existing call site doesn't pass either -- must keep working,
+    just without any persistence across calls, same as rival_runner_states."""
+    resolve_rival_day(Character(name="t"), _map(), day=1, rng=HIT)
 
 
 def _pair_map(locations=()):

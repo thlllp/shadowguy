@@ -6,6 +6,7 @@ from textual.screen import Screen
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character
 from shadowguy.corp_turn import (
     CorpState,
+    FactionEvent,
     advance_training,
     collect_income,
     collect_research,
@@ -48,6 +49,8 @@ class ShadowguyApp(App):
         refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         self.rival_actions: list[RivalAction] = []
         self.rival_runner_states: dict[str, RunnerState] = {}
+        self.rival_researched: dict[str, set[str]] = {}
+        self.faction_events: dict[str, list[FactionEvent]] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
 
@@ -159,6 +162,8 @@ class ShadowguyApp(App):
             player_faction_id,
             self.rival_runner_states,
             self.fixers,
+            self.rival_researched,
+            self.faction_events,
         )
         self.rival_actions += today_actions
         # Runners take jobs off the fixers' boards overnight (the offer stays
@@ -245,6 +250,8 @@ class ShadowguyApp(App):
             "location_gigs": self.location_gigs,
             "rival_actions": self.rival_actions,
             "rival_runner_states": self.rival_runner_states,
+            "rival_researched": self.rival_researched,
+            "faction_events": self.faction_events,
             "corp_state": self.corp_state,
             "corp_only": self.corp_only,
         }
@@ -258,6 +265,8 @@ class ShadowguyApp(App):
         self.location_gigs = location_gigs
         self.rival_actions = state["rival_actions"]
         self.rival_runner_states = state["rival_runner_states"]
+        self.rival_researched = state["rival_researched"]
+        self.faction_events = state["faction_events"]
         self.corp_state = state["corp_state"]
         self.corp_only = state["corp_only"]
         unspent = self.character.stat_points + self.character.skill_points
