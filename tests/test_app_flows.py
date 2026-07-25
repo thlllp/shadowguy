@@ -1,4 +1,4 @@
-"""End-to-end UI flow tests, driven headlessly via Textual's app.run_test()/pilot.
+"""End-to-end UI flow tests, driven headlessly via Textual's app.run_test(size=(80, 60))/pilot.
 
 These exercise real screen wiring (imports, ids, event routing) rather than pure
 logic -- the kind of regression a unit test on combat.py alone would miss (e.g. a
@@ -33,6 +33,7 @@ from shadowguy.factions import (
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
+from shadowguy.screens import CharacterSheet
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.corp_turn import (
@@ -124,7 +125,7 @@ async def _settle(pilot) -> None:
 def test_app_boots_to_title_menu():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, TitleMenu)
 
@@ -134,7 +135,7 @@ def test_app_boots_to_title_menu():
 def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
@@ -160,7 +161,7 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
 def test_creation_screen_refuses_to_begin_with_unspent_points():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
@@ -178,7 +179,7 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
 def test_new_game_corp_mode_picks_faction_and_skips_creation():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
@@ -210,7 +211,7 @@ def test_corp_main_menu_has_sidebar_categories():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
@@ -265,7 +266,7 @@ def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             # Find a generated job whose first fight is abstract (not tactical) --
@@ -325,7 +326,7 @@ def test_combat_action_list_boxes_only_the_highlighted_action():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             scene = None
@@ -379,7 +380,7 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             scene = None
@@ -434,7 +435,7 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
@@ -449,7 +450,7 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
 def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             assert isinstance(app.screen, TitleMenu)
 
@@ -484,7 +485,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
@@ -525,7 +526,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
 def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             # Stand the runner in a district with a weapon shop specifically -- its
@@ -567,7 +568,7 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
 def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             store_location = None
@@ -620,7 +621,7 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
 def test_cyberdeck_menu_option_reaches_the_screen_with_no_decks_owned():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -641,7 +642,7 @@ def test_cyberdeck_menu_option_reaches_the_screen_with_no_decks_owned():
 def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
             await pilot.pause()
@@ -666,7 +667,7 @@ def test_travel_never_refused_regardless_of_hours_already_spent():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
             await pilot.pause()
@@ -699,7 +700,7 @@ def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test():
+        async with app.run_test(size=(80, 60)):
             app.corp_state = CorpState(faction_id=FACTIONS[0].id)
             one_day_income = collect_income(app.corp_state, app.corp_map)
             assert one_day_income > 0
@@ -725,7 +726,7 @@ def test_hospital_stay_advances_one_day_and_skips_the_lodging_charge():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             # The start tile always carries the runner's free apartment (has_home), which
@@ -768,7 +769,7 @@ def test_rest_charges_lodging_immediately_not_at_a_midnight_crossing():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test():
+        async with app.run_test(size=(80, 60)):
             territory = next(
                 t for t in app.corp_map.territories.values()
                 if not has_home(t) and lodging_cost(t) > 0
@@ -788,7 +789,7 @@ def test_rest_charges_lodging_immediately_not_at_a_midnight_crossing():
 def test_rest_is_free_at_home_and_resets_fatigue_by_half():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test():
+        async with app.run_test(size=(80, 60)):
             # The start tile always carries the runner's free apartment.
             assert has_home(app.corp_map.territories[app.character.location_id])
             app.character.fatigue = 6
@@ -799,6 +800,53 @@ def test_rest_is_free_at_home_and_resets_fatigue_by_half():
             assert app.character.cash == cash_before
             assert app.character.fatigue == 3
             assert app.character.last_rest_hour == app.character.elapsed_hours == REST_HOURS_COST
+
+    run(body())
+
+
+def test_rest_always_heals_one_point_regardless_of_health_kit_or_location():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)):
+            character = app.character
+            character.health = character.max_health - 5
+            assert not character.health_kit_used_today
+            before = character.health
+
+            app.rest()
+
+            assert character.health == before + 1
+
+    run(body())
+
+
+def test_rest_healing_survives_a_rest_that_crosses_midnight():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)):
+            character = app.character
+            character.health = character.max_health - 5
+            character.elapsed_hours = HOURS_PER_DAY - 1  # one hour from midnight
+            before = character.health
+
+            app.rest()  # REST_HOURS_COST (8h) crosses the boundary
+
+            assert character.day == 2
+            assert character.health == before + 1
+
+    run(body())
+
+
+def test_rest_healing_does_not_exceed_max_health():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)):
+            character = app.character
+            assert character.health == character.max_health
+
+            app.rest()
+
+            assert character.health == character.max_health
 
     run(body())
 
@@ -815,7 +863,7 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             app.rng = AlwaysSix()
@@ -851,7 +899,7 @@ def _find_gang_den(app):
 def test_taking_a_smuggling_job_sets_it_and_den_refuses_a_second():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             den_territory, den_location = _find_gang_den(app)
             app.character.location_id = den_territory.id
@@ -878,7 +926,7 @@ def test_taking_a_smuggling_job_sets_it_and_den_refuses_a_second():
 def test_delivering_a_smuggling_job_only_pays_out_on_site():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             den_territory, den_location = _find_gang_den(app)
             gang = GANGS_BY_ID[den_territory.gang_id]
@@ -919,7 +967,7 @@ def test_delivering_a_smuggling_job_only_pays_out_on_site():
 def test_missing_a_smuggling_deadline_clears_it_and_costs_gang_standing():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test():
+        async with app.run_test(size=(80, 60)):
             den_territory, _den_location = _find_gang_den(app)
             gang_id = den_territory.gang_id
             job = generate_smuggling_job(gang_id, den_territory.id, app.corp_map, app.character.day, app.rng)
@@ -944,7 +992,7 @@ def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             scene, _timing = generate_job(day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(0))
@@ -979,7 +1027,7 @@ def test_completed_job_xp_is_not_split_with_crew_but_each_crew_member_earns_it_t
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
             scene, _timing = generate_job(day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(0))
@@ -1003,7 +1051,7 @@ def test_skills_screen_spends_experience_on_a_stat_and_a_skill():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.character.experience = 100
             body_before = app.character.body
@@ -1029,7 +1077,7 @@ def test_skills_screen_spends_experience_on_a_stat_and_a_skill():
 def test_skills_screen_refuses_unaffordable_stat_without_charging():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.character.experience = 0
             body_before = app.character.body
@@ -1050,7 +1098,7 @@ def test_skills_screen_refuses_unaffordable_stat_without_charging():
 def test_corp_screen_expand_and_rest():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1112,7 +1160,7 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1168,7 +1216,7 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
@@ -1198,7 +1246,7 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
 def test_phone_screen_lists_four_apps_in_a_grid():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(PhoneScreen())
             await pilot.pause()
@@ -1220,7 +1268,7 @@ def test_phone_app_tiles_open_their_own_screens():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             for key, screen_cls in (
                 ("app_contacts", ContactsScreen),
@@ -1248,7 +1296,7 @@ def test_phone_app_tiles_open_their_own_screens():
 def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(ContactsScreen())
             await pilot.pause()
@@ -1271,7 +1319,7 @@ def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
 def test_contacts_panel_nav_skips_a_collapsed_section():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(ContactsScreen())
             await pilot.pause()
@@ -1293,7 +1341,7 @@ def test_contacts_panel_nav_skips_a_collapsed_section():
 def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1313,7 +1361,7 @@ def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
 def test_local_panels_are_only_visible_on_the_local_category():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1339,7 +1387,7 @@ def test_local_panels_are_only_visible_on_the_local_category():
 def test_local_panel_nav_skips_a_collapsed_section():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1361,7 +1409,7 @@ def test_local_panel_nav_skips_a_collapsed_section():
 def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_cash():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             neighbor_id = _stage_gang_turf(app, standing=-2)  # toll band
             app.character.cash = 1000
@@ -1389,7 +1437,7 @@ def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_
 def test_toll_the_runner_cant_cover_falls_through_to_a_fight():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             neighbor_id = _stage_gang_turf(app, standing=-2)  # toll band, 70eb
             app.character.cash = 10  # can't cover the toll
@@ -1415,7 +1463,7 @@ def test_toll_the_runner_cant_cover_falls_through_to_a_fight():
 def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             neighbor_id = _stage_gang_turf(app, standing=-5)  # attack band
 
@@ -1545,6 +1593,61 @@ def _boot_runner_game(pilot, app):
     return go()
 
 
+def test_character_sheet_panel_shows_stun_ampm_time_and_a_corp_standing_column():
+    """The always-visible panel (CharacterSheet) must carry Health, Fatigue,
+    Stun, Money, Reputation, Experience, 12-hour time, and every major corp's
+    standing on its own line -- this pins the exact fields/format so a future
+    edit to render() can't silently drop one."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            character.stun = 5
+            character.elapsed_hours = 13  # 1:00 PM
+            character.adjust_standing(FACTIONS[0].id, 3)
+
+            content = app.screen.query_one(CharacterSheet).render()
+            assert "Stun: 5" in content
+            assert "1:00 PM" in content
+            assert f"{FACTIONS[0].name}: +3" in content
+            for faction in FACTIONS[1:]:
+                assert f"{faction.name}: +0" in content
+
+    run(body())
+
+
+def test_character_sheet_panel_shows_stun_none_and_midnight_as_12_am():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+
+            content = app.screen.query_one(CharacterSheet).render()  # elapsed_hours starts at 0
+            assert "Stun: None" in content
+            assert "12:00 AM" in content
+
+    run(body())
+
+
+def test_corp_map_screen_shows_the_character_sheet_panel():
+    """CorpMapScreen was the one runner-mode screen not yielding CharacterSheet
+    -- the always-visible panel must reach it too."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+            assert app.screen.query_one(CharacterSheet) is not None
+
+    run(body())
+
+
 def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
     """A job an independent runner beat the player to (rivals.py) stays on the
     fixer's board for the day, labelled with who took it, and selecting it must
@@ -1552,7 +1655,7 @@ def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             fixer = app.fixers[0]
             offer = fixer.offers[0]
@@ -1580,7 +1683,7 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             territory = app.corp_map.territories[app.character.location_id]
             app.rival_runner_states[RIVAL_RUNNERS[0].id] = RunnerState(
@@ -1608,7 +1711,7 @@ def test_contacts_corps_panel_row_opens_that_corps_website():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             faction = FACTIONS[0]
 
@@ -1636,7 +1739,7 @@ def test_web_screen_lists_cross_fixer_offers_and_accepting_one_takes_it():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             fixer = next(f for f in app.fixers if f.offers)
             app.character.adjust_fixer_trust(fixer.id, 1)
@@ -1662,7 +1765,7 @@ def test_web_screen_lists_cross_fixer_offers_and_accepting_one_takes_it():
 def test_web_screen_omits_fixers_without_established_trust():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             assert all(app.character.trust_with(fixer.id) <= 0 for fixer in app.fixers)
 
@@ -1682,7 +1785,7 @@ def test_web_screen_lists_megacorp_apps_before_the_search_section():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
 
             app.push_screen(WebScreen())
@@ -1708,7 +1811,7 @@ def test_web_screen_lists_megacorp_apps_before_the_search_section():
 def test_corp_website_screen_shows_no_updates_yet_with_an_empty_blog():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
 
             app.push_screen(CorpWebsiteScreen(FACTIONS[0]))
@@ -1727,7 +1830,7 @@ def test_corp_website_screen_renders_faction_events_most_recent_first():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             faction = FACTIONS[0]
             territory_id = next(iter(app.corp_map.territories))
@@ -1754,7 +1857,7 @@ def test_alarm_clock_screen_sets_and_shortens_the_next_rest():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             assert app.character.elapsed_hours == 0.0  # hour_of_day 0, fresh character
 
@@ -1782,7 +1885,7 @@ def test_alarm_clock_screen_sets_and_shortens_the_next_rest():
 def test_alarm_clock_screen_selecting_the_same_hour_again_clears_it():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             app.character.alarm_hour = 6
 
@@ -1804,7 +1907,7 @@ def test_alarm_clock_screen_selecting_the_same_hour_again_clears_it():
 def test_messages_screen_recaps_an_established_fixers_open_work():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
             fixer = next(f for f in app.fixers if f.offers)
             app.character.adjust_fixer_trust(fixer.id, 1)
@@ -1833,7 +1936,7 @@ def test_corp_screen_no_longer_hands_a_runner_a_corp():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(MainMenu())
             await pilot.pause()
@@ -1856,7 +1959,7 @@ def test_corp_screen_no_longer_hands_a_runner_a_corp():
 def test_hq_takeover_is_locked_until_rep_standing_and_cash_are_all_met():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             location, faction = _find_corp_hq(app)
             character = app.character
@@ -1893,7 +1996,7 @@ def test_hq_takeover_is_locked_until_rep_standing_and_cash_are_all_met():
 def test_hq_takeover_buys_the_corp_and_charges_for_it():
     async def body():
         app = ShadowguyApp()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             location, faction = _find_corp_hq(app)
             character = app.character

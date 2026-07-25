@@ -475,10 +475,6 @@ class CombatState:
     # Populated by _attack when the weapon has recharge_rounds > 0; decremented at
     # round end in take_turn. Resets between fights (CombatState is per-fight).
     weapon_cooldowns: dict[str, int] = field(default_factory=dict)
-    # Player's accumulated stun damage this fight. Starts at 0, goes up; when it
-    # meets or exceeds the player's current health, the outcome becomes
-    # KNOCKED_OUT — the fight ends (see _stun_player). Clears with CombatState.
-    player_stun: int = 0
 
     @property
     def standing(self) -> list[Fighter]:
@@ -552,10 +548,14 @@ def _stun_fighter(state: CombatState, fighter: Fighter, stun_amount: int) -> Non
 
 
 def _stun_player(state: CombatState, stun_amount: int) -> None:
-    """Apply stun damage to the player. If stun >= health, they're knocked out."""
-    state.player_stun += stun_amount
-    state.log.append(f"Your nerves crackle ({state.player_stun} stun).")
-    if state.player_stun >= state.character.health:
+    """Apply stun damage to the player. Character.stun is persistent (carries
+    into the next fight, only Rest clears it — see Character.mark_rested), so
+    entering a fight already stunned makes the threshold below easier to reach.
+    If stun >= current health, they're knocked out."""
+    character = state.character
+    character.adjust_stun(stun_amount)
+    state.log.append(f"Your nerves crackle ({character.stun} stun).")
+    if character.stun >= character.health:
         state.outcome = CombatOutcome.KNOCKED_OUT
         state.log.append("You're knocked out.")
 

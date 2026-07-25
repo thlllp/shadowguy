@@ -20,7 +20,7 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.shops import equipped_travel_reduction
 
-from . import MENU_BACK_BINDINGS, BackScreen, _menu_css
+from . import MENU_BACK_BINDINGS, BackScreen, CharacterSheet, _menu_css
 from .combat_screen import CombatScreen
 
 TRAVEL_HOURS_COST = 2.0
@@ -74,6 +74,7 @@ class CorpMapScreen(BackScreen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield CharacterSheet(self.app.character)
         yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
         yield Static(id="territory_info")
         yield Static(markup=False, id="modifiers")
@@ -81,6 +82,12 @@ class CorpMapScreen(BackScreen):
 
     def on_mount(self) -> None:
         self.selected_id = self.app.character.location_id
+        self._refresh()
+
+    def on_screen_resume(self) -> None:
+        # Health/cash/stun can change off-screen (a pushed CombatScreen from a
+        # gang fight, a GangTollScreen toll) -- refresh so the panel and info
+        # bars don't show stale numbers once this screen is back on top.
         self._refresh()
 
     def action_travel(self) -> None:
@@ -207,6 +214,7 @@ class CorpMapScreen(BackScreen):
             f"{self._travel_hint(t, here, character)}"
         )
         self.query_one("#modifiers", Static).update(self._modifier_panel(t))
+        self.query_one(CharacterSheet).refresh()
 
     def _modifier_panel(self, t: Territory) -> str:
         labels, levels = [], []

@@ -7,10 +7,12 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult
 from shadowguy.combat import (
     SMARTLINK_ATTACK_BONUS,
+    Action,
     ActionKind,
     CombatOutcome,
     Drop,
     ENEMIES_BY_ID,
+    Enemy,
     UNARMED,
     available_actions,
     drop_for_result,
@@ -229,3 +231,51 @@ def test_player_soak_folds_in_installed_cyberware_defense():
     before = player_soak(character)
     install_cyberware(character, "titanium_bones")
     assert player_soak(character) == before + 2
+
+
+# --- persistent stun (Character.stun replaced the old per-CombatState counter) ---
+
+
+class _AlwaysSix(random.Random):
+    def randint(self, a, b):
+        return 6  # guarantees every to-hit/brace roll in these tests passes
+
+
+def _stunning_enemy(stun_damage: int) -> Enemy:
+    return Enemy(id="test_stunner", name="Stunner", health=20, attack=5, defense=1, damage=1,
+                 toughness=0, stun_damage=stun_damage)
+
+
+def test_a_landed_hit_from_a_stun_weapon_raises_character_stun():
+    c = Character(name="t", body=10)  # tanky, so the parting health damage doesn't kill
+    state = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
+    brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
+    before = c.stun
+    take_turn(state, brace, rng=_AlwaysSix())
+    assert c.stun == before + 4
+
+
+def test_stun_carries_over_into_a_second_fight_instead_of_resetting():
+    """The old CombatState.player_stun reset to 0 for every new CombatState; now
+    it's Character.stun, so a runner who walks into a second fight already
+    rattled starts it stunned instead of fresh."""
+    c = Character(name="t", body=10)
+    brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
+
+    first = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
+    take_turn(first, brace, rng=_AlwaysSix())
+    after_first_fight = c.stun
+    assert after_first_fight > 0
+
+    second = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
+    assert second.character.stun == after_first_fight  # carried over, not reset to 0
+    take_turn(second, brace, rng=_AlwaysSix())
+    assert c.stun == after_first_fight + 4
+
+
+def test_stun_reaching_current_health_knocks_the_player_out():
+    c = Character(name="t", body=1)  # low max_health, easy to reach the threshold in one hit
+    state = start_combat(c, (_stunning_enemy(stun_damage=c.health),), rng=random.Random(0))
+    brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
+    take_turn(state, brace, rng=_AlwaysSix())
+    assert state.outcome is CombatOutcome.KNOCKED_OUT

@@ -124,7 +124,8 @@ class ShadowguyApp(App):
 
         Resting only halves accumulated fatigue rather than clearing it (see
         Character.fatigue) — a bad stretch of skipped rest still costs a few more
-        nights to fully shake off."""
+        nights to fully shake off. It does heal a flat point of health, though,
+        wherever the runner rests and whatever else happened that day."""
         character = self.character
         cost = self.rest_cost()
         if cost:
@@ -136,6 +137,7 @@ class ShadowguyApp(App):
         character.alarm_hour = None
         self.spend_time(hours)
         character.mark_rested()
+        character.adjust_health(1)
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that used to fire from a deliberate "End the day" click —

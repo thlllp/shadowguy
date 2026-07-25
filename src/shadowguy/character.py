@@ -135,6 +135,11 @@ class Character:
     rep: int = 0
     humanity: int = HUMANITY_BASELINE
     health: int | None = None
+    # Accumulated non-lethal stun damage (combat.py's weapon-side stun_damage lands
+    # here via _stun_player). Persists across fights and screens, unlike the old
+    # per-CombatState counter it replaced — a rest clears it outright (mark_rested),
+    # not merely halved like fatigue, so it's a real meter but not a punishing one.
+    stun: int = 0
     # The run's clock: a continuous count of in-game hours spent, never reset.
     # Character.day (below) is derived from this rather than stored — see
     # app.spend_time, the single chokepoint that advances it.
@@ -332,6 +337,9 @@ class Character:
     def adjust_health(self, delta: int) -> None:
         self.health = max(0, min(self.max_health, self.health + delta))
 
+    def adjust_stun(self, delta: int) -> None:
+        self.stun = max(0, self.stun + delta)
+
     def adjust_rep(self, delta: int) -> None:
         self.rep = max(REP_FLOOR, self.rep + delta)
 
@@ -509,9 +517,12 @@ class Character:
 
     def mark_rested(self) -> None:
         """Record a completed rest -- called by app.rest() and a hospital stay alike.
-        Halves fatigue rather than clearing it (see `fatigue`'s field comment)."""
+        Halves fatigue rather than clearing it (see `fatigue`'s field comment), but
+        clears stun outright -- unlike burnout, a knock to the nerves is meant to
+        walk off completely with one real rest."""
         self.last_rest_hour = self.elapsed_hours
         self.fatigue //= 2
+        self.stun = 0
 
     def stat(self, name: str) -> int:
         if name not in STAT_NAMES:

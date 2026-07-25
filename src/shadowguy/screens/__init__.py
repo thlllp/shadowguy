@@ -116,30 +116,43 @@ async def _populate_list(
     await _replace_items(list_view, items)
 
 
+def _format_hour_ampm(hour: int) -> str:
+    """CharacterSheet's clock display -- Character.hour_of_day (0-23) rendered
+    12-hour, e.g. 0 -> "12:00 AM", 13 -> "1:00 PM". Scoped to this one panel;
+    every other screen that shows the hour still uses the raw 24-hour value."""
+    period = "AM" if hour < 12 else "PM"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}:00 {period}"
+
+
 class CharacterSheet(Static):
+    """The always-visible status panel: every runner-mode screen (combat,
+    tactical, matrix, burglary, scene, shop, main menu, creation, the corp
+    map) yields one of these near the top, so it's never a deliberate choice
+    to check your own condition mid-run."""
+
     def __init__(self, character: Character) -> None:
         super().__init__()
         self.character = character
 
     def render(self) -> str:
         c = self.character
-        standings = "  ".join(
-            f"{f.name.split()[0]}: {c.standing_with(f.id):+d}" for f in FACTIONS
-        )
         gear = ", ".join(
             ITEMS_BY_ID[entry.item_id].name if entry.equipped else f"{ITEMS_BY_ID[entry.item_id].name} (stowed)"
             for entry in c.inventory
         ) or "none"
         fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
+        stun = "None" if c.stun == 0 else str(c.stun)
+        standing_lines = "\n".join(f"  {f.name}: {c.standing_with(f.id):+d}" for f in FACTIONS)
         return (
-            f"{c.name}\n"
-            f"Day {c.day}, {c.hour_of_day:02d}:00   Health: {c.health}/{c.max_health}   {fatigue}\n"
+            f"{c.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
+            f"Health: {c.health}/{c.max_health}   {fatigue}   Stun: {stun}\n"
+            f"Cash: {c.cash}eb   Rep: {c.rep}   Experience: {c.experience}xp   "
+            f"Humanity: {c.humanity}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
             f"Cool: {c.stat('cool')}\n"
-            f"Cash: {c.cash}eb   Rep: {c.rep}   Experience: {c.experience}xp   "
-            f"Humanity: {c.humanity}\n"
-            f"Standing — {standings}\n"
+            f"Standing:\n{standing_lines}\n"
             f"Gear: {gear}"
         )
 

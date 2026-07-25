@@ -92,6 +92,7 @@ Lodging is charged by `ShadowguyApp.rest()`, not by the midnight tick. The runne
 
 - **Lodging** is `LODGING_COST_PER_DEVELOPMENT` (5) × the district's Development — free where `corpmap.has_home(territory)` (an owned `APARTMENT`/`SAFEHOUSE`) or under an active security contract there. **Resting must never be blocked**: `rest()` pays `min(cost, cash)` and moves on. `ShadowguyApp.rest_cost()` is the one place the formula lives — both the charge and the menu-item preview (`MainMenu`/`CorpScreen`) call it.
 - **`Character.on_new_day()` does not heal.** It resets `health_kit_used_today`/`temp_bonuses`, expires jobs and discharges orphan crew, once per day boundary. Health is deliberately excluded.
+- **`rest()` itself heals a flat one point**, unconditionally — wherever the runner rests, whatever else happened that day (no Health Kit or location gate, unlike the cash charge above). `adjust_health` still clamps at `max_health`, so a full-health Rest is a no-op point.
 - **The hospital is the main way health comes back** (`shops.hospital_stay`, `HospitalScreen`): `HOSPITAL_STAY_COST` (20), heals `1d6 + raw Body`. Spends exactly `HOURS_PER_DAY` with `skip_night_effects=True` (skips security-contract night resolution — the runner isn't on-site). It also counts as rest (see Fatigue below): the handler calls `Character.mark_rested()`, the same as `rest()`.
 - **Property**: a `REAL_ESTATE` office lists safehouses *across the map* (`Location.listings`). Buying calls `corpmap.add_safehouse` → `has_home` true there. `safehouse_price` = `SAFEHOUSE_BASE_PRICE` (200) + `SAFEHOUSE_PRICE_PER_DEVELOPMENT` (75) × Development + `SAFEHOUSE_PRICE_PER_VALUE` (50) × value. Districts with an existing home drop off the listing.
 - `SafehouseScreen` is a **stub** — rest/stash functions land later.
@@ -124,6 +125,8 @@ Runner mode has no stamina and no manual "End the day" button. `Character.elapse
 **Vehicles cut travel time by a percentage, not a daily allowance.** `shops.Item.travel_reduction` (`Slot.VEHICLE` only): `equipped_travel_reduction` applies fresh to `TRAVEL_HOURS_COST` (2.0) each hop. Catalog: Beater Bike -10%, Tuned Coupe -20%, Armored Towncar -25%. `corp_map_screen._travel_hours(character)` is the one place the formula lives — both the charge and the pre-travel hint call it.
 
 **First-slice hour costs, not balance-simulated**: `TRAVEL_HOURS_COST` 2.0, `Scene.hours_cost` default 4 (gigs/legwork), job `hours_cost` 8/12 (tier 0 / 1+), hospital exactly `HOURS_PER_DAY`, Rest `REST_HOURS_COST` (8). `JobTiming.deadline_day`/`scheduled_day` windows (`randint(2,5)`/`randint(1,4)` days) were tuned against the old stamina pace and may feel tighter now — worth a playtest, not a pre-emptive numbers change.
+
+`screens.CharacterSheet` renders the clock 12-hour (`_format_hour_ampm`, e.g. "1:00 PM") — the one place in the UI that does; every other hour display (`rest_label`, travel hints, etc.) stays in `Character.hour_of_day`'s raw 24-hour form.
 
 ## Fixers & job generation (`shadowguy/fixer.py`, `shadowguy/jobs.py`)
 
@@ -216,6 +219,8 @@ Combat is the **only part of the game that isn't a single check** — but it's s
 **Running always works — the Dodge check only decides what it costs you** (a clean break, or one parting shot from *one* enemy). Load-bearing: without this, the build most needing the exit (a Hacker: 15 health, no Agility) is exactly the build that can't make the roll (it failed ~65% of the time, ate the round, and the squad kept swinging). **A fight must never be a cage.**
 
 **Weapons are the damage, skills are the hit.** `skill_value` decides connection; `shops.Item.damage` decides the cost — the only place a weapon's profile is written. Unarmed is always an attack (`UNARMED`, Grapple), just a bad one.
+
+**Stun is a persistent `Character` stat, not a per-fight counter.** A weapon/enemy's `stun_damage` (non-lethal) lands on `Character.stun` via `_stun_player`, bypassing soak entirely — it's the raw hit, not the soaked health damage. If `stun >= current health`, `CombatOutcome.KNOCKED_OUT` ends the fight. Because `stun` lives on `Character` (not the old `CombatState.player_stun`, which reset to 0 every `start_combat`), it now **carries into the next fight** — walking in already rattled means less headroom before another knockout. `Character.mark_rested()` clears it outright (unlike fatigue's halving) — a real meter, but not a punishing one; one rest and it's gone. Always visible on `screens.CharacterSheet`.
 
 **Balance, simulated over three presets × job archetypes (best-odds approach, running below 25% health):**
 
@@ -330,6 +335,10 @@ Today only a *completed* job moves standing (`jobs.JOB_STANDING_HIT` = -2, on th
 `Scene.__post_init__` rejects a `standing_delta` on a scene with no `target_faction_id` — a gig can't anger a corp it was never aimed at.
 
 **Room left for territory effects:** `Scene.target_territory_id` records *where* a job hit; nothing consumes it beyond flavor yet. A future territory-control effect belongs as a new `Outcome` field applied in `apply_outcome`, keyed off `target_territory_id` — don't invent a second effect pipeline.
+
+**`screens.CharacterSheet` lists standing with every `FACTIONS` entry one per line** (a "Standing:" column), not the old single inline row — the always-visible panel every runner-mode screen carries (see below) is meant to be read as a status board, not squeezed onto one line.
+
+**`CharacterSheet` is the one panel every runner-mode screen yields**, at (or near) the top: combat, tactical, matrix, burglary, scene, shop, main menu, creation, and `CorpMapScreen` (the one gap, closed alongside the standing-column/Stun/12-hour-clock changes above). It carries Health, Fatigue, Stun, Cash, Rep, Experience, Humanity, core stats, the standing column, and equipped gear — everything a runner might need to check without leaving whatever they're doing. Not yielded by `CorpScreen`/`CorpMainMenu` (the corp-mode screens have their own corp-focused header) or the pre-game menus.
 
 ## Rival AI (`shadowguy/rivals.py`)
 
