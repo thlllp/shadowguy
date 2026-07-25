@@ -1,7 +1,5 @@
 """Tests for shops.py: standing-scaled pricing, slot capacity, buy/sell/equip flows."""
 
-import random
-
 from shadowguy.character import Character
 from shadowguy.checks import CRITICAL_MARGIN, pool_for_difficulty
 from shadowguy.shops import (
@@ -37,6 +35,8 @@ from shadowguy.shops import (
     use_consumable,
 )
 from shadowguy.shops import CONSUMABLES_BY_ID
+
+from helpers import AlwaysOne, AlwaysSix, character_with_skill_value
 
 
 def test_buy_price_neutral_standing_is_base_price():
@@ -383,28 +383,8 @@ def test_bonus_text_omits_smartlinked_for_an_unlinked_weapon():
 # --- scavenge() ---
 
 
-def _character_with_tinkering_value(value: int) -> Character:
-    """A fresh Character with skill_value("tinkering") forced to an exact value, by
-    zeroing its rank and setting the tied stat (intelligence) directly -- same trick
-    as test_security.py's _character_with_skill_value."""
-    character = Character(name="t")
-    character.skill_ranks["tinkering"] = 0
-    character.intelligence = value
-    return character
-
-
-class AlwaysSix(random.Random):
-    def randint(self, a, b):
-        return 6
-
-
-class AlwaysOne(random.Random):
-    def randint(self, a, b):
-        return 1
-
-
 def test_scavenge_on_failure_adds_nothing_to_inventory():
-    character = _character_with_tinkering_value(0)
+    character = character_with_skill_value("tinkering", 0)
     message = scavenge(character, rng=AlwaysOne())
     assert character.inventory == []
     assert "rust" in message.lower()
@@ -414,7 +394,7 @@ def test_scavenge_on_success_adds_exactly_one_material():
     # margin 1 (below CRITICAL_MARGIN) with AlwaysSix (every die a success on both
     # sides) gives a plain, non-critical success.
     opposing_pool = pool_for_difficulty(SCAVENGE_DIFFICULTY)
-    character = _character_with_tinkering_value(opposing_pool + 1)
+    character = character_with_skill_value("tinkering", opposing_pool + 1)
     message = scavenge(character, rng=AlwaysSix())
     assert len(character.inventory) == 1
     assert character.inventory[0].item_id in SCAVENGE_MATERIALS
@@ -424,7 +404,7 @@ def test_scavenge_on_success_adds_exactly_one_material():
 
 def test_scavenge_on_critical_success_adds_distinct_materials():
     opposing_pool = pool_for_difficulty(SCAVENGE_DIFFICULTY)
-    character = _character_with_tinkering_value(opposing_pool + CRITICAL_MARGIN)
+    character = character_with_skill_value("tinkering", opposing_pool + CRITICAL_MARGIN)
     scavenge(character, rng=AlwaysSix())
     found = [entry.item_id for entry in character.inventory]
     assert len(found) == SCAVENGE_CRITICAL_FINDS

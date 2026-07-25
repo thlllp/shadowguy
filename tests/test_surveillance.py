@@ -9,8 +9,6 @@ used by resolve_surveillance_day at all, so unlike test_rivals.py's ForcedChance
 there's no real-RNG state to worry about here.
 """
 
-import random
-
 from shadowguy.character import Character
 from shadowguy.corp_turn import CorpState
 from shadowguy.corpmap import CorpMap, Territory, TerritoryModifier
@@ -19,17 +17,9 @@ from shadowguy.rivals import RunnerState
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.surveillance import MAX_SIGHTINGS_LOG, resolve_surveillance_day
 
+from helpers import ForcedChance
+
 IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
-
-
-class ForcedChance(random.Random):
-    def __init__(self, value: float) -> None:
-        super().__init__(0)
-        self._value = value
-
-    def random(self) -> float:
-        return self._value
-
 
 HIT = ForcedChance(0.0)
 MISS = ForcedChance(0.99)

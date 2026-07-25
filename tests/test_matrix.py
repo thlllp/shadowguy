@@ -48,6 +48,8 @@ from shadowguy.matrix import (
 )
 from shadowguy.shops import PROGRAMS_BY_ID, STOLEN_DATASHARD_ID, InventoryItem, Program
 
+from helpers import AlwaysOne, AlwaysSix, ForcedChance
+
 SEEDS = range(150)
 
 # Every program in today's catalog (sleaze/extract/analyze) is action-shaped, and each
@@ -57,29 +59,6 @@ SEEDS = range(150)
 # synthetic Program and monkeypatches it into PROGRAMS_BY_ID for the test's duration --
 # installed_programs is resolved by id through that dict (shops.installed_programs_for),
 # so this is the real resolution path, not a mock of it.
-
-
-class AlwaysSix(random.Random):
-    def randint(self, a, b):
-        return 6
-
-
-class AlwaysOne(random.Random):
-    def randint(self, a, b):
-        return 1
-
-
-class FixedChance(random.Random):
-    """A Random whose random() is pinned to a fixed value -- for forcing Sleaze's flat
-    three-way split into a specific branch -- while randint/choice keep using the real
-    generator state (same technique as test_app_flows.ForcedChance)."""
-
-    def __init__(self, value: float, seed: int = 0) -> None:
-        super().__init__(seed)
-        self._value = value
-
-    def random(self) -> float:
-        return self._value
 
 
 def _char(intelligence=1, hack_rank=1, deck_id=None, installed_programs=()):
@@ -297,7 +276,7 @@ def test_sleaze_success_clears_the_target_ice_and_can_seize_a_final_node():
     c = _char(deck_id="burner_deck", installed_programs=[program.id])
     state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
     action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
-    take_matrix_turn(state, action, FixedChance(0.1))
+    take_matrix_turn(state, action, ForcedChance(0.1))
     assert state.ices[0].integrity == 0
     assert state.outcome is MatrixOutcome.SEIZED  # is_final_node defaults True
 
@@ -308,7 +287,7 @@ def test_sleaze_plain_fail_wastes_the_round_only():
     state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
     action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
     before = state.ices[0].integrity
-    take_matrix_turn(state, action, FixedChance(0.5))
+    take_matrix_turn(state, action, ForcedChance(0.5))
     assert state.ices[0].integrity == before  # missed, ICE untouched
     assert state.security == 0  # only Extract's misses touch security, not Sleaze's
 
@@ -318,7 +297,7 @@ def test_sleaze_critical_fail_bites_twice_in_the_same_round():
     c = _char(deck_id="burner_deck", installed_programs=[program.id])
     state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
     action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
-    take_matrix_turn(state, action, FixedChance(0.99))
+    take_matrix_turn(state, action, ForcedChance(0.99))
     assert "snaps to alert" in state.log[0]
     # the alert line, plus two separate _ice_turn resolutions this round: the
     # immediate critical-fail bite and the ordinary end-of-round ICE phase.
