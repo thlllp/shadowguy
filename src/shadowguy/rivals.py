@@ -28,7 +28,7 @@ checks have somewhere real to catch them.
 Exactly one activity bites the player: WORKING takes a real JobOffer off a
 real fixer's board (marking it fixer.JobOffer.taken_by), so a job you sat on is
 a job you can lose. The others — LEGWORK, LAYING_LOW, DRINKING, RECOVERING —
-are informational: they drive movement and give ContactsScreen something true
+are informational: they drive movement and give PhoneScreen something true
 to show, but nothing rolls against them yet. RECOVERING is the one with a
 cause: it only ever follows a WORKING day that went badly.
 

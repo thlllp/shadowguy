@@ -2,7 +2,7 @@ from textual.app import ComposeResult
 from textual.containers import Grid, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
+from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Character
 from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
@@ -32,7 +32,12 @@ from . import (
     _populate_list,
     _replace_items,
 )
-from .shop_screens import FixerOffersScreen
+from .shop_screens import FixerOffersScreen, offer_label
+
+# Alarm Clock quick-set choices — every three hours around the clock, rather than a
+# free-text hour field: nothing else in the UI takes typed input (every screen is
+# ListView-driven), so this stays consistent instead of being the one exception.
+ALARM_HOUR_CHOICES = tuple(range(0, HOURS_PER_DAY, 3))
 
 
 class InventoryScreen(BackScreen):
@@ -174,16 +179,44 @@ class CyberdeckScreen(BackScreen):
         await self._refresh()
 
 
-class ContactsScreen(PanelNav, BackScreen):
-    PANEL_IDS = ("fixers_list", "corps_list", "locals_list", "runners_list")
+class PhoneScreen(PanelNav, BackScreen):
+    """The runner's handheld — Contacts is one tab among the phone's other apps:
+    Web (a browser: each megacorp's own site listed like an app shortcut above a
+    Search section, which is the cross-fixer job board — accept from anywhere
+    established trust reaches), Alarm Clock (sets Character.alarm_hour, read by
+    app.rest() to cut a Rest short), and Messages (a read-only recap built entirely
+    from data the other tabs already show — fixer boards, rival-runner activity —
+    not a new inbox)."""
+
+    PANEL_IDS = (
+        "fixers_list",
+        "corps_list",
+        "locals_list",
+        "runners_list",
+        "web_list",
+        "alarm_list",
+        "messages_list",
+    )
     BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
-    #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
+    #phone_frame {
+        border: round $accent;
+        padding: 0 1;
+    }
+
+    #phone_banner {
+        text-align: center;
+        color: $accent;
+    }
+
+    #fixers_panel, #corps_panel, #locals_panel, #runners_panel,
+    #web_panel, #alarm_panel, #messages_panel {
         height: auto;
     }
 
-    #fixers_list, #corps_list, #locals_list, #runners_list {
+    #fixers_list, #corps_list, #locals_list, #runners_list,
+    #web_list, #alarm_list, #messages_list {
         height: auto;
     }
     """
@@ -191,17 +224,24 @@ class ContactsScreen(PanelNav, BackScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Collapsible(
-            ListView(id="fixers_list"), title="Fixers", collapsed=False, id="fixers_panel"
-        )
-        yield Collapsible(
-            ListView(id="corps_list"), title="Corps", collapsed=False, id="corps_panel"
-        )
-        yield Collapsible(
-            ListView(id="locals_list"), title="Locals", collapsed=False, id="locals_panel"
-        )
-        yield Collapsible(
-            ListView(id="runners_list"), title="Runners", collapsed=False, id="runners_panel"
+        yield Vertical(
+            Static("── SG-Phone ──", id="phone_banner"),
+            Collapsible(
+                ListView(id="fixers_list"), title="Contacts — Fixers", collapsed=False, id="fixers_panel"
+            ),
+            Collapsible(
+                ListView(id="corps_list"), title="Contacts — Corps", collapsed=False, id="corps_panel"
+            ),
+            Collapsible(
+                ListView(id="locals_list"), title="Contacts — Locals", collapsed=False, id="locals_panel"
+            ),
+            Collapsible(
+                ListView(id="runners_list"), title="Contacts — Runners", collapsed=False, id="runners_panel"
+            ),
+            Collapsible(ListView(id="web_list"), title="Web", collapsed=False, id="web_panel"),
+            Collapsible(ListView(id="alarm_list"), title="Alarm Clock", collapsed=False, id="alarm_panel"),
+            Collapsible(ListView(id="messages_list"), title="Messages", collapsed=False, id="messages_panel"),
+            id="phone_frame",
         )
         yield Footer()
 
@@ -264,6 +304,43 @@ class ContactsScreen(PanelNav, BackScreen):
             ),
         )
 
+        # A browser home screen: each megacorp's site listed like an app shortcut,
+        # above a Search section that's the actual cross-fixer job board.
+        web_items = [
+            ListItem(Static(f"{faction.name} — official site"), id=f"webapp_{faction.id}")
+            for faction in FACTIONS
+        ]
+        web_items.append(ListItem(Static("── Search ──"), id="web_search_header"))
+        web_offers = [(fixer, offer) for fixer in established for offer in fixer.open_offers]
+        web_items += (
+            [
+                ListItem(Static(f"{fixer.name} — {offer_label(character, offer)}"), id=f"weboffer_{offer.id}")
+                for fixer, offer in web_offers
+            ]
+            if web_offers
+            else [ListItem(Static("No work posted online."), id="no_web_offers")]
+        )
+        await _replace_items(self.query_one("#web_list", ListView), web_items)
+
+        status = f"Alarm: {character.alarm_hour:02d}:00" if character.alarm_hour is not None else "Alarm: off"
+        alarm_items = [ListItem(Static(status), id="alarm_status")]
+        alarm_items += [
+            ListItem(
+                Static(f"Set {hour:02d}:00" + (" (current — tap to clear)" if character.alarm_hour == hour else "")),
+                id=f"alarm_{hour}",
+            )
+            for hour in ALARM_HOUR_CHOICES
+        ]
+        await _replace_items(self.query_one("#alarm_list", ListView), alarm_items)
+
+        lines = self._messages(character)
+        message_items = (
+            [ListItem(Static(line), id=f"message_{i}") for i, line in enumerate(lines)]
+            if lines
+            else [ListItem(Static("No new messages."), id="no_messages")]
+        )
+        await _replace_items(self.query_one("#messages_list", ListView), message_items)
+
     def _status(self, runner: RivalRunner) -> str:
         """What an independent runner was last seen doing (rivals.py). A runner
         with no state yet hasn't had a day tick since the run started."""
@@ -280,13 +357,58 @@ class ContactsScreen(PanelNav, BackScreen):
             return f"{territory.name}, drinking at {bar.name}"
         return f"{territory.name}, {ACTIVITY_LABELS[state.activity]}"
 
+    def _messages(self, character: Character) -> list[str]:
+        """A read-only recap of what Contacts/Web already show, reframed as texts —
+        no state of its own, so there's nothing here to persist or expire."""
+        lines = []
+        for fixer in self.app.fixers:
+            if character.trust_with(fixer.id) <= 0:
+                continue
+            if fixer.open_offers:
+                lines.append(f"{fixer.name}: got {len(fixer.open_offers)} job(s) if you're interested.")
+            if fixer.security_offers:
+                lines.append(f"{fixer.name}: security work up for grabs too, if that's more your speed.")
+        for runner in RIVAL_RUNNERS:
+            state = self.app.rival_runner_states.get(runner.id)
+            if state is not None and state.activity is RunnerActivity.WORKING and state.job_title:
+                lines.append(f"{runner.name}: heads up, I'm out running {state.job_title} today.")
+        return lines
+
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if not event.item.id.startswith("fixer_"):
+        item_id = event.item.id
+        character = self.app.character
+
+        if item_id.startswith("alarm_") and item_id != "alarm_status":
+            hour = int(item_id.removeprefix("alarm_"))
+            character.alarm_hour = None if character.alarm_hour == hour else hour
+            await self._refresh()
             return
-        fixer_id = event.item.id.removeprefix("fixer_")
-        fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
-        if fixer is not None:
-            self.app.push_screen(FixerOffersScreen(fixer))
+
+        if item_id.startswith("webapp_"):
+            faction_id = item_id.removeprefix("webapp_")
+            faction = next(f for f in FACTIONS if f.id == faction_id)
+            self.notify(f"{faction.name}.net — {faction.specialty.value}.")
+            return
+
+        if item_id.startswith("weboffer_"):
+            offer_id = item_id.removeprefix("weboffer_")
+            fixer = next((f for f in self.app.fixers if any(o.id == offer_id for o in f.offers)), None)
+            if fixer is None:
+                return
+            offer = next(o for o in fixer.offers if o.id == offer_id)
+            if offer.taken_by is not None:
+                self.notify("Someone else already took that one.", severity="warning")
+                return
+            character.accept_job(offer)
+            fixer.offers = [o for o in fixer.offers if o.id != offer.id]
+            await self._refresh()
+            return
+
+        if item_id.startswith("fixer_"):
+            fixer_id = item_id.removeprefix("fixer_")
+            fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
+            if fixer is not None:
+                self.app.push_screen(FixerOffersScreen(fixer))
 
 
 class SkillsScreen(PanelNav, BackScreen):

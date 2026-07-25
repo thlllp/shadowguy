@@ -223,6 +223,10 @@ class Character:
     # the deadline (checked in app._apply_day_tick) clears it and costs gang standing
     # instead of gaining it.
     smuggling_job: "SmugglingJob | None" = None
+    # Hour of day (0-23) the Phone's Alarm Clock tab is set to wake at, or None when
+    # no alarm is set -- see app.rest(), the only place this is read (and cleared
+    # once used).
+    alarm_hour: int | None = None
 
     def __post_init__(self) -> None:
         if self.health is None:

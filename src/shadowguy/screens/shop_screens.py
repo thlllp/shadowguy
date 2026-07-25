@@ -59,6 +59,20 @@ from . import (
 )
 
 
+def offer_label(character: Character, offer: JobOffer) -> str:
+    # An offer a rival runner beat the player to (rivals.py) stays listed for
+    # the day it was lost, so the board shows what went instead of quietly
+    # having one row fewer. No square brackets — Static parses them as Rich
+    # markup and eats them.
+    if offer.taken_by is not None:
+        runner = RUNNERS_BY_ID[offer.taken_by]
+        return f"{offer.scene.title} — TAKEN, {runner.name} got there first"
+    return (
+        f"{offer.scene.title} ({offer.scene.hours_cost}h) — {offer.timing.label}"
+        f"{matrix_warning(character, offer.scene)}"
+    )
+
+
 class FixerOffersScreen(BackScreen):
     BINDINGS = MENU_BACK_BINDINGS
 
@@ -84,19 +98,6 @@ class FixerOffersScreen(BackScreen):
     async def on_mount(self) -> None:
         await self._refresh()
 
-    def _offer_label(self, character: Character, offer: JobOffer) -> str:
-        # An offer a rival runner beat the player to (rivals.py) stays listed for
-        # the day it was lost, so the board shows what went instead of quietly
-        # having one row fewer. No square brackets — Static parses them as Rich
-        # markup and eats them.
-        if offer.taken_by is not None:
-            runner = RUNNERS_BY_ID[offer.taken_by]
-            return f"{offer.scene.title} — TAKEN, {runner.name} got there first"
-        return (
-            f"{offer.scene.title} ({offer.scene.hours_cost}h) — {offer.timing.label}"
-            f"{matrix_warning(character, offer.scene)}"
-        )
-
     def _security_label(self, contract: SecurityContract) -> str:
         corp_map = self.app.corp_map
         faction = FACTIONS_BY_ID[contract.faction_id]
@@ -111,7 +112,7 @@ class FixerOffersScreen(BackScreen):
     async def _refresh(self) -> None:
         character = self.app.character
         items = [
-            ListItem(Static(self._offer_label(character, offer)), id=offer.id)
+            ListItem(Static(offer_label(character, offer)), id=offer.id)
             for offer in self.fixer.offers
         ]
         items += [

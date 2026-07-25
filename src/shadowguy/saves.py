@@ -126,7 +126,10 @@ SAVE_SUFFIX = ".save"
 # `rival_runner_states` (runner_id -> rivals.RunnerState, carrying activity and
 # recovery alongside the territory), and fixer.JobOffer gained `taken_by` -- a
 # pre-v38 pickled JobOffer (on a fixer's board or inside an accepted job) lacks it.
-SAVE_VERSION = 38
+# v39 replaced Contacts with the Phone screen (screens/info_screens.py) and added
+# its Alarm Clock tab: Character gained `alarm_hour` (a pre-v39 pickled Character
+# lacks it, None when no alarm is set).
+SAVE_VERSION = 39
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -3,7 +3,7 @@ import random
 from textual.app import App
 from textual.screen import Screen
 
-from shadowguy.character import REST_HOURS_COST, Character
+from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character
 from shadowguy.corp_turn import (
     CorpState,
     advance_training,
@@ -89,19 +89,35 @@ class ShadowguyApp(App):
         active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
         return 0 if active_here else lodging_cost(here)
 
+    def _rest_hours(self) -> int:
+        """How long the next Rest will actually run: REST_HOURS_COST, unless the
+        Phone's Alarm Clock tab has set Character.alarm_hour, in which case it's
+        only until that hour — wrapping to the next day, and never 0 (an alarm set
+        to the current hour wakes a full day later, not instantly)."""
+        character = self.character
+        if character.alarm_hour is None:
+            return REST_HOURS_COST
+        return (character.alarm_hour - character.hour_of_day) % HOURS_PER_DAY or HOURS_PER_DAY
+
     def rest_label(self) -> str:
-        """The "Rest" menu item's text for MainMenu/CorpScreen, previewing rest_cost()."""
+        """The "Rest" menu item's text for MainMenu/CorpScreen, previewing rest_cost()
+        and, with an alarm set, the shorter actual duration."""
+        hours = self._rest_hours()
         cost = self.rest_cost()
         if not cost:
-            return f"Rest ({REST_HOURS_COST}h)"
-        return f"Rest ({REST_HOURS_COST}h, {cost}eb lodging)"
+            return f"Rest ({hours}h)"
+        return f"Rest ({hours}h, {cost}eb lodging)"
 
     def rest(self) -> None:
-        """Shared "Rest" action wiring for MainMenu and CorpScreen. Spends exactly
+        """Shared "Rest" action wiring for MainMenu and CorpScreen. Spends
         REST_HOURS_COST hours, wherever the runner currently is — same lodging pricing
         as the old midnight charge (corpmap.lodging_cost), just paid at the moment of
         resting instead of at whatever territory happened to hold the runner at
         midnight.
+
+        If the Phone's Alarm Clock tab has set Character.alarm_hour, _rest_hours()
+        overrides the fixed duration: sleep only until that hour instead of a flat 8.
+        The alarm is cleared here so it doesn't keep firing on every later Rest.
 
         Resting only halves accumulated fatigue rather than clearing it (see
         Character.fatigue) — a bad stretch of skipped rest still costs a few more
@@ -113,7 +129,9 @@ class ShadowguyApp(App):
             character.cash -= paid
             here = self.corp_map.territories[character.location_id]
             self.notify(f"Paid {paid}eb for lodging in {here.name}.")
-        self.spend_time(REST_HOURS_COST)
+        hours = self._rest_hours()
+        character.alarm_hour = None
+        self.spend_time(hours)
         character.mark_rested()
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
