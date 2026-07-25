@@ -10,6 +10,57 @@ from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
 from shadowguy.shops import ITEMS_BY_ID
 from shadowguy.skills import skill_value
+from shadowguy.tactical import Grid, Tile
+
+# Terrain glyph/style, shared by TacticalScreen and BurglaryWalkScreen so the two grid
+# renderers (same tactical.Grid/Tile underneath) look like one visual language. Wall and
+# low cover previously rendered as flat "#"/"%" in the same grey -- indistinguishable at
+# a glance. Solid vs. shaded blocks plus a distinct color for cover reads as "hide here",
+# without changing any tactical.py data.
+
+# Bitmask of which cardinal neighbors are also wall -- N/S/E/W as bits 1/2/4/8 -- mapped
+# to the box-drawing glyph that connects in those directions, so a wall reads as an actual
+# outlined floor plan instead of a flat field of the same block everywhere. The map's
+# outer edge counts as wall too (see _is_wall), closing the boundary the same way an
+# interior wall does.
+_WALL_CONNECTORS: dict[int, str] = {
+    0: "■",
+    1: "│", 2: "│", 3: "│",
+    4: "─", 8: "─", 12: "─",
+    5: "└", 6: "┌", 9: "┘", 10: "┐",
+    7: "├", 11: "┤", 13: "┴", 14: "┬",
+    # 15 (wall on all four cardinal sides) isn't a real junction shape to draw -- it's a
+    # wall tile with no floor/cover next to it in any of the four directions, i.e. solid
+    # rock in the middle of a wall band. A plain block reads as "rock" there instead of
+    # a busy field of crossings.
+    15: "█",
+}
+
+
+def _is_wall(grid: Grid, x: int, y: int) -> bool:
+    if not (0 <= x < grid.width and 0 <= y < grid.height):
+        return True
+    return grid.tiles[y][x] is Tile.WALL
+
+
+def _wall_glyph(grid: Grid, x: int, y: int) -> str:
+    mask = (
+        (1 if _is_wall(grid, x, y - 1) else 0)
+        | (2 if _is_wall(grid, x, y + 1) else 0)
+        | (4 if _is_wall(grid, x + 1, y) else 0)
+        | (8 if _is_wall(grid, x - 1, y) else 0)
+    )
+    return _WALL_CONNECTORS[mask]
+
+
+def _terrain_glyph(grid: Grid, x: int, y: int) -> tuple[str, str]:
+    tile = grid.tiles[y][x]
+    if tile is Tile.WALL:
+        return _wall_glyph(grid, x, y), "grey42"
+    if tile is Tile.LOW_COVER:
+        return "▒", "wheat4"
+    return "·", "grey50"
+
 
 # Combat/matrix Action labels follow "Title (detail)" — split it so a fight action can
 # render as a boxed RPG-style button (bold title, dim detail on its own line) instead of

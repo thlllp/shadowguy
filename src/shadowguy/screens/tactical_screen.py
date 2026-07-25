@@ -24,11 +24,11 @@ from shadowguy.tactical import (
     player_attack,
     start_tactical,
     throw_grenade,
+    visible_tiles,
 )
 
-from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text, _menu_css
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text, _menu_css, _terrain_glyph
 
-_TAC_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _TAC_END_TEXT = {
     TacticalOutcome.VICTORY: "You've cleared them out.",
     TacticalOutcome.ESCAPED: "You slip out.",
@@ -219,7 +219,12 @@ class TacticalScreen(Screen):
     def _map_text(self) -> Text:
         state = self.state
         grid = state.grid
-        glyphs = [[_TAC_TILE[grid.tiles[y][x]] for x in range(grid.width)] for y in range(grid.height)]
+        terrain = [[_terrain_glyph(grid, x, y) for x in range(grid.width)] for y in range(grid.height)]
+        glyphs = [[terrain[y][x][0] for x in range(grid.width)] for y in range(grid.height)]
+        # Tiles outside the player's current FOV render dimmed, not hidden -- there's no
+        # fog-of-war here (the whole map is always known), just a visual cue for "not
+        # looking that way right now" that reads as depth.
+        seen = visible_tiles(grid, state.player.coord)
         styles: dict[tuple[int, int], str] = {}
         for ex, ey in state.exits:
             if grid.tiles[ey][ex] is Tile.FLOOR:
@@ -255,7 +260,9 @@ class TacticalScreen(Screen):
         for y in range(grid.height):
             for x in range(grid.width):
                 ch = glyphs[y][x]
-                default = "grey30" if ch in ("#", "%") else "grey50"
+                default = terrain[y][x][1]
+                if (y, x) not in styles and not seen[y, x]:
+                    default = f"{default} dim"
                 style = styles.get((y, x), default)
                 if (y, x) == cursor:
                     style = cursor_style

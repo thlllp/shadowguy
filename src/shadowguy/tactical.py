@@ -157,6 +157,14 @@ def has_line_of_sight(grid: Grid, a: Coord, b: Coord) -> bool:
     return bool(_fov(grid, a)[_yx(b)])
 
 
+def visible_tiles(grid: Grid, origin: Coord) -> np.ndarray:
+    """Every tile `origin` can currently see, as the same [y, x] bool array
+    has_line_of_sight reads one cell from — exposed for renderers that want the whole
+    picture at once (e.g. dimming what the player can't presently see) instead of one
+    has_line_of_sight call per tile, which would recompute the FOV from scratch each time."""
+    return _fov(grid, origin)
+
+
 def path_between(
     grid: Grid, start: Coord, goal: Coord, blocked: frozenset[Coord] = frozenset()
 ) -> list[Coord]:
