@@ -361,6 +361,36 @@ class Sighting:
     day: int
 
 
+# Per-faction blog history, capped like Sighting/MAX_SIGHTINGS_LOG.
+MAX_FACTION_EVENTS = 15
+
+
+@dataclass
+class FactionEvent:
+    """One newsworthy thing a Faction did, for its corp website's blog
+    (screens/info_screens.py's CorpWebsiteScreen): a territory claimed or a
+    Technology researched. Populated for every Faction, not just the player's
+    own — rivals.resolve_rival_day logs both territory expansion and its own
+    simplified per-faction research roll, and CorpScreen/ResearchTreeScreen log
+    the player's own corp's expand_into/research_technology calls the same
+    way, since resolve_rival_day skips whichever faction the player runs."""
+
+    kind: Literal["territory", "technology"]
+    day: int
+    territory_id: str | None = None  # kind == "territory"
+    technology_id: str | None = None  # kind == "technology"
+
+
+def log_faction_event(
+    events: dict[str, list[FactionEvent]], faction_id: str, event: FactionEvent
+) -> None:
+    """Prepend `event` to `faction_id`'s log (most-recent-first) and trim it back
+    to MAX_FACTION_EVENTS, the same shape CorpState.sightings uses."""
+    log = events.setdefault(faction_id, [])
+    log.insert(0, event)
+    del log[MAX_FACTION_EVENTS:]
+
+
 class EmployeeCategory(StrEnum):
     """What a training session at the Academy produces — nothing reads which
     category a hire belongs to yet beyond research_assistants feeding

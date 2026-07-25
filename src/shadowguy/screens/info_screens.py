@@ -3,8 +3,9 @@ from textual.containers import Grid, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Character
+from shadowguy.corp_turn import TECHNOLOGIES_BY_ID, FactionEvent
 from shadowguy.corpmap import LocationKind
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import FACTIONS, Faction
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
 from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
 from shadowguy.shops import (
@@ -286,19 +287,27 @@ class ContactsScreen(PanelNav, BackScreen):
         return f"{territory.name}, {ACTIVITY_LABELS[state.activity]}"
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if not event.item.id.startswith("fixer_"):
+        item_id = event.item.id
+
+        if item_id.startswith("fixer_"):
+            fixer_id = item_id.removeprefix("fixer_")
+            fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
+            if fixer is not None:
+                self.app.push_screen(FixerOffersScreen(fixer))
             return
-        fixer_id = event.item.id.removeprefix("fixer_")
-        fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
-        if fixer is not None:
-            self.app.push_screen(FixerOffersScreen(fixer))
+
+        if item_id.startswith("faction_"):
+            faction_id = item_id.removeprefix("faction_")
+            faction = next(f for f in FACTIONS if f.id == faction_id)
+            self.app.push_screen(CorpWebsiteScreen(faction))
 
 
 class WebScreen(BackScreen):
-    """A browser: each megacorp's own site listed like an app shortcut, above a
-    Search section that's the real cross-fixer job board — every open offer from
-    every fixer established trust reaches, acceptable from anywhere, not just that
-    fixer's own board (shop_screens.FixerOffersScreen)."""
+    """A browser: each megacorp's own site listed like an app shortcut (opens
+    CorpWebsiteScreen), above a Search section that's the real cross-fixer job
+    board — every open offer from every fixer established trust reaches,
+    acceptable from anywhere, not just that fixer's own board
+    (shop_screens.FixerOffersScreen)."""
 
     BINDINGS = MENU_BACK_BINDINGS
 
@@ -341,7 +350,7 @@ class WebScreen(BackScreen):
         if item_id.startswith("webapp_"):
             faction_id = item_id.removeprefix("webapp_")
             faction = next(f for f in FACTIONS if f.id == faction_id)
-            self.notify(f"{faction.name}.net — {faction.specialty.value}.")
+            self.app.push_screen(CorpWebsiteScreen(faction))
             return
 
         if item_id.startswith("weboffer_"):
@@ -356,6 +365,49 @@ class WebScreen(BackScreen):
             character.accept_job(offer)
             fixer.offers = [o for o in fixer.offers if o.id != offer.id]
             await self._refresh()
+
+
+class CorpWebsiteScreen(BackScreen):
+    """One megacorp's own site, reached by tapping its row in WebScreen: a
+    one-line masthead plus a blog of recent corp_turn.FactionEvents (territory
+    claimed, technology researched) for that faction — most-recent-first,
+    same source app.faction_events every faction's site reads from, whether
+    the player runs that corp or not."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+
+    def __init__(self, faction: Faction) -> None:
+        super().__init__()
+        self.faction = faction
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(f"{self.faction.name}.net — {self.faction.specialty.value}\n{self.faction.description}")
+        yield ListView(id="blog_list")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    def _post_label(self, event: FactionEvent) -> str:
+        if event.kind == "territory":
+            name = self.app.corp_map.territories[event.territory_id].name
+            return f"Day {event.day} — Expanded operations into {name}."
+        technology = TECHNOLOGIES_BY_ID[event.technology_id]
+        return f"Day {event.day} — Unveiled new technology: {technology.name}."
+
+    async def _refresh(self) -> None:
+        events = self.app.faction_events.get(self.faction.id, [])
+        blog_items = (
+            [ListItem(Static(self._post_label(event)), id=f"blogpost_{i}") for i, event in enumerate(events)]
+            if events
+            else [ListItem(Static("No updates yet."), id="no_blog_posts")]
+        )
+        await _replace_items(self.query_one("#blog_list", ListView), blog_items)
 
 
 class AlarmClockScreen(BackScreen):

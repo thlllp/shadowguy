@@ -32,10 +32,18 @@ are informational: they drive movement and give PhoneScreen something true
 to show, but nothing rolls against them yet. RECOVERING is the one with a
 cause: it only ever follows a WORKING day that went badly.
 
-Leaf-ish: imports character/corpmap/factions/runners, never scene or app. The
-fixer board is reached through a TYPE_CHECKING-only import (the same trick
-fixer.py itself uses for Character) — a runner only ever reads an offer's
-timing and marks it taken, so nothing here needs fixer/scene at runtime.
+Each faction also gets a simplified, unstaffed research roll of its own
+(RIVAL_RESEARCH_CHANCE) — no economy behind it, just enough to give
+screens/info_screens.py's CorpWebsiteScreen (each corp's public "site")
+something to report for a corp the player isn't running. Both that and a
+territory claim get appended to a caller-owned `faction_events` blog log via
+corp_turn.log_faction_event.
+
+Leaf-ish: imports character/corpmap/corp_turn/factions/runners, never scene or
+app. The fixer board is reached through a TYPE_CHECKING-only import (the same
+trick fixer.py itself uses for Character) — a runner only ever reads an
+offer's timing and marks it taken, so nothing here needs fixer/scene at
+runtime.
 """
 
 import random
@@ -44,6 +52,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 from shadowguy.character import Character
+from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent, log_faction_event
 from shadowguy.corpmap import CorpMap, LocationKind, claim_territory, expansion_candidates
 from shadowguy.factions import FACTIONS
 from shadowguy.runners import RIVAL_RUNNERS
@@ -54,6 +63,14 @@ if TYPE_CHECKING:
 # Per faction, per day; only rolled when the faction has an eligible neutral
 # neighbor at all. First-slice number, not balance-simulated.
 EXPANSION_CHANCE = 0.2
+
+# Per faction, per day; only rolled when a Technology is available to it (prereqs
+# met, not already "researched" — see rival_researched below). Deliberately not
+# wired to any real economy (no scientists/labs for a rival corp, unlike
+# corp_turn.collect_research) — this exists purely to give CorpWebsiteScreen's
+# blog something to report for corps the player isn't running. First-slice
+# number, not balance-simulated.
+RIVAL_RESEARCH_CHANCE = 0.15
 
 
 class RunnerActivity(StrEnum):
@@ -225,6 +242,8 @@ def resolve_rival_day(
     player_faction_id: str | None = None,
     rival_runner_states: dict[str, RunnerState] | None = None,
     fixers: list["Fixer"] | None = None,
+    rival_researched: dict[str, set[str]] | None = None,
+    faction_events: dict[str, list[FactionEvent]] | None = None,
 ) -> list[RivalAction]:
     """Every Faction gets a shot at expanding into bordering neutral ground. A
     RivalRunner acts only while independent — excluded the moment they're on the
@@ -246,11 +265,26 @@ def resolve_rival_day(
     fixers is the live fixer roster, the one thing here that reaches outside
     rivals.py: a runner who goes to work marks a real JobOffer taken, removing
     it from the player's options. Omitting it (the default) means nobody can
-    find work — every runner falls through to the idle table."""
+    find work — every runner falls through to the idle table.
+
+    rival_researched is the caller's persistent faction_id -> {technology_id}
+    map (ShadowguyApp.rival_researched in production): a per-day roll
+    (RIVAL_RESEARCH_CHANCE) hands an eligible faction one Technology whose
+    prereqs it already has, purely so its corp website has something to report
+    — no scientists/labs/research points are simulated for a rival corp.
+    Defaults to a fresh dict when omitted (discarded after the call, same as
+    rival_runner_states' default).
+
+    faction_events is the caller's persistent faction_id -> [FactionEvent] blog
+    log (ShadowguyApp.faction_events in production), appended to via
+    corp_turn.log_faction_event whenever a faction claims territory or gains a
+    technology here. Omitted (the default) means no log is kept."""
     if rival_runner_states is None:
         rival_runner_states = {}
     if fixers is None:
         fixers = []
+    if rival_researched is None:
+        rival_researched = {}
     actions = []
     for faction in FACTIONS:
         if faction.id == player_faction_id:
@@ -260,7 +294,25 @@ def resolve_rival_day(
         if candidates and rng.random() < EXPANSION_CHANCE:
             target_id = rng.choice(candidates)
             claim_territory(corp_map.territories[target_id], faction.id, rng)
+            if faction_events is not None:
+                log_faction_event(
+                    faction_events, faction.id, FactionEvent(kind="territory", day=day, territory_id=target_id)
+                )
         actions.append(RivalAction(kind="faction", actor_id=faction.id, day=day, territory_id=target_id))
+
+        researched = rival_researched.setdefault(faction.id, set())
+        available = [
+            tech for tech in TECHNOLOGIES if tech.id not in researched and set(tech.prereqs) <= researched
+        ]
+        if available and rng.random() < RIVAL_RESEARCH_CHANCE:
+            technology = rng.choice(available)
+            researched.add(technology.id)
+            if faction_events is not None:
+                log_faction_event(
+                    faction_events,
+                    faction.id,
+                    FactionEvent(kind="technology", day=day, technology_id=technology.id),
+                )
     for runner in RIVAL_RUNNERS:
         if character.on_crew(runner.id):
             continue
