@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 from shadowguy.character import Character
 from shadowguy.corp_turn import CorpState, Sighting
 from shadowguy.corpmap import MODIFIER_MAX, CorpMap, Territory, TerritoryModifier
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
 
 if TYPE_CHECKING:
     from shadowguy.rivals import RunnerState
@@ -66,6 +66,7 @@ def resolve_surveillance_day(
     rival_runner_states: dict[str, "RunnerState"],
     day: int,
     rng: random.Random,
+    runners: list[RivalRunner] | None = None,
 ) -> list[Sighting]:
     """One day's Surveillance sweep of the corp's own territory: a detection
     roll against the player (if character.location_id is inside it) and
@@ -75,6 +76,11 @@ def resolve_surveillance_day(
     a runner laying low is as detectable as one out doing legwork, since
     detection has no opposed roll to bend yet.
 
+    runners is the run's actual independent-runner roster (ShadowguyApp.runners
+    in production — see rivals.resolve_rival_day's own `runners` param).
+    Defaults to the bare RIVAL_RUNNERS three, fine for callers that don't care
+    about that run's random extras.
+
     Returns every sighting logged today, in no particular order; the same list
     is also prepended to corp_state.sightings (most-recent-first, capped at
     MAX_SIGHTINGS_LOG). Returns an empty list and mutates nothing when
@@ -82,6 +88,8 @@ def resolve_surveillance_day(
     runner-only run has no corp watching anything."""
     if corp_state is None:
         return []
+    if runners is None:
+        runners = RIVAL_RUNNERS
     owned_ids = {t.id for t in corp_map.territories.values() if t.owner == corp_state.faction_id}
 
     sightings = []
@@ -89,7 +97,7 @@ def resolve_surveillance_day(
         territory = corp_map.territories[character.location_id]
         if _detected(territory, rng):
             sightings.append(Sighting(kind="player", actor_id="player", territory_id=territory.id, day=day))
-    for runner in RIVAL_RUNNERS:
+    for runner in runners:
         state = rival_runner_states.get(runner.id)
         if state is not None and state.territory_id in owned_ids:
             territory = corp_map.territories[state.territory_id]
