@@ -48,7 +48,7 @@ from . import (
     _replace_items,
 )
 from .corp_map_screen import CorpMapScreen
-from .info_screens import ContactsScreen
+from .info_screens import PhoneScreen
 
 
 def _sighting_label(sighting, corp_map) -> str:
@@ -376,7 +376,7 @@ class CorpMainMenu(PanelNav, CorpScreen):
     the main panel -- rather than dropping the player straight into the corp's
     action list. "Corp" renders inline (CorpScreen's own info/action list, grouped
     into Academy/Research Facility/Surveillance Log collapsibles, inherited
-    unchanged); "Corp Map"/"Contacts"/"Technology" push their own screens, same as
+    unchanged); "Corp Map"/"Phone"/"Technology" push their own screens, same as
     MainMenu's equivalent categories."""
 
     # CorpScreen's escape->back is redeclared here (not just omitted) with show=False:
@@ -389,13 +389,13 @@ class CorpMainMenu(PanelNav, CorpScreen):
     BINDINGS = [
         *MENU_QUIT_BINDINGS,
         ("m", "corp_map", "Corp Map"),
-        ("c", "contacts", "Contacts"),
+        ("c", "phone", "Phone"),
         Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
     PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "surveillance_list")
 
-    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("contacts", "Contacts"), ("tech", "Technology")]
+    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("phone", "Phone"), ("tech", "Technology")]
 
     # The #corp_list/#academy_list/#research_list/#academy_panel/#research_panel rules
     # are already on CorpScreen.CSS, but Textual's cross-hierarchy CSS merge silently
@@ -476,16 +476,16 @@ class CorpMainMenu(PanelNav, CorpScreen):
     def action_corp_map(self) -> None:
         self.app.push_screen(CorpMapScreen())
 
-    def action_contacts(self) -> None:
-        self.app.push_screen(ContactsScreen())
+    def action_phone(self) -> None:
+        self.app.push_screen(PhoneScreen())
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == "categories":
             key = event.item.id.removeprefix("cat_")
             if key == "map":
                 self.app.push_screen(CorpMapScreen())
-            elif key == "contacts":
-                self.app.push_screen(ContactsScreen())
+            elif key == "phone":
+                self.app.push_screen(PhoneScreen())
             elif key == "tech":
                 self.action_research_tree()
             return

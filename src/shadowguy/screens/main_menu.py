@@ -26,7 +26,7 @@ from . import (
 )
 from .corp_map_screen import CorpMapScreen
 from .corp_screen import CorpScreen
-from .info_screens import ContactsScreen, CyberdeckScreen, InventoryScreen, SkillsScreen
+from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
 from .scene_screen import SceneScreen
 from .shop_screens import (
     BarScreen,
@@ -49,7 +49,7 @@ class MainMenu(PanelNav, Screen):
         ("i", "inventory", "Gear"),
         ("d", "cyberdeck", "Cyberdeck"),
         ("k", "skills", "Skills"),
-        ("c", "contacts", "Contacts"),
+        ("c", "phone", "Phone"),
         *PANEL_NAV_BINDINGS,
     ]
 
@@ -89,7 +89,7 @@ class MainMenu(PanelNav, Screen):
         ("gear", "Gear"),
         ("cyberdeck", "Cyberdeck"),
         ("skills", "Skills"),
-        ("contacts", "Contacts"),
+        ("phone", "Phone"),
         ("map", "Corp Map"),
         ("corp", "Corp"),
     ]
@@ -139,8 +139,8 @@ class MainMenu(PanelNav, Screen):
     def action_skills(self) -> None:
         self.app.push_screen(SkillsScreen())
 
-    def action_contacts(self) -> None:
-        self.app.push_screen(ContactsScreen())
+    def action_phone(self) -> None:
+        self.app.push_screen(PhoneScreen())
 
     async def on_mount(self) -> None:
         await self._refresh_categories()
@@ -346,8 +346,8 @@ class MainMenu(PanelNav, Screen):
             return
 
     async def _select_category(self, key: str) -> None:
-        if key == "contacts":
-            self.app.push_screen(ContactsScreen())
+        if key == "phone":
+            self.app.push_screen(PhoneScreen())
         elif key == "map":
             self.app.push_screen(CorpMapScreen())
         elif key == "corp":

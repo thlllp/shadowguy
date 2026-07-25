@@ -57,7 +57,7 @@ from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, T
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome
-from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, SkillsScreen
+from shadowguy.screens.info_screens import CyberdeckScreen, PhoneScreen, SkillsScreen
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import (
     CorpHQScreen,
@@ -193,7 +193,7 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
 def test_corp_main_menu_has_sidebar_categories():
     """CorpMainMenu is laid out like MainMenu -- a left category sidebar next to the
     corp's own action list -- rather than dropping straight into the action list with
-    nothing beside it. "Corp" renders inline; "Corp Map"/"Contacts"/"Technology" push
+    nothing beside it. "Corp" renders inline; "Corp Map"/"Phone"/"Technology" push
     their own screens, reachable both from the sidebar and from the same quick
     keybindings MainMenu uses."""
 
@@ -213,7 +213,7 @@ def test_corp_main_menu_has_sidebar_categories():
             assert [item.id for item in categories.children] == [
                 "cat_corp",
                 "cat_map",
-                "cat_contacts",
+                "cat_phone",
                 "cat_tech",
             ]
             # The corp's own action list (inherited from CorpScreen) is visible
@@ -228,7 +228,7 @@ def test_corp_main_menu_has_sidebar_categories():
 
             await pilot.press("c")
             await pilot.pause()
-            assert isinstance(app.screen, ContactsScreen)
+            assert isinstance(app.screen, PhoneScreen)
             app.pop_screen()
             await pilot.pause()
 
@@ -1184,12 +1184,12 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
     run(body())
 
 
-def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
+def test_phone_screen_panels_are_collapsibles_expanded_by_default():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.push_screen(ContactsScreen())
+            app.push_screen(PhoneScreen())
             await pilot.pause()
 
             panels = {
@@ -1199,20 +1199,23 @@ def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
                     "corps_panel",
                     "locals_panel",
                     "runners_panel",
+                    "web_panel",
+                    "alarm_panel",
+                    "messages_panel",
                 )
             }
-            assert len(panels) == 4
+            assert len(panels) == 7
             assert all(not panel.collapsed for panel in panels.values())
 
     run(body())
 
 
-def test_contacts_panel_nav_skips_a_collapsed_section():
+def test_phone_panel_nav_skips_a_collapsed_section():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.push_screen(ContactsScreen())
+            app.push_screen(PhoneScreen())
             await pilot.pause()
 
             screen = app.screen
@@ -1513,7 +1516,7 @@ def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
     run(body())
 
 
-def test_contacts_runner_panel_reports_what_each_runner_is_doing():
+def test_phone_runner_panel_reports_what_each_runner_is_doing():
     """The Runners panel reads rivals.RunnerState, so a runner with a state
     shows where they are and what they're up to, and one without says so."""
 
@@ -1528,7 +1531,7 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
                 job_title="Server Pull",
             )
 
-            app.push_screen(ContactsScreen())
+            app.push_screen(PhoneScreen())
             await pilot.pause()
             rows = app.screen.query_one("#runners_list", ListView).children
             labels = [str(row.query_one(Static).content) for row in rows]
@@ -1537,6 +1540,150 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
             assert f"{territory.name}, running Server Pull" in working
             unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
             assert "whereabouts unknown" in unknown
+
+    run(body())
+
+
+def test_web_tab_lists_cross_fixer_offers_and_accepting_one_takes_it():
+    """Web aggregates open offers from every established (trust>0) fixer into one
+    list; selecting one should behave exactly like FixerOffersScreen's own accept
+    flow -- added to accepted_jobs and pulled off that fixer's own board."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = next(f for f in app.fixers if f.offers)
+            app.character.adjust_fixer_trust(fixer.id, 1)
+            offer = fixer.offers[0]
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            web_list = app.screen.query_one("#web_list", ListView)
+            web_list.focus()
+            web_list.index = next(
+                i for i, item in enumerate(web_list.children) if item.id == f"weboffer_{offer.id}"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert offer in app.character.accepted_jobs
+            assert offer not in fixer.offers
+
+    run(body())
+
+
+def test_web_tab_omits_fixers_without_established_trust():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            assert all(app.character.trust_with(fixer.id) <= 0 for fixer in app.fixers)
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            web_list = app.screen.query_one("#web_list", ListView)
+            ids = [item.id for item in web_list.children]
+            assert not any(item_id.startswith("weboffer_") for item_id in ids)
+            assert ids[-1] == "no_web_offers"
+
+    run(body())
+
+
+def test_web_tab_lists_megacorp_apps_before_the_search_section():
+    """A browser home screen: every megacorp's site listed like an app shortcut,
+    all of them ahead of the Search section (the actual job board)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            web_list = app.screen.query_one("#web_list", ListView)
+            ids = [item.id for item in web_list.children]
+            app_ids = [f"webapp_{faction.id}" for faction in FACTIONS]
+            assert ids[: len(app_ids)] == app_ids
+            assert ids[len(app_ids)] == "web_search_header"
+
+            web_list.focus()
+            web_list.index = 0
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.character.accepted_jobs == []  # an app shortcut, not a job accept
+
+    run(body())
+
+
+def test_alarm_clock_tab_sets_and_shortens_the_next_rest():
+    """Setting an alarm hour cuts the next Rest short (instead of the flat
+    REST_HOURS_COST) and clears itself so it doesn't fire again on the Rest after."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            assert app.character.elapsed_hours == 0.0  # hour_of_day 0, fresh character
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            alarm_list = app.screen.query_one("#alarm_list", ListView)
+            alarm_list.focus()
+            alarm_list.index = next(
+                i for i, item in enumerate(alarm_list.children) if item.id == "alarm_6"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.character.alarm_hour == 6
+
+            app.pop_screen()
+            await pilot.pause()
+            app.rest()
+            assert app.character.elapsed_hours == 6.0  # not REST_HOURS_COST (8)
+            assert app.character.alarm_hour is None
+
+    run(body())
+
+
+def test_alarm_clock_tab_selecting_the_same_hour_again_clears_it():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            app.character.alarm_hour = 6
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            alarm_list = app.screen.query_one("#alarm_list", ListView)
+            alarm_list.focus()
+            alarm_list.index = next(
+                i for i, item in enumerate(alarm_list.children) if item.id == "alarm_6"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.character.alarm_hour is None
+
+    run(body())
+
+
+def test_messages_tab_recaps_an_established_fixers_open_work():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = next(f for f in app.fixers if f.offers)
+            app.character.adjust_fixer_trust(fixer.id, 1)
+
+            app.push_screen(PhoneScreen())
+            await pilot.pause()
+            rows = app.screen.query_one("#messages_list", ListView).children
+            labels = [str(row.query_one(Static).content) for row in rows]
+            assert any(fixer.name in label for label in labels)
 
     run(body())
 
