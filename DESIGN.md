@@ -143,14 +143,16 @@ Two import-time guards: the **last stage cannot be optional** (the final stage c
 
 **Crew capacity runs along `Posture`**: several `ON_SITE` runners but at most one `REMOTE` — free rather than enforced, since only `hack` beats are `REMOTE` and a job has one objective.
 
-**Runners & crew (`runners.py`, `BarScreen`, `Character.crew`/`CrewHire`).** `RIVAL_RUNNERS` — Specter (Netrunner), Juncture (Solo), Mireille (Infiltrator) — carry a `rating` (future run-time effect), `daily_cost`, `job_cut`. `BAR` opens `BarScreen`: pick a runner, then terms —
+**Runners & crew (`runners.py`, `BarScreen`, `Character.crew`/`CrewHire`).** `RIVAL_RUNNERS` — Specter (Netrunner), Juncture (Solo), Mireille (Infiltrator) — are guaranteed every run, like every `FIXER_ROSTER` entry. `RUNNER_POOL` is a nine-strong bench (three per archetype, spanning budget/mid/elite `rating`) that `runners.select_active_runners(rng)` samples `RANDOM_RUNNER_COUNT` (6) from once at game start (`ShadowguyApp._new_run`), stored as `app.runners` — so a run's independent-runner roster is the guaranteed three plus six of the nine extras, different runners each run. `RUNNERS_BY_ID` still spans the whole universe (guaranteed plus every pool candidate) so a saved `CrewHire`/`JobOffer.taken_by` id resolves regardless of whether this run rolled that runner in. Every `RivalRunner` carries a `rating` (future run-time effect), `daily_cost`, `job_cut`. `BAR` opens `BarScreen`: pick a runner, then terms —
 
 - **Indefinitely** — draws `daily_cost` every day tick (`Character.pay_crew_wages`); miss payroll and they **walk** (no debt).
 - **For a job** — signed for `job_cut` of that job's payout, taken via `SceneScreen._take_crew_cut`; ends with the job.
 
 **Both terms are discounted by the recruiter's `Leadership`** (a `cool` skill, read not rolled). `runners.recruit_wage`/`recruit_cut` shave cost by `skill_value("leadership")` above `LEADERSHIP_BASE` (2), `LEADERSHIP_TERMS_STEP` (3%)/point capped at `LEADERSHIP_TERMS_CAP` (20%) — **one-directional, floored at zero, never a markup**. Every cost-reading call site goes through them rather than raw `.daily_cost`/`.job_cut`. Computed live off current Leadership, not locked in at hire.
 
-Neither term costs anything upfront. `Character.crew` is `list[CrewHire(runner_id, job_id | None)]` (`None` = indefinite); one live hire per runner. For-job hires are discharged when their job leaves `accepted_jobs` (`_discharge_orphan_crew`). Crew earns `crew_experience` from completed jobs (see Post-creation experience) but no spend path yet. **Still to come**: assigning a hire to a `Role.filled_by`, and the run-time effect. First-slice: the whole roster is hireable at *any* bar.
+Neither term costs anything upfront. `Character.crew` is `list[CrewHire(runner_id, job_id | None)]` (`None` = indefinite); one live hire per runner. For-job hires are discharged when their job leaves `accepted_jobs` (`_discharge_orphan_crew`). Crew earns `crew_experience` from completed jobs (see Post-creation experience) but no spend path yet. **Still to come**: assigning a hire to a `Role.filled_by`, and the run-time effect.
+
+**Recruiting is gated on having met the runner, not just knowing of them.** `Character.known_runners` (a set, parallel to `discovered_fixers`) tracks who the player has actually swapped numbers with — granted only by `BarScreen`, and only when that runner happens to be physically `DRINKING` (`rivals.RunnerActivity`) in the player's current territory right now, per the same `rivals.RunnerState` wander state `ContactsScreen`'s Runners panel already reads. A runner's `BarScreen` row is one of three things: **locked** (`no way to reach them yet`) if unmet and not here, an **exchange-numbers** prompt (`meet_<id>`) if unmet but drinking at this bar this moment, or the ordinary recruit flow once `knows_runner` is true — `on_crew` still short-circuits to "on your crew" ahead of all three. Replaces the old first-slice behavior where the whole roster was hireable from any bar regardless of where a runner actually was.
 
 **A job stage is several `Approach`es, not one check.** Each stage holds a pool of `Approach`s (`skill`, `difficulty_delta`, `flavor`) — hard/clean, middling, easy/bloody. The stage rolls its base difficulty **once**; every approach is offset from it.
 
@@ -366,7 +368,7 @@ The world's other actors getting a turn of their own (Faction standing above is 
 
 Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
 
-**Independent runners take a real turn.** Every `RIVAL_RUNNERS` entry gets a `RivalAction` too, except while on the player's crew. Each picks one `RunnerActivity` per day (`rivals._runner_turn`), and **the activity is the movement rule** — there's no separate "do they move" roll any more:
+**Independent runners take a real turn.** Every entry in the run's `app.runners` roster (see Runners & crew) gets a `RivalAction` too, except while on the player's crew. Each picks one `RunnerActivity` per day (`rivals._runner_turn`), and **the activity is the movement rule** — there's no separate "do they move" roll any more:
 
 | Activity | Moves? | Caused by |
 |---|---|---|
@@ -394,7 +396,7 @@ State lives in `ShadowguyApp.rival_runner_states` (`dict[runner_id, RunnerState]
 
 The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own gates, and the first thing that *does* something with a watched district. A parallel resolution module like `rivals.py`/`security.py`: `resolve_surveillance_day` runs once per day tick, right after `resolve_rival_day` (so the day's runner positions are already settled).
 
-**Scoped to the corp the player is actually running.** Takes `CorpState | None`, no-op when `None`. While set, every territory it owns rolls a detection check against two "known runner" kinds: the player (`location_id`) and every `RIVAL_RUNNERS` entry (via `RunnerState.territory_id`). Only the position is read — what the runner is *doing* that day doesn't bend the odds, since there's no opposed roll here to bend.
+**Scoped to the corp the player is actually running.** Takes `CorpState | None`, no-op when `None`. While set, every territory it owns rolls a detection check against two "known runner" kinds: the player (`location_id`) and every runner in the run's `app.runners` roster (via `RunnerState.territory_id`). Only the position is read — what the runner is *doing* that day doesn't bend the odds, since there's no opposed roll here to bend.
 
 **Detection is a flat, Surveillance-level-indexed chance, not an opposed check.** `SURVEILLANCE_DETECTION_CHANCE` is a 6-entry tuple (index = the territory's Surveillance, 0..`MODIFIER_MAX`), guarded at import. No player-side counter-roll yet (a Concealment/Stealth skill is the obvious hook). First-slice: even a maxed district (level 5, 0.65) misses more often than not.
 

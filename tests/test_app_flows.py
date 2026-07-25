@@ -72,6 +72,7 @@ from shadowguy.screens.info_screens import (
 )
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import (
+    BarScreen,
     CorpHQScreen,
     GangDenScreen,
     HospitalScreen,
@@ -696,7 +697,6 @@ def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
     actually iterates more than once when a spend crosses more than one boundary,
     since no real call site exercises that path."""
     from shadowguy.corp_turn import CorpState, collect_income
-    from shadowguy.runners import RIVAL_RUNNERS
 
     async def body():
         app = ShadowguyApp()
@@ -713,7 +713,7 @@ def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
             # rival_actions must accumulate across both boundaries crossed in this one
             # spend, not just keep the last day's -- one action per non-player faction
             # plus one per not-on-crew rival runner, per day ticked.
-            actions_per_day = (len(FACTIONS) - 1) + len(RIVAL_RUNNERS)
+            actions_per_day = (len(FACTIONS) - 1) + len(app.runners)
             assert len(app.rival_actions) == 2 * actions_per_day
 
     run(body())
@@ -1701,6 +1701,47 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
             assert f"{territory.name}, running Server Pull" in working
             unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
             assert "whereabouts unknown" in unknown
+
+    run(body())
+
+
+def test_bar_gates_recruiting_on_meeting_the_runner_first():
+    """A runner can't be recruited sight-unseen. BarScreen locks a runner's row
+    until the player runs into them drinking at a bar (rivals.RunnerActivity.
+    DRINKING in their current territory), at which point it offers to exchange
+    numbers instead -- and only after that does the row turn into a normal
+    recruit option."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            runner = RIVAL_RUNNERS[0]
+            territory = app.corp_map.territories[app.character.location_id]
+            bar = Location(id="test_bar", name="The Sprawl", kind=LocationKind.BAR)
+
+            app.push_screen(BarScreen(bar))
+            await pilot.pause()
+            rows = app.screen.query_one("#bar_runners", ListView)
+            assert any(item.id == f"locked_{runner.id}" for item in rows.children)
+            app.pop_screen()
+            await pilot.pause()
+
+            app.rival_runner_states[runner.id] = RunnerState(
+                territory_id=territory.id, activity=RunnerActivity.DRINKING
+            )
+            app.push_screen(BarScreen(bar))
+            await pilot.pause()
+            rows = app.screen.query_one("#bar_runners", ListView)
+            rows.focus()
+            rows.index = next(i for i, item in enumerate(rows.children) if item.id == f"meet_{runner.id}")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.character.knows_runner(runner.id)
+            rows = app.screen.query_one("#bar_runners", ListView)
+            assert any(item.id == f"runner_{runner.id}" for item in rows.children)
 
     run(body())
 

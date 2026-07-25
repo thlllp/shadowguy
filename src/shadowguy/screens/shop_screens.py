@@ -25,8 +25,9 @@ from shadowguy.factions import (
 from shadowguy.fixer import Fixer, JobOffer
 from shadowguy.gangs import Gang
 from shadowguy.jobs import generate_smuggling_job
+from shadowguy.rivals import RunnerActivity
 from shadowguy.security import SecurityContract
-from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, recruit_cut, recruit_wage
+from shadowguy.runners import RUNNERS_BY_ID, recruit_cut, recruit_wage
 from shadowguy.skills import skill_value
 from shadowguy.shops import (
     CATALOG,
@@ -305,13 +306,35 @@ class BarScreen(BackScreen):
             items = self._terms_items(runner)
         await _replace_items(self.query_one("#bar_runners", ListView), items)
 
+    def _runner_here(self, runner_id: str) -> bool:
+        """Whether `runner_id` happens to be drinking at this bar right now
+        (rivals.RunnerActivity.DRINKING in the runner's current territory) —
+        the encounter that lets the player exchange numbers with them."""
+        state = self.app.rival_runner_states.get(runner_id)
+        return (
+            state is not None
+            and state.territory_id == self.app.character.location_id
+            and state.activity is RunnerActivity.DRINKING
+        )
+
     def _roster_items(self) -> list[ListItem]:
         character = self.app.character
         items = []
-        for runner in RIVAL_RUNNERS:
+        for runner in self.app.runners:
             tag = f"{runner.name} ({runner.archetype}, rating {runner.rating})"
-            label = f"{tag} — on your crew" if character.on_crew(runner.id) else f"Recruit {tag}"
-            items.append(ListItem(Static(label), id=f"runner_{runner.id}"))
+            if character.on_crew(runner.id):
+                label = f"{tag} — on your crew"
+                item_id = f"runner_{runner.id}"
+            elif character.knows_runner(runner.id):
+                label = f"Recruit {tag}"
+                item_id = f"runner_{runner.id}"
+            elif self._runner_here(runner.id):
+                label = f"{runner.name} is here, nursing a drink — exchange numbers?"
+                item_id = f"meet_{runner.id}"
+            else:
+                label = f"{tag} — no way to reach them yet"
+                item_id = f"locked_{runner.id}"
+            items.append(ListItem(Static(label), id=item_id))
         return items
 
     def _terms_items(self, runner) -> list[ListItem]:
@@ -335,6 +358,14 @@ class BarScreen(BackScreen):
         character = self.app.character
         item_id = event.item.id
         if self.chosen_runner is None:
+            if item_id.startswith("locked_"):
+                return
+            if item_id.startswith("meet_"):
+                runner = RUNNERS_BY_ID[item_id.removeprefix("meet_")]
+                character.meet_runner(runner.id)
+                self.notify(f"You exchange numbers with {runner.name}.")
+                await self._refresh()
+                return
             runner = RUNNERS_BY_ID[item_id.removeprefix("runner_")]
             if not character.on_crew(runner.id):
                 self.chosen_runner = runner.id

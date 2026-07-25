@@ -164,6 +164,11 @@ class Character:
     # once. A fixer's presence on the corp map is hidden until discovered this way
     # — see fixer.discover_fixers_here(), the single place that reveals it.
     discovered_fixers: set[str] = field(default_factory=set)
+    # Runner ids (runners.RUNNERS_BY_ID) whose number the player has actually gotten —
+    # granted by shop_screens.BarScreen when the player runs into that runner drinking
+    # at a bar (rivals.RunnerActivity.DRINKING), not just by knowing they exist.
+    # Recruiting a runner onto the crew is gated on this.
+    known_runners: set[str] = field(default_factory=set)
     # Runner ids (runners.RUNNERS_BY_ID) the runner has hired at a bar. Assigning them to
     # a job's roles (with the one-remote-support cap) is a later increment.
     crew: list[CrewHire] = field(default_factory=list)
@@ -276,6 +281,12 @@ class Character:
 
     def discover_fixer(self, fixer_id: str) -> None:
         self.discovered_fixers.add(fixer_id)
+
+    def knows_runner(self, runner_id: str) -> bool:
+        return runner_id in self.known_runners
+
+    def meet_runner(self, runner_id: str) -> None:
+        self.known_runners.add(runner_id)
 
     def on_crew(self, runner_id: str) -> bool:
         return any(hire.runner_id == runner_id for hire in self.crew)

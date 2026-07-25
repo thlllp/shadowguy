@@ -7,7 +7,7 @@ from shadowguy.corp_turn import TECHNOLOGIES_BY_ID, FactionEvent
 from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, Faction
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
-from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
+from shadowguy.runners import RivalRunner
 from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
@@ -261,7 +261,7 @@ class ContactsScreen(PanelNav, BackScreen):
         )
         await _populate_list(
             self.query_one("#runners_list", ListView),
-            RIVAL_RUNNERS,
+            self.app.runners,
             id_prefix="runner_",
             label=lambda runner: (
                 f"{runner.name} — {runner.archetype}"
@@ -478,7 +478,7 @@ class MessagesScreen(BackScreen):
                 lines.append(f"{fixer.name}: got {len(fixer.open_offers)} job(s) if you're interested.")
             if fixer.security_offers:
                 lines.append(f"{fixer.name}: security work up for grabs too, if that's more your speed.")
-        for runner in RIVAL_RUNNERS:
+        for runner in self.app.runners:
             state = self.app.rival_runner_states.get(runner.id)
             if state is not None and state.activity is RunnerActivity.WORKING and state.job_title:
                 lines.append(f"{runner.name}: heads up, I'm out running {state.job_title} today.")
