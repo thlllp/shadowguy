@@ -54,7 +54,10 @@ from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, Skil
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import GangDenScreen, HospitalScreen, JunkyardScreen, ShopScreen
 from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
-from textual.widgets import Collapsible, ListView
+from shadowguy.rivals import RunnerActivity, RunnerState
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
+from shadowguy.screens.shop_screens import FixerOffersScreen
+from textual.widgets import Collapsible, ListView, Static
 
 
 class ForcedChance(random.Random):
@@ -82,6 +85,7 @@ def _stage_gang_turf(app, standing: int) -> str:
 
 def run(coro):
     return asyncio.run(coro)
+
 
 
 def test_app_boots_to_title_menu():
@@ -1427,5 +1431,81 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.pause()
             assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == before + 1
             assert app.corp_state.daily_action_used is False
+
+    run(body())
+
+
+def _boot_runner_game(pilot, app):
+    """Title -> Runner -> archetype -> MainMenu, the shortest real path into a
+    playable runner game."""
+
+    async def go():
+        await pilot.pause()
+        await pilot.click("#new_game")
+        await pilot.pause()
+        await pilot.click("#runner")
+        await pilot.pause()
+        await pilot.click("#arch_enforcer")
+        await pilot.pause()
+        await pilot.click("#begin")
+        await pilot.pause()
+        assert isinstance(app.screen, MainMenu)
+
+    return go()
+
+
+def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
+    """A job an independent runner beat the player to (rivals.py) stays on the
+    fixer's board for the day, labelled with who took it, and selecting it must
+    not accept it."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = app.fixers[0]
+            offer = fixer.offers[0]
+            offer.taken_by = RIVAL_RUNNERS[0].id
+
+            app.push_screen(FixerOffersScreen(fixer))
+            await pilot.pause()
+            rows = app.screen.query_one("#offers", ListView)
+            label = str(rows.children[0].query_one(Static).content)
+            assert "TAKEN" in label
+            assert RUNNERS_BY_ID[offer.taken_by].name in label
+
+            rows.index = 0
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.character.accepted_jobs == []
+            assert offer in fixer.offers
+
+    run(body())
+
+
+def test_contacts_runner_panel_reports_what_each_runner_is_doing():
+    """The Runners panel reads rivals.RunnerState, so a runner with a state
+    shows where they are and what they're up to, and one without says so."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.rival_runner_states[RIVAL_RUNNERS[0].id] = RunnerState(
+                territory_id=territory.id,
+                activity=RunnerActivity.WORKING,
+                job_title="Server Pull",
+            )
+
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+            rows = app.screen.query_one("#runners_list", ListView).children
+            labels = [str(row.query_one(Static).content) for row in rows]
+
+            working = next(label for label in labels if RIVAL_RUNNERS[0].name in label)
+            assert f"{territory.name}, running Server Pull" in working
+            unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
+            assert "whereabouts unknown" in unknown
 
     run(body())

@@ -125,7 +125,8 @@ src/shadowguy/
 
   security.py    parallel resolution: multi-night security contracts
   encounters.py  parallel resolution: gang turf-entry toll-or-attack
-  rivals.py      parallel resolution: faction expansion + runner wander, once a day
+  rivals.py      parallel resolution: faction expansion + the NPC runners' daily
+                 activity turn (one of which takes a job off a fixer's board), once a day
   surveillance.py parallel resolution: detection rolls in the player corp's territory
   corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action
 
@@ -193,6 +194,7 @@ Leaf modules, and why each has to stay one:
 | 35 | `CorpState.pending_recruit` (Academy training takes days) |
 | 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
 | 37 | `Character.smuggling_job` (gang delivery jobs) |
+| 38 | `rival_runner_states` **replacing** `rival_runner_locations`, `JobOffer.taken_by` |
 
 ### Verifying changes
 
@@ -211,3 +213,5 @@ A real test suite exists (`tests/`, 19 files, `pytest>=8` in `pyproject.toml`'s 
 - `Screen`'s resume hook is the public `on_screen_resume` (a separate private `_on_screen_resume` exists for internal bookkeeping) — override the public one to refresh a screen's content when popped back to.
 - Mouse hit-testing on a text blob: handle `on_mouse_move` and call `event.get_content_offset(widget)`, returning an `Offset` inside the widget's content or `None` when the pointer is outside it — `None` is the signal to clear hover state. Mouse events bubble to the `Screen`, so the handler fires for the whole screen.
 - `Static` has **no** `.renderable` attribute in Textual 8 (it did in older versions); current content is `.content`. Only matters when asserting on widget contents in tests.
+- **`run_test()` hands back a pilot before the first layout has run**, so the very first `pilot.click(selector)` of a test can be aimed one row off. `click()` reads the target's `.region` once up front, then pauses between the MouseDown/MouseUp/Click it posts — and `Pilot.pause()` *ends* by calling `screen._on_timer_update()`, which is what runs the pending layout. Aimed pre-layout, delivered post-layout. On `TitleMenu` this moved `#new_game` between y=18 and y=17 and opened Load Game instead of New Game in ~2% of runs. **Way out:** `tests/test_app_flows.py`'s `_settle(pilot)` (two pauses) before the first coordinate click. Only the cold-boot screen needs it — a `push_screen()` mid-test settles inside one pause (measured 150/150 stable).
+- **A frequent `app.notify()` toast makes `tests/test_app_flows.py` flaky.** Toasts render in an overlay, and `pilot.click(selector)` clicks *screen coordinates* — a live toast can sit on top of the target and swallow the click, so unrelated tests start failing intermittently in different places each run. A day-tick notification that fires on most days is enough to do it. Gate frequent notifications on something the player actually has (e.g. `Character.discovered_fixers`) rather than firing them unconditionally.

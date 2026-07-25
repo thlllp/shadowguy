@@ -3,8 +3,10 @@ from textual.containers import Grid, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
+from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
+from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
 from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
@@ -219,7 +221,7 @@ class ContactsScreen(PanelNav, BackScreen):
             id_prefix="fixer_",
             label=lambda fixer: (
                 f"{fixer.name} — {fixer.specialty} "
-                f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.offers)} jobs, "
+                f"(trust {character.trust_with(fixer.id):+d}, {len(fixer.open_offers)} jobs, "
                 f"{len(fixer.security_offers)} security available)"
             ),
             empty_label="No established contacts yet.",
@@ -257,10 +259,26 @@ class ContactsScreen(PanelNav, BackScreen):
             id_prefix="runner_",
             label=lambda runner: (
                 f"{runner.name} — {runner.archetype}"
-                + (" (on your crew)" if character.on_crew(runner.id) else "")
+                + (" (on your crew)" if character.on_crew(runner.id) else f" — {self._status(runner)}")
                 + f": {runner.description}"
             ),
         )
+
+    def _status(self, runner: RivalRunner) -> str:
+        """What an independent runner was last seen doing (rivals.py). A runner
+        with no state yet hasn't had a day tick since the run started."""
+        state = self.app.rival_runner_states.get(runner.id)
+        if state is None:
+            return "whereabouts unknown"
+        territory = self.app.corp_map.territories[state.territory_id]
+        if state.activity is RunnerActivity.WORKING and state.job_title:
+            return f"{territory.name}, running {state.job_title}"
+        if state.activity is RunnerActivity.DRINKING:
+            # rivals.py only picks DRINKING in a territory that has a bar, so
+            # naming it here is safe — and much better flavor than "drinking".
+            bar = next(loc for loc in territory.locations if loc.kind is LocationKind.BAR)
+            return f"{territory.name}, drinking at {bar.name}"
+        return f"{territory.name}, {ACTIVITY_LABELS[state.activity]}"
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if not event.item.id.startswith("fixer_"):
