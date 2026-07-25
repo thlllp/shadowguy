@@ -134,7 +134,12 @@ SAVE_SUFFIX = ".save"
 # (faction_id -> set of Technology ids a rival has "researched", rivals.py's
 # unstaffed flavor-only roll) and `faction_events` (faction_id -> list of
 # corp_turn.FactionEvent, the blog itself) -- a pre-v40 save lacks both keys.
-SAVE_VERSION = 40
+# v41 made stun a persistent Character stat instead of a per-fight counter:
+# Character gained `stun` (a pre-v41 pickled Character lacks it), and
+# combat.CombatState lost its own `player_stun` field entirely -- _stun_player
+# now reads/writes Character.stun directly, so it carries across fights and is
+# only cleared by Character.mark_rested (a full clear, unlike fatigue's halving).
+SAVE_VERSION = 41
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

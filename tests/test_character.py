@@ -57,6 +57,14 @@ def test_adjust_rep_floors_at_rep_floor_not_zero():
     assert c.rep < 0  # unlike health, rep is allowed negative
 
 
+def test_adjust_stun_floors_at_zero():
+    c = Character(name="t")
+    c.adjust_stun(5)
+    assert c.stun == 5
+    c.adjust_stun(-10_000)
+    assert c.stun == 0
+
+
 def test_spend_stat_point_raises_max_health_and_current_health():
     c = Character(name="t", body=1)
     before_max = c.max_health
@@ -342,6 +350,15 @@ def test_mark_rested_resets_last_rest_hour():
     c.elapsed_hours = 40
     c.mark_rested()
     assert c.last_rest_hour == 40
+
+
+def test_mark_rested_clears_stun_completely_unlike_fatigue():
+    """Unlike fatigue's halving, stun is meant to be a real meter but not an
+    extremely punishing one -- one rest walks it off entirely."""
+    c = Character(name="t")
+    c.stun = 12
+    c.mark_rested()
+    assert c.stun == 0
 
 
 def test_on_crew_hire_indefinite_and_for_job():
