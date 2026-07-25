@@ -339,17 +339,35 @@ The world's other actors getting a turn of their own (Faction standing above is 
 
 Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
 
-**Independent runners have a position now.** Every `RIVAL_RUNNERS` entry gets a `RivalAction` too, except while on the player's crew. Each wanders (`rivals._wander`): placed randomly on first sight, then a `RUNNER_MOVE_CHANCE` (0.3, first-slice) coin flip per day either hops them to a connected territory or leaves them put. Position tracked in `ShadowguyApp.rival_runner_locations` (`dict[runner_id, territory_id]`), mutated in place (persistence is the caller's problem, same as `rival_actions`). No decision logic beyond the wander yet — a runner AI is the natural next step. `rival_actions` is overwritten each day (no history read).
+**Independent runners take a real turn.** Every `RIVAL_RUNNERS` entry gets a `RivalAction` too, except while on the player's crew. Each picks one `RunnerActivity` per day (`rivals._runner_turn`), and **the activity is the movement rule** — there's no separate "do they move" roll any more:
 
-**Still deliberately inert past the wander**: no UI surfaces a faction's claim. (A runner's wander position *is* now surfaced — see Surveillance detection.)
+| Activity | Moves? | Caused by |
+|---|---|---|
+| `WORKING` | to the job's `target_territory_id` | the work roll (`RUNNER_WORK_CHANCE`, 0.35) hitting *and* a takeable offer existing |
+| `LEGWORK` | one hop along a connection | the idle table |
+| `LAYING_LOW` | no | the idle table, plus every `DRINKING` draw in a territory with no bar |
+| `DRINKING` | no | the idle table, only where the territory has a `LocationKind.BAR` |
+| `RECOVERING` | no | **only** a `WORKING` day that failed `JOB_INJURY_CHANCE` (0.25); lasts `RECOVERY_DAYS` (1–2) and pre-empts the whole roll |
+
+`IDLE_ACTIVITY_WEIGHTS` is deliberately set so `(1 - RUNNER_WORK_CHANCE) * 0.45 ≈ 0.29` reproduces the old flat `RUNNER_MOVE_CHANCE` of 0.3 — a runner still drifts at about the rate they used to, and job-site relocation is movement on top. All first-slice, not balance-simulated.
+
+**`WORKING` is the one activity with teeth.** It marks a live `fixer.JobOffer.taken_by`, so a job you sat on is a job you can lose. Takeable means untaken, runnable *today* (`JobTiming.is_available` and not expired), **and posted before today** — the tick generates the day's offers before it resolves runner turns, so without that last rule a runner takes jobs in the same tick that created them, which the player never had a chance to see (measured: 10% of all steals). Offers the player already accepted are gone from the board entirely, so there's nothing to exclude for them. On the `fixer.py` side a taken offer **stays listed for exactly one day**: the day tick expires *before* `resolve_rival_day` runs, so an offer marked tonight survives tomorrow's play and `expire_offers` sweeps it at the tick after. `refresh_offers` is untouched and needs no taken-offer accounting — by the time it runs, expiry has already cleared them — so that fixer's board is one job thinner for the day you lost it and back to `max_offers` the next. Anything *counting* jobs must use `Fixer.open_offers`, not `offers`: `MainMenu`'s Local tab and `ContactsScreen`'s Fixers panel both render "N jobs available", and a taken offer sitting in the list would overstate it for that day.
+
+State lives in `ShadowguyApp.rival_runner_states` (`dict[runner_id, RunnerState]` — territory, activity, `job_title`, `recovery_days`), mutated in place; persistence is the caller's problem, same as `rival_actions`. `rival_actions` is overwritten each day (no history read).
+
+**Two surfaces read it.** `FixerOffersScreen` renders a taken offer as `"{title} — TAKEN, {runner} got there first"` and refuses to accept it (no square brackets: `Static` would eat them as markup). `ContactsScreen`'s Runners panel appends a status line per independent runner — territory plus `ACTIVITY_LABELS`, naming the job when `WORKING` and the bar when `DRINKING`. `_apply_day_tick` also toasts, **but only for a fixer in `Character.discovered_fixers`** — you hear about work lifted off a board you knew existed, not every job in the city. That gate is load-bearing beyond flavor: an ungated toast fired most days in most tests, and a Textual toast overlay steals `pilot.click` coordinates, which made `test_app_flows.py` flaky in several unrelated places.
+
+**Still deliberately inert**: no UI surfaces a faction's claim, and the four non-`WORKING` activities have no mechanical consequence — Surveillance reads a runner's *position* but not what they're doing, so laying low doesn't yet make you harder to spot.
+
+**`rivals.py` stays leaf-ish.** `Fixer`/`JobOffer` are a `TYPE_CHECKING`-only import (the trick `fixer.py` itself uses for `Character`) — a runner only reads an offer's timing and marks it taken, so nothing here needs `fixer`/`scene` at runtime.
 
 **Once the player takes over a Faction, it drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, skips that faction and records no `RivalAction` for it. Default `None` keeps every pre-existing call site unchanged.
 
 ## Surveillance detection (`shadowguy/surveillance.py`)
 
-The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own gates, and the first thing that *does* something with a watched district. A parallel resolution module like `rivals.py`/`security.py`: `resolve_surveillance_day` runs once per day tick, right after `resolve_rival_day` (so wandering runner positions are already settled).
+The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own gates, and the first thing that *does* something with a watched district. A parallel resolution module like `rivals.py`/`security.py`: `resolve_surveillance_day` runs once per day tick, right after `resolve_rival_day` (so the day's runner positions are already settled).
 
-**Scoped to the corp the player is actually running.** Takes `CorpState | None`, no-op when `None`. While set, every territory it owns rolls a detection check against two "known runner" kinds: the player (`location_id`) and every `RIVAL_RUNNERS` entry (via its wandered position).
+**Scoped to the corp the player is actually running.** Takes `CorpState | None`, no-op when `None`. While set, every territory it owns rolls a detection check against two "known runner" kinds: the player (`location_id`) and every `RIVAL_RUNNERS` entry (via `RunnerState.territory_id`). Only the position is read — what the runner is *doing* that day doesn't bend the odds, since there's no opposed roll here to bend.
 
 **Detection is a flat, Surveillance-level-indexed chance, not an opposed check.** `SURVEILLANCE_DETECTION_CHANCE` is a 6-entry tuple (index = the territory's Surveillance, 0..`MODIFIER_MAX`), guarded at import. No player-side counter-roll yet (a Concealment/Stealth skill is the obvious hook). First-slice: even a maxed district (level 5, 0.65) misses more often than not.
 
@@ -357,7 +375,7 @@ The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own
 
 **Surfaced as a Surveillance Log panel** — a collapsed-by-default `Collapsible` in `CorpScreen`/`CorpMainMenu` (read-only history, unlike Academy/Research Facility). Each row: `"Day {day} — {who} spotted in {territory}"`, resolved at display time. `app.notify()`s once/day with just a count, not one toast per sighting.
 
-**Not balance-simulated** — the detection curve, `MAX_SIGHTINGS_LOG` (10), `RUNNER_MOVE_CHANCE` (0.3) are all first-slice.
+**Not balance-simulated** — the detection curve and `MAX_SIGHTINGS_LOG` (10) are both first-slice.
 
 ## Corp mode turn loop (`shadowguy/corp_turn.py`, `screens/corp_screen.py`)
 

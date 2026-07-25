@@ -17,7 +17,8 @@ from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refres
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN
-from shadowguy.rivals import RivalAction, resolve_rival_day
+from shadowguy.rivals import RivalAction, RunnerActivity, RunnerState, resolve_rival_day
+from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.corp_screen import CorpMainMenu
@@ -46,7 +47,7 @@ class ShadowguyApp(App):
         self.location_gigs: dict[str, Scene] = {}
         refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         self.rival_actions: list[RivalAction] = []
-        self.rival_runner_locations: dict[str, str] = {}
+        self.rival_runner_states: dict[str, RunnerState] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
 
@@ -132,9 +133,30 @@ class ShadowguyApp(App):
         refresh_security_offers(self.fixers, day, self.corp_map, self.rng)
         refresh_gigs(self.corp_map, self.location_gigs, day, self.rng)
         player_faction_id = self.corp_state.faction_id if self.corp_state else None
-        self.rival_actions += resolve_rival_day(
-            self.character, self.corp_map, day, self.rng, player_faction_id, self.rival_runner_locations
+        today_actions = resolve_rival_day(
+            self.character,
+            self.corp_map,
+            day,
+            self.rng,
+            player_faction_id,
+            self.rival_runner_states,
+            self.fixers,
         )
+        self.rival_actions += today_actions
+        # Runners take jobs off the fixers' boards overnight (the offer stays
+        # listed, marked taken, for the rest of today). Only news you'd plausibly
+        # hear gets a toast: a job lifted off a fixer you've actually met. Losing
+        # one from a fixer you've never found is still real, just discovered on
+        # the board rather than announced. One notify for the whole roster, like
+        # the surveillance sweep below.
+        taken = [
+            f"{RUNNERS_BY_ID[action.actor_id].name} took the {action.job_title} job"
+            for action in today_actions
+            if action.activity is RunnerActivity.WORKING
+            and action.fixer_id in self.character.discovered_fixers
+        ]
+        if taken:
+            self.notify(f"Word on the street: {', '.join(taken)}.")
         if self.corp_state:
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
@@ -146,7 +168,7 @@ class ShadowguyApp(App):
                     f"{employee_plural(trained.category)} report for duty."
                 )
             sightings = resolve_surveillance_day(
-                self.character, self.corp_map, self.corp_state, self.rival_runner_locations, day, self.rng
+                self.character, self.corp_map, self.corp_state, self.rival_runner_states, day, self.rng
             )
             if sightings:
                 self.notify(f"Surveillance logged {len(sightings)} sighting(s) in your territory today.")
@@ -204,7 +226,7 @@ class ShadowguyApp(App):
             "fixers": self.fixers,
             "location_gigs": self.location_gigs,
             "rival_actions": self.rival_actions,
-            "rival_runner_locations": self.rival_runner_locations,
+            "rival_runner_states": self.rival_runner_states,
             "corp_state": self.corp_state,
             "corp_only": self.corp_only,
         }
@@ -217,7 +239,7 @@ class ShadowguyApp(App):
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
         self.location_gigs = location_gigs
         self.rival_actions = state["rival_actions"]
-        self.rival_runner_locations = state["rival_runner_locations"]
+        self.rival_runner_states = state["rival_runner_states"]
         self.corp_state = state["corp_state"]
         self.corp_only = state["corp_only"]
         unspent = self.character.stat_points + self.character.skill_points

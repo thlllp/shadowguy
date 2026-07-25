@@ -54,7 +54,10 @@ from shadowguy.screens.info_screens import ContactsScreen, CyberdeckScreen, Skil
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import GangDenScreen, HospitalScreen, JunkyardScreen, ShopScreen
 from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
-from textual.widgets import Collapsible, ListView
+from shadowguy.rivals import RunnerActivity, RunnerState
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
+from shadowguy.screens.shop_screens import FixerOffersScreen
+from textual.widgets import Collapsible, ListView, Static
 
 
 class ForcedChance(random.Random):
@@ -84,6 +87,26 @@ def run(coro):
     return asyncio.run(coro)
 
 
+async def _settle(pilot) -> None:
+    """Let the opening screen finish laying out before anything is clicked.
+
+    run_test() hands back a pilot while the first layout is still pending, and
+    a single pilot.pause() isn't enough to flush it: pause() *ends* by calling
+    screen._on_timer_update(), which is what actually runs the layout. Meanwhile
+    pilot.click(selector) reads the target's .region once, up front, then pauses
+    between the MouseDown/MouseUp/Click it posts -- so a click can be aimed with
+    a pre-layout region and delivered against the post-layout screen.
+
+    On TitleMenu that shifted #new_game between y=18 and y=17 and put the click
+    one row low, opening Load Game instead of New Game in ~2% of runs (measured:
+    3/150). The second pause runs the pending layout before any coordinates are
+    taken. Use this instead of a bare pause() wherever the first thing a test
+    does after boot is a coordinate-based click.
+    """
+    await pilot.pause()
+    await pilot.pause()
+
+
 def test_app_boots_to_title_menu():
     async def body():
         app = ShadowguyApp()
@@ -98,7 +121,7 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             assert isinstance(app.screen, ModeSelectScreen)
@@ -124,7 +147,7 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#runner")
@@ -142,7 +165,7 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -174,7 +197,7 @@ def test_corp_main_menu_has_sidebar_categories():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -398,7 +421,7 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
@@ -413,7 +436,7 @@ def test_test_menu_matrix_combat_reaches_a_live_matrix_fight():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, TitleMenu)
 
             await pilot.click("#test")
@@ -448,7 +471,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
             await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
@@ -1127,7 +1150,7 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
     async def body():
         app = ShadowguyApp()
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#corp")
@@ -1427,5 +1450,81 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.pause()
             assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == before + 1
             assert app.corp_state.daily_action_used is False
+
+    run(body())
+
+
+def _boot_runner_game(pilot, app):
+    """Title -> Runner -> archetype -> MainMenu, the shortest real path into a
+    playable runner game."""
+
+    async def go():
+        await _settle(pilot)
+        await pilot.click("#new_game")
+        await pilot.pause()
+        await pilot.click("#runner")
+        await pilot.pause()
+        await pilot.click("#arch_enforcer")
+        await pilot.pause()
+        await pilot.click("#begin")
+        await pilot.pause()
+        assert isinstance(app.screen, MainMenu)
+
+    return go()
+
+
+def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
+    """A job an independent runner beat the player to (rivals.py) stays on the
+    fixer's board for the day, labelled with who took it, and selecting it must
+    not accept it."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = app.fixers[0]
+            offer = fixer.offers[0]
+            offer.taken_by = RIVAL_RUNNERS[0].id
+
+            app.push_screen(FixerOffersScreen(fixer))
+            await pilot.pause()
+            rows = app.screen.query_one("#offers", ListView)
+            label = str(rows.children[0].query_one(Static).content)
+            assert "TAKEN" in label
+            assert RUNNERS_BY_ID[offer.taken_by].name in label
+
+            rows.index = 0
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.character.accepted_jobs == []
+            assert offer in fixer.offers
+
+    run(body())
+
+
+def test_contacts_runner_panel_reports_what_each_runner_is_doing():
+    """The Runners panel reads rivals.RunnerState, so a runner with a state
+    shows where they are and what they're up to, and one without says so."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.rival_runner_states[RIVAL_RUNNERS[0].id] = RunnerState(
+                territory_id=territory.id,
+                activity=RunnerActivity.WORKING,
+                job_title="Server Pull",
+            )
+
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+            rows = app.screen.query_one("#runners_list", ListView).children
+            labels = [str(row.query_one(Static).content) for row in rows]
+
+            working = next(label for label in labels if RIVAL_RUNNERS[0].name in label)
+            assert f"{territory.name}, running Server Pull" in working
+            unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
+            assert "whereabouts unknown" in unknown
 
     run(body())

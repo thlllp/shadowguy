@@ -15,6 +15,7 @@ from shadowguy.character import Character
 from shadowguy.corp_turn import CorpState
 from shadowguy.corpmap import CorpMap, Territory, TerritoryModifier
 from shadowguy.factions import FACTIONS
+from shadowguy.rivals import RunnerState
 from shadowguy.runners import RIVAL_RUNNERS
 from shadowguy.surveillance import MAX_SIGHTINGS_LOG, resolve_surveillance_day
 
@@ -109,7 +110,7 @@ def test_rival_runner_detected_when_wandered_into_owned_territory():
     corp_state = CorpState(faction_id=IRONCLAD)
     runner_id = RIVAL_RUNNERS[0].id
     sightings = resolve_surveillance_day(
-        character, corp_map, corp_state, {runner_id: "watched"}, day=3, rng=HIT
+        character, corp_map, corp_state, {runner_id: RunnerState(territory_id="watched")}, day=3, rng=HIT
     )
     assert len(sightings) == 1
     assert sightings[0] == corp_state.sightings[0]

@@ -1,9 +1,9 @@
 """Corp-side Surveillance detection: a corp watches its own territory's camera
 and informant network (corpmap.TerritoryModifier.SURVEILLANCE) for known
 runners passing through — the player, and the independent street runners
-(runners.RIVAL_RUNNERS) now wandering the map on their own each day
-(rivals.py). A parallel resolution module, like rivals.py/security.py — not a
-Scene.
+(runners.RIVAL_RUNNERS) now taking a turn of their own each day and moving
+around the map as a result (rivals.py). A parallel resolution module, like
+rivals.py/security.py — not a Scene.
 
 Only resolves for the corp the player is actually running (CorpState — a
 None corp_state means "not playing Corp mode" and this is a no-op): nothing
@@ -25,14 +25,20 @@ CorpState.sightings, nothing else moves (no standing/rep/combat) — the same
 CorpMap.relations started as.
 
 Leaf-ish: imports character/corp_turn/corpmap/runners, never scene or app.
+rivals.RunnerState is a TYPE_CHECKING-only import — only `.territory_id` is
+read off it, so there's no runtime dependency to invert later.
 """
 
 import random
+from typing import TYPE_CHECKING
 
 from shadowguy.character import Character
 from shadowguy.corp_turn import CorpState, Sighting
 from shadowguy.corpmap import MODIFIER_MAX, CorpMap, Territory, TerritoryModifier
 from shadowguy.runners import RIVAL_RUNNERS
+
+if TYPE_CHECKING:
+    from shadowguy.rivals import RunnerState
 
 # Indexed by TerritoryModifier.SURVEILLANCE (0..MODIFIER_MAX). First-slice
 # numbers, not balance-simulated: even a fully-watched district (level 5)
@@ -57,15 +63,17 @@ def resolve_surveillance_day(
     character: Character,
     corp_map: CorpMap,
     corp_state: CorpState | None,
-    rival_runner_locations: dict[str, str],
+    rival_runner_states: dict[str, "RunnerState"],
     day: int,
     rng: random.Random,
 ) -> list[Sighting]:
     """One day's Surveillance sweep of the corp's own territory: a detection
     roll against the player (if character.location_id is inside it) and
-    against every independent RivalRunner whose current wander position
-    (rival_runner_locations, already updated for today by
-    rivals.resolve_rival_day) is inside it too.
+    against every independent RivalRunner whose current position
+    (rival_runner_states, already updated for today by
+    rivals.resolve_rival_day) is inside it too. Only the position is read —
+    a runner laying low is as detectable as one out doing legwork, since
+    detection has no opposed roll to bend yet.
 
     Returns every sighting logged today, in no particular order; the same list
     is also prepended to corp_state.sightings (most-recent-first, capped at
@@ -82,9 +90,9 @@ def resolve_surveillance_day(
         if _detected(territory, rng):
             sightings.append(Sighting(kind="player", actor_id="player", territory_id=territory.id, day=day))
     for runner in RIVAL_RUNNERS:
-        location_id = rival_runner_locations.get(runner.id)
-        if location_id in owned_ids:
-            territory = corp_map.territories[location_id]
+        state = rival_runner_states.get(runner.id)
+        if state is not None and state.territory_id in owned_ids:
+            territory = corp_map.territories[state.territory_id]
             if _detected(territory, rng):
                 sightings.append(Sighting(kind="runner", actor_id=runner.id, territory_id=territory.id, day=day))
 

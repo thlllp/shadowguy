@@ -121,7 +121,12 @@ SAVE_SUFFIX = ".save"
 # lacks both).
 # v37 added gang delivery jobs (jobs.py): Character gained `smuggling_job`
 # (a pre-v37 pickled Character lacks it, None when idle).
-SAVE_VERSION = 37
+# v38 gave independent runners a real turn (rivals.py): the bundle's
+# `rival_runner_locations` key (runner_id -> territory_id) is replaced by
+# `rival_runner_states` (runner_id -> rivals.RunnerState, carrying activity and
+# recovery alongside the territory), and fixer.JobOffer gained `taken_by` -- a
+# pre-v38 pickled JobOffer (on a fixer's board or inside an accepted job) lacks it.
+SAVE_VERSION = 38
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
@@ -133,7 +138,7 @@ STATE_KEYS = frozenset(
         "fixers",
         "location_gigs",
         "rival_actions",
-        "rival_runner_locations",
+        "rival_runner_states",
         "corp_state",
         "corp_only",
     }

@@ -237,7 +237,7 @@ class MainMenu(PanelNav, Screen):
                 id_prefix="local_fixer_",
                 label=lambda fixer: (
                     f"{fixer.name} — {fixer.specialty} "
-                    f"({len(fixer.offers)} jobs, {len(fixer.security_offers)} security available)"
+                    f"({len(fixer.open_offers)} jobs, {len(fixer.security_offers)} security available)"
                 ),
                 empty_label="No fixer seated here.",
                 empty_id="no_local_fixers",

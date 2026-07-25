@@ -43,6 +43,12 @@ class JobOffer:
     scene: Scene
     timing: JobTiming
     offered_day: int
+    # Set to a runners.RivalRunner id once an independent runner beat the player
+    # to this job (rivals.py). A taken offer stays on the board for the rest of
+    # that day so the player can see they lost it, and is never acceptable;
+    # expire_offers drops it at the next tick. It does still occupy one of
+    # max_offers until then, so that fixer is a job thinner for the day.
+    taken_by: str | None = None
 
 
 @dataclass
@@ -67,6 +73,13 @@ class Fixer:
     # `offers` since FixerOffersScreen has to render and accept them differently.
     max_security_offers: int = 1
     security_offers: list[SecurityContract] = field(default_factory=list)
+
+    @property
+    def open_offers(self) -> list[JobOffer]:
+        """The jobs a player can still accept. Anything counting or listing
+        "jobs available" wants this, not `offers` — which keeps a job a rival
+        runner took listed, unacceptable, for its last day on the board."""
+        return [offer for offer in self.offers if offer.taken_by is None]
 
 
 def _seat(
@@ -122,8 +135,16 @@ def discover_fixers_here(fixers: list[Fixer], character: "Character") -> None:
 
 
 def expire_offers(fixers: list[Fixer], day: int) -> None:
+    """Clears out offers nobody can take any more: ones past their timing, and
+    ones a rival runner took. A taken offer is dropped a whole day after it was
+    marked, since the day tick expires before rivals.resolve_rival_day runs —
+    that gap is what puts the "[taken]" row in front of the player at all."""
     for fixer in fixers:
-        fixer.offers = [offer for offer in fixer.offers if not offer.timing.is_expired(day)]
+        fixer.offers = [
+            offer
+            for offer in fixer.offers
+            if not offer.timing.is_expired(day) and offer.taken_by is None
+        ]
 
 
 def refresh_offers(
