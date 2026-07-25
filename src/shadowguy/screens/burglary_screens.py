@@ -19,9 +19,10 @@ from shadowguy.tactical import (
     move_walker,
     reached_objective,
     spotted,
+    visible_tiles,
 )
 
-from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items, _terrain_glyph
 
 # A fixed illustration, not a positional layout -- deliberately not corpmap.py's
 # dynamic column/connector rendering, which is built for dozens of interconnected
@@ -75,7 +76,6 @@ class BurglaryWalkResult(StrEnum):
     SPOTTED = "spotted"
 
 
-_WALK_TILE = {Tile.WALL: "#", Tile.LOW_COVER: "%", Tile.FLOOR: "."}
 _WALK_END_TEXT = {
     BurglaryWalkResult.REACHED: "You've reached it.",
     BurglaryWalkResult.SPOTTED: "A guard's light sweeps toward you!",
@@ -152,7 +152,9 @@ class BurglaryWalkScreen(Screen):
     def _map_text(self) -> Text:
         state = self.state
         grid = state.grid
-        glyphs = [[_WALK_TILE[grid.tiles[y][x]] for x in range(grid.width)] for y in range(grid.height)]
+        terrain = [[_terrain_glyph(grid, x, y) for x in range(grid.width)] for y in range(grid.height)]
+        glyphs = [[terrain[y][x][0] for x in range(grid.width)] for y in range(grid.height)]
+        seen = visible_tiles(grid, state.position)
         styles: dict[tuple[int, int], str] = {}
         ox, oy = state.objective
         if grid.tiles[oy][ox] is Tile.FLOOR:
@@ -165,7 +167,9 @@ class BurglaryWalkScreen(Screen):
         for y in range(grid.height):
             for x in range(grid.width):
                 ch = glyphs[y][x]
-                default = "grey30" if ch in ("#", "%") else "grey50"
+                default = terrain[y][x][1]
+                if (y, x) not in styles and not seen[y, x]:
+                    default = f"{default} dim"
                 text.append(ch, style=styles.get((y, x), default))
             text.append("\n")
         return text
