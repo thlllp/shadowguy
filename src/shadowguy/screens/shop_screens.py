@@ -10,7 +10,18 @@ from shadowguy.corpmap import (
     has_home,
     safehouse_price,
 )
-from shadowguy.factions import FACTIONS_BY_ID, Faction, officer_dialogue, officer_gate, officer_unlocked
+from shadowguy.corp_turn import CorpState
+from shadowguy.factions import (
+    EXECUTIVE_ROLE,
+    FACTIONS_BY_ID,
+    TAKEOVER_COST,
+    Faction,
+    can_take_over,
+    officer_dialogue,
+    officer_gate,
+    officer_unlocked,
+    takeover_gate,
+)
 from shadowguy.fixer import Fixer, JobOffer
 from shadowguy.gangs import Gang
 from shadowguy.jobs import generate_smuggling_job
@@ -662,9 +673,27 @@ class CorpHQScreen(BackScreen):
             label=label,
         )
 
+        # The takeover sits under the officers rather than beside them: it's what the
+        # exec suite is *for*, and it only appears once the executive will actually see
+        # you (there's nobody to make the offer to otherwise). Hidden outright while
+        # already running a corp — you can't run two.
+        officers = self.query_one("#hq_officers", ListView)
+        if self.app.corp_state is not None:
+            return
+        if not officer_unlocked(character.rep, standing, EXECUTIVE_ROLE):
+            return
+        if can_take_over(character.rep, standing, character.cash):
+            text = f"Move on the board — buy a controlling stake, {TAKEOVER_COST}eb"
+        else:
+            text = f"Move on the board — locked (needs {takeover_gate(character.rep, standing, character.cash)})"
+        await officers.append(ListItem(Static(text), id="takeover"))
+
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         character = self.app.character
         standing = character.standing_with(self.faction.id)
+        if event.item.id == "takeover":
+            await self._take_over(character, standing)
+            return
         officer_id = event.item.id.removeprefix("officer_")
         officer = next((char for char in self.location.characters if char.id == officer_id), None)
         if officer is None:
@@ -676,3 +705,25 @@ class CorpHQScreen(BackScreen):
             )
             return
         dialogue.update(officer_dialogue(self.faction, officer.role, standing))
+
+    async def _take_over(self, character, standing: int) -> None:
+        """Buy the corp. Fails closed (no charge, no corp_state) on every gate, the same
+        shape corp_turn.py's daily actions use — the row can be selected while locked,
+        so the check here is the real one, not the label's."""
+        if self.app.corp_state is not None:
+            self.notify("You're already running a corp.", severity="warning")
+            return
+        if not can_take_over(character.rep, standing, character.cash):
+            self.query_one("#hq_dialogue", Static).update(
+                f"The executive hears you out and passes — come back with "
+                f"{takeover_gate(character.rep, standing, character.cash)}."
+            )
+            return
+        character.cash -= TAKEOVER_COST
+        self.app.corp_state = CorpState(faction_id=self.faction.id)
+        self.notify(f"The board signs. {self.faction.name} is yours.")
+        await self._refresh()
+        self.query_one("#hq_dialogue", Static).update(
+            f"The paperwork takes an afternoon. You walk out running {self.faction.name} — "
+            f"and every rival on the map now knows exactly who to come for."
+        )

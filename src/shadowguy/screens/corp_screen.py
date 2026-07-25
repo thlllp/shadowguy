@@ -58,11 +58,12 @@ def _sighting_label(sighting, corp_map) -> str:
 
 
 class CorpScreen(BackScreen):
-    """Play as a corp instead of the runner: pick one of the 3 seeded Factions
-    to run (a plain menu choice for now — there's no in-fiction takeover yet,
-    see corp_turn.py), then spend one directed move a day on either the same
-    neutral-ground expansion rivals.py's AI factions make, or training up
-    employees at the corp's Academy.
+    """Play as a corp instead of the runner. Getting one is not a choice made here:
+    a runner takes a corp from inside its own HQ (shop_screens.CorpHQScreen), by
+    reaching the executive and buying a controlling stake — see factions.can_take_over.
+    With no corp yet this screen only points at that. With one, you spend a directed
+    move a day on either the same neutral-ground expansion rivals.py's AI factions
+    make, or training up employees at the corp's Academy.
 
     Actions are grouped by the thing they're attached to, not left in one flat
     list: territory expansion + end-day stay in #corp_list, Academy training
@@ -124,9 +125,24 @@ class CorpScreen(BackScreen):
         research_list = self.query_one("#research_list", ListView)
 
         if corp_state is None:
-            info.update("Pick a corp to run.")
+            # No picker here any more: a corp is taken from inside its own HQ
+            # (shop_screens.CorpHQScreen), by a runner the executive will see and who can
+            # cover factions.TAKEOVER_COST. This screen just says where to go and how
+            # each corp currently feels about you, since standing is the gate that moves
+            # slowest.
+            character = self.app.character
+            info.update(
+                "You aren't running a corp.\n"
+                "Corps are taken, not chosen — go see one in person, at its HQ."
+            )
             items = [
-                ListItem(Static(f"{faction.name} ({faction.specialty})"), id=f"faction_{faction.id}")
+                ListItem(
+                    Static(
+                        f"{faction.name} ({faction.specialty}) — "
+                        f"standing {character.standing_with(faction.id):+d}"
+                    ),
+                    id=f"corpinfo_{faction.id}",
+                )
                 for faction in FACTIONS
             ]
             await _replace_items(list_view, items)
@@ -268,11 +284,10 @@ class CorpScreen(BackScreen):
         if item_id.startswith("sighting_") or item_id == "no_sightings":
             return
 
-        if item_id.startswith("faction_"):
-            faction_id = item_id.removeprefix("faction_")
-            self.app.corp_state = CorpState(faction_id=faction_id)
-            self.notify(f"You're now running {FACTIONS_BY_ID[faction_id].name}.")
-            await self._refresh()
+        if item_id.startswith("corpinfo_"):
+            # Read-only rows: the takeover lives at the corp's HQ, not here.
+            faction = FACTIONS_BY_ID[item_id.removeprefix("corpinfo_")]
+            self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
             return
 
         if item_id == "rest":

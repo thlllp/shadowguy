@@ -381,7 +381,19 @@ The first reader of `TerritoryModifier.SURVEILLANCE` beyond `corp_turn.py`'s own
 
 The other half of Rival AI: once the player takes over a Faction, they get the same kind of daily move plus more. A parallel resolution module, not a `Scene`.
 
-**Taking over is a plain menu pick, not an earned one yet.** `CorpScreen` (MainMenu `r`/"Corp") lists the 3 `FACTIONS`; picking sets `ShadowguyApp.corp_state = CorpState(faction_id=...)`. No in-fiction coup mechanic — the same shortcut-before-the-real-gate precedent `TestMenu` sets. Once set, `resolve_rival_day` stops rolling for that faction.
+**Taking over is earned from inside the corp, not picked from a menu.** A runner buys a controlling stake at that corp's own HQ (`CorpHQScreen`, `LocationKind.CORP_HQ` — one per faction, so you have to travel there), which sets `ShadowguyApp.corp_state = CorpState(faction_id=...)`. Three gates, all required (`factions.can_take_over`, plain ints so `factions.py` stays a leaf):
+
+| Gate | Value | What moves it |
+|---|---|---|
+| `TAKEOVER_MIN_REP` | 20 | +1 per completed job or gig |
+| `TAKEOVER_MIN_STANDING` | +15 | +1 per job completed against one of *their* rivals (`standing_shift`) |
+| `TAKEOVER_COST` | 15,000eb | saved out of job payouts |
+
+The offer only appears once the `executive` tier (`EXECUTIVE_ROLE`, rep 12 / standing +8) will actually see you — reaching the exec suite buys the conversation, not the company — and is hidden entirely while you already run a corp. `takeover_gate()` renders **only the unmet requirements**, so the locked label shrinks as the runner closes in rather than restating the whole wall.
+
+Rep and standing are deliberately near-redundant: a completed job is +1 rep *and* +1 standing with every rival of the corp it hit, so working a corp's enemies advances both at once and the pair lands at roughly one point in a run instead of being two separate grinds. **Cash is the binding gate** — 15,000eb is ~30 jobs of gross income and an order of magnitude past the priciest thing in any shop (1,400eb), which is the point: CLAUDE.md's "switching modes is meant to be difficult" is what these numbers encode. All first-slice, not balance-simulated; `TAKEOVER_COST` is the one most likely to need tuning.
+
+**`CorpScreen` no longer acquires anything.** With no corp it's a signpost: the corps listed read-only with your current standing (the slowest-moving gate), and selecting one just tells you to find its HQ. Once set, `resolve_rival_day` stops rolling for that faction.
 
 **There are two ways in, producing different games.** New Game → `ModeSelectScreen` (Runner/Corp):
 
