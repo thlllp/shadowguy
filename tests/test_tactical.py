@@ -5,6 +5,7 @@ import random
 
 import pytest
 
+from shadowguy.buildings import generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
 from shadowguy.combat import ENEMIES_BY_ID, attack_verbs, player_defense
@@ -37,8 +38,11 @@ from shadowguy.tactical import (
     confirm_aim,
     confirm_attack_aim,
     confirm_grenade_aim,
+    _settle,
+    check_detection,
     cover_bonus,
     end_turn,
+    enter_level,
     enemy_at,
     enemy_target,
     generate_map,
@@ -56,8 +60,11 @@ from shadowguy.tactical import (
     resolve_downed_crew,
     snap_aim_to_next_target,
     stabilize_ally,
+    stairs_here,
+    start_burglary,
     stabilize_targets,
     start_tactical,
+    take_stairs,
     step_neighbors,
     targets_for,
     throw_grenade,
@@ -1054,3 +1061,137 @@ def test_generated_map_border_ring_stays_solid_wall(seed):
     for y in range(grid.height):
         assert grid.tile((0, y)) is Tile.WALL
         assert grid.tile((grid.width - 1, y)) is Tile.WALL
+
+
+# --- burglary: levels, standing a post, and what actually ends one ---
+
+
+def _burglary(seed=7, guard_id="thug", entrances=2):
+    """A real generated house with a live infiltration on its entry level."""
+    building = generate_building(random.Random(seed), entrance_count=entrances)
+    character = Character(name="t", inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)])
+    state = start_burglary(character, building, building.entrance_spawns[0], ENEMIES_BY_ID[guard_id])
+    return building, state
+
+
+def test_a_burglary_starts_quiet_with_its_guards_on_post():
+    building, state = _burglary()
+    assert not state.alarm
+    assert state.outcome is TacticalOutcome.ONGOING
+    everyone = [*state.units, *(u for units in state.off_level_units.values() for u in units)]
+    assert [u.alerted for u in everyone if u.is_enemy] == [False] * len(building.guards)
+
+
+def test_only_the_current_levels_units_are_on_the_board():
+    building, state = _burglary()
+    on_board = {(state.level_index, unit.coord) for unit in state.enemies}
+    waiting = {(level, unit.coord) for level, units in state.off_level_units.items() for unit in units}
+    assert on_board | waiting == set(building.guards)
+    assert not on_board & waiting
+
+
+def test_taking_the_stairs_swaps_the_level_and_costs_a_move():
+    building, state = _burglary()
+    stair = next(cell for link in building.links for level, cell in (link.a, link.b) if level == state.level_index)
+    state.player.coord = stair
+    destination = stairs_here(state)
+    assert destination is not None
+    moves = state.moves_left
+
+    assert take_stairs(state)
+    assert (state.level_index, state.player.coord) == destination
+    assert state.grid is building.levels[state.level_index].grid
+    assert state.moves_left == moves - 1
+
+
+def test_a_guard_left_behind_is_still_there_when_you_come_back():
+    """Levels are places, not a re-roll: who was where, and how they felt about it,
+    survives you walking upstairs and back down."""
+    building, state = _burglary()
+    guard_level = next(level for level, _coord in building.guards)
+    enter_level(state, guard_level, building.levels[guard_level].rooms[0].center)
+    guard = state.enemies[0]
+    guard.health -= 2
+    hurt, where = guard.health, guard.coord
+
+    other = next(i for i in range(len(building.levels)) if i != guard_level)
+    enter_level(state, other, building.levels[other].rooms[0].center)
+    assert not state.enemies  # they didn't come with you
+    enter_level(state, guard_level, building.levels[guard_level].rooms[0].center)
+    assert (state.enemies[0].health, state.enemies[0].coord) == (hurt, where)
+
+
+def test_an_unalerted_guard_stands_its_post_instead_of_taking_a_turn():
+    """The whole basis of sneaking: a guard who hasn't seen you doesn't act."""
+    grid = parse_grid(["." * 12 for _ in range(3)])
+    character = Character(name="t")
+    state = start_tactical(
+        character, grid, player_start=(0, 0), enemy_placements=[(ENEMIES_BY_ID["thug"], (1, 0))]
+    )
+    guard = state.enemies[0]
+    guard.alerted = False
+    health, coord = character.health, guard.coord
+
+    end_turn(state, AlwaysSix())  # forced hits, and adjacent -- they'd flatten you if they acted
+    assert character.health == health
+    assert guard.coord == coord
+
+
+def test_walking_into_a_guards_sightline_raises_the_alarm_for_the_whole_building():
+    building, state = _burglary()
+    guard_level = next(level for level, _coord in building.guards)
+    guard_coord = next(coord for level, coord in building.guards if level == guard_level)
+    enter_level(state, guard_level, guard_coord)  # nose to nose with them
+    assert check_detection(state)
+    assert state.alarm
+    everyone = [*state.units, *(u for units in state.off_level_units.values() for u in units)]
+    assert all(unit.alerted for unit in everyone if unit.is_enemy)
+
+
+def test_staying_out_of_sight_keeps_you_undetected():
+    building, state = _burglary()
+    # Standing where they aren't: nobody on this level, so nobody sees anything.
+    assert not any(unit.is_enemy for unit in state.units) or not check_detection(state)
+    assert not state.alarm
+
+
+def test_taking_a_shot_gives_you_away_even_if_nobody_saw_you():
+    grid = parse_grid(["." * 12 for _ in range(3)])
+    character = Character(name="t", inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)])
+    state = start_tactical(
+        character, grid, player_start=(0, 0), enemy_placements=[(ENEMIES_BY_ID["thug"], (4, 0))]
+    )
+    guard = state.enemies[0]
+    guard.alerted = False
+    begin_attack_aim(state)
+    confirm_attack_aim(state, AlwaysSix())
+    assert state.alarm
+    assert guard.health <= 0 or guard.alerted
+
+
+def test_reaching_the_score_ends_the_burglary_secured():
+    building, state = _burglary()
+    enter_level(state, *building.objective)
+    _settle(state)
+    assert state.outcome is TacticalOutcome.SECURED
+
+
+def test_clearing_every_guard_does_not_end_a_burglary():
+    """You came for the score, not the bodies -- an empty house is a quiet house, and
+    the job is still unfinished."""
+    building, state = _burglary()
+    for units in state.off_level_units.values():
+        for unit in units:
+            unit.health = 0
+    for unit in state.units:
+        if unit.is_enemy:
+            unit.health = 0
+    _settle(state)
+    assert state.outcome is TacticalOutcome.ONGOING
+
+
+def test_the_way_you_came_in_is_a_way_out():
+    building, state = _burglary()
+    assert state.player.coord in state.exits
+    assert leave(state)
+    assert state.outcome is TacticalOutcome.ESCAPED

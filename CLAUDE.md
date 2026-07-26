@@ -122,6 +122,8 @@ src/shadowguy/
   gangs.py       street Gangs + GANG_RANKS
   relations.py   seeded Faction<->Gang standing
   corpmap.py     the territory map, its Locations/LocalCharacters, and the ASCII renderer
+  buildings.py   burglary targets: rooms, levels and the links between them. Job-scoped
+                 and never a corpmap.Location — see Burglary in DESIGN.md
 
   security.py    parallel resolution: multi-night security contracts
   encounters.py  parallel resolution: gang turf-entry toll-or-attack
@@ -146,7 +148,7 @@ src/shadowguy/
     combat_screen.py     CombatScreen
     tactical_screen.py   TacticalScreen + GrenadePickScreen
     matrix_screen.py     MatrixScreen
-    burglary_screens.py  EntrancePick + BurglaryWalk
+    burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen + GangTollScreen
     corp_screen.py       CorpScreen + CorpMainMenu (subclasses it) + ResearchTreeScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
@@ -166,6 +168,7 @@ Leaf modules, and why each has to stay one:
 - **`skills.py`** — imports nothing from the package; `character.py → shops.py → corpmap.py` all import it. The "every `Skill.stat` is a real core stat" guard therefore lives in `character.py`, the one module seeing both tables. A runtime `character` import here is a cycle.
 - **`combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
 - **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`.
+- **`buildings.py`** — imports `tactical` for grid primitives and nothing else from the package; `scene`/`jobs` import *it*. `tactical.py` reaches back for `Building` under `TYPE_CHECKING` only, so the runtime arrow still points one way.
 - **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle.
 - **`relations.py`** — imports only `factions.py`/`gangs.py`.
 - **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
@@ -206,12 +209,14 @@ Leaf modules, and why each has to stay one:
 | 42 | `Character.known_runners` (recruiting gated on having met them) |
 | 43 | `ShadowguyApp.runners` (a run's random independent-runner roster) |
 | 44 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
+| 45 | `BurglaryStage.kind` (the building tag) |
+| 46 | `BurglaryStage.building`/`guard`/`bailed` **replacing** its flat grid/objective/guards/spotted; `Entrance.spawn` is now (level, cell) |
 
 ### Verifying changes
 
 A real test suite exists (`tests/`, 22 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
-- **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap.py` widens to `range(200)`, `test_burglary_gen.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
+- **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
 - Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky.

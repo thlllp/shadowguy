@@ -1,28 +1,18 @@
-"""Screens for a Burglary job's two-phase APPROACH: pick an entrance on a small
-diagram, then walk the interior grid it leads into. Neither screen owns any check
-resolution or Outcome logic -- SceneScreen does that (resolve_entrance, apply_outcome),
-the same separation every other screen in this package keeps between input/view and
-game logic (see TacticalScreen/CombatScreen)."""
+"""The first phase of a Burglary job's APPROACH: pick a way in, on a small diagram.
 
-from enum import StrEnum
+What happens *after* the door is an ordinary tactical fight the runner is trying not to
+start, so it plays on TacticalScreen (see tactical.start_burglary) rather than in a
+stripped-down walk of its own -- this module is only the choice of entrance. It owns no
+check resolution or Outcome logic; SceneScreen does that (resolve_entrance,
+apply_outcome), the same separation every other screen in this package keeps."""
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.scene import BurglaryStage
-from shadowguy.tactical import (
-    BurglaryWalkState,
-    Coord,
-    Tile,
-    move_walker,
-    reached_objective,
-    spotted,
-    visible_tiles,
-)
 
-from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items, _terrain_glyph
+from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 
 # A fixed illustration, not a positional layout -- deliberately not corpmap.py's
 # dynamic column/connector rendering, which is built for dozens of interconnected
@@ -69,119 +59,3 @@ class EntrancePickScreen(Screen):
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         index = int(event.item.id.removeprefix("entrance_"))
         self.dismiss(index)
-
-
-class BurglaryWalkResult(StrEnum):
-    REACHED = "reached"
-    SPOTTED = "spotted"
-
-
-_WALK_END_TEXT = {
-    BurglaryWalkResult.REACHED: "You've reached it.",
-    BurglaryWalkResult.SPOTTED: "A guard's light sweeps toward you!",
-}
-
-
-class BurglaryWalkScreen(Screen):
-    """Phase B: walk the interior from the chosen entrance's spawn to the objective,
-    avoiding guard sightlines. Dismisses with a BurglaryWalkResult once either
-    happens -- SceneScreen applies whichever Outcome that implies (stage.burglary's
-    entrance-check Outcome on REACHED, stage.burglary.spotted on SPOTTED)."""
-
-    BINDINGS = [
-        ("up", "move('up')", "Move"),
-        ("down", "move('down')", "Move"),
-        ("left", "move('left')", "Move"),
-        ("right", "move('right')", "Move"),
-        ("enter", "continue", "Continue"),
-        *MENU_QUIT_BINDINGS,
-    ]
-
-    DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
-
-    CSS = """
-    #walk_map { height: 1fr; padding: 0 1; }
-    #walk_status { height: auto; padding: 0 1; }
-    """
-
-    def __init__(self, stage: BurglaryStage, spawn: Coord) -> None:
-        super().__init__()
-        self.stage = stage
-        self.spawn = spawn
-        self.state: BurglaryWalkState | None = None
-        self.result: BurglaryWalkResult | None = None
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield CharacterSheet(self.app.character)
-        yield Static(id="walk_status")
-        yield Static(id="walk_map")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self.state = BurglaryWalkState(
-            grid=self.stage.grid,
-            position=self.spawn,
-            objective=self.stage.objective,
-            guards=self.stage.guards,
-        )
-        # An entrance can spawn the walker already inside a guard's sightline --
-        # check immediately, don't wait for the first move to notice.
-        if spotted(self.state):
-            self.result = BurglaryWalkResult.SPOTTED
-        elif reached_objective(self.state):
-            self.result = BurglaryWalkResult.REACHED
-        self._refresh()
-
-    def action_move(self, direction: str) -> None:
-        if self.result is not None:
-            return
-        dx, dy = self.DIRECTIONS[direction]
-        px, py = self.state.position
-        move_walker(self.state, (px + dx, py + dy))
-        if spotted(self.state):
-            self.result = BurglaryWalkResult.SPOTTED
-        elif reached_objective(self.state):
-            self.result = BurglaryWalkResult.REACHED
-        self._refresh()
-
-    def action_continue(self) -> None:
-        if self.result is not None:
-            self.dismiss(self.result)
-
-    def _map_text(self) -> Text:
-        state = self.state
-        grid = state.grid
-        terrain = [[_terrain_glyph(grid, x, y) for x in range(grid.width)] for y in range(grid.height)]
-        glyphs = [[terrain[y][x][0] for x in range(grid.width)] for y in range(grid.height)]
-        seen = visible_tiles(grid, state.position)
-        styles: dict[tuple[int, int], str] = {}
-        ox, oy = state.objective
-        if grid.tiles[oy][ox] is Tile.FLOOR:
-            glyphs[oy][ox], styles[(oy, ox)] = "$", "bold yellow"
-        for gx, gy in state.guards:
-            glyphs[gy][gx], styles[(gy, gx)] = "G", "bold red"
-        px, py = state.position
-        glyphs[py][px], styles[(py, px)] = "@", "bold cyan"
-        text = Text()
-        for y in range(grid.height):
-            for x in range(grid.width):
-                ch = glyphs[y][x]
-                default = terrain[y][x][1]
-                if (y, x) not in styles and not seen[y, x]:
-                    default = f"{default} dim"
-                text.append(ch, style=styles.get((y, x), default))
-            text.append("\n")
-        return text
-
-    def _refresh(self) -> None:
-        self.query_one(CharacterSheet).refresh()
-        self.query_one("#walk_map", Static).update(self._map_text())
-        if self.result is not None:
-            self.query_one("#walk_status", Static).update(
-                f"{_WALK_END_TEXT[self.result]}  —  press Enter to continue."
-            )
-        else:
-            self.query_one("#walk_status", Static).update(
-                "Find your way in without being seen. (arrows move)"
-            )

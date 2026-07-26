@@ -16,6 +16,7 @@ callers never deal in it.
 import random
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import numpy as np
 import tcod
@@ -37,6 +38,13 @@ from shadowguy.combat import (
 )
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
+
+if TYPE_CHECKING:
+    # buildings.py imports *this* module for its grid primitives, so the arrow only
+    # points one way at runtime: a burglary hands its Building in, and everything this
+    # module does with one (walk a level's grid, follow a link) is duck-typed. Same
+    # trick, same reason, as rivals.py's Fixer import.
+    from shadowguy.buildings import Building
 
 Coord = tuple[int, int]  # (x, y)
 
@@ -71,7 +79,7 @@ class Grid:
     only the *units* move, so the terrain is fixed for the fight and there's nothing to
     invalidate. That matters because has_line_of_sight runs an unlimited-radius FOV per
     call and is hit hard — once per movement step per enemy in _enemy_phase, per guard
-    per keypress in a burglary walk — and rebuilding the array from `tiles` was ~70% of
+    per keypress while sneaking — and rebuilding the array from `tiles` was ~70% of
     each call. Generation mutates `tiles` in place while carving (see generate_map), so
     the cache is keyed on the tile data's identity-and-contents via _invalidate below;
     callers that edit tiles after construction must go through it."""
@@ -264,6 +272,9 @@ class TacticalOutcome(StrEnum):
     VICTORY = "victory"  # every enemy down
     ESCAPED = "escaped"  # player left by an exit tile
     DEAD = "dead"  # player at 0 health
+    # Burglary only: reached what you came for. Clearing the guards is *not* how a
+    # burglary ends -- the thing you came to steal is still upstairs.
+    SECURED = "secured"
 
 
 @dataclass
@@ -293,6 +304,11 @@ class Unit:
     # (stabilize_ally). Doesn't put them back in the fight — it decides whether they
     # walk away from it (resolve_downed_crew).
     stabilized: bool = False
+    # Whether this unit knows there's anyone to fight. True everywhere except a
+    # burglary's guards, who stand their post until they see you (check_detection): an
+    # unalerted unit sits out the AI phase entirely, which is what makes sneaking past
+    # one possible at all.
+    alerted: bool = True
 
     @property
     def is_enemy(self) -> bool:
@@ -330,6 +346,18 @@ class TacticalState:
     aim_cursor: Coord | None = None
     aim_kind: AimKind | None = None
     pending_grenade_index: int | None = None
+    # Burglary only (None for an ordinary fight, which is one room with nothing to
+    # steal). `building` is the whole place; `grid` above is whichever level is on the
+    # board right now, and `units` the people standing on it -- everyone else waits in
+    # `off_level_units` until the player takes a stair to them. `objective` is where the
+    # score is, as (level, cell), and reaching it is how a burglary ends.
+    building: "Building | None" = None
+    level_index: int = 0
+    objective: tuple[int, Coord] | None = None
+    off_level_units: dict[int, list[Unit]] = field(default_factory=dict, repr=False)
+    # Set the moment anybody sees you. Guards that were standing their post start
+    # fighting, and no amount of hiding puts it back.
+    alarm: bool = False
     # What became of any hire who went down, filled by _end_fight when the fight ends
     # (None while it's still running). The screen reports it; it isn't the screen's to
     # decide — see resolve_downed_crew.
@@ -466,6 +494,148 @@ def start_tactical(
     return state
 
 
+def start_burglary(
+    character: Character,
+    building: "Building",
+    spawn: tuple[int, Coord],
+    guard: Enemy,
+    allies: list[Enemy] = (),
+) -> TacticalState:
+    """Set up a burglary: the same tactical fight every other stage plays, with three
+    differences that make it a burglary rather than a shootout.
+
+    The board is one *level* of a building and the player can take stairs to the others
+    (take_stairs). The guards are real units but start unalerted, standing their post --
+    they only act once somebody sees you (check_detection), which is what makes walking
+    past one a thing you can do. And it ends when you reach what you came for
+    (SECURED), not when the last guard falls: clearing the house is a way to make the
+    rest of the walk quiet, never the win itself.
+
+    Every entrance is an exit, so the way you came in is the way you bail."""
+    exits = frozenset(coord for level, coord in building.entrance_spawns if level == spawn[0])
+    state = TacticalState(
+        character=character,
+        grid=building.levels[spawn[0]].grid,
+        units=[],
+        exits=exits,
+        building=building,
+        level_index=spawn[0],
+        objective=building.objective,
+    )
+    # Everybody, filed by the level they're standing on. The player joins whichever
+    # level they entered by; _enter_level swaps the rest in as they're walked into.
+    for level_index, coord in building.guards:
+        state.off_level_units.setdefault(level_index, []).append(
+            Unit(
+                name=guard.name,
+                side=Side.ENEMY,
+                coord=coord,
+                speed=ENEMY_SPEED,
+                stats=guard,
+                health=guard.health,
+                alerted=False,
+            )
+        )
+    player = Unit(name=character.name, side=Side.PLAYER, coord=spawn[1], speed=PLAYER_SPEED)
+    spawns = ally_spawns(
+        state.grid, spawn[1], len(allies), frozenset(u.coord for u in state.off_level_units.get(spawn[0], []))
+    )
+    crew = [
+        Unit(name=ally.name, side=Side.ALLY, coord=coord, speed=ALLY_SPEED, stats=ally, health=ally.health)
+        for ally, coord in zip(allies, spawns, strict=False)
+    ]
+    state.units = [player, *state.off_level_units.pop(spawn[0], []), *crew]
+    _begin_player_turn(state)
+    return state
+
+
+def enter_level(state: TacticalState, index: int, coord: Coord) -> None:
+    """Put the player on another level of the building, at `coord`. The board swaps
+    wholesale: this level's units go into off_level_units, the target level's come out,
+    and the player (with any crew still standing) comes along. A guard left behind stays
+    exactly as they were -- alerted or not, hurt or not -- because they're still there."""
+    if state.building is None:
+        return
+    player = state.player
+    crew = [unit for unit in state.units if unit.is_ally]
+    state.off_level_units[state.level_index] = [
+        unit for unit in state.units if unit is not player and unit not in crew
+    ]
+    state.level_index = index
+    state.grid = state.building.levels[index].grid
+    player.coord = coord
+    arriving = state.off_level_units.pop(index, [])
+    for ally, spot in zip(crew, ally_spawns(state.grid, coord, len(crew), frozenset(u.coord for u in arriving)), strict=False):
+        ally.coord = spot
+    state.units = [player, *arriving, *crew]
+    state.exits = frozenset(
+        cell for level, cell in state.building.entrance_spawns if level == index
+    )
+    state.log.append(f"You move to the {state.building.levels[index].name.lower()}.")
+
+
+def stairs_here(state: TacticalState) -> tuple[int, Coord] | None:
+    """Where the cell the player is standing on leads, if it's a stair or a lift."""
+    if state.building is None:
+        return None
+    return state.building.links_at(state.level_index, state.player.coord)
+
+
+def take_stairs(state: TacticalState) -> bool:
+    """Take the stairs under your feet. Costs a move, like any other step -- a floor is
+    a place you walk to, not a free teleport. False when there's nothing to take or no
+    movement left to spend."""
+    destination = stairs_here(state)
+    if destination is None or state.moves_left <= 0 or state.is_over:
+        return False
+    state.moves_left -= 1
+    enter_level(state, *destination)
+    check_detection(state)
+    _settle(state)
+    return True
+
+
+def check_detection(state: TacticalState) -> bool:
+    """Look for the player through every unalerted guard's eyes: within GUARD_SIGHT_RANGE
+    and with a clear line is seen. Raises the alarm for the whole building the first time
+    anyone does -- a shout carries -- and returns whether anyone just spotted them.
+
+    Called after each thing the player does that could give them away (moving, taking
+    stairs, attacking), which is what makes position the whole game while sneaking."""
+    if state.building is None or state.is_over:
+        return False
+    player = state.player.coord
+    spotted_by = [
+        unit
+        for unit in state.enemies
+        if not unit.alerted and in_reach(state.grid, unit.coord, player, GUARD_SIGHT_RANGE)
+    ]
+    if not spotted_by:
+        return False
+    raise_alarm(state, f"{spotted_by[0].name} spots you.")
+    return True
+
+
+def raise_alarm(state: TacticalState, reason: str) -> None:
+    """It's gone loud. Every guard on this level drops their post and fights, and the
+    ones elsewhere are alert by the time you reach them."""
+    if state.alarm:
+        return
+    state.alarm = True
+    state.log.append(reason)
+    for unit in state.units:
+        if unit.is_enemy:
+            unit.alerted = True
+    for waiting in state.off_level_units.values():
+        for unit in waiting:
+            unit.alerted = True
+
+
+def reached_score(state: TacticalState) -> bool:
+    """Whether the player is standing on what they came to steal."""
+    return state.objective is not None and (state.level_index, state.player.coord) == state.objective
+
+
 def _begin_player_turn(state: TacticalState) -> None:
     state.moves_left = state.player.speed
     state.acted = False
@@ -485,6 +655,8 @@ def move_player(state: TacticalState, dest: Coord) -> bool:
         return False
     state.player.coord = dest
     state.moves_left -= 1
+    check_detection(state)
+    _settle(state)
     return True
 
 
@@ -536,6 +708,7 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
     if state.acted or state.is_over or not can_hit(state, weapon, target):
         return
     state.acted = True
+    raise_alarm(state, "The noise carries. They know you're here.")
     difficulty = target.stats.defense + cover_bonus(state.grid, target.coord, state.player.coord)
     roll, damage = resolve_hit(
         rng,
@@ -907,6 +1080,8 @@ def _ai_phase(state: TacticalState, *, allied: bool, rng: random.Random) -> None
     for unit in state.allies if allied else state.enemies:
         if state.is_over:
             return
+        if not unit.alerted:
+            continue  # standing their post, none the wiser -- see check_detection
         if unit.stunned_rounds > 0:
             unit.stunned_rounds -= 1
             state.log.append(f"{unit.name} is still reeling.")
@@ -948,10 +1123,15 @@ def _unit_attack(state: TacticalState, attacker: Unit, target: Unit, rng: random
 
 
 def _settle(state: TacticalState, rng: random.Random | None = None) -> None:
-    """Read the board. Death first: a mutual kill still kills you."""
+    """Read the board. Death first: a mutual kill still kills you.
+
+    A burglary ends on the score, never on an empty board -- putting the last guard down
+    makes the rest of the house quiet, but the thing you came for is still upstairs."""
     if not state.character.is_alive:
         _end_fight(state, TacticalOutcome.DEAD, rng)
-    elif not state.enemies:
+    elif reached_score(state):
+        _end_fight(state, TacticalOutcome.SECURED, rng)
+    elif state.objective is None and not state.enemies:
         _end_fight(state, TacticalOutcome.VICTORY, rng)
 
 
@@ -1109,11 +1289,15 @@ def _room_cells(grid: Grid, rect: tuple[int, int, int, int]) -> list[Coord]:
     ]
 
 
-def _bsp_rooms(tiles: list[list[Tile]], width: int, height: int, rng: random.Random) -> list[tuple[Coord, tuple[int, int, int, int]]] | None:
-    """Carve BSP rooms and corridors into tiles. Returns room list or None."""
+def _bsp_rooms(
+    tiles: list[list[Tile]], width: int, height: int, rng: random.Random, depth: int = _BSP_DEPTH
+) -> list[tuple[Coord, tuple[int, int, int, int]]] | None:
+    """Carve BSP rooms and corridors into tiles. Returns room list or None. `depth` is
+    room granularity -- deeper splits the same footprint into more, smaller rooms, which
+    is how a residential block differs from a fight map carved at the same size."""
     bsp = tcod.bsp.BSP(x=1, y=1, width=width - 2, height=height - 2)
     bsp.split_recursive(
-        depth=_BSP_DEPTH, min_width=_ROOM_MIN, min_height=_ROOM_MIN,
+        depth=depth, min_width=_ROOM_MIN, min_height=_ROOM_MIN,
         max_horizontal_ratio=1.5, max_vertical_ratio=1.5,
         seed=tcod.random.Random(tcod.random.MERSENNE_TWISTER, seed=rng.getrandbits(31)),
     )
@@ -1205,113 +1389,3 @@ def generate_map(
 # so an uncapped guard would spot the walker from clear across an open room the
 # instant a sightline cleared -- far harsher than anything else in the game.
 GUARD_SIGHT_RANGE = 4
-
-# Deliberately fixed, not tier-scaled, for a first slice: _bsp_rooms carves a single
-# chain of rooms, so even one guard is nearly unavoidable somewhere between an
-# entrance and the objective. Raise once the base feel is right.
-BURGLARY_GUARD_COUNT = 1
-
-
-@dataclass
-class BuildingLayout:
-    """A generated building interior plus where each entrance leads and where the
-    guards are -- what a BurglaryStage is built from. Unlike TacticalMap (one
-    player_start, many enemy_spawns), a burglary building has several distinct entry
-    points, one per Entrance the runner could pick, all converging on one objective."""
-
-    grid: Grid
-    entrance_spawns: list[Coord]  # one per requested entrance, same order as input
-    objective: Coord
-    guards: tuple[Coord, ...]
-
-
-def generate_building(
-    rng: random.Random,
-    entrance_count: int,
-    cover_density: float = 0.08,
-    width: int = TAC_MAP_WIDTH,
-    height: int = TAC_MAP_HEIGHT,
-) -> BuildingLayout:
-    """A building interior for a Burglary stage: `entrance_count` distinct rooms to
-    spawn into (one per Entrance, in input order) plus one objective room at the far
-    end of the same room chain _bsp_rooms already carves, and up to
-    BURGLARY_GUARD_COUNT guards in whatever rooms are neither. Mirrors generate_map's
-    retry-on-failure shape, but verifies multi-source reachability (every entrance
-    must reach the objective) rather than one player_start reaching many targets --
-    path_between is symmetric on this grid, so that's the only real difference from
-    _verify_map, which is why this doesn't reuse it directly."""
-    for _ in range(_MAP_GEN_ATTEMPTS):
-        tiles = [[Tile.WALL] * width for _ in range(height)]
-        rooms = _bsp_rooms(tiles, width, height, rng)
-        if rooms is None or len(rooms) <= entrance_count:
-            continue
-
-        grid = Grid(width=width, height=height, tiles=tiles)
-        rooms.sort(key=lambda room: room[0][0])
-        cells_by_room = [_room_cells(grid, rect) for _center, rect in rooms]
-
-        # The east-end room is the objective (opposite end from generate_map's
-        # west-end player_start); every other room is a candidate entrance/guard
-        # spot, so "other" is just "everything before it" once rooms are x-sorted.
-        objective = rooms[-1][0]
-        other_indices = list(range(len(rooms) - 1))
-        entrance_indices = rng.sample(other_indices, entrance_count)
-        entrance_spawns = [rooms[i][0] for i in entrance_indices]
-
-        guard_pool = [i for i in other_indices if i not in entrance_indices]
-        guard_indices = rng.sample(guard_pool, min(BURGLARY_GUARD_COUNT, len(guard_pool)))
-        guards = tuple(rooms[i][0] for i in guard_indices)
-
-        keep_clear = {objective, *entrance_spawns, *guards}
-        _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
-        # `tiles` was just edited in place under an already-constructed Grid.
-        grid._invalidate()
-
-        if all(path_between(grid, spawn, objective) for spawn in entrance_spawns):
-            return BuildingLayout(grid, entrance_spawns, objective, guards)
-    raise RuntimeError("could not generate a playable burglary building")
-
-
-@dataclass
-class BurglaryWalkState:
-    """A burglary's interior walk in progress -- pure position and hazard tracking,
-    deliberately NOT built on TacticalState: there's no turn structure and no attack
-    resolution, since there's nothing to fight while sneaking. A guard's sightline
-    ends the walk outright (see spotted()) rather than opening a fight in place --
-    screens/burglary_screens.py routes a spotted walk to the job's ordinary fight
-    stage instead, the same door a critical failure or the ambush entrance uses."""
-
-    grid: Grid
-    position: Coord
-    objective: Coord
-    guards: tuple[Coord, ...]
-
-
-def legal_walk_moves(state: BurglaryWalkState) -> list[Coord]:
-    """Where the walker may step: one cardinal move into open floor. No other units
-    to collide with -- a guard is a hazard to avoid, not an obstacle that blocks
-    movement, so nothing is passed as `blocked`."""
-    return step_neighbors(state.grid, state.position)
-
-
-def move_walker(state: BurglaryWalkState, dest: Coord) -> bool:
-    """Take one step. Returns False (moving nowhere) if the step isn't legal."""
-    if dest not in legal_walk_moves(state):
-        return False
-    state.position = dest
-    return True
-
-
-def spotted(state: BurglaryWalkState) -> bool:
-    """Whether any guard has the walker in their sightline right now -- range-capped
-    (GUARD_SIGHT_RANGE), same reason combat.Enemy.reach caps an attack's: unlimited
-    has_line_of_sight alone would spot the walker from clear across an open room."""
-    return any(
-        chebyshev(guard, state.position) <= GUARD_SIGHT_RANGE
-        and has_line_of_sight(state.grid, guard, state.position)
-        for guard in state.guards
-    )
-
-
-def reached_objective(state: BurglaryWalkState) -> bool:
-    return state.position == state.objective
