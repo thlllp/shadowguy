@@ -151,7 +151,16 @@ SAVE_SUFFIX = ".save"
 # tactical.resolve_downed_crew when a hire who went down doesn't walk away from the
 # fight, and read through Character.runner_available -- which now joins known_runners
 # in deciding whether a runner appears at a bar or takes a rival's daily turn at all.
-SAVE_VERSION = 44
+# v45 tagged a burglary with the kind of building it is: scene.BurglaryStage gained
+# `kind` (tactical.BuildingKind) and tactical.BuildingLayout the same -- a pre-v45
+# pickled BurglaryStage (inside an accepted Burglary job) lacks it. The building is
+# still job-scoped and never a corpmap.Location, so no map state changed.
+# v46 rebuilt Burglary around multi-level buildings played as tactical fights:
+# scene.BurglaryStage now holds a buildings.Building (levels, links, rooms) plus a
+# `guard` Enemy template and a `bailed` Outcome, in place of the old flat
+# grid/objective/guards/spotted fields, and scene.Entrance.spawn became (level, cell).
+# A pre-v46 pickled BurglaryStage (inside an accepted Burglary job) has the old shape.
+SAVE_VERSION = 46
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -26,7 +26,8 @@ from shadowguy.scene import (
     TacticalStage,
 )
 from shadowguy.skills import skill_for
-from shadowguy.tactical import generate_building, generate_map
+from shadowguy.buildings import BuildingKind, generate_building
+from shadowguy.tactical import generate_map
 
 TARGETS = [
     "a corp exec's private files",
@@ -1082,9 +1083,17 @@ def generate_job(
 
         if job_stage.burglary:
             # A Burglary APPROACH: each approach becomes an Entrance (a diagram node,
-            # not a list row), landing the runner at a distinct spawn in a freshly
-            # generated building — see scene.BurglaryStage and screens/burglary_screens.py.
-            layout = generate_building(rng, entrance_count=len(approaches), cover_density=_cover_density(location.kind))
+            # not a list row), landing the runner at a distinct spawn inside a freshly
+            # generated building — several levels of it, with the score somewhere inside.
+            #
+            # The building is generated *with the job* and lives inside its Scene: it is
+            # never a corpmap.Location, so a target adds nothing to the map the player
+            # walks around, and it goes away when the job is finished or expires. `kind`
+            # is the seam where a site's character will pick a structure once there's
+            # more than one — everything is residential today.
+            building = generate_building(
+                rng, entrance_count=len(approaches), kind=BuildingKind.RESIDENTIAL
+            )
             entrances = [
                 Entrance(
                     label=f"{approach.flavor} ({skill_for(approach.skill).name})",
@@ -1098,9 +1107,9 @@ def generate_job(
                     ),
                     critical_failure=_approach_critical_failure(approach),
                 )
-                for approach, spawn in zip(approaches, layout.entrance_spawns, strict=True)
+                for approach, spawn in zip(approaches, building.entrance_spawns, strict=True)
             ]
-            entrances.append(Entrance(spawn=layout.objective, **_ambush_kwargs()))
+            entrances.append(Entrance(spawn=building.objective, **_ambush_kwargs()))
             stages[stage_ids[i]] = Stage(
                 id=stage_ids[i],
                 prompt="",  # the BurglaryStage carries the prose; a burglary stage has no choices
@@ -1114,14 +1123,13 @@ def generate_job(
                         target=target,
                     ),
                     entrances=tuple(entrances),
-                    grid=layout.grid,
-                    objective=layout.objective,
-                    spotted=Outcome(
-                        text="A guard's light sweeps across you.",
+                    building=building,
+                    bailed=Outcome(
+                        text="You back out the way you came, empty-handed.",
                         health_delta=-BURGLARY_SPOTTED_DAMAGE,
                         next_stage=fight_id,
                     ),
-                    guards=layout.guards,
+                    guard=rng.choice(roll_enemies(tier, rng)),
                 ),
             )
         else:

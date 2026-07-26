@@ -15,7 +15,7 @@ from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, res
 from shadowguy.tactical import TacticalOutcome
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
-from .burglary_screens import BurglaryWalkResult, BurglaryWalkScreen, EntrancePickScreen
+from .burglary_screens import EntrancePickScreen
 from .combat_screen import CombatScreen
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
@@ -188,22 +188,29 @@ class SceneScreen(Screen):
         self._pending_next_stage = outcome.next_stage
         self._pending_result = result
         self.app.push_screen(
-            BurglaryWalkScreen(stage.burglary, entrance.spawn),
-            self._on_burglary_walk_end,
+            TacticalScreen(stage.burglary, allies=self._crew_units(), spawn=entrance.spawn),
+            self._on_burglary_end,
         )
 
-    async def _on_burglary_walk_end(self, result: BurglaryWalkResult) -> None:
-        if result is BurglaryWalkResult.SPOTTED:
-            # A fresh Outcome, never applied yet -- same shape as a fight ending.
-            # A guard's sightline finding you is exactly what a critical failure
-            # represents everywhere else, so it hands the enemy the same drop
-            # (see combat.drop_for_result) rather than an even, undeserved fight.
-            stage = self._current_stage()
-            await self._finish_stage_outcome(stage.burglary.spotted, result=CheckResult.CRITICAL_FAILURE)
+    async def _on_burglary_end(self, result: TacticalOutcome) -> None:
+        """How an infiltration ended. Reaching the score is the only success; walking
+        back out an entrance is bailing, and dying is dying. Clearing every guard doesn't
+        end it at all (see tactical._settle), so there's no VICTORY branch to write."""
+        character = self.app.character
+        if result is TacticalOutcome.DEAD:
+            self.app.exit(message=f"{character.name} has died. Game over.")
             return
-        # Reached the objective -- the entrance check's Outcome (health/cash/rep/etc)
-        # already applied at pick time; only stage advancement waited on the walk,
-        # so this is a plain advance, not a re-apply.
+        if result is not TacticalOutcome.SECURED:
+            # A fresh Outcome, never applied yet -- same shape as a fight ending. Walking
+            # out empty-handed is what a critical failure represents everywhere else, so
+            # it hands the enemy the same drop (combat.drop_for_result) on the way into
+            # the fight it routes to.
+            stage = self._current_stage()
+            await self._finish_stage_outcome(stage.burglary.bailed, result=CheckResult.CRITICAL_FAILURE)
+            return
+        # Got it -- the entrance check's Outcome (health/cash/rep/etc) already applied at
+        # pick time; only stage advancement waited on the infiltration, so this is a
+        # plain advance, not a re-apply.
         await self._await_continue(self._pending_next_stage, self._pending_result)
 
     async def _on_combat_end(self, result: CombatOutcome) -> None:

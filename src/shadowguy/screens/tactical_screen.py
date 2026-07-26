@@ -28,7 +28,10 @@ from shadowguy.tactical import (
     move_player,
     snap_aim_to_next_target,
     stabilize_ally,
+    stairs_here,
+    start_burglary,
     start_tactical,
+    take_stairs,
     throw_grenade,
     visible_tiles,
     weapon_for_target,
@@ -40,6 +43,7 @@ _TAC_END_TEXT = {
     TacticalOutcome.VICTORY: "You've cleared them out.",
     TacticalOutcome.ESCAPED: "You slip out.",
     TacticalOutcome.DEAD: "You're down.",
+    TacticalOutcome.SECURED: "You've got what you came for.",
 }
 TACTICAL_LOG_LINES = 6
 
@@ -103,6 +107,7 @@ class TacticalScreen(Screen):
         ("s", "stabilize", "Stabilize crew"),
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
+        (">", "stairs", "Take stairs"),
         ("enter", "continue", "Continue / confirm"),
         ("escape", "cancel_aim", "Cancel aim"),
         *MENU_QUIT_BINDINGS,
@@ -123,9 +128,13 @@ class TacticalScreen(Screen):
     }
     """
 
-    def __init__(self, stage, allies=()) -> None:
+    def __init__(self, stage, allies=(), spawn=None) -> None:
         super().__init__()
         self.stage = stage
+        # Set for a burglary (scene.BurglaryStage): which (level, cell) the entrance the
+        # player picked drops them at. None for an ordinary fight, which has one grid and
+        # a fixed player_start.
+        self.spawn = spawn
         # combat.Enemy stat blocks for the hired runners on this job (combat.crew_stats),
         # supplied by whoever opened the fight — the crew is the Character's, not the
         # stage's, so a hire made after the job was generated still shows up.
@@ -145,6 +154,7 @@ class TacticalScreen(Screen):
             Static(id="tac_box_leave", classes="tac_box"),
             Static(id="tac_box_enemies", classes="tac_box"),
             Static(id="tac_box_crew", classes="tac_box"),
+            Static(id="tac_box_level", classes="tac_box"),
             id="tac_status",
         )
         yield Static(id="tac_map")
@@ -152,14 +162,21 @@ class TacticalScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.state = start_tactical(
-            self.app.character,
-            self.stage.grid,
-            self.stage.player_start,
-            list(self.stage.enemies),
-            self.stage.exits,
-            allies=self.allies,
-        )
+        # One screen, two setups: a burglary is a tactical fight you're trying not to
+        # start, so it plays here rather than in a stripped-down walk of its own.
+        if self.spawn is not None:
+            self.state = start_burglary(
+                self.app.character, self.stage.building, self.spawn, self.stage.guard, self.allies
+            )
+        else:
+            self.state = start_tactical(
+                self.app.character,
+                self.stage.grid,
+                self.stage.player_start,
+                list(self.stage.enemies),
+                self.stage.exits,
+                allies=self.allies,
+            )
         self._refresh()
 
     def action_move(self, direction: str) -> None:
@@ -240,6 +257,17 @@ class TacticalScreen(Screen):
         end_turn(self.state, self.app.rng)
         self._refresh()
 
+    def action_stairs(self) -> None:
+        """Take the stairs (or lift) under your feet, in a burglary. Costs a move like
+        any other step -- another floor is somewhere you walk to."""
+        if self.state.is_over or self.state.aim_cursor is not None:
+            return
+        if not take_stairs(self.state):
+            self.notify(
+                "No stairs here." if stairs_here(self.state) is None else "No movement left this turn."
+            )
+        self._refresh()
+
     def action_leave(self) -> None:
         if self.state.is_over or self.state.aim_cursor is not None:
             return
@@ -278,8 +306,16 @@ class TacticalScreen(Screen):
         styles: dict[tuple[int, int], str] = {}
         for ex, ey in state.exits:
             if grid.tiles[ey][ex] is Tile.FLOOR:
-                glyphs[ey][ex] = ">"
+                glyphs[ey][ex] = "<"
                 styles[(ey, ex)] = "bold green"
+        if state.building is not None:
+            for link in state.building.links:
+                for level, (lx, ly) in (link.a, link.b):
+                    if level == state.level_index:
+                        glyphs[ly][lx], styles[(ly, lx)] = ">", "bold yellow"
+            if state.objective is not None and state.objective[0] == state.level_index:
+                ox, oy = state.objective[1]
+                glyphs[oy][ox], styles[(oy, ox)] = "$", "bold yellow"
         # A downed unit -- hire or hostile -- greys out rather than vanishing: they're
         # still a body on the floor you can walk over (and, for a hire, patch up).
         for unit in state.units:
@@ -387,6 +423,15 @@ class TacticalScreen(Screen):
             _boxed_text("Leave (l)", "on exit" if on_exit else "not here")
         )
         self.query_one("#tac_box_enemies", Static).update(_boxed_text("Enemies", f"{len(state.enemies)} left"))
+        # Burglary only: which floor you're on and whether the house knows about you.
+        # An ordinary fight is one room where everyone already does, so it says nothing.
+        level_box = self.query_one("#tac_box_level", Static)
+        level_box.display = state.building is not None
+        if level_box.display:
+            level = state.building.levels[state.level_index]
+            room = level.room_at(state.player.coord)
+            where = f"{level.name}{' — ' + room.label() if room else ''}"
+            level_box.update(_boxed_text("ALARM" if state.alarm else "Undetected", where))
         # Crew tile only exists when you brought someone — a fight you walked into alone
         # shouldn't carry an empty box saying so.
         crew = [unit for unit in state.units if unit.is_ally]

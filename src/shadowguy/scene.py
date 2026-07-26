@@ -8,6 +8,7 @@ from shadowguy.combat import Enemy
 from shadowguy.factions import standing_shift
 from shadowguy.matrix import MatrixNetwork
 from shadowguy.skills import skill_for, skill_value
+from shadowguy.buildings import Building, BuildingKind
 from shadowguy.tactical import Coord, Grid
 
 
@@ -155,7 +156,9 @@ class Entrance:
     label: str
     skill: str
     difficulty: int
-    spawn: Coord
+    # Where this way in puts you, as (level index, cell): a building is a graph of
+    # levels, so a bare coord would be ambiguous the moment there's more than one floor.
+    spawn: tuple[int, Coord]
     success: Outcome
     failure: Outcome
     critical_success: Outcome | None = None
@@ -167,26 +170,36 @@ class Entrance:
 
 @dataclass
 class BurglaryStage:
-    """A job's APPROACH stage, played out as: pick an Entrance (a Choice-shaped
-    check, resolved immediately on pick) on a small diagram, then walk the interior
-    grid from that entrance's spawn to the objective tile, avoiding guard sightlines.
-    Reaching the objective carries the scene to whatever next_stage the entrance's
-    Outcome already set; getting spotted by a guard fires `spotted` instead (which
-    is why `spotted` isn't per-entrance -- it's a hazard of the walk itself, not of
-    how you got in). This is the one place in the game a single stage attempt can
-    apply two Outcomes in sequence (the entrance's, then maybe `spotted`'s) --
-    deliberate, so keep `spotted`'s cost modest, since it stacks on whatever the
-    entrance check already did."""
+    """A job's APPROACH stage, played out as: pick an Entrance (a Choice-shaped check,
+    resolved immediately on pick) on a small diagram, then infiltrate the building --
+    which is an ordinary tactical fight you are trying very hard not to start.
+
+    The interior is `building` (buildings.Building): several levels joined by stairs,
+    guards standing their posts until they see you, and the score somewhere inside.
+    Reaching it carries the scene to whatever next_stage the entrance's Outcome already
+    set; walking back out of an entrance without it applies `bailed` instead. Clearing
+    the guards is not a win -- see tactical.TacticalOutcome.SECURED.
+
+    This is the one place in the game a single stage attempt can apply two Outcomes in
+    sequence (the entrance's, then maybe `bailed`'s) -- deliberate, so keep `bailed`'s
+    cost modest, since it stacks on whatever the entrance check already did."""
 
     prompt: str
     entrances: tuple[Entrance, ...]
-    grid: Grid
-    objective: Coord
-    spotted: Outcome
-    # Static watcher positions, not combat.Enemy -- nothing to fight while sneaking
-    # past. Walking within one's line of sight ends the walk in `spotted` instead
-    # of at the objective (see tactical.spotted()).
-    guards: tuple[Coord, ...] = ()
+    building: Building
+    # What walking out empty-handed costs. Not per-entrance: it's a verdict on the
+    # infiltration, not on how you got in.
+    bailed: Outcome
+    # Who's watching, as a template -- one live Unit per buildings.Building.guards
+    # position is built from this when the fight opens (tactical.start_burglary), so the
+    # difficulty of a burglary's guards scales with the job like any other fight's.
+    guard: Enemy = None
+
+    @property
+    def kind(self) -> BuildingKind:
+        """What sort of building this is -- the tag, read off the building itself so the
+        two can never disagree."""
+        return self.building.kind
 
 
 @dataclass(frozen=True)
@@ -355,7 +368,7 @@ class Scene:
                 ):
                     if outcome is not None:
                         yield outcome
-            yield stage.burglary.spotted
+            yield stage.burglary.bailed
         if stage.narration is not None:
             yield stage.narration
 
