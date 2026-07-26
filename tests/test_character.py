@@ -378,6 +378,42 @@ def test_hire_for_job_and_crew_for_job():
     assert c.crew_for_job("job_2") == []
 
 
+def test_crew_working_takes_this_job_s_hires_plus_everyone_on_retainer():
+    """Who walks into the fight, as opposed to crew_for_job's "who takes a cut": an
+    indefinite hire is on retainer and comes to all of it, someone else's job doesn't."""
+    c = Character(name="t")
+    c.hire_for_job("runner_a", "job_1")
+    c.hire_for_job("runner_b", "job_2")
+    c.hire_indefinite("runner_c")
+    assert {h.runner_id for h in c.crew_working("job_1")} == {"runner_a", "runner_c"}
+    assert {h.runner_id for h in c.crew_working("job_2")} == {"runner_b", "runner_c"}
+    assert [h.runner_id for h in c.crew_for_job("job_1")] == ["runner_a"]
+
+
+def test_record_runner_killed_takes_them_off_the_crew_and_the_roster_for_good():
+    c = Character(name="t")
+    c.hire_indefinite("runner_x")
+    c.record_runner_killed("runner_x")
+    assert not c.on_crew("runner_x")
+    assert not c.runner_available("runner_x")
+    c.elapsed_hours += HOURS_PER_DAY * 100  # no amount of time brings them back
+    assert not c.runner_available("runner_x")
+
+
+def test_an_arrested_runner_comes_back_once_their_day_arrives():
+    c = Character(name="t")
+    c.hire_for_job("runner_x", "job_1")
+    c.record_runner_arrested("runner_x", days=3)
+    assert not c.on_crew("runner_x")
+    assert not c.runner_available("runner_x")
+
+    c.elapsed_hours += HOURS_PER_DAY * 2
+    assert not c.runner_available("runner_x")  # still inside
+    c.elapsed_hours += HOURS_PER_DAY
+    assert c.runner_available("runner_x")
+    assert "runner_x" not in c.arrested_runners  # released, and the ledger swept itself
+
+
 def test_remove_job_discharges_orphaned_for_job_crew_but_not_indefinite():
     c = Character(name="t")
     c.hire_for_job("runner_a", "job_1")

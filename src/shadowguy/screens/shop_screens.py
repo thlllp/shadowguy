@@ -309,6 +309,11 @@ class BarScreen(BackScreen):
         character = self.app.character
         items = []
         for runner in RIVAL_RUNNERS:
+            # A runner who died on one of your jobs is gone for the run, and one who was
+            # picked up at a scene is inside until their day comes round — neither is at
+            # the bar to hire (Character.runner_available).
+            if not character.runner_available(runner.id):
+                continue
             tag = f"{runner.name} ({runner.archetype}, rating {runner.rating})"
             label = f"{tag} — on your crew" if character.on_crew(runner.id) else f"Recruit {tag}"
             items.append(ListItem(Static(label), id=f"runner_{runner.id}"))

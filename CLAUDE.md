@@ -195,6 +195,7 @@ Leaf modules, and why each has to stay one:
 | 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
 | 37 | `Character.smuggling_job` (gang delivery jobs) |
 | 38 | `rival_runner_states` **replacing** `rival_runner_locations`, `JobOffer.taken_by` |
+| 42 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
 
 ### Verifying changes
 

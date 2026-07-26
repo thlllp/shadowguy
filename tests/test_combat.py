@@ -7,6 +7,7 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult
 from shadowguy.combat import (
     SMARTLINK_ATTACK_BONUS,
+    _DEFAULT_ATTACK_VERBS,
     Action,
     ActionKind,
     CombatOutcome,
@@ -14,6 +15,7 @@ from shadowguy.combat import (
     ENEMIES_BY_ID,
     Enemy,
     UNARMED,
+    attack_verbs,
     available_actions,
     drop_for_result,
     equipped_weapons,
@@ -24,7 +26,7 @@ from shadowguy.combat import (
     take_turn,
 )
 from shadowguy.cybernetics import CyberSlot, install_cyberware
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Slot
 
 
 # --- drop_for_result ---
@@ -45,6 +47,38 @@ def test_drop_for_result_enemy_only_on_critical_failure():
 
 def test_drop_for_result_none_on_plain_failure():
     assert drop_for_result(CheckResult.FAILURE) is Drop.NONE
+
+
+# --- attack_verbs ---
+
+
+def test_attack_verbs_cover_every_weapon_skill_in_the_catalog():
+    """Including UNARMED's grapple -- an uncovered skill silently falls back to the
+    generic pair, which is the failure mode this table exists to avoid."""
+    weapons = [item for item in ITEMS_BY_ID.values() if item.slot is Slot.WEAPON]
+    for weapon in (*weapons, UNARMED):
+        assert attack_verbs(weapon) is not _DEFAULT_ATTACK_VERBS, weapon.skill
+
+
+def test_attack_verbs_differ_between_a_firearm_and_each_melee_type():
+    by_skill = {
+        item.skill: attack_verbs(item)
+        for item in ITEMS_BY_ID.values()
+        if item.slot is Slot.WEAPON
+    }
+    assert by_skill["firearms"] == ("fire on", "shoot")
+    # Every melee skill reads differently from the gun and from each other, which is the
+    # whole point -- a knife shouldn't "fire" and a katana shouldn't read like knuckles.
+    melee = {skill: verbs for skill, verbs in by_skill.items() if skill != "firearms"}
+    assert by_skill["firearms"] not in melee.values()
+    assert len(set(melee.values())) == len(melee)
+
+
+def test_attack_verbs_fall_back_for_an_unknown_skill():
+    made_up = ITEMS_BY_ID["combat_knife"].__class__(
+        id="x", name="X", price=0, bonuses={}, slot=Slot.WEAPON, skill="not_a_skill", damage=1
+    )
+    assert attack_verbs(made_up) == _DEFAULT_ATTACK_VERBS
 
 
 # --- available_actions ---

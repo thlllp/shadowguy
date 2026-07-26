@@ -1,9 +1,12 @@
-"""Biased random.Random subclasses shared by tests that need to force a specific
-check or probability outcome instead of seeding and hoping."""
+"""Shared test fixtures: biased random.Random subclasses for tests that need to force a
+specific check or probability outcome instead of seeding and hoping, plus a couple of
+Character/roster builders several suites want."""
 
 import random
 
 from shadowguy.character import Character
+from shadowguy.combat import crew_stats
+from shadowguy.runners import RIVAL_RUNNERS
 
 
 class AlwaysSix(random.Random):
@@ -37,3 +40,9 @@ def character_with_skill_value(skill_id: str, value: int) -> Character:
     character.perception = value
     character.intelligence = value
     return character
+
+
+def crew_stats_for(archetype: str = "Solo"):
+    """The combat stat block for the roster's runner of this archetype -- the Solo by
+    default, being the one hire built to shoot people (most health, a gun's reach)."""
+    return crew_stats(next(runner for runner in RIVAL_RUNNERS if runner.archetype == archetype))

@@ -26,7 +26,9 @@ from shadowguy.character import Character
 from shadowguy.checks import resolve_rng
 from shadowguy.combat import (
     Enemy,
+    attack_verbs,
     combat_consumables,
+    consumables_with,
     equipped_weapons,
     player_defense,
     player_soak,
@@ -220,6 +222,9 @@ FIREARM_RANGE = 8
 # player's is the obvious hook, which is why it's a field on the unit, not a global.
 PLAYER_SPEED = 4
 ENEMY_SPEED = 4
+# A hired runner moves like everyone else; they're a unit on the same board, and giving
+# backup its own movement rule would be a second thing to reason about for no gain.
+ALLY_SPEED = 4
 
 # Cover raises the to-hit difficulty against a unit hugging it, on the side facing the
 # shooter: a full wall is worth more than a low crate you can shoot over. Added straight
@@ -239,7 +244,19 @@ GRENADE_RADIUS = 1
 
 class Side(StrEnum):
     PLAYER = "player"
+    ALLY = "ally"  # a hired runner fighting on the player's side (combat.crew_stats)
     ENEMY = "enemy"
+
+
+class AimKind(StrEnum):
+    """What the aim cursor is currently pointing *for*, and so which confirm the screen's
+    Enter resolves (see confirm_aim). Both kinds drive the same cursor with the same keys;
+    they differ only in what makes a cell legal and what lands there — an attack needs an
+    enemy standing on the cell and a weapon that reaches it, a grenade needs a tile in
+    throwing range and takes anything in the blast with it."""
+
+    ATTACK = "attack"
+    GRENADE = "grenade"
 
 
 class TacticalOutcome(StrEnum):
@@ -251,25 +268,44 @@ class TacticalOutcome(StrEnum):
 
 @dataclass
 class Unit:
-    """One combatant on the grid. Enemy units carry their combat template (combat.Enemy)
-    and current `health` here; the player's health stays on the Character — the single
-    source of truth combat.py already mutates — so a player Unit's `enemy` is None and its
-    `health` field is unused. `speed` is the per-turn move budget (see PLAYER_SPEED)."""
+    """One combatant on the grid.
+
+    Every unit but the player carries a `combat.Enemy` stat block in `stats` and its
+    current `health` here — hostile squad and hired crew alike, since `Enemy` is really
+    "a combatant who isn't the player" (see combat.crew_stats). `side` is the only thing
+    that says which way a unit is pointing. The *player's* health stays on the Character —
+    the single source of truth combat.py already mutates — so the player Unit is the one
+    with `stats is None` and an unused `health` field. `speed` is the per-turn move
+    budget (see PLAYER_SPEED)."""
 
     name: str
     side: Side
     coord: Coord
     speed: int
-    enemy: Enemy | None = None
+    stats: Enemy | None = None
     health: int = 0
     # Enemy-only, set by a thrown Webbing/Flash-family grenade (EffectKind.COMBAT_STUN):
     # this unit sits out its next `stunned_rounds` enemy phases entirely — no move, no
     # attack — same "a round they owe you" meaning as combat.Fighter.stunned_rounds.
     stunned_rounds: int = 0
 
+    # Ally-only: a downed hire whose bleeding the player stopped with a health kit
+    # (stabilize_ally). Doesn't put them back in the fight — it decides whether they
+    # walk away from it (resolve_downed_crew).
+    stabilized: bool = False
+
     @property
     def is_enemy(self) -> bool:
         return self.side is Side.ENEMY
+
+    @property
+    def is_ally(self) -> bool:
+        """A hired runner fighting beside the player."""
+        return self.side is Side.ALLY
+
+    @property
+    def is_down(self) -> bool:
+        return self.health <= 0
 
 
 @dataclass
@@ -285,14 +321,19 @@ class TacticalState:
     log: list[str] = field(default_factory=list)
     moves_left: int = 0
     acted: bool = False
-    # Grenade tile-targeting, in progress between begin_grenade_aim and
-    # confirm_grenade_aim/cancel_grenade_aim. Non-None means the screen is in aim mode:
-    # arrow keys move this cursor instead of the player (tactical_screen.action_move).
-    # Neither field costs the turn's action on its own — only a resolved throw
-    # (throw_grenade, called by confirm_grenade_aim) sets `acted`, so backing out of an
-    # aim is free.
+    # Targeting, in progress between begin_attack_aim/begin_grenade_aim and
+    # confirm_aim/cancel_aim. A non-None cursor means the screen is in aim mode: arrow
+    # keys move this cursor instead of the player (tactical_screen.action_move), and
+    # `aim_kind` says what confirming it does. None of these fields costs the turn's
+    # action on its own — only a resolved attack or throw sets `acted` — so backing out
+    # of an aim is free. `pending_grenade_index` is set for AimKind.GRENADE only.
     aim_cursor: Coord | None = None
+    aim_kind: AimKind | None = None
     pending_grenade_index: int | None = None
+    # What became of any hire who went down, filled by _end_fight when the fight ends
+    # (None while it's still running). The screen reports it; it isn't the screen's to
+    # decide — see resolve_downed_crew.
+    crew_aftermath: list[tuple[str, "CrewFate"]] | None = None
 
     @property
     def player(self) -> Unit:
@@ -304,16 +345,34 @@ class TacticalState:
         return [u for u in self.units if u.is_enemy and u.health > 0]
 
     @property
+    def allies(self) -> list[Unit]:
+        """Every hired runner still standing."""
+        return [u for u in self.units if u.is_ally and u.health > 0]
+
+    @property
+    def downed_allies(self) -> list[Unit]:
+        """Hires bleeding on the floor. Out of the fight either way — what's still open
+        is whether they walk away from it (stabilize_ally / resolve_downed_crew)."""
+        return [u for u in self.units if u.is_ally and u.is_down]
+
+    @property
+    def friendlies(self) -> list[Unit]:
+        """Everyone an enemy could shoot at: the player (while alive) and any ally still
+        up. The player comes first, so a tie in the AI's target policy falls on them —
+        a hire is backup, not a meat shield that quietly soaks every round."""
+        player = self.player
+        return ([player] if self.character.is_alive else []) + self.allies
+
+    @property
     def is_over(self) -> bool:
         return self.outcome is not TacticalOutcome.ONGOING
 
     def occupied(self, *, exclude: Unit | None = None) -> frozenset[Coord]:
         """Cells a unit stands on — what blocks movement and pathing this instant. Living
-        units only: a downed enemy is a corpse you can walk over, not a wall."""
+        units only: a downed enemy (or a downed hire) is a corpse you can walk over, not
+        a wall. The player is always in the set; a dead player ends the fight anyway."""
         return frozenset(
-            u.coord
-            for u in self.units
-            if u is not exclude and (u.side is Side.PLAYER or u.health > 0)
+            u.coord for u in self.units if u is not exclude and (u.health > 0 or u.side is Side.PLAYER)
         )
 
 
@@ -347,14 +406,37 @@ def weapon_range(weapon: Item) -> int:
     return FIREARM_RANGE if weapon.skill == "firearms" else MELEE_RANGE
 
 
+def ally_spawns(grid: Grid, player_start: Coord, count: int, taken: frozenset[Coord]) -> list[Coord]:
+    """Where `count` hired runners stand at the start of a fight: the open cells nearest
+    the player they came in with, ringing outward. Fewer coords than asked for if the
+    entry room is too cramped — the caller drops the hires that don't fit rather than
+    stacking two units on a tile."""
+    found: list[Coord] = []
+    frontier, seen = [player_start], {player_start, *taken}
+    while frontier and len(found) < count:
+        cell = frontier.pop(0)
+        for neighbor in step_neighbors(grid, cell, blocked=frozenset()):
+            if neighbor in seen:
+                continue
+            seen.add(neighbor)
+            frontier.append(neighbor)
+            found.append(neighbor)
+            if len(found) == count:
+                break
+    return found
+
+
 def start_tactical(
     character: Character,
     grid: Grid,
     player_start: Coord,
     enemy_placements: list[tuple[Enemy, Coord]],
     exits: frozenset[Coord] = frozenset(),
+    allies: list[Enemy] = (),
 ) -> TacticalState:
-    """Set up a fight: place the player and each enemy, then open the player's turn."""
+    """Set up a fight: place the player, each enemy, and any hired runner who came along
+    (`allies`, stat blocks from combat.crew_stats — they spawn around the player via
+    ally_spawns, and any that don't fit sit the fight out), then open the player's turn."""
     units = [Unit(name=character.name, side=Side.PLAYER, coord=player_start, speed=PLAYER_SPEED)]
     for enemy, coord in enemy_placements:
         units.append(
@@ -363,8 +445,20 @@ def start_tactical(
                 side=Side.ENEMY,
                 coord=coord,
                 speed=ENEMY_SPEED,
-                enemy=enemy,
+                stats=enemy,
                 health=enemy.health,
+            )
+        )
+    spawns = ally_spawns(grid, player_start, len(allies), frozenset(u.coord for u in units))
+    for ally, coord in zip(allies, spawns, strict=False):
+        units.append(
+            Unit(
+                name=ally.name,
+                side=Side.ALLY,
+                coord=coord,
+                speed=ALLY_SPEED,
+                stats=ally,
+                health=ally.health,
             )
         )
     state = TacticalState(character=character, grid=grid, units=units, exits=frozenset(exits))
@@ -394,43 +488,222 @@ def move_player(state: TacticalState, dest: Coord) -> bool:
     return True
 
 
+def in_reach(grid: Grid, origin: Coord, target: Coord, reach: int) -> bool:
+    """Range and line of sight, the two gates DESIGN.md keeps deliberately separate,
+    asked together. Every attack in this module goes through here — the player's
+    (can_hit, off weapon_range) and the AI's (_can_reach, off Enemy.reach) — so there is
+    one place that spells out what "able to attack that" means."""
+    return chebyshev(origin, target) <= reach and has_line_of_sight(grid, origin, target)
+
+
+def can_hit(state: TacticalState, weapon: Item, target: Unit) -> bool:
+    """Whether this weapon reaches this enemy right now: standing, in range and in sight.
+    targets_for lists it per weapon, weapon_for_target inverts it per target."""
+    return target.health > 0 and in_reach(
+        state.grid, state.player.coord, target.coord, weapon_range(weapon)
+    )
+
+
 def targets_for(state: TacticalState, weapon: Item) -> list[Unit]:
-    """Enemies the player could hit with this weapon right now: standing, within the
-    weapon's range, and in line of sight."""
-    origin = state.player.coord
-    reach = weapon_range(weapon)
-    return [
-        enemy
-        for enemy in state.enemies
-        if chebyshev(origin, enemy.coord) <= reach and has_line_of_sight(state.grid, origin, enemy.coord)
-    ]
+    """Enemies the player could hit with this weapon right now."""
+    return [enemy for enemy in state.enemies if can_hit(state, weapon, enemy)]
+
+
+def weapon_for_target(state: TacticalState, target: Unit) -> Item | None:
+    """Which weapon the player attacks `target` with — the hardest-hitting equipped one
+    that reaches it, or None if nothing does. This is what makes aiming a *unit* enough
+    to resolve an attack: the player picks who, the weapon follows from where they're
+    standing (a knife only for someone at arm's length, the gun for anyone further out)."""
+    reaching = [weapon for weapon in player_weapons(state) if can_hit(state, weapon, target)]
+    return max(reaching, key=lambda weapon: weapon.damage, default=None)
+
+
+def attack_targets(state: TacticalState) -> list[Unit]:
+    """Every enemy some equipped weapon can reach right now — the set the aim cursor
+    snaps between (snap_aim_to_next_target) and the one "no shot" is read off."""
+    return [enemy for enemy in state.enemies if weapon_for_target(state, enemy) is not None]
+
+
+def enemy_at(state: TacticalState, coord: Coord) -> Unit | None:
+    """The standing enemy on this cell, if any — how a cursor position becomes a target."""
+    return next((enemy for enemy in state.enemies if enemy.coord == coord), None)
 
 
 def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.Random | None = None) -> None:
     """Resolve the player's one action: an attack, through combat.resolve_hit, with the
     target's cover folded into the to-hit difficulty. Spends the action for the turn."""
     rng = resolve_rng(rng)
-    if state.acted or state.is_over or target not in targets_for(state, weapon):
+    if state.acted or state.is_over or not can_hit(state, weapon, target):
         return
     state.acted = True
-    difficulty = target.enemy.defense + cover_bonus(state.grid, target.coord, state.player.coord)
+    difficulty = target.stats.defense + cover_bonus(state.grid, target.coord, state.player.coord)
     roll, damage = resolve_hit(
         rng,
         skill_value(state.character, weapon.skill),
         smartlink_bonus(state.character, weapon),
         difficulty,
         weapon.damage,
-        target.enemy.toughness,
+        target.stats.toughness,
     )
+    miss_verb, hit_verb = attack_verbs(weapon)
     if not roll.result.passed:
-        state.log.append(f"You fire on {target.name} and miss.")
+        state.log.append(f"You {miss_verb} {target.name} and miss.")
         return
     target.health = max(0, target.health - damage)
     if target.health <= 0:
-        state.log.append(f"You drop {target.name}.")
+        state.log.append(f"You drop {target.name}.")  # a kill reads the same however it landed
     else:
-        state.log.append(f"You hit {target.name} for {damage}.")
+        state.log.append(f"You {hit_verb} {target.name} for {damage}.")
     _settle(state)
+
+
+def healing_kits(character: Character) -> list[tuple[int, Consumable]]:
+    """The health kits the runner is carrying — the stabilize counterpart of
+    combat.combat_consumables, off the same combat.consumables_with. Any HEAL consumable
+    works, so an Advanced Health Kit stabilizes exactly like a basic one (nothing here
+    reads `amount`: you're stopping the bleeding, not healing them)."""
+    return consumables_with(character, {EffectKind.HEAL})
+
+
+def stabilize_targets(state: TacticalState) -> list[Unit]:
+    """Downed hires the player could stabilize this instant: bleeding, not already
+    stabilized, and within arm's reach. Empty once the turn's action is spent, or with
+    no kit left to spend on them."""
+    if state.acted or state.is_over or not healing_kits(state.character):
+        return []
+    return [
+        ally
+        for ally in state.downed_allies
+        if not ally.stabilized and chebyshev(state.player.coord, ally.coord) <= MELEE_RANGE
+    ]
+
+
+def stabilize_ally(state: TacticalState) -> str | None:
+    """Spend the turn's action and one health kit to stop a downed hire bleeding out.
+
+    They stay down — this is first aid under fire, not a revival: what it buys is the
+    aftermath (resolve_downed_crew), where a stabilized runner walks away and an
+    unstabilized one may not. Costing a whole turn is the point; standing over a body in
+    a firefight is a real decision, and one an unstabilized-but-alive hire lets you
+    refuse. Deliberately *not* gated on Character.health_kit_used_today: that cap is
+    about a runner topping themselves up between fights, not about who they can patch.
+
+    *Which* body gets the kit is policy, so it's decided here rather than by the screen:
+    the nearest one you could reach. Returns None on success, or why not — spending
+    nothing — so a refusal can't drift out of step with what stabilize_targets allows.
+    """
+    targets = stabilize_targets(state)
+    if not targets:
+        return _no_stabilize_reason(state)
+    ally = min(targets, key=lambda unit: chebyshev(state.player.coord, unit.coord))
+    index, kit = healing_kits(state.character)[0]
+    state.character.consumables.pop(index)
+    state.acted = True
+    ally.stabilized = True
+    state.log.append(f"You put {kit.name} into {ally.name}. They're stable, but out of this one.")
+    return None
+
+
+def _no_stabilize_reason(state: TacticalState) -> str:
+    """Which of stabilize_targets' gates is the one shutting the player out — read in the
+    same order it applies them, so the two can't disagree."""
+    if state.acted:
+        return "You've already acted this turn."
+    if not [ally for ally in state.downed_allies if not ally.stabilized]:
+        return "Nobody on your crew is down."
+    if not healing_kits(state.character):
+        return "No health kit to patch them with."
+    return "Step next to them first."
+
+
+def begin_attack_aim(state: TacticalState) -> bool:
+    """Enter targeting mode for an attack: the same cursor a grenade throw aims with (see
+    begin_grenade_aim), pointed at units instead of tiles. Opens on best_shot's default
+    target, so the common case is Enter straight away. Spends nothing — only
+    confirm_attack_aim's resolved attack sets `acted`.
+
+    Returns False, having done nothing, when there's no shot to open on: already acted,
+    fight over, or nothing in sight and range. The caller doesn't have to ask best_shot
+    itself first — asking costs a line-of-sight pass per enemy."""
+    if state.acted or state.is_over:
+        return False
+    shot = best_shot(state)
+    if shot is None:
+        return False
+    state.aim_cursor = shot.coord
+    state.aim_kind = AimKind.ATTACK
+    return True
+
+
+def legal_attack_target(state: TacticalState, coord: Coord) -> bool:
+    """Whether the player could actually attack whatever is on this cell right now: a
+    standing enemy with an equipped weapon that reaches it. The attack counterpart of
+    legal_grenade_target, and what colours the cursor while aiming."""
+    enemy = enemy_at(state, coord)
+    return enemy is not None and weapon_for_target(state, enemy) is not None
+
+
+def confirm_attack_aim(state: TacticalState, rng: random.Random | None = None) -> bool:
+    """Resolve the aimed attack at the cursor with weapon_for_target's pick. Returns False
+    and stays in aim mode when there's nothing hittable there, same as
+    confirm_grenade_aim's bad-tile behaviour — a misaimed cursor costs the player a
+    keypress, not their action."""
+    if state.aim_kind is not AimKind.ATTACK or state.aim_cursor is None:
+        return False
+    target = enemy_at(state, state.aim_cursor)
+    weapon = None if target is None else weapon_for_target(state, target)
+    if weapon is None:
+        return False
+    cancel_aim(state)
+    player_attack(state, target, weapon, rng)
+    return True
+
+
+def aim_is_legal(state: TacticalState, coord: Coord) -> bool:
+    """Whether confirming on this cell would resolve, for whichever aim is running —
+    the one call a renderer needs to colour the cursor without knowing the kind."""
+    if state.aim_kind is AimKind.ATTACK:
+        return legal_attack_target(state, coord)
+    if state.aim_kind is AimKind.GRENADE:
+        return legal_grenade_target(state, coord)
+    return False
+
+
+def snap_aim_to_next_target(state: TacticalState) -> bool:
+    """Jump the cursor to the next enemy worth aiming at, wrapping — nearest first, so
+    tapping through the ring goes outward from the player rather than in map order. What
+    counts as "worth aiming at" is the running aim's own legality: an enemy some weapon
+    reaches when attacking, an enemy standing on a throwable tile when aiming a grenade.
+    Returns False if there's no aim running or nothing to snap to (the cursor stays put,
+    so the player can still walk it somewhere by hand)."""
+    if state.aim_cursor is None:
+        return False
+    order = sorted(
+        (enemy.coord for enemy in state.enemies if aim_is_legal(state, enemy.coord)),
+        key=lambda coord: (chebyshev(state.player.coord, coord), coord),
+    )
+    if not order:
+        return False
+    index = order.index(state.aim_cursor) + 1 if state.aim_cursor in order else 0
+    state.aim_cursor = order[index % len(order)]
+    return True
+
+
+def cancel_aim(state: TacticalState) -> None:
+    """Back out of targeting with nothing spent, whichever aim is running."""
+    state.aim_cursor = None
+    state.aim_kind = None
+    state.pending_grenade_index = None
+
+
+def confirm_aim(state: TacticalState, rng: random.Random | None = None) -> bool:
+    """Resolve whatever the cursor is aiming — the screen's Enter, with the attack/throw
+    split kept here rather than in the UI. False means "not legal there, still aiming"."""
+    if state.aim_kind is AimKind.ATTACK:
+        return confirm_attack_aim(state, rng)
+    if state.aim_kind is AimKind.GRENADE:
+        return confirm_grenade_aim(state)
+    return False
 
 
 # The two grenade effects a blast radius actually applies to. COMBAT_ESCAPE isn't aimed
@@ -461,13 +734,14 @@ def legal_grenade_target(state: TacticalState, coord: Coord) -> bool:
 def begin_grenade_aim(state: TacticalState, consumable_index: int) -> None:
     """Enter tile-targeting mode for Character.consumables[consumable_index]: arrow keys
     move state.aim_cursor instead of the player (tactical_screen.action_move) until
-    confirm_grenade_aim resolves the throw or cancel_grenade_aim backs out. Starts the
-    cursor on the player's own tile — always a legal target (range 0), a safe default
-    to nudge from. Doesn't touch Character.consumables or state.acted; only a resolved
-    throw spends either."""
+    confirm_aim resolves the throw or cancel_aim backs out. Starts the cursor on the
+    player's own tile — always a legal target (range 0), a safe default to nudge from.
+    Doesn't touch Character.consumables or state.acted; only a resolved throw spends
+    either."""
     if state.acted or state.is_over:
         return
     state.aim_cursor = state.player.coord
+    state.aim_kind = AimKind.GRENADE
     state.pending_grenade_index = consumable_index
 
 
@@ -484,12 +758,6 @@ def move_aim_cursor(state: TacticalState, dx: int, dy: int) -> None:
         state.aim_cursor = dest
 
 
-def cancel_grenade_aim(state: TacticalState) -> None:
-    """Back out of tile-targeting with nothing spent — see begin_grenade_aim."""
-    state.aim_cursor = None
-    state.pending_grenade_index = None
-
-
 def confirm_grenade_aim(state: TacticalState) -> bool:
     """Resolve the pending grenade at the aim cursor. Returns False and leaves aim mode
     running if the cursor isn't a legal_grenade_target right now, so the screen can
@@ -499,8 +767,7 @@ def confirm_grenade_aim(state: TacticalState) -> bool:
     if not legal_grenade_target(state, state.aim_cursor):
         return False
     index, target = state.pending_grenade_index, state.aim_cursor
-    state.aim_cursor = None
-    state.pending_grenade_index = None
+    cancel_aim(state)
     throw_grenade(state, index, target)
     return True
 
@@ -534,92 +801,225 @@ def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | N
             enemy.stunned_rounds = consumable.amount
         state.log.append(f"{consumable.name} — {len(hit)} pinned down for {consumable.amount}.")
     elif consumable.effect is EffectKind.COMBAT_ESCAPE:
-        state.outcome = TacticalOutcome.ESCAPED
         state.log.append(f"{consumable.name} — you slip out under cover.")
+        _end_fight(state, TacticalOutcome.ESCAPED)
     else:
         # Same guard as combat._throw, from the other side: a new combat-only effect
         # with no branch here would otherwise be popped and silently do nothing.
         raise ValueError(f"consumable effect not handled in tactical combat: {consumable.effect}")
 
 
-def leave(state: TacticalState) -> bool:
+def leave(state: TacticalState, rng: random.Random | None = None) -> bool:
     """Walk out — but only from an exit tile. Positional escape: getting to the door *is*
     the flee, so there's no roll and no parting shot; the risk was crossing the room to
     reach it. Returns False if the player isn't standing on an exit."""
     if state.is_over or state.player.coord not in state.exits:
         return False
-    state.outcome = TacticalOutcome.ESCAPED
     state.log.append("You slip out.")
+    _end_fight(state, TacticalOutcome.ESCAPED, rng)
     return True
 
 
 def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
-    """End the player's turn and run the enemy phase, then open the next player turn."""
+    """End the player's turn: the hired crew acts, then the enemy phase, then the next
+    player turn opens. Allies go first because they're on your side of the round — the
+    fire they draw and the enemies they drop are part of what your turn bought."""
     rng = resolve_rng(rng)
     if state.is_over:
         return
-    _enemy_phase(state, rng)
-    _settle(state)
+    # Allies go first because they're on your side of the round — the fire they draw and
+    # the enemies they drop are part of what your turn bought.
+    _ai_phase(state, allied=True, rng=rng)
+    if not state.is_over:
+        _ai_phase(state, allied=False, rng=rng)
+    _settle(state, rng)
     if not state.is_over:
         _begin_player_turn(state)
 
 
-def _can_hit_player(state: TacticalState, enemy: Unit) -> bool:
-    """Whether this enemy has a shot at the player right now: within its `reach` and with a
-    clear line. Melee (reach 1) needs to be adjacent; a guard's gun only needs the sightline."""
-    player = state.player.coord
-    return chebyshev(enemy.coord, player) <= enemy.enemy.reach and has_line_of_sight(
-        state.grid, enemy.coord, player
+def _can_reach(state: TacticalState, attacker: Unit, target: Unit) -> bool:
+    """Whether this unit has a shot at that one right now. Melee (reach 1) needs to be
+    adjacent; a guard's gun only needs the sightline. Side-agnostic — it's the same
+    question for a Sec Heavy and for your Solo."""
+    return in_reach(state.grid, attacker.coord, target.coord, attacker.stats.reach)
+
+
+def pick_target(state: TacticalState, attacker: Unit, candidates: list[Unit]) -> Unit | None:
+    """Who a unit goes after — **the one they can actually hit**, and the one ranking both
+    sides use.
+
+    Candidates are ordered by the cover between them and the attacker (`cover_bonus` —
+    the same number that raises the to-hit difficulty), then by distance, with anyone the
+    attacker has no line to sorting last. So ducking behind a wall genuinely redirects
+    fire onto whoever is standing in the open: cover stops being "my rolls got better"
+    and becomes a decision about who eats the round. `min` is stable, so the candidate
+    list's own order breaks exact ties — which is why `friendlies` puts the player first,
+    and a hire is never a quiet meat shield. Called before movement too, so a unit crosses
+    the room toward the target it *wants*, not the nearest body.
+
+    One FOV pass covers every candidate (see visible_tiles); None when the list is empty."""
+    seen = visible_tiles(state.grid, attacker.coord)
+    return min(
+        candidates,
+        key=lambda target: (
+            not seen[target.coord[1], target.coord[0]],
+            cover_bonus(state.grid, target.coord, attacker.coord),
+            chebyshev(attacker.coord, target.coord),
+        ),
+        default=None,
     )
 
 
-def _enemy_phase(state: TacticalState, rng: random.Random) -> None:
-    """Each enemy that can't already hit the player closes via A* (up to its speed) until it
-    can, then attacks. A ranged enemy therefore holds its distance — it only advances when it
-    has no shot — while melee has to reach arm's length."""
-    for enemy in state.enemies:
+def enemy_target(state: TacticalState, enemy: Unit) -> Unit | None:
+    """Who this enemy shoots at: the player or a hire, by pick_target's ranking."""
+    return pick_target(state, enemy, state.friendlies)
+
+
+def _advance_and_attack(state: TacticalState, attacker: Unit, target: Unit, rng: random.Random) -> None:
+    """Close via A* (up to `speed`) until the target is in reach, then hit it. The shared
+    body of both AI phases — a ranged unit holds its distance because it stops advancing
+    the moment it has a shot, while melee has to walk all the way in."""
+    reached = _can_reach(state, attacker, target)
+    if not reached:
+        path = path_between(
+            state.grid, attacker.coord, target.coord, blocked=state.occupied(exclude=attacker)
+        )
+        # Path ends on the target's own tile; don't step onto it — stop the step before.
+        for step in path[: attacker.speed]:
+            if step == target.coord:
+                break
+            attacker.coord = step
+            if (reached := _can_reach(state, attacker, target)):
+                break
+    if reached:
+        _unit_attack(state, attacker, target, rng)
+        _settle(state, rng)
+
+
+def _ai_phase(state: TacticalState, *, allied: bool, rng: random.Random) -> None:
+    """One side's turn: each unit picks a target (pick_target), closes until it can hit
+    them, then does. Targets are re-picked per unit per round rather than locked in at the
+    start of the fight, so a runner who steps out of cover draws the next one's fire.
+
+    Both sides run this same body — a hire fights the way a Sec Heavy does, pointed the
+    other way. They're AI-driven, not a second unit you steer: a hire you have to
+    micromanage is a second character, not backup."""
+    for unit in state.allies if allied else state.enemies:
         if state.is_over:
             return
-        if enemy.stunned_rounds > 0:
-            enemy.stunned_rounds -= 1
-            state.log.append(f"{enemy.name} is still reeling.")
+        if unit.stunned_rounds > 0:
+            unit.stunned_rounds -= 1
+            state.log.append(f"{unit.name} is still reeling.")
             continue
-        if not _can_hit_player(state, enemy):
-            path = path_between(
-                state.grid, enemy.coord, state.player.coord, blocked=state.occupied(exclude=enemy)
-            )
-            # Path ends on the player's own tile; don't step onto it — stop the step before.
-            for step in path[: enemy.speed]:
-                if step == state.player.coord:
-                    break
-                enemy.coord = step
-                if _can_hit_player(state, enemy):
-                    break
-        if _can_hit_player(state, enemy):
-            _enemy_attack(state, enemy, rng)
-            _settle(state)
+        target = pick_target(state, unit, state.enemies if allied else state.friendlies)
+        if target is None:
+            return
+        _advance_and_attack(state, unit, target, rng)
 
 
-def _enemy_attack(state: TacticalState, enemy: Unit, rng: random.Random) -> None:
-    difficulty = player_defense(state.character) + cover_bonus(
-        state.grid, state.player.coord, enemy.coord
-    )
-    roll, damage = resolve_hit(
-        rng, enemy.enemy.attack, 0, difficulty, enemy.enemy.damage, player_soak(state.character)
-    )
+def _unit_attack(state: TacticalState, attacker: Unit, target: Unit, rng: random.Random) -> None:
+    """One AI attack, either direction: an enemy shooting at the player or their crew, or
+    a hired runner shooting back. Runs through combat.resolve_hit like every other attack
+    in the game, with the target's cover on the difficulty. Whose numbers get used is the
+    only fork — the player's defense/soak come off the Character, everyone else's off
+    their `stats` block — and damage lands in the matching place."""
+    is_player = target is state.player
+    difficulty = (
+        player_defense(state.character) if is_player else target.stats.defense
+    ) + cover_bonus(state.grid, target.coord, attacker.coord)
+    soak = player_soak(state.character) if is_player else target.stats.toughness
+    roll, damage = resolve_hit(rng, attacker.stats.attack, 0, difficulty, attacker.stats.damage, soak)
+    # Every line names who was shot at: with two runners on the board, who a shot was
+    # aimed at is the whole point — it's how cover redirecting fire reads.
+    who = "you" if is_player else target.name
     if not roll.result.passed:
-        state.log.append(f"{enemy.name} swings wide.")
+        state.log.append(f"{attacker.name} swings wide at {who}.")
         return
-    state.character.adjust_health(-damage)
-    state.log.append(f"{enemy.name} hits you for {damage}." if damage else f"{enemy.name} connects, but your armor holds.")
+    if is_player:
+        state.character.adjust_health(-damage)
+    else:
+        target.health = max(0, target.health - damage)
+    if not is_player and target.is_down:
+        state.log.append(f"{attacker.name} puts {who} down.")
+    elif damage:
+        state.log.append(f"{attacker.name} hits {who} for {damage}.")
+    else:
+        state.log.append(f"{attacker.name} connects with {who}, but it doesn't get through.")
 
 
-def _settle(state: TacticalState) -> None:
+def _settle(state: TacticalState, rng: random.Random | None = None) -> None:
     """Read the board. Death first: a mutual kill still kills you."""
     if not state.character.is_alive:
-        state.outcome = TacticalOutcome.DEAD
+        _end_fight(state, TacticalOutcome.DEAD, rng)
     elif not state.enemies:
-        state.outcome = TacticalOutcome.VICTORY
+        _end_fight(state, TacticalOutcome.VICTORY, rng)
+
+
+def _end_fight(state: TacticalState, outcome: TacticalOutcome, rng: random.Random | None = None) -> None:
+    """The one place a fight ends. Sets the outcome and settles anyone who went down with
+    you (resolve_downed_crew) — so a hire's fate follows from the fight ending, not from
+    whoever happens to render or dismiss the screen afterwards. A player death skips it:
+    the run is over, and there is nobody left to carry anyone out."""
+    state.outcome = outcome
+    state.crew_aftermath = [] if outcome is TacticalOutcome.DEAD else resolve_downed_crew(state, rng)
+
+
+class CrewFate(StrEnum):
+    """What became of a hire who went down, once the shooting stopped."""
+
+    RECOVERED = "recovered"  # patched up and back on the street
+    ARRESTED = "arrested"  # picked up at the scene, off the roster for a stretch
+    KILLED = "killed"  # gone for the run
+
+
+# How long a runner is held after being picked up at a scene, in days. First-slice
+# tuning like the rest of this block — long enough to hurt a crew plan, short enough
+# that a three-runner roster isn't gutted by one bad night.
+ARREST_DAYS = 7
+
+# The odds a downed hire faces, as (killed, arrested) — the remainder is RECOVERED.
+# Two things decide which row applies: whether you stopped their bleeding
+# (stabilize_ally) and whether you *held the field*. Winning means you can carry them
+# out; walking out an exit means leaving them where they fell, for whoever arrives next.
+# So the fight's ending is what turns a downed hire into a dead one, which is exactly
+# the pressure a body on the floor should put on the decision to run.
+# Not balance-simulated (nothing involving crew is yet).
+_CREW_FATES: dict[tuple[bool, bool], tuple[float, float]] = {
+    # (stabilized, held_the_field): (killed, arrested)
+    (True, True): (0.00, 0.00),  # stable, and you carried them out
+    (False, True): (0.25, 0.00),  # you won, but they'd been bleeding the whole time
+    (True, False): (0.00, 0.60),  # alive where you left them — someone else finds them
+    (False, False): (0.40, 0.40),  # left bleeding on someone else's floor
+}
+
+
+def resolve_downed_crew(
+    state: TacticalState, rng: random.Random | None = None
+) -> list[tuple[str, CrewFate]]:
+    """Settle every hire who went down, once the fight is over. Applies each fate to the
+    Character (a killed or arrested runner is discharged and comes off the roster — see
+    Character.record_runner_killed/record_runner_arrested) and returns (name, fate) pairs
+    for the screen to report.
+
+    Only meaningful on a finished fight; a player death doesn't reach here at all (the
+    run is over). Idempotent by construction only in the sense that it clears nothing —
+    call it once per fight, at the end (TacticalScreen does, when the outcome lands)."""
+    rng = resolve_rng(rng)
+    held_the_field = state.outcome is TacticalOutcome.VICTORY
+    results: list[tuple[str, CrewFate]] = []
+    for ally in state.downed_allies:
+        killed_odds, arrested_odds = _CREW_FATES[(ally.stabilized, held_the_field)]
+        roll = rng.random()
+        if roll < killed_odds:
+            fate = CrewFate.KILLED
+            state.character.record_runner_killed(ally.stats.id)
+        elif roll < killed_odds + arrested_odds:
+            fate = CrewFate.ARRESTED
+            state.character.record_runner_arrested(ally.stats.id, ARREST_DAYS)
+        else:
+            fate = CrewFate.RECOVERED
+        results.append((ally.name, fate))
+    return results
 
 
 def player_weapons(state: TacticalState) -> list[Item]:
@@ -627,21 +1027,17 @@ def player_weapons(state: TacticalState) -> list[Item]:
     return equipped_weapons(state.character)
 
 
-def best_shot(state: TacticalState) -> tuple[Item, Unit] | None:
-    """The attack the player takes by default: the nearest in-sight, in-range enemy, with
-    the best-reaching weapon (nearer first, more damage breaks ties). None if there's no
-    shot — already acted, or nothing in sight and range. This is fight *policy*, not view,
-    so it lives here beside targets_for; the screen and any headless driver share it."""
+def best_shot(state: TacticalState) -> Unit | None:
+    """The enemy the player shoots by default: the nearest one some equipped weapon
+    reaches. None if there's no shot — already acted, or nothing in sight and range.
+    Which weapon fires isn't part of the answer, because it follows from the target
+    (weapon_for_target) rather than from this choice. Fight *policy*, not view, so it
+    lives here; the screen (as the aim cursor's starting target, see begin_attack_aim)
+    and any headless driver share it."""
     if state.acted:
         return None
     origin = state.player.coord
-    best = None  # (sort_key, weapon, target)
-    for weapon in player_weapons(state):
-        for target in targets_for(state, weapon):
-            key = (chebyshev(origin, target.coord), -weapon.damage)
-            if best is None or key < best[0]:
-                best = (key, weapon, target)
-    return None if best is None else (best[1], best[2])
+    return min(attack_targets(state), key=lambda enemy: chebyshev(origin, enemy.coord), default=None)
 
 
 def available_grenades(state: TacticalState) -> list[tuple[int, Consumable]]:

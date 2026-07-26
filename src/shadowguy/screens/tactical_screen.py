@@ -1,5 +1,6 @@
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
@@ -7,24 +8,30 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
 from shadowguy.tactical import (
     GRENADE_RADIUS,
+    AimKind,
+    CrewFate,
     Side,
     TacticalOutcome,
     Tile,
+    aim_is_legal,
     available_grenades,
+    begin_attack_aim,
     begin_grenade_aim,
     best_shot,
-    cancel_grenade_aim,
-    confirm_grenade_aim,
+    cancel_aim,
+    confirm_aim,
+    enemy_at,
     end_turn,
     grenade_needs_target,
     leave,
-    legal_grenade_target,
     move_aim_cursor,
     move_player,
-    player_attack,
+    snap_aim_to_next_target,
+    stabilize_ally,
     start_tactical,
     throw_grenade,
     visible_tiles,
+    weapon_for_target,
 )
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _boxed_text, _menu_css, _terrain_glyph
@@ -35,6 +42,17 @@ _TAC_END_TEXT = {
     TacticalOutcome.DEAD: "You're down.",
 }
 TACTICAL_LOG_LINES = 6
+
+# How a standing unit reads on the map, by side. The player is '@' and handled apart —
+# they're the one unit whose health lives on the Character, not the Unit.
+_SIDE_GLYPH = {Side.ALLY: ("A", "bold magenta"), Side.ENEMY: ("E", "bold red")}
+
+# What the end-of-fight line says about a hire who went down (tactical.resolve_downed_crew).
+_CREW_FATE_TEXT = {
+    CrewFate.RECOVERED: "{name} is patched up and back on the street.",
+    CrewFate.ARRESTED: "{name} was picked up at the scene.",
+    CrewFate.KILLED: "{name} didn't make it.",
+}
 
 
 class GrenadePickScreen(ModalScreen):
@@ -77,12 +95,16 @@ class TacticalScreen(Screen):
         ("down", "move('down')", "Move"),
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
-        ("f", "fire", "Attack"),
+        ("f", "fire", "Aim attack"),
         ("g", "throw_grenade", "Grenade"),
+        # Priority so the aim cursor's target-cycling wins over Screen's own default
+        # tab -> focus_next binding, which would otherwise eat the key.
+        Binding("tab", "next_target", "Next target", priority=True),
+        ("s", "stabilize", "Stabilize crew"),
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
-        ("enter", "continue", "Continue / confirm throw"),
-        ("escape", "cancel_aim", "Cancel throw"),
+        ("enter", "continue", "Continue / confirm"),
+        ("escape", "cancel_aim", "Cancel aim"),
         *MENU_QUIT_BINDINGS,
     ]
 
@@ -101,9 +123,13 @@ class TacticalScreen(Screen):
     }
     """
 
-    def __init__(self, stage) -> None:
+    def __init__(self, stage, allies=()) -> None:
         super().__init__()
         self.stage = stage
+        # combat.Enemy stat blocks for the hired runners on this job (combat.crew_stats),
+        # supplied by whoever opened the fight — the crew is the Character's, not the
+        # stage's, so a hire made after the job was generated still shows up.
+        self.allies = list(allies)
         self.state = None
 
     def compose(self) -> ComposeResult:
@@ -118,6 +144,7 @@ class TacticalScreen(Screen):
             Static(id="tac_box_end", classes="tac_box"),
             Static(id="tac_box_leave", classes="tac_box"),
             Static(id="tac_box_enemies", classes="tac_box"),
+            Static(id="tac_box_crew", classes="tac_box"),
             id="tac_status",
         )
         yield Static(id="tac_map")
@@ -131,6 +158,7 @@ class TacticalScreen(Screen):
             self.stage.player_start,
             list(self.stage.enemies),
             self.stage.exits,
+            allies=self.allies,
         )
         self._refresh()
 
@@ -147,16 +175,23 @@ class TacticalScreen(Screen):
         self._refresh()
 
     def action_fire(self) -> None:
+        """Open the aim cursor on the default target rather than firing outright — the
+        player confirms with Enter (action_continue), after walking the cursor or tabbing
+        to another enemy. Nothing is spent until then."""
         if self.state.is_over or self.state.aim_cursor is not None:
             return
-        shot = best_shot(self.state)
-        if shot is None:
+        if not begin_attack_aim(self.state):
             self.notify(
                 "You've already acted this turn." if self.state.acted else "No target in sight and range."
             )
             return
-        weapon, target = shot
-        player_attack(self.state, target, weapon, self.app.rng)
+        self._refresh()
+
+    def action_next_target(self) -> None:
+        if self.state.aim_cursor is None:
+            return
+        if not snap_aim_to_next_target(self.state):
+            self.notify("Nothing in reach to snap to.")
         self._refresh()
 
     def action_throw_grenade(self) -> None:
@@ -189,6 +224,16 @@ class TacticalScreen(Screen):
         else:
             throw_grenade(self.state, index)
 
+    def action_stabilize(self) -> None:
+        """Patch up a downed hire you're standing next to. Which body and whether it's
+        allowed are both stabilize_ally's call — this only reports the refusal."""
+        if self.state.is_over or self.state.aim_cursor is not None:
+            return
+        refused = stabilize_ally(self.state)
+        if refused is not None:
+            self.notify(refused)
+        self._refresh()
+
     def action_end_turn(self) -> None:
         if self.state.is_over or self.state.aim_cursor is not None:
             return
@@ -204,8 +249,13 @@ class TacticalScreen(Screen):
 
     def action_continue(self) -> None:
         if self.state.aim_cursor is not None:
-            if not confirm_grenade_aim(self.state):
-                self.notify("Out of range or blocked — pick another tile.")
+            aiming_attack = self.state.aim_kind is AimKind.ATTACK
+            if not confirm_aim(self.state, self.app.rng):
+                self.notify(
+                    "Nothing you can hit there — pick another target."
+                    if aiming_attack
+                    else "Out of range or blocked — pick another tile."
+                )
             self._refresh()
             return
         if self.state.is_over:
@@ -213,10 +263,10 @@ class TacticalScreen(Screen):
 
     def action_cancel_aim(self) -> None:
         if self.state.aim_cursor is not None:
-            cancel_grenade_aim(self.state)
+            cancel_aim(self.state)
             self._refresh()
 
-    def _map_text(self) -> Text:
+    def _map_text(self, cursor_legal: bool) -> Text:
         state = self.state
         grid = state.grid
         terrain = [[_terrain_glyph(grid, x, y) for x in range(grid.width)] for y in range(grid.height)]
@@ -230,31 +280,35 @@ class TacticalScreen(Screen):
             if grid.tiles[ey][ex] is Tile.FLOOR:
                 glyphs[ey][ex] = ">"
                 styles[(ey, ex)] = "bold green"
+        # A downed unit -- hire or hostile -- greys out rather than vanishing: they're
+        # still a body on the floor you can walk over (and, for a hire, patch up).
         for unit in state.units:
             ux, uy = unit.coord
             if unit.side is Side.PLAYER:
                 glyphs[uy][ux], styles[(uy, ux)] = "@", "bold cyan"
-            elif unit.health > 0:
-                glyphs[uy][ux], styles[(uy, ux)] = "E", "bold red"
-            else:
+            elif unit.is_down:
                 glyphs[uy][ux], styles[(uy, ux)] = "x", "grey37"
+            else:
+                glyphs[uy][ux], styles[(uy, ux)] = _SIDE_GLYPH[unit.side]
 
-        # While aiming a grenade: shade the 3x3 blast around the cursor and mark the
-        # cursor itself, in a color that says whether it's a legal_grenade_target right
-        # now (green) or not (red) -- so the player sees the throw's actual reach and
-        # radius before committing, not just where their cursor happens to be sitting.
+        # While aiming: mark the cursor in a color that says whether confirming there
+        # would actually resolve (green) or not (red) -- so the player sees a weapon's
+        # reach, or a throw's, before committing rather than after. A grenade also shades
+        # the 3x3 blast it would land, since that's area the cursor cell alone doesn't
+        # show; an attack hits exactly the unit under the cursor, so there's none.
         cursor: tuple[int, int] | None = None
         cursor_style = ""
         blast: frozenset[tuple[int, int]] = frozenset()
         if state.aim_cursor is not None:
             cx, cy = state.aim_cursor
             cursor = (cy, cx)
-            blast = frozenset(
-                (by, bx)
-                for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
-                for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
-            )
-            cursor_style = "bold green underline" if legal_grenade_target(state, state.aim_cursor) else "bold red underline"
+            if state.aim_kind is AimKind.GRENADE:
+                blast = frozenset(
+                    (by, bx)
+                    for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
+                    for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
+                )
+            cursor_style = "bold green underline" if cursor_legal else "bold red underline"
 
         text = Text()
         for y in range(grid.height):
@@ -274,27 +328,52 @@ class TacticalScreen(Screen):
 
     def _refresh(self) -> None:
         state = self.state
+        # Resolve what the cursor is pointing at once: the map colours the cursor by it
+        # and the Attack tile names it, and each answer costs a line-of-sight pass.
+        aiming_attack = state.aim_kind is AimKind.ATTACK
+        aim_target = enemy_at(state, state.aim_cursor) if aiming_attack else None
+        aim_weapon = None if aim_target is None else weapon_for_target(state, aim_target)
+        cursor_legal = (
+            aim_weapon is not None
+            if aiming_attack
+            else state.aim_cursor is not None and aim_is_legal(state, state.aim_cursor)
+        )
+
         self.query_one(CharacterSheet).refresh()
-        self.query_one("#tac_map", Static).update(self._map_text())
+        self.query_one("#tac_map", Static).update(self._map_text(cursor_legal))
         self.query_one("#tac_log", Static).update(Text("\n".join(state.log[-TACTICAL_LOG_LINES:])))
 
         status = self.query_one("#tac_status", Horizontal)
         if state.is_over:
             status.display = False
+            aftermath = "  ".join(
+                _CREW_FATE_TEXT[fate].format(name=name) for name, fate in state.crew_aftermath or []
+            )
             self.query_one("#tac_end", Static).update(
-                f"{_TAC_END_TEXT[state.outcome]}  —  press Enter to continue."
+                f"{_TAC_END_TEXT[state.outcome]}  {aftermath}  —  press Enter to continue."
             )
             return
         status.display = True
 
         aiming = state.aim_cursor is not None
+        verb = "fire" if aiming_attack else "throw"
         self.query_one("#tac_end", Static).update(
-            "Aiming — arrows move the target, Enter to throw, Esc to cancel." if aiming else ""
+            f"Aiming — arrows move the target, Tab for the next one, Enter to {verb}, Esc to cancel."
+            if aiming
+            else ""
         )
 
         on_exit = state.player.coord in state.exits
         move_detail = "aiming target" if aiming else f"{state.moves_left}/{state.player.speed} left"
-        attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
+        if aiming_attack:
+            # Name the weapon that would fire and who it's pointed at: the weapon is
+            # picked for you (weapon_for_target), so the readout is where the player
+            # finds out a step back has swapped their knife for the gun.
+            attack_detail = (
+                f"{aim_weapon.name} → {aim_target.name}" if aim_weapon is not None else "no shot there"
+            )
+        else:
+            attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
         grenades = available_grenades(state)
         if aiming:
             grenade_detail = "aiming — enter/esc"
@@ -308,3 +387,16 @@ class TacticalScreen(Screen):
             _boxed_text("Leave (l)", "on exit" if on_exit else "not here")
         )
         self.query_one("#tac_box_enemies", Static).update(_boxed_text("Enemies", f"{len(state.enemies)} left"))
+        # Crew tile only exists when you brought someone — a fight you walked into alone
+        # shouldn't carry an empty box saying so.
+        crew = [unit for unit in state.units if unit.is_ally]
+        crew_box = self.query_one("#tac_box_crew", Static)
+        crew_box.display = bool(crew)
+        if crew_box.display:
+            crew_box.update(_boxed_text("Crew (s to stabilize)", ", ".join(map(self._crew_line, crew))))
+
+    @staticmethod
+    def _crew_line(unit) -> str:
+        if not unit.is_down:
+            return f"{unit.name} {unit.health}/{unit.stats.health}"
+        return f"{unit.name} {'stable' if unit.stabilized else 'DOWN'}"
