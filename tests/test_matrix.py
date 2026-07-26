@@ -263,6 +263,29 @@ def test_deckless_runner_gets_no_program_actions():
     assert not any(a.kind is MatrixActionKind.PROGRAM for a in actions)
 
 
+# --- _attack / _analyze's next-round bonus ----------------------------------------
+
+
+def test_attack_critical_success_logs_a_clean_break_prefix():
+    c = _ready_char()
+    state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    attack = next(a for a in available_matrix_actions(c) if a.kind is MatrixActionKind.ATTACK)
+    take_matrix_turn(state, attack, AlwaysSix())
+    assert "Clean break" in state.log[0]
+
+
+def test_analyze_bonus_only_boosts_the_very_next_intrusion():
+    c = _ready_char()
+    state = start_matrix(c, (ICE_BY_ID["black_ice"],), Drop.NONE, random.Random(0))
+    _analyze(state, AlwaysSix())
+    assert state.next_attack_bonus == ANALYZE_BONUS
+    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    assert roll.advantage == ANALYZE_BONUS
+    assert state.next_attack_bonus == 0  # spent, not banked for a second attack
+    roll2, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    assert roll2.advantage == 0
+
+
 # --- Sleaze (Program.action_sleaze) ---------------------------------------------
 
 
@@ -743,6 +766,21 @@ def test_cpu_node_is_reachable_and_optional_after_data_clears():
     assert extract(run) is True
 
 
+def test_extract_refuses_while_a_guardian_is_up_even_with_data_already_cleared():
+    """can_extract alone isn't enough -- moving into CPU after DATA is cleared reopens
+    a live fight, and extract must still refuse until that guardian's down too."""
+    run = start_matrix_run(_ready_char(), _hand_built_network(with_cpu=True), Drop.NONE, random.Random(5))
+    move_to(run, "slave", random.Random(5))
+    move_to(run, "ic", random.Random(5))
+    _clear_node(run, random.Random(5))
+    move_to(run, "data", random.Random(5))
+    _clear_node(run, random.Random(5))
+    assert run.can_extract
+    move_to(run, "cpu", random.Random(5))
+    assert run.in_fight
+    assert extract(run) is False
+
+
 def test_clearing_a_cache_node_grants_a_sellable_item_and_never_gates_the_run():
     char = _ready_char()
     run = start_matrix_run(char, _hand_built_network(with_cache=True), Drop.NONE, random.Random(9))
@@ -854,6 +892,25 @@ def test_usable_analyze_program_is_none_without_the_program_installed():
     assert usable_analyze_program(run) is None
     assert analyze_node(run, "slave", random.Random(0)) is False
     assert "slave" not in run.revealed_node_ids
+
+
+def test_usable_analyze_program_is_none_once_charges_are_exhausted():
+    program = PROGRAMS_BY_ID["analyze"]
+    c = _char(deck_id="burner_deck", installed_programs=[program.id])
+    run = start_matrix_run(c, _hand_built_network(), Drop.NONE, random.Random(0))
+    run.analyze_uses[program.id] = 0
+    assert usable_analyze_program(run) is None
+
+
+def test_analyze_node_refuses_while_a_guardian_is_up():
+    program = PROGRAMS_BY_ID["analyze"]
+    c = _char(deck_id="burner_deck", installed_programs=[program.id])
+    run = start_matrix_run(c, _hand_built_network(), Drop.NONE, random.Random(0))
+    move_to(run, "slave", random.Random(0))
+    move_to(run, "ic", random.Random(0))
+    assert run.in_fight
+    assert analyze_node(run, "data", random.Random(0)) is False
+    assert "data" not in run.revealed_node_ids
 
 
 def test_analyze_program_never_appears_as_an_in_fight_action():
