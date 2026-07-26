@@ -2,7 +2,7 @@
 security.py — not a Scene.
 
 First slice of "the player runs a corp instead of just a runner": the player
-takes over one of the 3 seeded Factions (CorpState.faction_id) rather than
+takes over one of the 4 seeded Factions (CorpState.faction_id) rather than
 founding a new one, via a plain menu pick (screens/corp_screen.py) — there's no
 in-fiction takeover mechanic yet, the same shortcut-before-the-real-gate
 precedent TestMenu already sets for jumping straight into a fight.

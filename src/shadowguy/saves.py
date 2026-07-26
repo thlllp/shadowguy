@@ -139,12 +139,14 @@ SAVE_SUFFIX = ".save"
 # combat.CombatState lost its own `player_stun` field entirely -- _stun_player
 # now reads/writes Character.stun directly, so it carries across fights and is
 # only cleared by Character.mark_rested (a full clear, unlike fatigue's halving).
-# v42 added the crew's own casualties: Character gained `dead_runners` and
-# `arrested_runners` (a pre-v42 pickled Character has neither), written by
-# tactical.resolve_downed_crew when a hire who went down doesn't walk away from the
-# fight, and read through Character.runner_available -- which is now what decides
-# whether a runner appears at a bar or takes a rival's daily turn at all.
-SAVE_VERSION = 42
+# v42 gated recruiting a RivalRunner on having met them: Character gained
+# `known_runners` (a pre-v42 pickled Character lacks it), granted by
+# shop_screens.BarScreen when the player runs into that runner drinking at a bar.
+# v43 made a run's independent-runner roster random: ShadowguyApp gained `runners`
+# (the guaranteed RIVAL_RUNNERS plus that run's random pick from the new
+# runners.RUNNER_POOL, picked once at game start by runners.select_active_runners) --
+# a pre-v43 save lacks the key entirely.
+SAVE_VERSION = 43
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
@@ -154,6 +156,7 @@ STATE_KEYS = frozenset(
         "corp_map",
         "character",
         "fixers",
+        "runners",
         "location_gigs",
         "rival_actions",
         "rival_runner_states",

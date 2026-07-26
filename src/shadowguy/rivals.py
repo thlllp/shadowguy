@@ -55,7 +55,7 @@ from shadowguy.character import Character
 from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent, log_faction_event
 from shadowguy.corpmap import CorpMap, LocationKind, claim_territory, expansion_candidates
 from shadowguy.factions import FACTIONS
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
 
 if TYPE_CHECKING:
     from shadowguy.fixer import Fixer, JobOffer
@@ -244,6 +244,7 @@ def resolve_rival_day(
     fixers: list["Fixer"] | None = None,
     rival_researched: dict[str, set[str]] | None = None,
     faction_events: dict[str, list[FactionEvent]] | None = None,
+    runners: list[RivalRunner] | None = None,
 ) -> list[RivalAction]:
     """Every Faction gets a shot at expanding into bordering neutral ground. A
     RivalRunner acts only while independent — excluded the moment they're on the
@@ -278,11 +279,19 @@ def resolve_rival_day(
     faction_events is the caller's persistent faction_id -> [FactionEvent] blog
     log (ShadowguyApp.faction_events in production), appended to via
     corp_turn.log_faction_event whenever a faction claims territory or gains a
-    technology here. Omitted (the default) means no log is kept."""
+    technology here. Omitted (the default) means no log is kept.
+
+    runners is the run's actual independent-runner roster (ShadowguyApp.runners
+    in production: the guaranteed RIVAL_RUNNERS plus that run's random pick from
+    runners.RUNNER_POOL, see runners.select_active_runners). Defaults to the bare
+    RIVAL_RUNNERS three, which is fine for callers (mostly tests) that don't care
+    about the extras."""
     if rival_runner_states is None:
         rival_runner_states = {}
     if fixers is None:
         fixers = []
+    if runners is None:
+        runners = RIVAL_RUNNERS
     if rival_researched is None:
         rival_researched = {}
     actions = []
@@ -317,6 +326,8 @@ def resolve_rival_day(
         # On your crew, dead, or in a cell: either way they aren't out working the city
         # today (Character.runner_available covers the last two).
         if character.on_crew(runner.id) or not character.runner_available(runner.id):
+    for runner in runners:
+        if character.on_crew(runner.id):
             continue
         state = rival_runner_states.get(runner.id)
         if state is None:

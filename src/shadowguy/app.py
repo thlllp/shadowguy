@@ -19,7 +19,7 @@ from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN
 from shadowguy.rivals import RivalAction, RunnerActivity, RunnerState, resolve_rival_day
-from shadowguy.runners import RUNNERS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.corp_screen import CorpMainMenu
@@ -42,6 +42,7 @@ class ShadowguyApp(App):
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
+        self.runners = select_active_runners(self.rng)
         day = self.character.day
         refresh_offers(self.fixers, day, self.corp_map, self.rng)
         refresh_security_offers(self.fixers, day, self.corp_map, self.rng)
@@ -86,7 +87,13 @@ class ShadowguyApp(App):
     def rest_cost(self) -> int:
         """What Rest would charge for lodging right now, wherever the runner is —
         also read by MainMenu/CorpScreen to preview it on the menu item. Free under
-        an active security contract here, same as an owned home (corpmap.lodging_cost)."""
+        an active security contract here, same as an owned home (corpmap.lodging_cost) —
+        and free outright for a corp-only game (self.corp_only): there's no runner
+        body paying for a flophouse, and CorpMapScreen's travel is a free reposition
+        for exactly that reason, so charging lodging by wherever '@' happens to sit
+        would just be a cost with no matching mechanic behind it."""
+        if self.corp_only:
+            return 0
         character = self.character
         here = self.corp_map.territories[character.location_id]
         active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
@@ -166,6 +173,7 @@ class ShadowguyApp(App):
             self.fixers,
             self.rival_researched,
             self.faction_events,
+            self.runners,
         )
         self.rival_actions += today_actions
         # Runners take jobs off the fixers' boards overnight (the offer stays
@@ -193,7 +201,7 @@ class ShadowguyApp(App):
                     f"{employee_plural(trained.category)} report for duty."
                 )
             sightings = resolve_surveillance_day(
-                self.character, self.corp_map, self.corp_state, self.rival_runner_states, day, self.rng
+                self.character, self.corp_map, self.corp_state, self.rival_runner_states, day, self.rng, self.runners
             )
             if sightings:
                 self.notify(f"Surveillance logged {len(sightings)} sighting(s) in your territory today.")
@@ -249,6 +257,7 @@ class ShadowguyApp(App):
             "corp_map": self.corp_map,
             "character": self.character,
             "fixers": self.fixers,
+            "runners": self.runners,
             "location_gigs": self.location_gigs,
             "rival_actions": self.rival_actions,
             "rival_runner_states": self.rival_runner_states,
@@ -264,6 +273,7 @@ class ShadowguyApp(App):
         character, fixers = state["character"], state["fixers"]
         location_gigs = state["location_gigs"]
         self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
+        self.runners = state["runners"]
         self.location_gigs = location_gigs
         self.rival_actions = state["rival_actions"]
         self.rival_runner_states = state["rival_runner_states"]

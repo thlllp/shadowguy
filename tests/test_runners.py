@@ -1,21 +1,31 @@
-"""Tests for runners.py: Leadership-scaled recruiting terms.
+"""Tests for runners.py: Leadership-scaled recruiting terms, and the per-run
+random pick of independent runners.
 
 Leadership is the skill that governs how easy runners are to recruit (issue #33 — it
 replaced the dead `seduction` skill). recruit_wage/recruit_cut bend a runner's listed
 daily_cost/job_cut by the recruiter's skill_value("leadership"), mirroring how
 shops._standing_discount bends prices."""
 
+import random
+
+import pytest
+
 from shadowguy.character import Character
 from shadowguy.runners import (
     LEADERSHIP_BASE,
     LEADERSHIP_TERMS_CAP,
+    RANDOM_RUNNER_COUNT,
     RIVAL_RUNNERS,
+    RUNNER_POOL,
+    RUNNERS_BY_ID,
     recruit_cut,
     recruit_wage,
+    select_active_runners,
 )
 from shadowguy.skills import skill_value
 
 RUNNER = RIVAL_RUNNERS[0]  # Specter: daily_cost 60, job_cut 0.25
+SEEDS = range(150)
 
 
 def test_terms_at_base_are_the_listed_values():
@@ -66,3 +76,33 @@ def test_wages_scale_when_charged_on_a_crew():
         c.hire_indefinite(RUNNER.id)
         c.pay_crew_wages()
     assert strong.cash > weak.cash
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_select_active_runners_is_guaranteed_three_plus_a_random_six(seed):
+    """Every run's roster is the fixed three plus RANDOM_RUNNER_COUNT distinct
+    extras drawn from RUNNER_POOL -- no duplicates, no repeats of a guaranteed
+    runner, and no id select_active_runners could hand back that RUNNERS_BY_ID
+    can't resolve."""
+    roster = select_active_runners(random.Random(seed))
+    assert len(roster) == len(RIVAL_RUNNERS) + RANDOM_RUNNER_COUNT
+    assert len(roster) == len(set(r.id for r in roster))
+    assert all(r in roster for r in RIVAL_RUNNERS)
+    extras = [r for r in roster if r not in RIVAL_RUNNERS]
+    assert len(extras) == RANDOM_RUNNER_COUNT
+    assert all(r in RUNNER_POOL for r in extras)
+    assert all(r.id in RUNNERS_BY_ID for r in roster)
+
+
+def test_select_active_runners_varies_between_seeds():
+    """The whole point: which six extras show up isn't the same every run."""
+    first = {r.id for r in select_active_runners(random.Random(1))}
+    second = {r.id for r in select_active_runners(random.Random(2))}
+    assert first != second
+
+
+def test_runners_by_id_spans_the_whole_pool_not_just_one_runs_roster():
+    """A saved CrewHire/JobOffer.taken_by id must resolve regardless of whether
+    the run that made it happened to roll that pool runner in."""
+    assert all(r.id in RUNNERS_BY_ID for r in RIVAL_RUNNERS)
+    assert all(r.id in RUNNERS_BY_ID for r in RUNNER_POOL)
