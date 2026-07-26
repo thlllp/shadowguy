@@ -190,7 +190,7 @@ TitleMenu {
 
 class ModeSelectScreen(BackScreen):
     """New Game's first choice: build a Runner the usual way, or set up as a
-    Corp instead by picking one of the 3 seeded Factions -- Corp mode has no
+    Corp instead by picking one of the 4 seeded Factions -- Corp mode has no
     runner to build, so that path skips CharacterCreationScreen entirely and
     drops straight into CorpMainMenu."""
 

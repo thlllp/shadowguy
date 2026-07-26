@@ -74,9 +74,9 @@ A text-based cyberpunk roguelite TUI. Python 3.14, managed with `uv`, built on T
 Two coupled game modes, not one game with a reskinned second mode:
 
 - **Runner mode** — RPG scale. One character, stats, scene-based missions, permadeath.
-- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists (`shadowguy/corp_turn.py`): take over one of the 3 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, train employees at your Academy, or upgrade your Research Facility's labs/efficiency). No corp-vs-corp conflict yet — see Corp mode turn loop in `DESIGN.md`.
+- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists (`shadowguy/corp_turn.py`): take over one of the 4 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, train employees at your Academy, or upgrade your Research Facility's labs/efficiency), and spend research points on `corp_turn.TECHNOLOGIES`. No corp-vs-corp conflict yet — see Corp mode turn loop in `DESIGN.md`.
 
-Switching between runner and corp is optional and meant to be difficult — neither mode is a straight upgrade over the other. **A run can also start as either one** (New Game → Runner / Corp): a Corp game never builds a runner at all (`ShadowguyApp.corp_only`), so it isn't "runner mode plus a corp screen" — it's the 4X half on its own.
+Switching between runner and corp is optional and meant to be difficult — a runner earns a corp by buying a controlling stake at that corp's own HQ (`CorpHQScreen`, gated on rep + standing + 15,000eb), not by picking one off a menu. Neither mode is a straight upgrade over the other. **A run can also start as either one** (New Game → Runner / Corp): a Corp game never builds a runner at all (`ShadowguyApp.corp_only`), so it isn't "runner mode plus a corp screen" — it's the 4X half on its own.
 
 ### Run/game-over rules
 
@@ -102,8 +102,8 @@ Orientation only — each module's own section in `DESIGN.md` carries the detail
 
 ```
 src/shadowguy/
-  character.py   the run's whole mutable state: stats, health, humanity, skill ranks,
-                 experience, every standing, crew, inventory, accepted work
+  character.py   the run's whole mutable state: stats, health, stun, fatigue, humanity,
+                 skill ranks, experience, every standing, crew, inventory, accepted work
   archetypes.py  Enforcer/Hacker/Infiltrator creation presets
   checks.py      resolve_check() — the one place any check resolves
   skills.py      the 32-skill table, skill_value(), skill_for()
@@ -113,7 +113,7 @@ src/shadowguy/
   tactical.py    fight surface 2: grid (tcod FOV+A*); also generate_building for Burglary walks
   matrix.py      fight surface 3: ICE, node networks, integrity pool, cyberdeck programs
 
-  jobs.py        job generation + JobTiming + per-job legwork
+  jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
   fixer.py       the Fixer roster holding job and security offers
   runners.py     the hireable-runner roster
@@ -125,8 +125,9 @@ src/shadowguy/
 
   security.py    parallel resolution: multi-night security contracts
   encounters.py  parallel resolution: gang turf-entry toll-or-attack
-  rivals.py      parallel resolution: faction expansion + the NPC runners' daily
-                 activity turn (one of which takes a job off a fixer's board), once a day
+  rivals.py      parallel resolution: faction expansion + a flavor-only rival research
+                 roll + the NPC runners' daily activity turn (one of which takes a job
+                 off a fixer's board), once a day
   surveillance.py parallel resolution: detection rolls in the player corp's territory
   corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action
 
@@ -136,18 +137,22 @@ src/shadowguy/
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
 
   screens/
+    __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
+                         BackScreen, PanelNav, the tactical/burglary map glyph helpers
     creation_screen.py   CharacterCreationScreen
     main_menu.py         MainMenu
     menu_screens.py      TitleMenu (entry point) + ModeSelect + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen
-    tactical_screen.py   TacticalScreen
+    tactical_screen.py   TacticalScreen + GrenadePickScreen
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePick + BurglaryWalk
     corp_map_screen.py   CorpMapScreen + GangTollScreen
     corp_screen.py       CorpScreen + CorpMainMenu (subclasses it) + ResearchTreeScreen
-    shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate + Safehouse
-    info_screens.py      Contacts + Inventory + Cyberdeck + Skills
+    shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
+                         Safehouse + Junkyard + GangDen
+    info_screens.py      Phone (home grid) + its apps: Contacts + Web + CorpWebsite +
+                         AlarmClock + Messages; plus Inventory + Cyberdeck + Skills
 ```
 
 The four **parallel resolution** modules are a deliberate category: day-advance pipelines that resolve outside the `Scene` model entirely, because nothing in `scene.py` is day-aware.
@@ -195,14 +200,19 @@ Leaf modules, and why each has to stay one:
 | 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
 | 37 | `Character.smuggling_job` (gang delivery jobs) |
 | 38 | `rival_runner_states` **replacing** `rival_runner_locations`, `JobOffer.taken_by` |
-| 42 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
+| 39 | `Character.alarm_hour` (the Phone's Alarm Clock) |
+| 40 | `rival_researched`, `faction_events` (every corp's public website) |
+| 41 | `Character.stun` **replacing** `CombatState.player_stun` (stun now carries between fights) |
+| 42 | `Character.known_runners` (recruiting gated on having met them) |
+| 43 | `ShadowguyApp.runners` (a run's random independent-runner roster) |
+| 44 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
 
 ### Verifying changes
 
-A real test suite exists (`tests/`, 19 files, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `master`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
+A real test suite exists (`tests/`, 22 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `master`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap.py` widens to `range(200)`, `test_burglary_gen.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
-- **Forcing an exact `CheckResult` branch** — `tests/test_checks.py`'s pattern: a `random.Random` subclass whose `randint` always returns a fixed face (`AlwaysSix`/`AlwaysOne`) or a call-counted mix, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Reused in `tests/test_security.py`.
+- **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
 - Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky.
 
