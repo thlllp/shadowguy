@@ -87,7 +87,13 @@ class ShadowguyApp(App):
     def rest_cost(self) -> int:
         """What Rest would charge for lodging right now, wherever the runner is —
         also read by MainMenu/CorpScreen to preview it on the menu item. Free under
-        an active security contract here, same as an owned home (corpmap.lodging_cost)."""
+        an active security contract here, same as an owned home (corpmap.lodging_cost) —
+        and free outright for a corp-only game (self.corp_only): there's no runner
+        body paying for a flophouse, and CorpMapScreen's travel is a free reposition
+        for exactly that reason, so charging lodging by wherever '@' happens to sit
+        would just be a cost with no matching mechanic behind it."""
+        if self.corp_only:
+            return 0
         character = self.character
         here = self.corp_map.territories[character.location_id]
         active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
