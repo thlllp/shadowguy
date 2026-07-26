@@ -146,7 +146,12 @@ SAVE_SUFFIX = ".save"
 # (the guaranteed RIVAL_RUNNERS plus that run's random pick from the new
 # runners.RUNNER_POOL, picked once at game start by runners.select_active_runners) --
 # a pre-v43 save lacks the key entirely.
-SAVE_VERSION = 43
+# v44 added the crew's own casualties: Character gained `dead_runners` and
+# `arrested_runners` (a pre-v44 pickled Character has neither), written by
+# tactical.resolve_downed_crew when a hire who went down doesn't walk away from the
+# fight, and read through Character.runner_available -- which now joins known_runners
+# in deciding whether a runner appears at a bar or takes a rival's daily turn at all.
+SAVE_VERSION = 44
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

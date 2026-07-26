@@ -53,6 +53,7 @@ from shadowguy.checks import (
     resolve_rng,
 )
 from shadowguy.cybernetics import has_smartlink, installed_defense
+from shadowguy.runners import RivalRunner
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -262,6 +263,50 @@ def roll_enemies(tier: int, rng: random.Random) -> tuple[Enemy, ...]:
     return tuple(ENEMIES_BY_ID[rng.choice(pool)] for _ in range(rng.randint(low, high)))
 
 
+# What a hired runner brings to a fight, by their runners.RivalRunner.archetype:
+# (health, damage, toughness, reach). A Solo is the one you hire to shoot people; the
+# Netrunner is along for the deck and bleeds if you make them fight; the Infiltrator
+# works up close. Reach matches the enemy guns' 6 rather than the player's
+# FIREARM_RANGE of 8 — a hire is backup, not a better version of you.
+#
+# First-slice numbers, deliberately NOT balance-simulated: the sim in DESIGN.md's
+# tactical Balance note assumes a lone runner, and an ally shifts every one of its
+# figures. Re-run it before treating these as tuned.
+_CREW_PROFILES: dict[str, tuple[int, int, int, int]] = {
+    "Solo": (14, 5, 3, 6),
+    "Infiltrator": (11, 4, 2, 1),
+    "Netrunner": (10, 3, 1, 6),
+}
+_CREW_DEFAULT_PROFILE = (10, 3, 1, 1)
+# Their rating (runners.RivalRunner.rating, 7-8 today) is the attack pool directly, and
+# half of it over this base is what an enemy's attack roll has to beat.
+CREW_DEFENSE_BASE = 8
+
+
+def crew_stats(runner: RivalRunner) -> Enemy:
+    """The stat block a hired runner fights with — `runners.RivalRunner` in, combat
+    numbers out.
+
+    Returns an `Enemy` for a *friendly*, which reads oddly until you notice `Enemy` is
+    already "a combatant who isn't the player": six numbers with no gear, inventory or
+    skill sheet behind them, which is exactly what a hire is on the grid too. Building a
+    second identical dataclass would only mean resolving attacks twice, once per side —
+    the thing `resolve_hit` exists to prevent. `tactical.Unit.stats` is typed on this for
+    the same reason, and `Unit.side` is what says which way they're pointing.
+    """
+    health, damage, toughness, reach = _CREW_PROFILES.get(runner.archetype, _CREW_DEFAULT_PROFILE)
+    return Enemy(
+        id=runner.id,
+        name=runner.name,
+        health=health,
+        attack=runner.rating,
+        defense=CREW_DEFENSE_BASE + runner.rating // 2,
+        damage=damage,
+        toughness=toughness,
+        reach=reach,
+    )
+
+
 @dataclass
 class Fighter:
     """A live enemy in a fight: the Enemy is the template, this is the one bleeding."""
@@ -380,22 +425,36 @@ def equipped_weapons(character: Character) -> list[Item]:
     return weapons or [UNARMED]
 
 
+def consumables_with(character: Character, effects) -> list[tuple[int, Consumable]]:
+    """What the runner is carrying that does one of `effects`, as (index into
+    Character.consumables, consumable). The index is the currency every spend path here
+    and in tactical.py deals in — `Character.consumables` is a list of ids with
+    duplicates allowed, so position is the only handle on a particular one.
+
+    Public because both fight surfaces filter that list for their own reasons —
+    combat_consumables for grenades, tactical.healing_kits for stabilizing a downed
+    hire. One place that knows how the list is addressed, several questions asked of it.
+    """
+    return [
+        (index, consumable)
+        for index, consumable_id in enumerate(character.consumables)
+        if (consumable := CONSUMABLES_BY_ID[consumable_id]).effect in effects
+    ]
+
+
 def combat_consumables(character: Character) -> list[tuple[int, Consumable]]:
     """The grenades, and only the grenades — see shops.COMBAT_ONLY_EFFECTS.
 
     Notably not health kits: healing mid-fight would make a fight the cheapest place
     to spend one, and health does not come back fast enough in this game for that to
-    be anything but a grind.
+    be anything but a grind. (Stabilizing a *downed hire* with one is a different
+    action, not healing — see tactical.stabilize_ally.)
 
     Public (not underscore-private) because tactical.py's grenade-throw action reuses
     it too — same reason resolve_hit is public: one list of "what's a grenade", two
     fight surfaces.
     """
-    return [
-        (index, CONSUMABLES_BY_ID[consumable_id])
-        for index, consumable_id in enumerate(character.consumables)
-        if CONSUMABLES_BY_ID[consumable_id].effect in COMBAT_ONLY_EFFECTS
-    ]
+    return consumables_with(character, COMBAT_ONLY_EFFECTS)
 
 
 def available_actions(
@@ -443,6 +502,29 @@ def available_actions(
     )
     actions.append(Action(kind=ActionKind.FLEE, label="Break and run (Dodge)", skill="dodge"))
     return actions
+
+
+# How an attack reads in the log, keyed on the weapon's skill: (what a miss is, what a
+# hit is). Flavor only — nothing resolves off this — but it's shared by both fight
+# surfaces so a katana never "fires" on the grid and a pistol never "swings" in the
+# abstract fight. Keyed on the skill rather than the item id so a new weapon reads right
+# the day it's added to the catalog, and unknown skills fall back to the generic pair
+# rather than raising: a missing verb should not be able to break a fight mid-round.
+_ATTACK_VERBS: dict[str, tuple[str, str]] = {
+    "firearms": ("fire on", "shoot"),
+    "long_blade": ("swing at", "slash"),
+    "short_blade": ("stab at", "stab"),
+    "blunt": ("swing at", "smash"),
+    "grapple": ("grab at", "wrestle"),
+    "misc": ("aim at", "zap"),  # the tasers, today
+}
+_DEFAULT_ATTACK_VERBS = ("swing at", "hit")
+
+
+def attack_verbs(weapon: Item) -> tuple[str, str]:
+    """This weapon's (miss, hit) verbs — "You {miss} them and miss." / "You {hit} them
+    for N." See _ATTACK_VERBS."""
+    return _ATTACK_VERBS.get(weapon.skill, _DEFAULT_ATTACK_VERBS)
 
 
 def _weapon_label(weapon: Item) -> str:
@@ -577,7 +659,7 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
         target.enemy.toughness,
     )
     if not roll.result.passed:
-        state.log.append(f"You swing at {target.enemy.name} and miss.")
+        state.log.append(f"You {attack_verbs(weapon)[0]} {target.enemy.name} and miss.")
         return
 
     if weapon.stun_damage:

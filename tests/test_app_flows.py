@@ -13,8 +13,8 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
-from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST
-from shadowguy.combat import ENEMY_TIERS, ActionKind
+from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
+from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS, ActionKind
 from shadowguy.corpmap import (
     Location,
     LocationKind,
@@ -51,7 +51,15 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.tactical_screen import TacticalScreen
-from shadowguy.tactical import TacticalOutcome
+from shadowguy.tactical import (
+    AimKind,
+    CrewFate,
+    Side,
+    TacticalOutcome,
+    Unit,
+    parse_grid,
+    step_neighbors,
+)
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
@@ -85,7 +93,7 @@ from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.widgets import Collapsible, ListView, Static
 
-from helpers import ForcedChance
+from helpers import ForcedChance, crew_stats_for
 
 
 def _stage_gang_turf(app, standing: int) -> str:
@@ -520,6 +528,166 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def _open_strip(state, *, player, units):
+    """Swap a live tactical fight onto a hand-placed board: an open 12x3 strip with the
+    given units at the given coords. Both the generated map and the rolled enemy count are
+    RNG-driven, so a test that needs a specific sightline builds its own."""
+    state.grid = parse_grid(["." * 12 for _ in range(3)])
+    state.units = [state.player, *units]
+    state.player.coord = player
+    state.exits = frozenset({(0, 2)})  # the generated map's exits are off this strip
+
+
+def test_tactical_attack_aims_first_and_tab_cycles_targets_before_enter_fires():
+    """Pressing f opens the aim cursor instead of firing outright; Tab walks it between
+    the enemies in reach (the Screen's own tab->focus_next binding must not eat the key),
+    Esc backs out spending nothing, and Enter resolves against whoever is under it."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            tac_screen = app.screen
+            state = tac_screen.state
+
+            # Two enemies in a straight line the player can see, at different ranges,
+            # and a gun to reach them with.
+            thug = ENEMIES_BY_ID["thug"]
+            near = Unit(name="near thug", side=Side.ENEMY, coord=(2, 0), speed=4, stats=thug, health=thug.health)
+            far = Unit(name="far thug", side=Side.ENEMY, coord=(5, 0), speed=4, stats=thug, health=thug.health)
+            _open_strip(state, player=(0, 0), units=[near, far])
+            app.character.inventory.append(InventoryItem(item_id="pipe_pistol", equipped=True))
+
+            await pilot.press("f")
+            await pilot.pause()
+            assert state.aim_kind is AimKind.ATTACK
+            assert state.aim_cursor == near.coord  # opens on the default target
+            assert not state.acted  # aiming spends nothing
+
+            await pilot.press("tab")
+            await pilot.pause()
+            assert state.aim_cursor == far.coord
+            assert f"→ {far.name}" in tac_screen.query_one("#tac_box_attack").content.plain
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert state.aim_cursor is None and state.aim_kind is None
+            assert not state.acted
+
+            # Aim again and fire: the shot resolves against the aimed enemy.
+            await pilot.press("f")
+            await pilot.press("tab")
+            await pilot.pause()
+            assert state.aim_cursor == far.coord
+            await pilot.press("enter")
+            await pilot.pause()
+            assert state.acted
+            assert state.aim_cursor is None
+            assert state.log  # hit or miss, the shot was taken
+
+    run(body())
+
+
+def test_tactical_fight_with_a_hired_runner_renders_them_and_lets_them_fight():
+    """A crew hire reaches the grid as a real unit: rendered as 'A', listed in the Crew
+    HUD tile with their health, never targetable by the player's own aim cursor, and
+    taking their own attack on end-turn."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            stage = app.screen.stage
+            app.pop_screen()
+            await pilot.pause()
+
+            solo = crew_stats_for()
+            app.push_screen(TacticalScreen(stage, allies=[solo]))
+            await pilot.pause()
+            tac_screen = app.screen
+            state = tac_screen.state
+
+            ally = state.allies[0]
+            assert ally.name == solo.name
+            assert f"{solo.name} {ally.health}/{solo.health}" in tac_screen.query_one("#tac_box_crew").content.plain
+            assert tac_screen.query_one("#tac_box_crew").display is True
+            assert "A" in tac_screen.query_one("#tac_map").content.plain
+
+            # The player's own targeting never offers them (no friendly fire).
+            tac_screen.action_fire()
+            await pilot.pause()
+            if state.aim_cursor is not None:
+                assert state.aim_cursor != ally.coord
+
+            # End the turn on a hand-placed board (the generated one's corridors decide
+            # whether anyone has a shot): the hire is a Solo with reach 6, standing six
+            # tiles off an enemy in the open, so their phase resolves into an attack.
+            enemy = state.enemies[0]
+            ally.coord, enemy.coord = (0, 1), (6, 1)
+            _open_strip(state, player=(0, 0), units=[ally, enemy])
+            await pilot.press("e")
+            await pilot.pause()
+            assert any(solo.name in line for line in state.log)
+
+    run(body())
+
+
+def test_tactical_stabilize_key_patches_a_downed_hire_and_the_fight_reports_their_fate():
+    """'s' spends a carried health kit on a downed hire you're standing next to, the Crew
+    tile shows them stable rather than DOWN, and the end-of-fight line says what became
+    of them (a stabilized hire on a won fight always walks away)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            stage = app.screen.stage
+            app.pop_screen()
+            await pilot.pause()
+
+            solo = crew_stats_for()
+            app.character.consumables.append("health_kit")
+            app.character.hire_for_job(solo.id, "job_1")
+            app.push_screen(TacticalScreen(stage, allies=[solo]))
+            await pilot.pause()
+            tac_screen = app.screen
+            state = tac_screen.state
+
+            ally = state.allies[0]
+            ally.health = 0  # they went down
+            ally.coord = next(iter(step_neighbors(state.grid, state.player.coord)))
+            await pilot.press("s")
+            await pilot.pause()
+            assert ally.stabilized
+            assert app.character.consumables == []  # kit spent
+            assert "stable" in tac_screen.query_one("#tac_box_crew").content.plain
+
+            # Clear the board and end the turn: the fight ending is what settles the
+            # hire's fate (the engine's job), and the end line reports it.
+            for enemy in state.enemies:
+                enemy.health = 0
+            await pilot.press("e")
+            await pilot.pause()
+            assert state.outcome is TacticalOutcome.VICTORY
+            assert state.crew_aftermath == [(solo.name, CrewFate.RECOVERED)]
+            assert "back on the street" in str(tac_screen.query_one("#tac_end").content)
+            assert app.character.on_crew(solo.id)  # a recovered hire stays hired
 
     run(body())
 

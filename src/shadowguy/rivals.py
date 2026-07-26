@@ -323,7 +323,9 @@ def resolve_rival_day(
                     FactionEvent(kind="technology", day=day, technology_id=technology.id),
                 )
     for runner in runners:
-        if character.on_crew(runner.id):
+        # On your crew, dead, or in a cell: either way they aren't out working the city
+        # today (Character.runner_available covers the last two).
+        if character.on_crew(runner.id) or not character.runner_available(runner.id):
             continue
         state = rival_runner_states.get(runner.id)
         if state is None:

@@ -203,6 +203,9 @@ Leaf modules, and why each has to stay one:
 | 39 | `Character.alarm_hour` (the Phone's Alarm Clock) |
 | 40 | `rival_researched`, `faction_events` (every corp's public website) |
 | 41 | `Character.stun` **replacing** `CombatState.player_stun` (stun now carries between fights) |
+| 42 | `Character.known_runners` (recruiting gated on having met them) |
+| 43 | `ShadowguyApp.runners` (a run's random independent-runner roster) |
+| 44 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
 
 ### Verifying changes
 

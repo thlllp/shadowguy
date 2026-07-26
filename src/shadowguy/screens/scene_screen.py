@@ -5,7 +5,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.checks import CheckResult
-from shadowguy.combat import CombatOutcome, drop_for_result
+from shadowguy.combat import CombatOutcome, crew_stats, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.matrix import MatrixOutcome
@@ -105,7 +105,18 @@ class SceneScreen(Screen):
 
     async def _show_tactical(self, stage) -> None:
         self.stage_id = stage.id
-        self.app.push_screen(TacticalScreen(stage.tactical), self._on_tactical_end)
+        self.app.push_screen(TacticalScreen(stage.tactical, allies=self._crew_units()), self._on_tactical_end)
+
+    def _crew_units(self) -> list:
+        """The hired runners who fight this stage beside the player, as stat blocks. Read
+        off the Character at the moment the fight opens rather than baked into the stage
+        at generation, so hiring someone between accepting a job and walking it counts.
+        Only jobs have a crew (a gig is solo work), and only the grid fields them —
+        combat.py's abstract fight has no positions to put a second body in."""
+        if self.scene.kind is not SceneKind.JOB:
+            return []
+        character = self.app.character
+        return [crew_stats(RUNNERS_BY_ID[hire.runner_id]) for hire in character.crew_working(self.scene.id)]
 
     async def _on_tactical_end(self, result: TacticalOutcome) -> None:
         character = self.app.character

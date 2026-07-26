@@ -172,6 +172,14 @@ class Character:
     # Runner ids (runners.RUNNERS_BY_ID) the runner has hired at a bar. Assigning them to
     # a job's roles (with the one-remote-support cap) is a later increment.
     crew: list[CrewHire] = field(default_factory=list)
+    # Runners who went down on a job and didn't walk away from it (see
+    # tactical.resolve_downed_crew). Killed is permanent for the run — the roster is
+    # three people, and a hire dying because you left them bleeding should mean
+    # something. Arrested holds the day they're back on the street, so they reappear at
+    # bars on their own; both are read through runner_available(), the one place a
+    # roster listing or a rival's daily turn asks whether a runner is around at all.
+    dead_runners: set[str] = field(default_factory=set)
+    arrested_runners: dict[str, int] = field(default_factory=dict)  # runner id -> day they're free
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Accepted multi-night guard contracts (security.py) — a standing engagement, not
     # a Scene: resolved one night at a time by MainMenu's end-day handler while
@@ -301,6 +309,40 @@ class Character:
 
     def crew_for_job(self, job_id: str) -> list[CrewHire]:
         return [hire for hire in self.crew if hire.job_id == job_id]
+
+    def discharge_crew(self, runner_id: str) -> None:
+        """Take a runner off the crew, whatever their terms were."""
+        self.crew = [hire for hire in self.crew if hire.runner_id != runner_id]
+
+    def record_runner_killed(self, runner_id: str) -> None:
+        """They died on the job: off the crew and off the roster for the rest of the run."""
+        self.discharge_crew(runner_id)
+        self.dead_runners.add(runner_id)
+
+    def record_runner_arrested(self, runner_id: str, days: int) -> None:
+        """Picked up at the scene: off the crew, and off the roster until `days` from now."""
+        self.discharge_crew(runner_id)
+        self.arrested_runners[runner_id] = self.day + days
+
+    def runner_available(self, runner_id: str) -> bool:
+        """Whether this runner is on the street at all today — not dead, not still held.
+        A released runner is dropped from the ledger here rather than on a day tick, so
+        nothing has to remember to sweep it."""
+        if runner_id in self.dead_runners:
+            return False
+        free_on = self.arrested_runners.get(runner_id)
+        if free_on is None:
+            return True
+        if self.day < free_on:
+            return False
+        del self.arrested_runners[runner_id]
+        return True
+
+    def crew_working(self, job_id: str) -> list[CrewHire]:
+        """Who actually walks into this job with you: the hires signed for it, plus every
+        indefinite hire (they're on retainer — they come to all of it). Wider than
+        crew_for_job, which is specifically "who takes a cut of *this* payout"."""
+        return [hire for hire in self.crew if hire.job_id in (None, job_id)]
 
     def pay_crew_wages(self) -> list[str]:
         """Charge each indefinitely-kept crew member their daily wage on a day turnover.
