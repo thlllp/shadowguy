@@ -95,6 +95,16 @@ class CorpMapScreen(BackScreen):
         here = self.app.corp_map.territories[character.location_id]
         if self.selected_id not in here.connections:
             return
+        # A corp-only game never built a runner (ShadowguyApp.corp_only) -- there's no
+        # body physically crossing the map, so repositioning costs no time and can't
+        # run into a gang. Every corp action (expand/train/research/...) already reads
+        # off CorpState, never character.location_id, so this only moves the '@'
+        # marker and which territory's info panel is shown (lodging is waived
+        # entirely for corp_only -- see app.rest_cost).
+        if self.app.corp_only:
+            character.location_id = self.selected_id
+            self._refresh()
+            return
         # Spend before the move lands: a day boundary crossed mid-hop resolves
         # tonight's lodging/security at the origin, not the destination.
         self.app.spend_time(_travel_hours(character))

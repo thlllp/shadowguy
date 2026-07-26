@@ -691,6 +691,58 @@ def test_travel_never_refused_regardless_of_hours_already_spent():
     run(body())
 
 
+def test_corp_only_travel_is_free_and_instant():
+    """A corp-only game never builds a runner (ShadowguyApp.corp_only): every corp
+    action already reads off CorpState, never character.location_id, so repositioning
+    the map cursor shouldn't cost the time or gang-encounter risk a runner's real
+    travel does."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+
+            start_id = app.character.location_id
+            neighbor_id = app.corp_map.territories[start_id].connections[0]
+            screen = app.screen
+            screen.selected_id = neighbor_id
+            screen._refresh()
+            await pilot.pause()
+
+            elapsed_before = app.character.elapsed_hours
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.character.location_id == neighbor_id
+            assert app.character.elapsed_hours == elapsed_before  # not a single hour spent
+            assert isinstance(app.screen, CorpMapScreen)  # no gang encounter pushed a fight
+
+    run(body())
+
+
+def test_corp_only_rest_waives_lodging_regardless_of_location():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            # Park on the priciest territory on the map to prove this isn't just
+            # "this particular spot happens to be free."
+            priciest = max(app.corp_map.territories.values(), key=lodging_cost)
+            assert lodging_cost(priciest) > 0
+            app.character.location_id = priciest.id
+
+            assert app.rest_cost() == 0
+            cash_before = app.character.cash
+            app.rest()
+            assert app.character.cash == cash_before
+
+    run(body())
+
+    run(body())
+
+
 def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
     """spend_time's per-boundary loop only ever fires once with today's in-game costs
     (nothing spends >=2*HOURS_PER_DAY in one call) -- this proves the loop itself
@@ -1589,6 +1641,23 @@ def _boot_runner_game(pilot, app):
         await pilot.click("#begin")
         await pilot.pause()
         assert isinstance(app.screen, MainMenu)
+
+    return go()
+
+
+def _boot_corp_game(pilot, app):
+    """Title -> Corp -> pick a faction, the shortest real path into a playable
+    corp-only game (no runner ever built)."""
+
+    async def go():
+        await _settle(pilot)
+        await pilot.click("#new_game")
+        await pilot.pause()
+        await pilot.click("#corp")
+        await pilot.pause()
+        await pilot.click(f"#faction_{FACTIONS[0].id}")
+        await pilot.pause()
+        assert isinstance(app.screen, CorpMainMenu)
 
     return go()
 
