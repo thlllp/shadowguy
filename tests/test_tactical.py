@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from shadowguy.buildings import generate_building
+from shadowguy.buildings import BuildingKind, Lock, generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
 from shadowguy.combat import ENEMIES_BY_ID, attack_verbs, player_defense
@@ -18,6 +18,7 @@ from shadowguy.tactical import (
     GRENADE_RADIUS,
     GRENADE_RANGE,
     HALF_COVER,
+    LOCK_FAILURE_ALARM_CHANCE,
     MELEE_RANGE,
     TAC_MAP_HEIGHT,
     TAC_MAP_WIDTH,
@@ -29,6 +30,7 @@ from shadowguy.tactical import (
     Unit,
     aim_is_legal,
     attack_targets,
+    attempt_lock,
     available_grenades,
     begin_attack_aim,
     begin_grenade_aim,
@@ -51,6 +53,7 @@ from shadowguy.tactical import (
     legal_attack_target,
     legal_grenade_target,
     legal_moves,
+    lock_at,
     move_aim_cursor,
     move_player,
     parse_grid,
@@ -1195,3 +1198,101 @@ def test_the_way_you_came_in_is_a_way_out():
     assert state.player.coord in state.exits
     assert leave(state)
     assert state.outcome is TacticalOutcome.ESCAPED
+
+
+# --- burglary: locked doors and cameras ---
+
+
+def test_a_camera_raises_the_alarm_without_any_guard_seeing_you():
+    """Building.cameras isn't a Unit -- it's not gated on being unalerted, and there's no
+    fighting or sneaking past one by knocking it out."""
+    building = generate_building(random.Random(1), entrance_count=2, kind=BuildingKind.OFFICE)
+    character = Character(name="t", inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)])
+    state = start_burglary(character, building, building.entrance_spawns[0], ENEMIES_BY_ID["thug"])
+    assert building.cameras  # OFFICE always carries at least one
+    for units in state.off_level_units.values():
+        for unit in units:
+            unit.health = 0
+    for unit in state.units:
+        if unit.is_enemy:
+            unit.health = 0
+    camera_level, camera_coord = building.cameras[0]
+    enter_level(state, camera_level, camera_coord)  # nose to nose with the camera
+    assert check_detection(state)
+    assert state.alarm
+    assert "camera" in state.log[-1].lower()
+
+
+def test_stepping_into_a_pickable_locked_door_opens_it_and_moves_you_through():
+    building, state = _burglary()
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.intelligence = 6  # comfortably clears a difficulty-9 lock (opposing pool 0)
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
+    moves = state.moves_left
+
+    assert lock_at(state, dest) is not None
+    assert move_player(state, dest, AlwaysSix())
+    assert state.player.coord == dest
+    assert lock_at(state, dest) is None
+    assert state.moves_left == moves - 1
+
+
+def test_a_failed_lock_pick_leaves_it_locked_and_still_costs_the_move():
+    building, state = _burglary()
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.intelligence = 0  # a difficulty-9 lock still has an opposing pool of 0,
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
+    moves = state.moves_left
+
+    # 0 successes either side is a plain FAILURE (not critical), so the alarm is only the
+    # ordinary chance -- keep the roll just above it to isolate "failed, no alarm" here.
+    assert move_player(state, dest, ForcedChance(LOCK_FAILURE_ALARM_CHANCE + 0.01))
+    assert state.player.coord != dest
+    assert lock_at(state, dest) is not None
+    assert state.moves_left == moves - 1
+    assert not state.alarm
+
+
+def test_a_failed_lock_pick_can_still_trip_the_alarm():
+    building, state = _burglary()
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.intelligence = 0
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
+
+    assert move_player(state, dest, ForcedChance(LOCK_FAILURE_ALARM_CHANCE - 0.01))
+    assert state.alarm
+
+
+def test_a_critical_failure_lock_pick_always_trips_the_alarm():
+    """A high enough difficulty against a 0-pool character is a guaranteed critical
+    failure (AlwaysSix forces every opposing die to hit too) -- and that always goes
+    loud, same as a burglary entrance's own critical failure, whatever the ordinary
+    LOCK_FAILURE_ALARM_CHANCE roll would have said."""
+    building, state = _burglary()
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.intelligence = 0
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=21)
+
+    assert move_player(state, dest, AlwaysSix())
+    assert state.alarm
+    assert lock_at(state, dest) is not None  # still locked -- only a passed check clears it
+
+
+def test_attempt_lock_is_what_move_player_dispatches_to():
+    """move_player's locked-door branch is attempt_lock, called directly here so a
+    regression in the dispatch (e.g. move_player stops checking lock_at) shows up as a
+    behavioral difference between the two, not just a passing test either way."""
+    building, state = _burglary()
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.intelligence = 6
+    lock = Lock(skill="hack", difficulty=9)
+    state.building.locks[(state.level_index, dest)] = lock
+
+    attempt_lock(state, dest, lock, AlwaysSix())
+    assert state.player.coord == dest
+    assert lock_at(state, dest) is None

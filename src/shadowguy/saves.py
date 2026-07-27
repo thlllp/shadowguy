@@ -165,7 +165,10 @@ SAVE_SUFFIX = ".save"
 # generated when residential was the only structure and when entrances were placed by the
 # level-index rule that put an office's spawns a floor up. Rather than leave those runs
 # holding buildings the current generator would never produce, they're refused at load.
-SAVE_VERSION = 47
+# v48 added locked doors and cameras: buildings.Level gained `doors`, buildings.Building
+# gained `locks`/`cameras`. A pre-v48 pickled Level/Building (inside an accepted Burglary
+# or Wetwork job) lacks all three fields.
+SAVE_VERSION = 48
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

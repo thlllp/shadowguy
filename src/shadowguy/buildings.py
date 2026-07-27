@@ -28,6 +28,7 @@ must never import scene -- same rule, same reason, as tactical.py and combat.py.
 """
 
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -111,11 +112,14 @@ class Room:
 @dataclass
 class Level:
     """One floor: a Grid, and the rooms carved into it. `name` is what a screen shows
-    ("Ground floor"), and is the level's identity as far as the player is concerned."""
+    ("Ground floor"), and is the level's identity as far as the player is concerned.
+    `doors` is every cell cut into a wall between two rooms (see _cut_door) -- generation's
+    own record of where they ended up, since a Tile can't tell a doorway from open floor."""
 
     name: str
     grid: Grid
     rooms: tuple[Room, ...]
+    doors: frozenset[Coord]
 
     def room_at(self, coord: Coord) -> Room | None:
         """Which room a cell is inside, if any -- None in a doorway or a wall."""
@@ -145,14 +149,25 @@ class Link:
         return None
 
 
+@dataclass(frozen=True)
+class Lock:
+    """A locked door: blocks its cell until picked (see tactical.attempt_lock). `skill` is
+    hack for an electronic lock, infiltration for a mechanical one; `difficulty` is
+    checks.resolve_check's own scale, same as every other difficulty in the game."""
+
+    skill: str
+    difficulty: int
+
+
 @dataclass
 class Building:
     """A generated burglary target: its levels, the links between them, where each
-    entrance lands, where the objective is, and who's watching.
+    entrance lands, where the objective is, who's watching, and what's locked.
 
-    `entrance_spawns`, `objective` and `guards` are all (level index, cell) -- a building
-    is a graph of levels, so a bare coord would be ambiguous the moment there's more than
-    one floor."""
+    `entrance_spawns`, `objective`, `guards` and `cameras` are all (level index, cell) --
+    a building is a graph of levels, so a bare coord would be ambiguous the moment there's
+    more than one floor. `locks` is keyed the same way: every door still locked, cleared
+    from the dict for good once picked (see tactical.attempt_lock)."""
 
     kind: BuildingKind
     levels: tuple[Level, ...]
@@ -160,6 +175,8 @@ class Building:
     entrance_spawns: list[tuple[int, Coord]]  # one per requested entrance, input order
     objective: tuple[int, Coord]
     guards: tuple[tuple[int, Coord], ...]
+    cameras: tuple[tuple[int, Coord], ...]
+    locks: dict[tuple[int, Coord], Lock]
 
     def level(self, index: int) -> Level:
         return self.levels[index]
@@ -192,10 +209,13 @@ class BuildingProfile:
     can show at 80x24 (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling).
 
     `objective_rooms` is where the thing worth stealing plausibly is for this sort of
-    building, `guard_rooms` where somebody plausibly stands watching. Both are
-    preferences, not requirements -- a generated level that happens to have none of them
-    falls back to any room that isn't already spoken for, so a new RoomKind (or a profile
-    naming a room its program never builds) can never make generation fail."""
+    building, `guard_rooms`/`camera_rooms` where somebody (or something) plausibly watches.
+    All three are preferences, not requirements -- a generated level that happens to have
+    none of them falls back to any room that isn't already spoken for, so a new RoomKind
+    (or a profile naming a room its program never builds) can never make generation fail.
+
+    `locked_door_chance` is rolled independently per interior door (Level.doors) -- not a
+    room preference, since a lock sits on the doorway itself, not in either room it joins."""
 
     label: str
     width: int
@@ -204,6 +224,9 @@ class BuildingProfile:
     guards: int
     objective_rooms: tuple[RoomKind, ...]
     guard_rooms: tuple[RoomKind, ...]
+    cameras: int
+    camera_rooms: tuple[RoomKind, ...]
+    locked_door_chance: float
 
 
 # Rooms need interior space plus the wall ring between them; below this a partition
@@ -213,6 +236,12 @@ MIN_ROOM_SPAN = 3
 # reason) as tactical._MAP_GEN_ATTEMPTS: hand back a playable building or raise, never
 # an unplayable one.
 _BUILD_ATTEMPTS = 60
+
+# A locked door's skill is a coin flip between the two ways a door gets secured: hack for
+# an electronic lock, infiltration for a mechanical one. LOCK_DIFFICULTY is a flat
+# first-slice number (checks.resolve_check's own 9-21 scale), not yet balance-simulated.
+LOCK_SKILLS = ("hack", "infiltration")
+LOCK_DIFFICULTY = 12
 
 # A house: 2-4 bedrooms and 1-2 bathrooms upstairs, the living half downstairs, and a
 # basement under both. First-slice numbers, not balance-simulated.
@@ -228,6 +257,9 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         guards=1,
         objective_rooms=(RoomKind.BEDROOM, RoomKind.BASEMENT, RoomKind.LIVING),
         guard_rooms=(RoomKind.HALL, RoomKind.LIVING, RoomKind.KITCHEN),
+        cameras=0,  # a home has no monitored camera system to run into
+        camera_rooms=(),
+        locked_door_chance=0.05,  # rare -- a locked closet or a strongbox room, not a norm
     ),
     BuildingKind.OFFICE: BuildingProfile(
         label="Office",
@@ -241,6 +273,16 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         # of rolls through the fallback, and a fallback that fires posts somebody in a
         # bathroom. The open floor is where a guard actually stands anyway.
         guard_rooms=(RoomKind.HALL, RoomKind.RECEPTION, RoomKind.BREAK_ROOM, RoomKind.OFFICE),
+        # A camera system covers the whole building, not just where a guard is posted --
+        # every room OFFICE's own program ever builds, so cameras=2 seats without a
+        # fallback (a narrower list, mirroring guard_rooms, put ~8% of them in whatever
+        # room was free; see the guard_rooms comment above for the same failure mode).
+        cameras=2,
+        camera_rooms=(
+            RoomKind.HALL, RoomKind.RECEPTION, RoomKind.OFFICE, RoomKind.BATHROOM,
+            RoomKind.CONFERENCE, RoomKind.BREAK_ROOM, RoomKind.SERVER_ROOM, RoomKind.STORAGE,
+        ),
+        locked_door_chance=0.15,  # records, server closets -- the doors worth locking
     ),
     BuildingKind.COMPOUND: BuildingProfile(
         label="Compound",
@@ -250,6 +292,13 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         guards=3,  # a bigger private stake than an OFFICE floor, watched more closely
         objective_rooms=(RoomKind.BEDROOM, RoomKind.OFFICE, RoomKind.BASEMENT),
         guard_rooms=(RoomKind.HALL, RoomKind.LIVING, RoomKind.DINING, RoomKind.KITCHEN, RoomKind.OFFICE),
+        # A private system, lighter than a corp's -- the guards do most of the watching --
+        # but widened past just (HALL, OFFICE) the same way OFFICE's camera_rooms is: with
+        # guards/objective/entrances already spoken for, a single camera still missed
+        # both of those rooms more often than not.
+        cameras=1,
+        camera_rooms=(RoomKind.HALL, RoomKind.OFFICE, RoomKind.LIVING, RoomKind.BEDROOM),
+        locked_door_chance=0.2,  # an owner's own study or vault is the most locked-up place in the game
     ),
 }
 if set(BUILDING_PROFILES) != set(BuildingKind):
@@ -365,11 +414,13 @@ def _split_rects(rng: random.Random, rect: tuple[int, int, int, int], count: int
     return rects
 
 
-def _connected(grid: Grid, a: Coord, b: Coord) -> bool:
+def _connected(grid: Grid, a: Coord, b: Coord, blocked: frozenset[Coord] = frozenset()) -> bool:
     """Whether a walker can get from one cell to the other on this level. Wraps
     path_between's one sharp edge: A* hands back an empty path both for "unreachable"
-    and for "you are already standing there", and a room is always connected to itself."""
-    return a == b or bool(path_between(grid, a, b))
+    and for "you are already standing there", and a room is always connected to itself.
+    `blocked` is extra impassable cells on top of the grid's own walls -- generate_building
+    uses it to ask "is this still true with every locked door treated as a wall"."""
+    return a == b or bool(path_between(grid, a, b, blocked=blocked))
 
 
 def _adjacent(a: Room, b: Room) -> list[Coord]:
@@ -475,7 +526,7 @@ def _carve_level(rng: random.Random, profile: BuildingProfile, program: LevelPro
     grid._invalidate()
     if any(not _connected(grid, halls[0].center, room.center) for room in rooms):
         return None  # furnished itself shut; re-roll rather than hand back a sealed room
-    return Level(name=program.name, grid=grid, rooms=rooms)
+    return Level(name=program.name, grid=grid, rooms=rooms, doors=frozenset(doors))
 
 
 def _cut_door(tiles: list[list[Tile]], doors: set[Coord], a: Room, b: Room) -> bool:
@@ -616,15 +667,42 @@ def generate_building(
             taken.add(spot)
             guards.append(spot)
 
-        if _reachable(levels, links, entrance_spawns, objective):
-            return Building(
-                kind=kind,
-                levels=levels,
-                links=links,
-                entrance_spawns=entrance_spawns,
-                objective=objective,
-                guards=tuple(guards),
-            )
+        if not _reachable(levels, links, entrance_spawns, objective):
+            continue
+
+        cameras = []
+        for _camera in range(profile.cameras):
+            spot = _place(rng, levels, profile.camera_rooms, taken)
+            if spot is None:
+                break
+            taken.add(spot)
+            cameras.append(spot)
+
+        locks: dict[tuple[int, Coord], Lock] = {
+            (level_index, door): Lock(skill=rng.choice(LOCK_SKILLS), difficulty=LOCK_DIFFICULTY)
+            for level_index, level in enumerate(levels)
+            for door in level.doors
+            if rng.random() < profile.locked_door_chance
+        }
+        locked_by_level = defaultdict(set)
+        for level_index, coord in locks:
+            locked_by_level[level_index].add(coord)
+        blocked = {level_index: frozenset(coords) for level_index, coords in locked_by_level.items()}
+        if not _reachable(levels, links, entrance_spawns, objective, blocked=blocked):
+            # A run of bad rolls locked every way to the score -- hand back a building
+            # with no locked doors at all rather than one nothing can finish.
+            locks = {}
+
+        return Building(
+            kind=kind,
+            levels=levels,
+            links=links,
+            entrance_spawns=entrance_spawns,
+            objective=objective,
+            guards=tuple(guards),
+            cameras=tuple(cameras),
+            locks=locks,
+        )
     raise RuntimeError(f"could not generate a playable {kind} building")
 
 
@@ -633,6 +711,7 @@ def _reachable(
     links: tuple[Link, ...],
     entrance_spawns: list[tuple[int, Coord]],
     objective: tuple[int, Coord],
+    blocked: dict[int, frozenset[Coord]] | None = None,
 ) -> bool:
     """Whether every entrance can actually get to the objective, walking floors and
     taking stairs.
@@ -640,7 +719,13 @@ def _reachable(
     A flood over the level graph. The nodes are the cells that matter -- room centres,
     both ends of every link, the objective and the spawns -- because within a level
     "can I get there" is already answered by A*, and between levels it's answered by
-    standing on a link. Anything else on the floor is scenery."""
+    standing on a link. Anything else on the floor is scenery.
+
+    `blocked` is extra impassable cells per level, on top of each grid's own walls --
+    generate_building passes every locked door here to check the objective is still
+    reachable with none of them ever pickable, so a run of bad rolls can never seal it
+    off for good."""
+    blocked = blocked or {}
     nodes: dict[int, set[Coord]] = {i: set() for i in range(len(levels))}
     for index, level in enumerate(levels):
         nodes[index].update(room.center for room in level.rooms)
@@ -661,6 +746,7 @@ def _reachable(
             seen.add(current)
             level_index, coord = current
             grid = levels[level_index].grid
+            level_blocked = blocked.get(level_index, frozenset())
             for link in links:
                 side = link.other_side(level_index, coord)
                 if side is not None and side not in seen:
@@ -668,7 +754,7 @@ def _reachable(
             frontier += [
                 (level_index, cell)
                 for cell in nodes[level_index]
-                if (level_index, cell) not in seen and _connected(grid, coord, cell)
+                if (level_index, cell) not in seen and _connected(grid, coord, cell, blocked=level_blocked)
             ]
         if objective not in seen:
             return False
