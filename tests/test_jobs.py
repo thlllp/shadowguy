@@ -19,6 +19,7 @@ from shadowguy.jobs import (
     SMUGGLING_BASE_DEADLINE_DAYS,
     SMUGGLING_DEADLINE_DAYS_PER_HOP,
     SPECIALIST_FOR_STAT,
+    WETWORK_STRUCTURE,
     JobTiming,
     archetype_specialist,
     generate_job,
@@ -200,7 +201,10 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
             # the specialist's guaranteed way through only means something where
             # there's a check to withhold it from.
             continue
-        non_ambush = [c for c in stage.choices if not c.label.startswith(AMBUSH_LABEL)]
+        # Wetwork's APPROACH is a burglary stage (see JobStage.burglary): the pool
+        # lives on its Entrances, not stage.choices, but they're Choice-shaped too.
+        options = stage.burglary.entrances if stage.burglary is not None else stage.choices
+        non_ambush = [c for c in options if not c.label.startswith(AMBUSH_LABEL)]
         stats = {skill_for(c.skill).stat for c in non_ambush}
         specialists = {SPECIALIST_FOR_STAT[stat] for stat in stats}
         assert specialist in specialists
@@ -210,8 +214,8 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
 def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(corp_map, seed):
     rng = random.Random(seed)
     archetype = rng.choice(ARCHETYPES)
-    if archetype.name != "Burglary":
-        pytest.skip("not a Burglary job this seed")
+    if archetype.name not in ("Burglary", "Wetwork"):
+        pytest.skip("not a burglary-stage job this seed")
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     # APPROACH is always the first stage kept (only COMPLICATION can be dropped),
     # so it's always stage_0.
@@ -219,6 +223,11 @@ def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(
     assert approach.burglary is not None
     assert approach.choices == []
     assert len(approach.burglary.entrances) >= 3  # drawn approaches (>=2) + the ambush entry
+    # Wetwork always breaks into a private COMPOUND, wherever the job site itself
+    # is (WETWORK_STRUCTURE); Burglary's structure instead follows the site's own
+    # kind (BURGLARY_STRUCTURE).
+    if archetype.name == "Wetwork":
+        assert approach.burglary.building.kind == WETWORK_STRUCTURE
     for sid, stage in scene.stages.items():
         if sid in ("stage_0", "stage_0_fight") or sid.endswith("_fight"):
             continue

@@ -43,6 +43,7 @@ class BuildingKind(StrEnum):
 
     RESIDENTIAL = "residential"
     OFFICE = "office"
+    COMPOUND = "compound"
 
 
 class RoomKind(StrEnum):
@@ -241,6 +242,15 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         # bathroom. The open floor is where a guard actually stands anyway.
         guard_rooms=(RoomKind.HALL, RoomKind.RECEPTION, RoomKind.BREAK_ROOM, RoomKind.OFFICE),
     ),
+    BuildingKind.COMPOUND: BuildingProfile(
+        label="Compound",
+        width=30,
+        height=10,
+        cover_density=0.09,  # a wealthy house, furnished like RESIDENTIAL but with room to spare
+        guards=3,  # a bigger private stake than an OFFICE floor, watched more closely
+        objective_rooms=(RoomKind.BEDROOM, RoomKind.OFFICE, RoomKind.BASEMENT),
+        guard_rooms=(RoomKind.HALL, RoomKind.LIVING, RoomKind.DINING, RoomKind.KITCHEN, RoomKind.OFFICE),
+    ),
 }
 if set(BUILDING_PROFILES) != set(BuildingKind):
     raise ValueError("every BuildingKind needs a BUILDING_PROFILES row")
@@ -296,7 +306,30 @@ def _office_program(rng: random.Random) -> list[LevelProgram]:
     return program
 
 
-LEVEL_PROGRAMS = {BuildingKind.RESIDENTIAL: _residential_program, BuildingKind.OFFICE: _office_program}
+def _compound_program(rng: random.Random) -> list[LevelProgram]:
+    """A compound: a house too big to be just RESIDENTIAL. A ground floor and an upper
+    floor are both always present -- that's the two storeys it tops out at, never
+    OFFICE's stack of up to four -- and a basement underneath is an independent coin
+    flip on top of them."""
+    has_basement = rng.random() < 0.5
+    ground = [
+        RoomKind.HALL, RoomKind.LIVING, RoomKind.DINING, RoomKind.KITCHEN,
+        RoomKind.OFFICE, RoomKind.BATHROOM, RoomKind.BEDROOM,
+    ]
+    program = []
+    if has_basement:
+        program.append(LevelProgram("Basement", (RoomKind.BASEMENT, RoomKind.BASEMENT)))
+    program.append(LevelProgram(GROUND_FLOOR, tuple(ground)))
+    upper = [RoomKind.HALL, *(RoomKind.BEDROOM,) * rng.randint(2, 4), RoomKind.BATHROOM]
+    program.append(LevelProgram("Upper floor", tuple(upper)))
+    return program
+
+
+LEVEL_PROGRAMS = {
+    BuildingKind.RESIDENTIAL: _residential_program,
+    BuildingKind.OFFICE: _office_program,
+    BuildingKind.COMPOUND: _compound_program,
+}
 if set(LEVEL_PROGRAMS) != set(BuildingKind):
     raise ValueError("every BuildingKind needs a LEVEL_PROGRAMS builder")
 

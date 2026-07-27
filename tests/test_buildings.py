@@ -77,6 +77,19 @@ def test_an_office_stacks_2_to_4_storeys_with_reception_at_street_level(seed):
     assert kinds.count(RoomKind.OFFICE) >= 2
 
 
+@pytest.mark.parametrize("seed", SEEDS)
+def test_a_compound_is_two_storeys_with_an_optional_basement(seed):
+    """The compound program's promise: always a ground floor and an upper floor -- never
+    OFFICE's stack of up to four -- with a basement underneath being the only thing that's
+    a coin flip."""
+    building = generate_building(random.Random(seed), entrance_count=3, kind=BuildingKind.COMPOUND)
+    names = [level.name for level in building.levels]
+    assert names[-2:] == ["Ground floor", "Upper floor"]
+    assert len(names) in (2, 3)
+    if len(names) == 3:
+        assert names[0] == "Basement"
+
+
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_room_on_a_level_is_reachable_from_every_other(seed, kind):

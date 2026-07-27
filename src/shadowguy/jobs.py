@@ -255,12 +255,12 @@ class JobStage:
     type: StageType
     prompt: str
     approaches: tuple[Approach, ...]
-    # True only for Burglary's APPROACH stage (set at ARCHETYPES construction, see
-    # below, not authored per-row) -- tells generate_job to build this stage as a
-    # scene.BurglaryStage (entrance diagram + interior walk) instead of a plain
-    # Choice list. `approaches` stays meaningful either way: it still feeds each
-    # Entrance's skill/difficulty/flavor and is still subject to the same import-time
-    # pool-size/cross-stat guards below.
+    # True only for Burglary's and Wetwork's APPROACH stages (set at ARCHETYPES
+    # construction, see below, not authored per-row) -- tells generate_job to build
+    # this stage as a scene.BurglaryStage (entrance diagram + interior walk) instead
+    # of a plain Choice list. `approaches` stays meaningful either way: it still feeds
+    # each Entrance's skill/difficulty/flavor and is still subject to the same
+    # import-time pool-size/cross-stat guards below.
     burglary: bool = False
 
 
@@ -285,6 +285,12 @@ class JobArchetype:
     # than always presenting its pool. Quiet legs become a scene.Stage.narration
     # beat: no roll, nothing to click, just prose and a Continue.
     vigilance: bool = False
+    # True only for Wetwork (set at ARCHETYPES construction, not authored per-row) --
+    # tells generate_job to pick its burglary stage's structure from WETWORK_STRUCTURE
+    # (always a private COMPOUND) instead of BURGLARY_STRUCTURE[location.kind], since
+    # the target is holed up in their own place rather than broken into as the job
+    # site's own business.
+    wetwork: bool = False
 
 
 # name, verb, then one row per stage: (StageType, prompt, approach pool).
@@ -485,11 +491,15 @@ _ARCHETYPE_ROWS = (
         # both map to Solo in SPECIALIST_FOR_STAT, so archetype_specialist() still
         # reads it as one archetype's contract even though the lead skill itself
         # varies stage to stage. Where Intrusion is the Netrunner's quiet way through
-        # a system, Wetwork is the Solo's loud way through people: no lock-picking or
-        # ICE, just whoever's standing between you and the job. The other two
-        # approaches on each beat still sit on different stats, same as every other
-        # archetype, so it's a job a Netrunner or Infiltrator can take and bleed
-        # through rather than one they're locked out of.
+        # a system, Wetwork is the Solo's loud way through people. Its APPROACH gets
+        # the same treatment as Burglary's own (the `burglary` flag below, set at
+        # ARCHETYPES construction) -- the target is always holed up in a private
+        # COMPOUND regardless of the job site's own kind (WETWORK_STRUCTURE), so this
+        # stage's flavor strings are short entrance captions, not sentences, same as
+        # Burglary's. The other two approaches on each beat still sit on different
+        # stats, same as every other archetype, so it's a job a Netrunner or
+        # Infiltrator can take and bleed through rather than one they're locked out
+        # of.
         "Wetwork",
         "strong-arm",
         (
@@ -497,9 +507,9 @@ _ARCHETYPE_ROWS = (
                 StageType.APPROACH,
                 "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
                 (
-                    ("grapple", 1, "Take the one guard quiet before they clock you"),
-                    ("infer", 0, "Read the rotation and slot into the gap"),
-                    ("intimidation", -2, "Walk up to the checkpoint and dare them to stop you"),
+                    ("grapple", 1, "Perimeter Wall"),
+                    ("infer", 0, "Service Entrance"),
+                    ("intimidation", -2, "Front Gate"),
                 ),
             ),
             (
@@ -739,13 +749,14 @@ ARCHETYPES = [
                 type=stage_type,
                 prompt=prompt,
                 approaches=tuple(Approach(*approach) for approach in approaches),
-                burglary=(name == "Burglary" and stage_type is StageType.APPROACH),
+                burglary=(name in ("Burglary", "Wetwork") and stage_type is StageType.APPROACH),
             )
             for stage_type, prompt, approaches in stages
         ),
         matrix=(name == "Data Heist"),
         hours_cost=4 if name == "Bodyguard" else None,
         vigilance=(name == "Bodyguard"),
+        wetwork=(name == "Wetwork"),
     )
     for name, verb, stages in _ARCHETYPE_ROWS
 ]
@@ -949,19 +960,20 @@ def generate_smuggling_job(
 
 
 # What a burglary target is shaped like, per the site you're breaking into. Splits
-# GENERATED_KINDS on the only question buildings.py can currently answer: does this place
-# have a shop-front with somebody living over it (RESIDENTIAL -- cluttered, a basement,
-# bedrooms upstairs, one guard), or is it a floor of desks (OFFICE -- wider, barer,
-# reception at street level, two guards)? Same table shape and guard as
-# corpmap.LOCATION_SKILL. First-slice assignments: a kind moving sides is a one-line
-# change here, not a generator change.
+# GENERATED_KINDS on the question buildings.py can answer: does this place have a
+# shop-front with somebody living over it (RESIDENTIAL -- cluttered, a basement,
+# bedrooms upstairs, one guard), is it a floor of desks (OFFICE -- wider, barer,
+# reception at street level, two guards), or is it run out of a private walled estate
+# (COMPOUND -- bigger still, two storeys and an optional basement, three guards)? Same
+# table shape and guard as corpmap.LOCATION_SKILL. First-slice assignments: a kind
+# moving sides is a one-line change here, not a generator change.
 BURGLARY_STRUCTURE = {
     LocationKind.DATA: BuildingKind.OFFICE,
     LocationKind.LAB: BuildingKind.OFFICE,
     LocationKind.DEPOT: BuildingKind.OFFICE,
     LocationKind.CYBER_CLINIC: BuildingKind.OFFICE,
     LocationKind.HOSPITAL: BuildingKind.OFFICE,
-    LocationKind.REAL_ESTATE: BuildingKind.OFFICE,
+    LocationKind.REAL_ESTATE: BuildingKind.COMPOUND,
     LocationKind.AUTO_DEALER: BuildingKind.OFFICE,
     LocationKind.BAR: BuildingKind.RESIDENTIAL,
     LocationKind.PAWN: BuildingKind.RESIDENTIAL,
@@ -971,6 +983,11 @@ BURGLARY_STRUCTURE = {
 }
 if set(BURGLARY_STRUCTURE) != set(GENERATED_KINDS):
     raise ValueError("BURGLARY_STRUCTURE must have exactly one entry per generated LocationKind")
+
+# Wetwork never depends on the site's own kind the way Burglary does: the target is
+# being hit wherever they're holed up, not broken into as a data haven or an office,
+# so it always drops the runner at a private COMPOUND.
+WETWORK_STRUCTURE = BuildingKind.COMPOUND
 
 
 def generate_job(
@@ -1107,18 +1124,20 @@ def generate_job(
             }
 
         if job_stage.burglary:
-            # A Burglary APPROACH: each approach becomes an Entrance (a diagram node,
-            # not a list row), landing the runner at a distinct spawn inside a freshly
-            # generated building — several levels of it, with the score somewhere inside.
+            # A Burglary or Wetwork APPROACH: each approach becomes an Entrance (a
+            # diagram node, not a list row), landing the runner at a distinct spawn
+            # inside a freshly generated building — several levels of it, with the
+            # score (or the target) somewhere inside.
             #
             # The building is generated *with the job* and lives inside its Scene: it is
             # never a corpmap.Location, so a target adds nothing to the map the player
-            # walks around, and it goes away when the job is finished or expires. The
-            # site's own kind picks the structure (BURGLARY_STRUCTURE), so breaking into
-            # a data haven doesn't hand you somebody's bedrooms.
-            building = generate_building(
-                rng, entrance_count=len(approaches), kind=BURGLARY_STRUCTURE[location.kind]
-            )
+            # walks around, and it goes away when the job is finished or expires.
+            # Burglary's structure comes from the site's own kind (BURGLARY_STRUCTURE),
+            # so breaking into a data haven doesn't hand you somebody's bedrooms; Wetwork
+            # always drops the runner at a COMPOUND (WETWORK_STRUCTURE) regardless of the
+            # site, since the target is holed up in their own place, not the job site's.
+            kind = WETWORK_STRUCTURE if archetype.wetwork else BURGLARY_STRUCTURE[location.kind]
+            building = generate_building(rng, entrance_count=len(approaches), kind=kind)
             entrances = [
                 Entrance(
                     label=f"{approach.flavor} ({skill_for(approach.skill).name})",
