@@ -284,7 +284,7 @@ A **third kind of stage**: some job fights play out on a grid. It is emphaticall
 
 ## Burglary jobs (`shadowguy/jobs.py`, `scene.BurglaryStage`, `screens/burglary_screens.py`)
 
-A **fourth kind of stage**, the second to break the "text list of Choices" mold: replaces one job archetype's whole APPROACH stage with a two-phase UI — pick a labeled entrance on a diagram (`EntrancePickScreen`), then walk a generated interior (`BurglaryWalkScreen`) from that entrance's spawn to an objective tile, avoiding static guards. It's the 6th `jobs.ARCHETYPES` entry (generic, mixed leads, no specialist); every other stage of Burglary itself is an ordinary `Choice` list.
+A **fourth kind of stage**, the second to break the "text list of Choices" mold: replaces a job archetype's whole APPROACH stage with a two-phase UI — pick a labeled entrance on a diagram (`EntrancePickScreen`), then walk a generated interior (`BurglaryWalkScreen`) from that entrance's spawn to an objective tile, avoiding static guards. Burglary is the 6th `jobs.ARCHETYPES` entry (generic, mixed leads, no specialist) and the one this section is named for; every other stage of Burglary itself is an ordinary `Choice` list. Wetwork's APPROACH (the Solo specialist job, `jobs.WETWORK_STRUCTURE`) gets the identical treatment — `JobStage.burglary` is set for both — except its structure is always `COMPOUND` regardless of the job site's own kind, since the target is holed up in their own place, not the site's: see Wetwork's own comment in `jobs.py` for why its APPROACH pool reads as short entrance captions ("Front Gate") rather than sentences, the one place it departs from every other Wetwork stage's voice.
 
 **The entrance check resolves the instant it's picked, before any walk.** `scene.Entrance` is `Choice`-shaped plus a `spawn: Coord`; `resolve_entrance` applies health/cash/rep/standing immediately, only stage advancement (`next_stage`) waits on the walk (the walk is spatial risk on top of the check, not a second roll). Burglary's one departure: `BurglaryStage.spotted`, a second `Outcome` that can fire if a guard's sightline catches the walk, stacking on whatever the entrance check already did — keep its cost modest.
 
@@ -314,22 +314,31 @@ both import-guarded to cover every kind). `RESIDENTIAL` is a basement, a ground 
 an upstairs, with 2-4 bedrooms and 1-2 bathrooms (the second bath goes downstairs, where a
 house puts it). `OFFICE` is 2-4 storeys with no basement — reception at street level,
 offices and the odd conference/break/server/storage room above — wider than a house,
-barer to cross, and watched by two guards instead of one. Adding Compound is a profile row
-and a level program, not a branch in the generator. First-slice numbers, not
-balance-simulated.
+barer to cross, and watched by two guards instead of one. `COMPOUND` is a ground floor and
+an upper floor always (never OFFICE's stack of up to four), with a basement as an
+independent coin flip underneath, bigger and better-appointed than `RESIDENTIAL`, and
+watched by three guards. A new `BuildingKind` is a profile row and a level program, not a
+branch in the generator. First-slice numbers, not balance-simulated.
 
 Which level you walk in on is a **name, not an index**: every level program must name one
 level `GROUND_FLOOR`, and entrances land there. A house stacks a basement underneath it
 and an office starts at it, so the old "index 1, or 0 if there's only one level" rule
 silently put an office's entrances on the first floor up.
 
-**The site picks the structure** (`jobs.BURGLARY_STRUCTURE`, same shape and import guard
-as `corpmap.LOCATION_SKILL`: exactly one entry per `GENERATED_KINDS` kind). Data havens,
-labs, depots, clinics, hospitals, real-estate offices and auto dealers are `OFFICE`; bars,
-pawn shops, weapon shops, pharmacies and computer stores are `RESIDENTIAL`, on the reading
-that a street-front shop has somebody living over it. Assignments are first-slice — moving
-a kind across is one line, and needs no generator change. This is the table to extend when
-a third `BuildingKind` lands, not `generate_job`.
+**The site picks the structure — for Burglary** (`jobs.BURGLARY_STRUCTURE`, same shape and
+import guard as `corpmap.LOCATION_SKILL`: exactly one entry per `GENERATED_KINDS` kind).
+Data havens, labs, depots, clinics, hospitals and auto dealers are `OFFICE`; bars, pawn
+shops, weapon shops, pharmacies and computer stores are `RESIDENTIAL`, on the reading that
+a street-front shop has somebody living over it; real-estate offices are `COMPOUND`, on the
+reading that a realtor's own showpiece is the private estate it's run out of. Assignments
+are first-slice — moving a kind across is one line, and needs no generator change. This is
+the table to extend when a new `BuildingKind` lands, not `generate_job`.
+
+Wetwork's structure isn't in this table at all (`jobs.WETWORK_STRUCTURE`, a bare constant):
+it's always `COMPOUND`, whatever the job site's own kind, since a Wetwork target is holed
+up in their own place rather than broken into as a business's building — see Wetwork's row
+in `jobs.ARCHETYPES` and `generate_job`'s `job_stage.burglary` branch, which reads `archetype.name`
+to pick between the two.
 
 A profile's `guard_rooms` must be **wide enough to seat that profile's own `guards`
 count**. It isn't checked at import (it depends on what a level program happened to roll),
