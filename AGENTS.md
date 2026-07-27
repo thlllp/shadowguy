@@ -95,7 +95,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 
 ## Save versions
 
-Bump `saves.SAVE_VERSION` on any breaking state change. Last version: **44** (`Character.dead_runners`/`arrested_runners`). Full version history in `CLAUDE.md:176-208`.
+Bump `saves.SAVE_VERSION` on any breaking state change. Last version: **47** (the `OFFICE` `BuildingKind`). Full version history in `CLAUDE.md:185-214`.
 
 ## Critical Textual gotchas
 
