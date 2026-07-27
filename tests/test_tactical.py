@@ -34,6 +34,7 @@ from shadowguy.tactical import (
     available_grenades,
     begin_attack_aim,
     begin_grenade_aim,
+    begin_look,
     best_shot,
     cancel_aim,
     chebyshev,
@@ -367,6 +368,29 @@ def test_begin_grenade_aim_is_a_noop_once_already_acted():
     begin_grenade_aim(state, 0)
     assert state.aim_cursor is None
     assert state.pending_grenade_index is None
+
+
+def test_begin_look_starts_on_the_player_and_spends_nothing():
+    state = _simple_state()
+    assert begin_look(state)
+    assert state.aim_cursor == state.player.coord
+    assert state.aim_kind is AimKind.LOOK
+    assert not state.acted
+    assert state.moves_left == state.player.speed
+
+
+def test_begin_look_refuses_once_the_fight_is_over():
+    state = _simple_state()
+    state.outcome = TacticalOutcome.VICTORY
+    assert not begin_look(state)
+    assert state.aim_cursor is None
+
+
+def test_move_aim_cursor_pans_a_look_cursor_same_as_any_other():
+    state = _simple_state()
+    begin_look(state)
+    move_aim_cursor(state, 1, 0)
+    assert state.aim_cursor == (1, 0)
 
 
 def test_cancel_aim_spends_nothing():

@@ -13,7 +13,7 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
-from shadowguy.buildings import BuildingKind
+from shadowguy.buildings import BuildingKind, Lock
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS, ActionKind
 from shadowguy.corpmap import (
@@ -59,6 +59,7 @@ from shadowguy.tactical import (
     Side,
     TacticalOutcome,
     Unit,
+    enter_level,
     parse_grid,
     step_neighbors,
 )
@@ -597,6 +598,115 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def test_tactical_look_cursor_reads_the_map_without_spending_the_turn():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            moves_before = state.moves_left
+            player_before = state.player.coord
+
+            await pilot.press("x")
+            assert state.aim_kind is AimKind.LOOK
+            assert state.aim_cursor == player_before
+            assert "You" in tac_screen.query_one("#tac_end", Static).content  # cursor opens on the player's own tile
+
+            await pilot.press("right")
+            assert state.aim_cursor == (player_before[0] + 1, player_before[1])
+            assert state.player.coord == player_before  # only the cursor moved
+            assert state.moves_left == moves_before  # looking costs no move or action
+            assert not state.acted
+
+            await pilot.press("escape")
+            assert state.aim_cursor is None
+            assert state.aim_kind is None
+
+    run(body())
+
+
+def test_tactical_look_cursor_ignores_next_target_instead_of_reporting_nothing_in_reach():
+    """Tab is bound to Next target (aim mode's own cursor-snap), and stays listed in the
+    footer while looking -- but snap_aim_to_next_target's legality check has no branch for
+    AimKind.LOOK, so it would always come back empty. action_next_target must ignore Tab
+    outright while looking rather than surface that as a "nothing in reach" notification,
+    which would be a lie whenever an enemy is standing right there."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            notified = []
+            tac_screen.notify = lambda *args, **kwargs: notified.append(args)
+            tac_screen.action_look()
+            cursor_before = tac_screen.state.aim_cursor
+
+            tac_screen.action_next_target()
+            assert tac_screen.state.aim_kind is AimKind.LOOK
+            assert tac_screen.state.aim_cursor == cursor_before
+            assert notified == []
+
+    run(body())
+
+
+def test_burglary_look_cursor_names_a_locked_camera_watched_objective():
+    """The look cursor's building-specific notes (camera/locked door/objective) are each
+    gated on state.level_index -- force all three onto one cell on the level the player
+    actually lands on, rather than hoping the random building put them there, so the
+    assertion runs every time regardless of what generate_building rolled."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click("#wetwork")  # Compound: always has at least one camera
+            await pilot.pause()
+            await pilot.click("ListView ListItem")  # pick the first entrance
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            camera_level, coord = state.building.cameras[0]
+            enter_level(state, camera_level, coord)
+            state.building.locks[(state.level_index, coord)] = Lock(skill="hack", difficulty=12)
+            state.objective = (state.level_index, coord)
+
+            tac_screen.action_look()
+            end_text = tac_screen.query_one("#tac_end", Static).content
+            assert "camera" in end_text
+            assert "locked door (hack)" in end_text
+            assert "the objective" in end_text
+
+            # Building.links_at (buildings.py) is the one place "is this cell a stair"
+            # is answered elsewhere in the codebase -- the look cursor should agree with
+            # it rather than carrying its own copy of the same check.
+            link = state.building.links[0]
+            link_level, link_coord = link.a
+            enter_level(state, link_level, link_coord)
+            state.aim_cursor = link_coord  # already looking; just move the cursor onto the link
+            tac_screen._refresh()
+            assert "stairs" in tac_screen.query_one("#tac_end", Static).content
 
     run(body())
 
