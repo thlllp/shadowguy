@@ -948,6 +948,31 @@ def generate_smuggling_job(
     )
 
 
+# What a burglary target is shaped like, per the site you're breaking into. Splits
+# GENERATED_KINDS on the only question buildings.py can currently answer: does this place
+# have a shop-front with somebody living over it (RESIDENTIAL -- cluttered, a basement,
+# bedrooms upstairs, one guard), or is it a floor of desks (OFFICE -- wider, barer,
+# reception at street level, two guards)? Same table shape and guard as
+# corpmap.LOCATION_SKILL. First-slice assignments: a kind moving sides is a one-line
+# change here, not a generator change.
+BURGLARY_STRUCTURE = {
+    LocationKind.DATA: BuildingKind.OFFICE,
+    LocationKind.LAB: BuildingKind.OFFICE,
+    LocationKind.DEPOT: BuildingKind.OFFICE,
+    LocationKind.CYBER_CLINIC: BuildingKind.OFFICE,
+    LocationKind.HOSPITAL: BuildingKind.OFFICE,
+    LocationKind.REAL_ESTATE: BuildingKind.OFFICE,
+    LocationKind.AUTO_DEALER: BuildingKind.OFFICE,
+    LocationKind.BAR: BuildingKind.RESIDENTIAL,
+    LocationKind.PAWN: BuildingKind.RESIDENTIAL,
+    LocationKind.WEAPON_SHOP: BuildingKind.RESIDENTIAL,
+    LocationKind.PHARMACY: BuildingKind.RESIDENTIAL,
+    LocationKind.COMPUTER_STORE: BuildingKind.RESIDENTIAL,
+}
+if set(BURGLARY_STRUCTURE) != set(GENERATED_KINDS):
+    raise ValueError("BURGLARY_STRUCTURE must have exactly one entry per generated LocationKind")
+
+
 def generate_job(
     day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
 ) -> tuple[Scene, JobTiming]:
@@ -1088,11 +1113,11 @@ def generate_job(
             #
             # The building is generated *with the job* and lives inside its Scene: it is
             # never a corpmap.Location, so a target adds nothing to the map the player
-            # walks around, and it goes away when the job is finished or expires. `kind`
-            # is the seam where a site's character will pick a structure once there's
-            # more than one — everything is residential today.
+            # walks around, and it goes away when the job is finished or expires. The
+            # site's own kind picks the structure (BURGLARY_STRUCTURE), so breaking into
+            # a data haven doesn't hand you somebody's bedrooms.
             building = generate_building(
-                rng, entrance_count=len(approaches), kind=BuildingKind.RESIDENTIAL
+                rng, entrance_count=len(approaches), kind=BURGLARY_STRUCTURE[location.kind]
             )
             entrances = [
                 Entrance(

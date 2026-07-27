@@ -160,7 +160,12 @@ SAVE_SUFFIX = ".save"
 # `guard` Enemy template and a `bailed` Outcome, in place of the old flat
 # grid/objective/guards/spotted fields, and scene.Entrance.spawn became (level, cell).
 # A pre-v46 pickled BurglaryStage (inside an accepted Burglary job) has the old shape.
-SAVE_VERSION = 46
+# v47 added the OFFICE BuildingKind. Nothing pickled changed *shape* -- a v46 Building is
+# structurally a v47 Building -- but a pre-v47 run's accepted Burglary jobs were all
+# generated when residential was the only structure and when entrances were placed by the
+# level-index rule that put an office's spawns a floor up. Rather than leave those runs
+# holding buildings the current generator would never produce, they're refused at load.
+SAVE_VERSION = 47
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

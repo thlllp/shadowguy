@@ -42,12 +42,13 @@ class BuildingKind(StrEnum):
     generator."""
 
     RESIDENTIAL = "residential"
+    OFFICE = "office"
 
 
 class RoomKind(StrEnum):
-    """What a room is for. Drives placement (see OBJECTIVE_ROOMS / GUARD_ROOMS) and the
-    name the walk shows, so a runner always knows whether they're standing in a kitchen
-    or somebody's bedroom."""
+    """What a room is for. Drives placement (see each profile's `objective_rooms` /
+    `guard_rooms`) and the name the walk shows, so a runner always knows whether they're
+    standing in a kitchen or somebody's bedroom."""
 
     HALL = "hall"  # circulation: entry hall, upstairs landing, corridor
     LIVING = "living"
@@ -56,6 +57,12 @@ class RoomKind(StrEnum):
     BEDROOM = "bedroom"
     BATHROOM = "bathroom"
     BASEMENT = "basement"
+    OFFICE = "office"
+    CONFERENCE = "conference"
+    RECEPTION = "reception"
+    BREAK_ROOM = "break_room"
+    STORAGE = "storage"
+    SERVER_ROOM = "server_room"
 
 
 ROOM_LABELS = {
@@ -66,16 +73,15 @@ ROOM_LABELS = {
     RoomKind.BEDROOM: "Bedroom",
     RoomKind.BATHROOM: "Bathroom",
     RoomKind.BASEMENT: "Basement",
+    RoomKind.OFFICE: "Office",
+    RoomKind.CONFERENCE: "Conference room",
+    RoomKind.RECEPTION: "Reception",
+    RoomKind.BREAK_ROOM: "Break room",
+    RoomKind.STORAGE: "Storage",
+    RoomKind.SERVER_ROOM: "Server room",
 }
 if set(ROOM_LABELS) != set(RoomKind):
     raise ValueError("every RoomKind needs a ROOM_LABELS entry")
-
-# Where the thing worth stealing plausibly is, and where somebody plausibly stands
-# watching. Both are preferences, not requirements -- a generated level that happens to
-# have none of these falls back to any room that isn't already spoken for, so a new
-# RoomKind can never make generation fail.
-OBJECTIVE_ROOMS = (RoomKind.BEDROOM, RoomKind.BASEMENT, RoomKind.LIVING)
-GUARD_ROOMS = (RoomKind.HALL, RoomKind.LIVING, RoomKind.KITCHEN)
 
 
 @dataclass(frozen=True)
@@ -182,13 +188,21 @@ class BuildingProfile:
     how cluttered it is, and the room program for each of its levels.
 
     `label` is what a screen calls the place. Width/height are capped by what a screen
-    can show at 80x24 (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling)."""
+    can show at 80x24 (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling).
+
+    `objective_rooms` is where the thing worth stealing plausibly is for this sort of
+    building, `guard_rooms` where somebody plausibly stands watching. Both are
+    preferences, not requirements -- a generated level that happens to have none of them
+    falls back to any room that isn't already spoken for, so a new RoomKind (or a profile
+    naming a room its program never builds) can never make generation fail."""
 
     label: str
     width: int
     height: int
     cover_density: float
     guards: int
+    objective_rooms: tuple[RoomKind, ...]
+    guard_rooms: tuple[RoomKind, ...]
 
 
 # Rooms need interior space plus the wall ring between them; below this a partition
@@ -211,10 +225,33 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         height=10,
         cover_density=0.10,  # furniture: a home is the most cluttered thing to cross
         guards=1,
+        objective_rooms=(RoomKind.BEDROOM, RoomKind.BASEMENT, RoomKind.LIVING),
+        guard_rooms=(RoomKind.HALL, RoomKind.LIVING, RoomKind.KITCHEN),
+    ),
+    BuildingKind.OFFICE: BuildingProfile(
+        label="Office",
+        width=30,
+        height=10,
+        cover_density=0.06,  # desks and partitions, but an open floor is barer than a home
+        guards=2,
+        objective_rooms=(RoomKind.OFFICE, RoomKind.SERVER_ROOM, RoomKind.CONFERENCE, RoomKind.STORAGE),
+        # OFFICE is here as well as in objective_rooms (the way LIVING is for a house):
+        # two guards and only reception/halls/a maybe-break-room to seat them sends ~9%
+        # of rolls through the fallback, and a fallback that fires posts somebody in a
+        # bathroom. The open floor is where a guard actually stands anyway.
+        guard_rooms=(RoomKind.HALL, RoomKind.RECEPTION, RoomKind.BREAK_ROOM, RoomKind.OFFICE),
     ),
 }
 if set(BUILDING_PROFILES) != set(BuildingKind):
     raise ValueError("every BuildingKind needs a BUILDING_PROFILES row")
+
+
+# Street level, and so where every entrance lands. Levels are built bottom-up and a kind
+# is free to put storeys under it or none at all, so the *name* is the only thing that
+# says which one you walk in on -- an index can't, since a house has a basement below it
+# and an office starts at it. Every LEVEL_PROGRAMS builder must name exactly one level
+# this; generate_building raises if one doesn't.
+GROUND_FLOOR = "Ground floor"
 
 
 def _residential_program(rng: random.Random) -> list[LevelProgram]:
@@ -230,12 +267,36 @@ def _residential_program(rng: random.Random) -> list[LevelProgram]:
     upstairs = [RoomKind.HALL, *(RoomKind.BEDROOM,) * bedrooms, RoomKind.BATHROOM]
     return [
         LevelProgram("Basement", (RoomKind.BASEMENT, RoomKind.BASEMENT)),
-        LevelProgram("Ground floor", tuple(ground)),
+        LevelProgram(GROUND_FLOOR, tuple(ground)),
         LevelProgram("Upstairs", tuple(upstairs)),
     ]
 
 
-LEVEL_PROGRAMS = {BuildingKind.RESIDENTIAL: _residential_program}
+def _office_program(rng: random.Random) -> list[LevelProgram]:
+    """An office building: reception on the ground floor, offices and a few amenity rooms
+    upstairs, 2-4 storeys. No basement -- the prize is on somebody's desk or in a server
+    closet, not under the building."""
+    floors = rng.randint(2, 4)
+    ground = [RoomKind.RECEPTION, RoomKind.HALL, RoomKind.OFFICE, RoomKind.BATHROOM]
+    program = [LevelProgram(GROUND_FLOOR, tuple(ground))]
+    for i in range(1, floors):
+        name = "Upper floor" if floors == 2 else f"Floor {i + 1}"
+        upper = [RoomKind.HALL, RoomKind.BATHROOM]
+        n_offices = rng.randint(2, 3)
+        upper.extend([RoomKind.OFFICE] * n_offices)
+        if rng.random() < 0.5:
+            upper.append(RoomKind.CONFERENCE)
+        if rng.random() < 0.4:
+            upper.append(RoomKind.BREAK_ROOM)
+        if rng.random() < 0.2:
+            upper.append(RoomKind.SERVER_ROOM)
+        if rng.random() < 0.2:
+            upper.append(RoomKind.STORAGE)
+        program.append(LevelProgram(name, tuple(upper)))
+    return program
+
+
+LEVEL_PROGRAMS = {BuildingKind.RESIDENTIAL: _residential_program, BuildingKind.OFFICE: _office_program}
 if set(LEVEL_PROGRAMS) != set(BuildingKind):
     raise ValueError("every BuildingKind needs a LEVEL_PROGRAMS builder")
 
@@ -314,7 +375,10 @@ def _assign_kinds(rng: random.Random, rects: list[tuple[int, int, int, int]], pr
     # Biggest kinds to biggest rooms, smallest to smallest: a bathroom is never the
     # largest room in a house, and a living room is rarely the smallest.
     order = {kind: i for i, kind in enumerate(
-        (RoomKind.LIVING, RoomKind.BASEMENT, RoomKind.DINING, RoomKind.KITCHEN, RoomKind.BEDROOM, RoomKind.HALL, RoomKind.BATHROOM)
+        (RoomKind.LIVING, RoomKind.RECEPTION, RoomKind.BASEMENT, RoomKind.DINING,
+         RoomKind.CONFERENCE, RoomKind.KITCHEN, RoomKind.BREAK_ROOM,
+         RoomKind.BEDROOM, RoomKind.OFFICE, RoomKind.HALL,
+         RoomKind.STORAGE, RoomKind.SERVER_ROOM, RoomKind.BATHROOM)
     )}
     wanted.sort(key=lambda kind: order.get(kind, len(order)))
     free = sorted(
@@ -474,10 +538,10 @@ def generate_building(
     LEVEL_PROGRAMS builder, so a new sort of building to break into is data rather than
     another branch here.
 
-    Entrances land on the ground floor (the level above the basement, or the bottom one
-    if there isn't one) -- you come in at street level and find your own way down or up.
-    Re-rolls up to _BUILD_ATTEMPTS times and raises rather than hand back a building
-    whose objective can't be reached."""
+    Entrances land on the level the program named GROUND_FLOOR, wherever that falls in the
+    stack -- you come in at street level and find your own way down or up. Re-rolls up to
+    _BUILD_ATTEMPTS times and raises rather than hand back a building whose objective can't
+    be reached."""
     profile = BUILDING_PROFILES[kind]
     for _ in range(_BUILD_ATTEMPTS):
         programs = LEVEL_PROGRAMS[kind](rng)
@@ -498,20 +562,22 @@ def generate_building(
             continue
         links = tuple(stairs)
 
-        ground = min(len(levels) - 1, 1)  # street level: above the basement when there is one
+        ground = next((i for i, level in enumerate(levels) if level.name == GROUND_FLOOR), None)
+        if ground is None:
+            raise ValueError(f"{kind}'s level program names no {GROUND_FLOOR!r} level")
         rooms = levels[ground].rooms
         if len(rooms) < entrance_count:
             continue
         entrance_spawns = [(ground, room.center) for room in rng.sample(list(rooms), entrance_count)]
 
         taken |= set(entrance_spawns)
-        objective = _place(rng, levels, OBJECTIVE_ROOMS, taken)
+        objective = _place(rng, levels, profile.objective_rooms, taken)
         if objective is None:
             continue
         taken.add(objective)
         guards = []
         for _guard in range(profile.guards):
-            spot = _place(rng, levels, GUARD_ROOMS, taken)
+            spot = _place(rng, levels, profile.guard_rooms, taken)
             if spot is None:
                 break
             taken.add(spot)

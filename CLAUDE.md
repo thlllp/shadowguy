@@ -211,6 +211,7 @@ Leaf modules, and why each has to stay one:
 | 44 | `Character.dead_runners`/`arrested_runners` (a hire who goes down on a job) |
 | 45 | `BurglaryStage.kind` (the building tag) |
 | 46 | `BurglaryStage.building`/`guard`/`bailed` **replacing** its flat grid/objective/guards/spotted; `Entrance.spawn` is now (level, cell) |
+| 47 | the `OFFICE` `BuildingKind` — no shape change, but pre-v47 burglary targets are all residential and were placed by the old ground-floor rule |
 
 ### Verifying changes
 
