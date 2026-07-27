@@ -3,19 +3,38 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
+from shadowguy.buildings import BuildingKind, generate_building
+from shadowguy.checks import resolve_check
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
 from shadowguy.corp_turn import CorpState
 from shadowguy.factions import FACTIONS
+from shadowguy.jobs import DIFFICULTY_BASE
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
-from shadowguy.scene import MatrixStage, Outcome, TacticalStage
+from shadowguy.scene import BurglaryStage, Entrance, MatrixStage, Outcome, TacticalStage
+from shadowguy.skills import skill_for, skill_value
 from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
+from .burglary_screens import EntrancePickScreen
 from .corp_screen import CorpMainMenu
 from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
+
+# The same three entrance approaches jobs.py's Burglary/Wetwork APPROACH rows use
+# (skill, difficulty_delta, flavor), so the test menu's building matches what those
+# archetypes actually generate.
+_BURGLARY_APPROACHES = (
+    ("forgery", 1, "Front Door"),
+    ("stealth", 0, "Back Window"),
+    ("lift", -2, "Loading Dock"),
+)
+_WETWORK_APPROACHES = (
+    ("grapple", 1, "Perimeter Wall"),
+    ("infer", 0, "Service Entrance"),
+    ("intimidation", -2, "Front Gate"),
+)
 
 
 class QuitMenu(ModalScreen):
@@ -267,6 +286,8 @@ class TestMenu(BackScreen):
                     Static(f"Matrix Combat — Tier {min(ICE_TIERS)}"),
                     id=f"matrix_{min(ICE_TIERS)}",
                 ),
+                ListItem(Static("Burglary — Office"), id="burglary"),
+                ListItem(Static("Wetwork — Compound"), id="wetwork"),
             ),
             id="test_dialog",
         )
@@ -278,6 +299,10 @@ class TestMenu(BackScreen):
             self._start_tactical(int(item_id.removeprefix("tactical_")))
         elif item_id.startswith("matrix_"):
             self._start_matrix(int(item_id.removeprefix("matrix_")))
+        elif item_id == "burglary":
+            self._start_burglary(BuildingKind.OFFICE, _BURGLARY_APPROACHES)
+        elif item_id == "wetwork":
+            self._start_burglary(BuildingKind.COMPOUND, _WETWORK_APPROACHES)
 
     def _start_tactical(self, tier: int) -> None:
         rng = self.app.rng
@@ -310,3 +335,40 @@ class TestMenu(BackScreen):
 
     def _on_matrix_end(self, result: MatrixOutcome) -> None:
         self.notify(f"Test breach ended: {result.name.title()}.")
+
+    def _start_burglary(self, kind: BuildingKind, approaches: tuple[tuple[str, int, str], ...]) -> None:
+        rng = self.app.rng
+        tier = min(ENEMY_TIERS)
+        difficulty = DIFFICULTY_BASE[tier]
+        building = generate_building(rng, entrance_count=len(approaches), kind=kind)
+        entrances = tuple(
+            Entrance(
+                label=f"{flavor} ({skill_for(skill).name})",
+                skill=skill,
+                difficulty=difficulty + delta,
+                spawn=spawn,
+                success=Outcome(text="It goes clean."),
+                failure=Outcome(text="It gets messy, but you're in."),
+            )
+            for (skill, delta, flavor), spawn in zip(approaches, building.entrance_spawns, strict=True)
+        )
+        stage = BurglaryStage(
+            prompt=f"Test infiltration — {kind.value.title()}.",
+            entrances=entrances,
+            building=building,
+            bailed=Outcome(text="You back out empty-handed."),
+            guard=rng.choice(roll_enemies(tier, rng)),
+        )
+        self.app.push_screen(EntrancePickScreen(stage), lambda index: self._on_entrance_picked(stage, index))
+
+    def _on_entrance_picked(self, stage: BurglaryStage, index: int) -> None:
+        character = self.app.character
+        entrance = stage.entrances[index]
+        roll = resolve_check(skill_value(character, entrance.skill), entrance.difficulty, rng=self.app.rng)
+        outcome = entrance.outcome_for(roll.result)
+        self.notify(f"{roll.result.name}: {outcome.text}")
+        self.app.push_screen(TacticalScreen(stage, spawn=entrance.spawn), self._on_burglary_end)
+
+    def _on_burglary_end(self, result: TacticalOutcome) -> None:
+        self.app.character.health = self.app.character.max_health
+        self.notify(f"Test infiltration ended: {result.name.title()}.")

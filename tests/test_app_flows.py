@@ -13,6 +13,7 @@ import asyncio
 import random
 
 from shadowguy.app import ShadowguyApp
+from shadowguy.buildings import BuildingKind
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS, ActionKind
 from shadowguy.corpmap import (
@@ -34,6 +35,7 @@ from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet
+from shadowguy.screens.burglary_screens import EntrancePickScreen
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.corp_turn import (
@@ -440,7 +442,8 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
     """The Test menu was trimmed down to one Tactical Combat and one Matrix Combat
     entry (the lowest tier of each) rather than one row per combat.ENEMY_TIERS /
     matrix.ICE_TIERS entry -- lock that in so a future tier addition doesn't quietly
-    reopen the full list."""
+    reopen the full list. Burglary/Wetwork are each a single fixed building kind, not
+    tiered, so they always contribute exactly one row apiece."""
 
     async def body():
         app = ShadowguyApp()
@@ -451,7 +454,73 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
             assert isinstance(app.screen, GameTestMenu)
 
             ids = [item.id for item in app.screen.query_one(ListView).children]
-            assert ids == [f"tactical_{min(ENEMY_TIERS)}", f"matrix_{min(ICE_TIERS)}"]
+            assert ids == [f"tactical_{min(ENEMY_TIERS)}", f"matrix_{min(ICE_TIERS)}", "burglary", "wetwork"]
+
+    run(body())
+
+
+def test_test_menu_burglary_reaches_a_live_infiltration():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click("#burglary")
+            await pilot.pause()
+            assert isinstance(app.screen, EntrancePickScreen)
+
+            await pilot.click("ListView ListItem")  # pick the first entrance
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            assert not state.is_over
+
+            # Positional escape always works, regardless of the entrance check's roll --
+            # same trick the plain tactical test uses to end deterministically.
+            state.player.coord = next(iter(state.exits))
+            tac_screen.action_leave()
+            await pilot.pause()
+            assert state.is_over
+            assert state.outcome is TacticalOutcome.ESCAPED
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def test_test_menu_wetwork_reaches_a_live_infiltration_of_a_compound():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click("#wetwork")
+            await pilot.pause()
+            assert isinstance(app.screen, EntrancePickScreen)
+
+            await pilot.click("ListView ListItem")  # pick the first entrance
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            assert tac_screen.stage.building.kind is BuildingKind.COMPOUND
+
+            state = tac_screen.state
+            state.player.coord = next(iter(state.exits))
+            tac_screen.action_leave()
+            await pilot.pause()
+            assert state.is_over
+            assert state.outcome is TacticalOutcome.ESCAPED
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, GameTestMenu)
 
     run(body())
 
