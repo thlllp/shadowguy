@@ -13,6 +13,8 @@ import pytest
 from shadowguy.buildings import (
     BUILDING_PROFILES,
     LEVEL_PROGRAMS,
+    LOCK_DIFFICULTY,
+    LOCK_SKILLS,
     RESIDENTIAL_BATHROOMS,
     RESIDENTIAL_BEDROOMS,
     ROOM_LABELS,
@@ -174,6 +176,37 @@ def test_guards_stand_in_rooms_people_actually_stand_in(seed, kind):
         assert room.kind in profile.guard_rooms, f"{kind} guard posted in a {room.label()}"
 
 
+@pytest.mark.parametrize("kind", [k for k in KINDS if BUILDING_PROFILES[k].cameras > 0])
+@pytest.mark.parametrize("seed", SEEDS)
+def test_cameras_stand_in_rooms_that_make_sense(seed, kind):
+    """Same shape (and same fix) as the guard test above: a camera_rooms too narrow for
+    its own camera count sends placement through the any-free-room fallback -- OFFICE's
+    first cut (mirroring guard_rooms) put ~8% of cameras there instead."""
+    profile = BUILDING_PROFILES[kind]
+    building = generate_building(random.Random(seed), entrance_count=3, kind=kind)
+    assert len(building.cameras) == profile.cameras
+    for level_index, coord in building.cameras:
+        room = building.level(level_index).room_at(coord)
+        assert room.kind in profile.camera_rooms, f"{kind} camera posted in a {room.label()}"
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_residential_never_gets_a_camera(seed):
+    """A home has no monitored camera system to run into (BuildingProfile.cameras=0)."""
+    building = generate_building(random.Random(seed), entrance_count=3)  # default kind
+    assert building.cameras == ()
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_lock_sits_on_a_real_door_with_a_real_skill(seed, kind):
+    building = generate_building(random.Random(seed), entrance_count=3, kind=kind)
+    for (level_index, coord), lock in building.locks.items():
+        assert coord in building.level(level_index).doors
+        assert lock.skill in LOCK_SKILLS
+        assert lock.difficulty == LOCK_DIFFICULTY
+
+
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("seed", SEEDS)
 def test_levels_are_linked_in_a_chain_and_the_links_are_two_sided(seed, kind):
@@ -211,6 +244,38 @@ def test_every_entrance_can_reach_the_objective_across_levels(seed, kind):
                 if (level_index, step) not in seen
             ]
         assert building.objective in seen, f"{spawn} can't reach the objective"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_entrance_can_reach_the_objective_even_if_no_lock_is_ever_picked(seed, kind):
+    """generate_building has no idea which character will take the job, so it can't
+    assume any given Lock is ever pickable -- the objective must stay reachable in the
+    worst case where every locked door in the building stays locked forever. Same
+    independent flood as the test above, plus every locked cell treated as a wall."""
+    building = generate_building(random.Random(seed), entrance_count=3, kind=kind)
+    locked_by_level: dict[int, frozenset] = {}
+    for level_index, coord in building.locks:
+        locked_by_level[level_index] = locked_by_level.get(level_index, frozenset()) | {coord}
+    for spawn in building.entrance_spawns:
+        seen, frontier = set(), [spawn]
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            level_index, coord = current
+            grid = building.level(level_index).grid
+            side = building.links_at(level_index, coord)
+            if side is not None:
+                frontier.append(side)
+            blocked = locked_by_level.get(level_index, frozenset())
+            frontier += [
+                (level_index, step)
+                for step in step_neighbors(grid, coord, blocked=blocked)
+                if (level_index, step) not in seen
+            ]
+        assert building.objective in seen, f"{spawn} can't reach the objective with locks as walls"
 
 
 def test_every_kind_has_a_profile_and_a_level_program():

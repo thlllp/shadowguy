@@ -337,14 +337,45 @@ the table to extend when a new `BuildingKind` lands, not `generate_job`.
 Wetwork's structure isn't in this table at all (`jobs.WETWORK_STRUCTURE`, a bare constant):
 it's always `COMPOUND`, whatever the job site's own kind, since a Wetwork target is holed
 up in their own place rather than broken into as a business's building — see Wetwork's row
-in `jobs.ARCHETYPES` and `generate_job`'s `job_stage.burglary` branch, which reads `archetype.name`
-to pick between the two.
+in `jobs.ARCHETYPES` and `generate_job`'s `job_stage.burglary` branch, which reads
+`archetype.wetwork` (a whole-job flag set once at `ARCHETYPES` construction, the same
+pattern as `archetype.matrix`/`vigilance`) to pick between the two.
 
-A profile's `guard_rooms` must be **wide enough to seat that profile's own `guards`
-count**. It isn't checked at import (it depends on what a level program happened to roll),
-but the fallback that covers a too-narrow tuple degrades quietly rather than failing: the
-office shipped two guards against three sometimes-absent rooms and put ~9% of them in
-bathrooms and storage closets. `tests/test_buildings.py` asserts the valve never fires.
+A profile's `guard_rooms`/`camera_rooms` must be **wide enough to seat that profile's own
+`guards`/`cameras` count**. Neither is checked at import (it depends on what a level
+program happened to roll), but the fallback that covers a too-narrow tuple degrades
+quietly rather than failing: the office shipped two guards against three sometimes-absent
+rooms and put ~9% of them in bathrooms and storage closets, and its first cut of
+`camera_rooms` (mirroring `guard_rooms`) put ~8% of cameras in the same place — widened to
+every room kind `OFFICE`'s own program ever builds, since a camera system plausibly covers
+the whole building rather than a guard's specific post. `tests/test_buildings.py` asserts
+the valve never fires for either.
+
+**Locked doors are a per-door coin flip, not a room preference** (`BuildingProfile.
+locked_door_chance`, rolled independently against every cell in a `Level`'s `doors` --
+generation's own record of where `_cut_door` opened one, since a `Tile` can't tell a
+doorway from open floor). A locked `buildings.Lock` names a skill (hack for an electronic
+lock, infiltration for a mechanical one, a coin flip) and a difficulty
+(`buildings.LOCK_DIFFICULTY`, a flat first-slice number). `RESIDENTIAL` locks rarely
+(0.05 — a strongbox room, not a norm), `OFFICE` more (0.15 — records, server closets),
+`COMPOUND` most (0.2 — an owner's own study or vault). `tactical.attempt_lock` resolves it
+the instant the player steps toward a locked cell rather than gating a separate action:
+success clears the `Lock` from `Building.locks` for good and steps them through; failure
+costs the move anyway and risks the alarm (`LOCK_FAILURE_ALARM_CHANCE`, always on a
+critical failure, same shape as a burglary entrance's own). Since `generate_building` has
+no way to know which character will take the job, a lock can't assume it's ever pickable
+for a given build — so after placing them, it re-runs the same reachability flood
+(`_reachable`, now taking an optional `blocked` map) treating every locked door as a wall,
+and drops every lock in the building rather than hand back one a bad roll sealed the
+objective behind.
+
+**Cameras are a fixed hazard, not a Unit** (`Building.cameras`, (level, cell) positions
+same shape as `guards`). `check_detection` gives a camera position the identical
+`GUARD_SIGHT_RANGE` range+LOS test a guard gets, but it's never `alerted`-gated, never
+moves, and — unlike a guard — can't be fought or sneaked around by knocking it out; only
+avoiding its sightline works. `RESIDENTIAL` has none (a home has no monitored system to
+run into); `OFFICE` runs the heaviest (two); `COMPOUND` a lighter one, since its guards do
+most of the watching.
 
 **A burglary building is job-scoped and invisible.** It's generated with the job, lives
 inside its `Scene` (`BurglaryStage.building`), and goes away when the job is finished or

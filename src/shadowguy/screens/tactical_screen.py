@@ -188,7 +188,7 @@ class TacticalScreen(Screen):
             self._refresh()
             return
         px, py = self.state.player.coord
-        move_player(self.state, (px + dx, py + dy))
+        move_player(self.state, (px + dx, py + dy), self.app.rng)
         self._refresh()
 
     def action_fire(self) -> None:
@@ -316,6 +316,12 @@ class TacticalScreen(Screen):
             if state.objective is not None and state.objective[0] == state.level_index:
                 ox, oy = state.objective[1]
                 glyphs[oy][ox], styles[(oy, ox)] = "$", "bold yellow"
+            for level, (dx, dy) in state.building.locks:
+                if level == state.level_index:
+                    glyphs[dy][dx], styles[(dy, dx)] = "+", "bold red"
+            for level, (mx, my) in state.building.cameras:
+                if level == state.level_index:
+                    glyphs[my][mx], styles[(my, mx)] = "o", "bold magenta"
         # A downed unit -- hire or hostile -- greys out rather than vanishing: they're
         # still a body on the floor you can walk over (and, for a hire, patch up).
         for unit in state.units:

@@ -24,7 +24,7 @@ import tcod.bsp
 import tcod.random
 
 from shadowguy.character import Character
-from shadowguy.checks import resolve_rng
+from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
     Enemy,
     attack_verbs,
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     # points one way at runtime: a burglary hands its Building in, and everything this
     # module does with one (walk a level's grid, follow a link) is duck-typed. Same
     # trick, same reason, as rivals.py's Fixer import.
-    from shadowguy.buildings import Building
+    from shadowguy.buildings import Building, Lock
 
 Coord = tuple[int, int]  # (x, y)
 
@@ -600,6 +600,11 @@ def check_detection(state: TacticalState) -> bool:
     and with a clear line is seen. Raises the alarm for the whole building the first time
     anyone does -- a shout carries -- and returns whether anyone just spotted them.
 
+    A Building.cameras position gets the identical range+LOS test, but it's not a Unit --
+    fixed, unalerted-forever, and (unlike a guard) nothing the player can fight or sneak
+    past by knocking it out. Guards are checked first only because a guard's name makes
+    the better log line when both would catch you the same turn.
+
     Called after each thing the player does that could give them away (moving, taking
     stairs, attacking), which is what makes position the whole game while sneaking."""
     if state.building is None or state.is_over:
@@ -610,9 +615,16 @@ def check_detection(state: TacticalState) -> bool:
         for unit in state.enemies
         if not unit.alerted and in_reach(state.grid, unit.coord, player, GUARD_SIGHT_RANGE)
     ]
-    if not spotted_by:
+    if spotted_by:
+        raise_alarm(state, f"{spotted_by[0].name} spots you.")
+        return True
+    seen_by_camera = any(
+        level == state.level_index and in_reach(state.grid, coord, player, GUARD_SIGHT_RANGE)
+        for level, coord in state.building.cameras
+    )
+    if not seen_by_camera:
         return False
-    raise_alarm(state, f"{spotted_by[0].name} spots you.")
+    raise_alarm(state, "A camera catches you.")
     return True
 
 
@@ -649,15 +661,51 @@ def legal_moves(state: TacticalState) -> list[Coord]:
     return step_neighbors(state.grid, state.player.coord, blocked=state.occupied(exclude=state.player))
 
 
-def move_player(state: TacticalState, dest: Coord) -> bool:
-    """Take one step. Returns False (spending nothing) if the step isn't legal."""
+def move_player(state: TacticalState, dest: Coord, rng: random.Random | None = None) -> bool:
+    """Spend the player's move on `dest`. Returns False (spending nothing) only if the
+    step isn't legal at all -- a locked door resolves a pick-the-lock check instead of a
+    plain step (see attempt_lock), and still returns True on a failed pick: the move was
+    spent attempting it, even though state.player.coord didn't change. Check that
+    directly if "did the player actually end up on dest" is what you need."""
     if dest not in legal_moves(state):
         return False
+    lock = lock_at(state, dest)
+    if lock is not None:
+        attempt_lock(state, dest, lock, rng)
+        return True
     state.player.coord = dest
     state.moves_left -= 1
     check_detection(state)
     _settle(state)
     return True
+
+
+def lock_at(state: TacticalState, coord: Coord) -> "Lock | None":
+    """The still-locked door on this cell of the level currently on the board, if any."""
+    if state.building is None:
+        return None
+    return state.building.locks.get((state.level_index, coord))
+
+
+def attempt_lock(state: TacticalState, dest: Coord, lock: "Lock", rng: random.Random | None = None) -> None:
+    """Try the lock instead of just walking through it. Costs the move either way:
+    success clears it for good and steps the player through; failure leaves it standing
+    and risks the alarm -- an ordinary failure only sometimes (LOCK_FAILURE_ALARM_CHANCE),
+    a critical failure always, same shape as a burglary entrance's own critical failure."""
+    rng = resolve_rng(rng)
+    roll = resolve_check(skill_value(state.character, lock.skill), lock.difficulty, rng=rng)
+    state.moves_left -= 1
+    if roll.result.passed:
+        del state.building.locks[(state.level_index, dest)]
+        state.player.coord = dest
+        state.log.append("The lock gives. You're through.")
+    elif roll.result is CheckResult.CRITICAL_FAILURE or rng.random() < LOCK_FAILURE_ALARM_CHANCE:
+        state.log.append("The lock holds, and something trips.")
+        raise_alarm(state, "An alarm you didn't see screams.")
+    else:
+        state.log.append("The lock holds.")
+    check_detection(state)
+    _settle(state)
 
 
 def in_reach(grid: Grid, origin: Coord, target: Coord, reach: int) -> bool:
@@ -1387,5 +1435,13 @@ def generate_map(
 # A guard's static sightline is capped the same way combat.Enemy.reach caps an
 # attack's: has_line_of_sight is unlimited-range by design (see _fov's docstring),
 # so an uncapped guard would spot the walker from clear across an open room the
-# instant a sightline cleared -- far harsher than anything else in the game.
+# instant a sightline cleared -- far harsher than anything else in the game. A
+# Building.cameras position reuses this same range rather than getting its own --
+# one fewer unbalanced knob, and there's no basis yet to tune it separately.
 GUARD_SIGHT_RANGE = 4
+
+# A failed lock pick (attempt_lock) doesn't raise the alarm outright -- this is the
+# chance an ordinary failure still trips it; a critical failure always does, the same
+# shape as a burglary entrance's own critical failure always going loud. First-slice
+# number, not balance-simulated.
+LOCK_FAILURE_ALARM_CHANCE = 0.3
