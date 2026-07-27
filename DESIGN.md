@@ -297,9 +297,13 @@ line of links and a compound is several ground-level grids side by side with a c
 below, and neither needs a special case. Every position in it is `(level index, cell)`.
 
 Levels are built from **rooms with kinds** (`RoomKind`), not BSP leaves. Kinds are load-
-bearing: `OBJECTIVE_ROOMS` keeps the score somewhere valuables live (a bedroom, a
-basement), `GUARD_ROOMS` puts the watcher where a person actually stands, and the walk
-names the room you're in. Layout is **hall-centric** — the room touching the most others
+bearing: a profile's `objective_rooms` keeps the score somewhere valuables live (a bedroom
+or a basement in a house, a desk or a server closet in an office), its `guard_rooms` puts
+the watcher where a person actually stands, and the walk names the room you're in. Both
+are **per-`BuildingKind`, not global** — a union across every kind would happily drop an
+office's prize in somebody's bedroom. Both are also preferences, not requirements: a level
+holding none of the named rooms falls back to any room not already spoken for, so a new
+`RoomKind` can never make generation fail. Layout is **hall-centric** — the room touching the most others
 becomes circulation and everything with a wall against it gets a door — which is what
 makes a floorplan read like a home rather than a chopped rectangle. Furniture is scattered
 *before* the connectivity check, with doorways and their approaches kept clear, because a
@@ -308,8 +312,30 @@ chair in the wrong cell seals a room as effectively as a wall.
 **What a building is, is data** (`BuildingKind` → `BUILDING_PROFILES` + `LEVEL_PROGRAMS`,
 both import-guarded to cover every kind). `RESIDENTIAL` is a basement, a ground floor and
 an upstairs, with 2-4 bedrooms and 1-2 bathrooms (the second bath goes downstairs, where a
-house puts it). Adding Office or Compound is a profile row and a level program, not a
-branch in the generator. First-slice numbers, not balance-simulated.
+house puts it). `OFFICE` is 2-4 storeys with no basement — reception at street level,
+offices and the odd conference/break/server/storage room above — wider than a house,
+barer to cross, and watched by two guards instead of one. Adding Compound is a profile row
+and a level program, not a branch in the generator. First-slice numbers, not
+balance-simulated.
+
+Which level you walk in on is a **name, not an index**: every level program must name one
+level `GROUND_FLOOR`, and entrances land there. A house stacks a basement underneath it
+and an office starts at it, so the old "index 1, or 0 if there's only one level" rule
+silently put an office's entrances on the first floor up.
+
+**The site picks the structure** (`jobs.BURGLARY_STRUCTURE`, same shape and import guard
+as `corpmap.LOCATION_SKILL`: exactly one entry per `GENERATED_KINDS` kind). Data havens,
+labs, depots, clinics, hospitals, real-estate offices and auto dealers are `OFFICE`; bars,
+pawn shops, weapon shops, pharmacies and computer stores are `RESIDENTIAL`, on the reading
+that a street-front shop has somebody living over it. Assignments are first-slice — moving
+a kind across is one line, and needs no generator change. This is the table to extend when
+a third `BuildingKind` lands, not `generate_job`.
+
+A profile's `guard_rooms` must be **wide enough to seat that profile's own `guards`
+count**. It isn't checked at import (it depends on what a level program happened to roll),
+but the fallback that covers a too-narrow tuple degrades quietly rather than failing: the
+office shipped two guards against three sometimes-absent rooms and put ~9% of them in
+bathrooms and storage closets. `tests/test_buildings.py` asserts the valve never fires.
 
 **A burglary building is job-scoped and invisible.** It's generated with the job, lives
 inside its `Scene` (`BurglaryStage.building`), and goes away when the job is finished or
