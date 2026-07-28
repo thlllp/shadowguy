@@ -258,13 +258,15 @@ class Side(StrEnum):
 
 class AimKind(StrEnum):
     """What the aim cursor is currently pointing *for*, and so which confirm the screen's
-    Enter resolves (see confirm_aim). Both kinds drive the same cursor with the same keys;
+    Enter resolves (see confirm_aim). All three drive the same cursor with the same keys;
     they differ only in what makes a cell legal and what lands there — an attack needs an
     enemy standing on the cell and a weapon that reaches it, a grenade needs a tile in
-    throwing range and takes anything in the blast with it."""
+    throwing range and takes anything in the blast with it. LOOK confirms nothing (see
+    begin_look) — it's read-only, so confirm_aim has no branch for it."""
 
     ATTACK = "attack"
     GRENADE = "grenade"
+    LOOK = "look"
 
 
 class TacticalOutcome(StrEnum):
@@ -964,6 +966,18 @@ def begin_grenade_aim(state: TacticalState, consumable_index: int) -> None:
     state.aim_cursor = state.player.coord
     state.aim_kind = AimKind.GRENADE
     state.pending_grenade_index = consumable_index
+
+
+def begin_look(state: TacticalState) -> bool:
+    """Enter the same cursor mode aim/throw use, pointed at nothing in particular — just a
+    way to read the map before committing to a move. Starts on the player's own tile, the
+    same safe default begin_grenade_aim opens on. Spends nothing and needs no target, so
+    it only refuses when the fight's already over."""
+    if state.is_over:
+        return False
+    state.aim_cursor = state.player.coord
+    state.aim_kind = AimKind.LOOK
+    return True
 
 
 def move_aim_cursor(state: TacticalState, dx: int, dy: int) -> None:

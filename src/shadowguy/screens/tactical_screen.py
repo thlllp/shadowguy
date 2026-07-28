@@ -17,6 +17,7 @@ from shadowguy.tactical import (
     available_grenades,
     begin_attack_aim,
     begin_grenade_aim,
+    begin_look,
     best_shot,
     cancel_aim,
     confirm_aim,
@@ -105,6 +106,7 @@ class TacticalScreen(Screen):
         # tab -> focus_next binding, which would otherwise eat the key.
         Binding("tab", "next_target", "Next target", priority=True),
         ("s", "stabilize", "Stabilize crew"),
+        ("x", "look", "Look"),
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
         (">", "stairs", "Take stairs"),
@@ -205,7 +207,7 @@ class TacticalScreen(Screen):
         self._refresh()
 
     def action_next_target(self) -> None:
-        if self.state.aim_cursor is None:
+        if self.state.aim_cursor is None or self.state.aim_kind is AimKind.LOOK:
             return
         if not snap_aim_to_next_target(self.state):
             self.notify("Nothing in reach to snap to.")
@@ -240,6 +242,44 @@ class TacticalScreen(Screen):
             begin_grenade_aim(self.state, index)
         else:
             throw_grenade(self.state, index)
+
+    def action_look(self) -> None:
+        """Open a read-only cursor (the same one aim/throw drive) for reading the map --
+        what's on a tile, without spending the turn's action or its move budget."""
+        if self.state.is_over or self.state.aim_cursor is not None:
+            return
+        begin_look(self.state)
+        self._refresh()
+
+    def _look_text(self, coord: tuple[int, int]) -> str:
+        """What's on this cell, in words -- the look cursor's answer. Reads the same
+        building/exit/unit data _map_text's glyphs come from, just as a sentence."""
+        state = self.state
+        unit = next((u for u in state.units if u.coord == coord), None)
+        if unit is None:
+            subject = {Tile.WALL: "Wall", Tile.LOW_COVER: "Low cover"}.get(state.grid.tile(coord), "Floor")
+        elif unit.side is Side.PLAYER:
+            subject = "You"
+        elif unit.is_down:
+            subject = f"{unit.name} (down)"
+        else:
+            side = "Ally" if unit.is_ally else "Guard" if state.building is not None else "Enemy"
+            subject = f"{unit.name} ({side}, {unit.health}/{unit.stats.health} health)"
+
+        notes = []
+        if coord in state.exits:
+            notes.append("exit")
+        if state.building is not None:
+            if state.building.links_at(state.level_index, coord) is not None:
+                notes.append("stairs")
+            lock = state.building.locks.get((state.level_index, coord))
+            if lock is not None:
+                notes.append(f"locked door ({lock.skill})")
+            if (state.level_index, coord) in state.building.cameras:
+                notes.append("camera")
+            if state.objective == (state.level_index, coord):
+                notes.append("the objective")
+        return f"{subject} — {', '.join(notes)}" if notes else subject
 
     def action_stabilize(self) -> None:
         """Patch up a downed hire you're standing next to. Which body and whether it's
@@ -276,6 +316,10 @@ class TacticalScreen(Screen):
         self._refresh()
 
     def action_continue(self) -> None:
+        if self.state.aim_kind is AimKind.LOOK:
+            cancel_aim(self.state)
+            self._refresh()
+            return
         if self.state.aim_cursor is not None:
             aiming_attack = self.state.aim_kind is AimKind.ATTACK
             if not confirm_aim(self.state, self.app.rng):
@@ -350,7 +394,10 @@ class TacticalScreen(Screen):
                     for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
                     for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
                 )
-            cursor_style = "bold green underline" if cursor_legal else "bold red underline"
+            if state.aim_kind is AimKind.LOOK:
+                cursor_style = "bold cyan underline"
+            else:
+                cursor_style = "bold green underline" if cursor_legal else "bold red underline"
 
         text = Text()
         for y in range(grid.height):
@@ -398,15 +445,23 @@ class TacticalScreen(Screen):
         status.display = True
 
         aiming = state.aim_cursor is not None
+        looking = state.aim_kind is AimKind.LOOK
         verb = "fire" if aiming_attack else "throw"
-        self.query_one("#tac_end", Static).update(
-            f"Aiming — arrows move the target, Tab for the next one, Enter to {verb}, Esc to cancel."
-            if aiming
-            else ""
-        )
+        if looking:
+            end_text = f"{self._look_text(state.aim_cursor)}   (arrows to move, Enter/Esc to stop looking)"
+        elif aiming:
+            end_text = f"Aiming — arrows move the target, Tab for the next one, Enter to {verb}, Esc to cancel."
+        else:
+            end_text = ""
+        self.query_one("#tac_end", Static).update(end_text)
 
         on_exit = state.player.coord in state.exits
-        move_detail = "aiming target" if aiming else f"{state.moves_left}/{state.player.speed} left"
+        if looking:
+            move_detail = "looking"
+        elif aiming:
+            move_detail = "aiming target"
+        else:
+            move_detail = f"{state.moves_left}/{state.player.speed} left"
         if aiming_attack:
             # Name the weapon that would fire and who it's pointed at: the weapon is
             # picked for you (weapon_for_target), so the readout is where the player
@@ -417,7 +472,7 @@ class TacticalScreen(Screen):
         else:
             attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
         grenades = available_grenades(state)
-        if aiming:
+        if state.aim_kind is AimKind.GRENADE:
             grenade_detail = "aiming — enter/esc"
         else:
             grenade_detail = "used" if state.acted else (f"{len(grenades)} ready" if grenades else "none carried")
