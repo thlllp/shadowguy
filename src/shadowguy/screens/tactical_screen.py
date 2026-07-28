@@ -1,3 +1,4 @@
+import numpy as np
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -251,11 +252,19 @@ class TacticalScreen(Screen):
         begin_look(self.state)
         self._refresh()
 
-    def _look_text(self, coord: tuple[int, int]) -> str:
+    def _look_text(self, coord: tuple[int, int], seen: np.ndarray) -> str:
         """What's on this cell, in words -- the look cursor's answer. Reads the same
-        building/exit/unit data _map_text's glyphs come from, just as a sentence."""
+        building/exit/unit data _map_text's glyphs come from, just as a sentence. Fog of
+        war applies here too: nothing you haven't seen, and units only while you can
+        presently see them, same as the map itself. `seen` is the caller's one FOV pass
+        for this frame, shared with _map_text so a look doesn't cost a second."""
         state = self.state
-        unit = next((u for u in state.units if u.coord == coord), None)
+        is_seen = bool(seen[coord[1], coord[0]])
+        if not is_seen and coord not in state.explored.get(state.level_index, set()):
+            return "Unknown -- you haven't seen this."
+        unit = next(
+            (u for u in state.units if u.coord == coord and (u.side is Side.PLAYER or is_seen)), None
+        )
         if unit is None:
             subject = {Tile.WALL: "Wall", Tile.LOW_COVER: "Low cover"}.get(state.grid.tile(coord), "Floor")
         elif unit.side is Side.PLAYER:
@@ -338,15 +347,16 @@ class TacticalScreen(Screen):
             cancel_aim(self.state)
             self._refresh()
 
-    def _map_text(self, cursor_legal: bool) -> Text:
+    def _map_text(self, cursor_legal: bool, seen: np.ndarray) -> Text:
         state = self.state
         grid = state.grid
         terrain = [[_terrain_glyph(grid, x, y) for x in range(grid.width)] for y in range(grid.height)]
         glyphs = [[terrain[y][x][0] for x in range(grid.width)] for y in range(grid.height)]
-        # Tiles outside the player's current FOV render dimmed, not hidden -- there's no
-        # fog-of-war here (the whole map is always known), just a visual cue for "not
-        # looking that way right now" that reads as depth.
-        seen = visible_tiles(grid, state.player.coord)
+        # Fog of war: tiles currently in FOV render normally, tiles seen before but not
+        # now render dimmed (terrain and static features only), and everything else is
+        # blank -- see DESIGN.md's Tactical section. `seen` is the caller's one FOV pass
+        # for this frame, shared with _look_text so a look doesn't cost a second.
+        explored = state.explored.get(state.level_index, set())
         styles: dict[tuple[int, int], str] = {}
         for ex, ey in state.exits:
             if grid.tiles[ey][ex] is Tile.FLOOR:
@@ -367,9 +377,13 @@ class TacticalScreen(Screen):
                 if level == state.level_index:
                     glyphs[my][mx], styles[(my, mx)] = "o", "bold magenta"
         # A downed unit -- hire or hostile -- greys out rather than vanishing: they're
-        # still a body on the floor you can walk over (and, for a hire, patch up).
+        # still a body on the floor you can walk over (and, for a hire, patch up). But
+        # only while you can currently see them -- fog of war remembers terrain and fixed
+        # features, not who's standing (or lying) where right now.
         for unit in state.units:
             ux, uy = unit.coord
+            if unit.side is not Side.PLAYER and not seen[uy, ux]:
+                continue
             if unit.side is Side.PLAYER:
                 glyphs[uy][ux], styles[(uy, ux)] = "@", "bold cyan"
             elif unit.is_down:
@@ -402,15 +416,25 @@ class TacticalScreen(Screen):
         text = Text()
         for y in range(grid.height):
             for x in range(grid.width):
-                ch = glyphs[y][x]
-                default = terrain[y][x][1]
-                if (y, x) not in styles and not seen[y, x]:
-                    default = f"{default} dim"
-                style = styles.get((y, x), default)
+                known = seen[y, x] or (x, y) in explored
+                in_blast = (y, x) in blast
+                if not known and (y, x) != cursor and not in_blast:
+                    text.append(" ")
+                    continue
                 if (y, x) == cursor:
-                    style = cursor_style
-                elif (y, x) in blast:
-                    style = f"{style} on grey15"
+                    ch, style = (glyphs[y][x] if known else "?"), cursor_style
+                elif not known:
+                    # In the blast but never seen: still blank -- fog of war doesn't
+                    # loosen for it -- but tinted, since the reach of your own throw
+                    # isn't map intel to gate on visibility.
+                    ch, style = " ", "on grey15"
+                else:
+                    style = styles.get((y, x), terrain[y][x][1])
+                    if not seen[y, x]:
+                        style = f"{style} dim"
+                    if in_blast:
+                        style = f"{style} on grey15"
+                    ch = glyphs[y][x]
                 text.append(ch, style=style)
             text.append("\n")
         return text
@@ -428,8 +452,12 @@ class TacticalScreen(Screen):
             else state.aim_cursor is not None and aim_is_legal(state, state.aim_cursor)
         )
 
+        # One FOV pass for the whole frame -- _map_text and (while looking) _look_text
+        # both read it rather than each recomputing it.
+        seen = visible_tiles(state.grid, state.player.coord)
+
         self.query_one(CharacterSheet).refresh()
-        self.query_one("#tac_map", Static).update(self._map_text(cursor_legal))
+        self.query_one("#tac_map", Static).update(self._map_text(cursor_legal, seen))
         self.query_one("#tac_log", Static).update(Text("\n".join(state.log[-TACTICAL_LOG_LINES:])))
 
         status = self.query_one("#tac_status", Horizontal)
@@ -448,7 +476,7 @@ class TacticalScreen(Screen):
         looking = state.aim_kind is AimKind.LOOK
         verb = "fire" if aiming_attack else "throw"
         if looking:
-            end_text = f"{self._look_text(state.aim_cursor)}   (arrows to move, Enter/Esc to stop looking)"
+            end_text = f"{self._look_text(state.aim_cursor, seen)}   (arrows to move, Enter/Esc to stop looking)"
         elif aiming:
             end_text = f"Aiming — arrows move the target, Tab for the next one, Enter to {verb}, Esc to cancel."
         else:
