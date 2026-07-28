@@ -12,7 +12,6 @@ from shadowguy.character import Character
 from shadowguy.combat import CombatOutcome, Drop
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
-    MODIFIER_MAX,
     OWNER_COLORS,
     PLAYER_OWNED_KINDS,
     SHOP_KINDS,
@@ -84,7 +83,6 @@ from .shop_screens import (
 )
 
 TRAVEL_HOURS_COST = 2.0
-MODIFIER_COLUMN = 13
 
 
 def _travel_hours(character: Character) -> float:
@@ -167,14 +165,11 @@ class CorpMapScreen(BackScreen):
         padding: 0 1;
     }
 
-    #territory_info {
-        height: auto;
-        border-top: solid $accent;
-        padding: 0 1;
-    }
-
-    #modifiers {
-        height: auto;
+    #territory_summary {
+        /* Fixed height (not auto) -- _territory_summary_text always renders
+        exactly 4 lines, so hovering a different territory never resizes this
+        panel and shoves #map_scroll's scroll position around. */
+        height: 4;
         border-top: solid $accent;
         padding: 0 1;
     }
@@ -226,8 +221,7 @@ class CorpMapScreen(BackScreen):
                 yield ListView(id="categories")
             with Vertical(id="main_panel"):
                 yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
-                yield Static(id="territory_info")
-                yield Static(markup=False, id="modifiers")
+                yield Static(markup=False, id="territory_summary")
                 yield ListView(id="activities")
                 yield Collapsible(
                     ListView(id="local_locations"), title="Locations", collapsed=False, id="local_locations_panel"
@@ -538,8 +532,7 @@ class CorpMapScreen(BackScreen):
         is_corp = self.selected_category == "corp"
 
         self.query_one("#map_scroll").display = in_map
-        self.query_one("#territory_info").display = in_map
-        self.query_one("#modifiers").display = in_map
+        self.query_one("#territory_summary").display = in_map
         self.query_one("#activities").display = not in_map
         self.query_one("#local_locations_panel").display = is_local or in_map
         self.query_one("#local_fixers_panel").display = is_local or in_map
@@ -575,25 +568,7 @@ class CorpMapScreen(BackScreen):
 
         t = corp_map.territories[self.hovered_id or self.selected_id]
         here = corp_map.territories[character.location_id]
-        borders = ", ".join(corp_map.territories[c].name for c in t.connections)
-        locations = ", ".join(f"{loc.name} ({loc.kind})" for loc in t.locations)
-        fixer_here = next(
-            (
-                fixer
-                for fixer in self.app.fixers
-                if fixer.location_id == t.id and fixer.id in character.discovered_fixers
-            ),
-            None,
-        )
-        fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
-        gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
-        self.query_one("#territory_info", Static).update(
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}\n"
-            f"Borders: {borders}\n"
-            f"Locations: {locations}\n"
-            f"{self._travel_hint(t, here, character)}"
-        )
-        self.query_one("#modifiers", Static).update(self._modifier_panel(t))
+        self.query_one("#territory_summary", Static).update(self._territory_summary_text(t, here, character))
         self.query_one(CharacterSheet).refresh()
         # Cancel any still-running refresh for a previously hovered/selected territory
         # before starting this one -- otherwise two overlapping tasks race to
@@ -631,12 +606,30 @@ class CorpMapScreen(BackScreen):
             empty_id="no_map_local_fixers",
         )
 
-    def _modifier_panel(self, t: Territory) -> str:
-        labels, levels = [], []
-        for modifier, level in t.modifiers.items():
-            labels.append(MODIFIER_LABELS[modifier].ljust(MODIFIER_COLUMN))
-            levels.append(f"{level}/{MODIFIER_MAX}".ljust(MODIFIER_COLUMN))
-        return f"{''.join(labels).rstrip()}\n{''.join(levels).rstrip()}"
+    def _territory_summary_text(self, t: Territory, here: Territory, character: Character) -> str:
+        """Always exactly 4 lines -- #territory_summary is a fixed-height panel (see
+        its CSS) precisely so a different territory's summary never resizes it and
+        shoves #map_scroll's scroll position around."""
+        borders = ", ".join(self.app.corp_map.territories[c].name for c in t.connections)
+        fixer_here = next(
+            (
+                fixer
+                for fixer in self.app.fixers
+                if fixer.location_id == t.id and fixer.id in character.discovered_fixers
+            ),
+            None,
+        )
+        fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
+        gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
+        modifier_line = "  ".join(
+            f"{MODIFIER_LABELS[modifier]}:{level}" for modifier, level in t.modifiers.items()
+        )
+        return (
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}\n"
+            f"Borders: {borders}\n"
+            f"{modifier_line}\n"
+            f"{self._travel_hint(t, here, character)}"
+        )
 
     def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
         if t.id == here.id:
