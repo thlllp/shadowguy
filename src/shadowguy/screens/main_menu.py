@@ -1,6 +1,5 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corpmap import (
@@ -16,15 +15,15 @@ from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.scene import Scene
 
 from . import (
-    MENU_QUIT_BINDINGS,
+    MENU_BACK_BINDINGS,
     PANEL_NAV_BINDINGS,
+    BackScreen,
     CharacterSheet,
     PanelNav,
     _populate_list,
     _replace_items,
     matrix_warning,
 )
-from .corp_map_screen import CorpMapScreen
 from .corp_screen import CorpScreen
 from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
 from .scene_screen import SceneScreen
@@ -41,10 +40,14 @@ from .shop_screens import (
 )
 
 
-class MainMenu(PanelNav, Screen):
+class MainMenu(PanelNav, BackScreen):
+    """Pushed from CorpMapScreen (the actual home screen) via its 'm' binding -- escape
+    (MENU_BACK_BINDINGS, inherited BackScreen.action_back) pops back to the map, so
+    there's no "Corp Map" category/binding here any more; the map is what this sits on
+    top of, not a destination from inside it."""
+
     BINDINGS = [
-        *MENU_QUIT_BINDINGS,
-        ("m", "corp_map", "Corp Map (preview)"),
+        *MENU_BACK_BINDINGS,
         ("r", "run_corp", "Run a Corp"),
         ("i", "inventory", "Gear"),
         ("d", "cyberdeck", "Cyberdeck"),
@@ -90,13 +93,14 @@ class MainMenu(PanelNav, Screen):
         ("cyberdeck", "Cyberdeck"),
         ("skills", "Skills"),
         ("phone", "Phone"),
-        ("map", "Corp Map"),
         ("corp", "Corp"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
-        self.selected_category = self.CATEGORIES[0][0]
+        # Read the app's remembered category rather than always defaulting to the
+        # first one -- see ShadowguyApp.main_menu_category.
+        self.selected_category = self.app.main_menu_category
 
     @property
     def PANEL_IDS(self) -> tuple[str, ...]:
@@ -123,9 +127,6 @@ class MainMenu(PanelNav, Screen):
             ),
         )
         yield Footer()
-
-    def action_corp_map(self) -> None:
-        self.app.push_screen(CorpMapScreen())
 
     def action_run_corp(self) -> None:
         self.app.push_screen(CorpScreen())
@@ -348,8 +349,6 @@ class MainMenu(PanelNav, Screen):
     async def _select_category(self, key: str) -> None:
         if key == "phone":
             self.app.push_screen(PhoneScreen())
-        elif key == "map":
-            self.app.push_screen(CorpMapScreen())
         elif key == "corp":
             self.app.push_screen(CorpScreen())
         elif key == "gear":
@@ -359,4 +358,5 @@ class MainMenu(PanelNav, Screen):
         elif key == "skills":
             self.app.push_screen(SkillsScreen())
         self.selected_category = key
+        self.app.main_menu_category = key
         await self._refresh()
