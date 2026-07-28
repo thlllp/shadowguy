@@ -962,6 +962,14 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
+            # Each Location is a Collapsible box, collapsed by default -- expand it and
+            # scroll its "Enter" row into view (an expanded box's stock list can run
+            # taller than the 80x60 test viewport) before clicking it.
+            app.screen.query_one(f"#local_box_{shop_location.id}", Collapsible).collapsed = False
+            await pilot.pause()
+            enter_row = app.screen.query_one(f"#local_{shop_location.id}")
+            enter_row.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
             await pilot.click(f"#local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -1000,6 +1008,14 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
+            await pilot.pause()
+            # Each Location is a Collapsible box, collapsed by default -- expand it and
+            # scroll its "Enter" row into view (an expanded box's stock list can run
+            # taller than the 80x60 test viewport) before clicking it.
+            app.screen.query_one(f"#local_box_{store_location.id}", Collapsible).collapsed = False
+            await pilot.pause()
+            enter_row = app.screen.query_one(f"#local_{store_location.id}")
+            enter_row.scroll_visible(animate=False, immediate=True)
             await pilot.pause()
             await pilot.click(f"#local_{store_location.id}")
             await pilot.pause()
@@ -1825,7 +1841,10 @@ def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
     run(body())
 
 
-def test_local_panels_are_visible_in_map_mode_and_local_category():
+def test_local_panels_are_visible_only_in_map_mode():
+    """#local_locations_panel/#local_fixers_panel are the hover-preview panels below
+    the map -- the "Local" category itself has its own #local_boxes/#local_summary
+    (one Collapsible box per Location, phone-tile style) since the sidebar merge."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1834,19 +1853,22 @@ def test_local_panels_are_visible_in_map_mode_and_local_category():
             await pilot.pause()
             screen = app.screen
 
-            # Map mode -- local panels show the selected territory's contents.
+            # Map mode -- local panels show the hovered/selected territory's contents.
             assert screen.query_one("#local_locations_panel").display is True
             assert screen.query_one("#local_fixers_panel").display is True
+            assert screen.query_one("#local_boxes_scroll").display is False
 
             await pilot.click("#cat_local")
             await pilot.pause()
-            assert screen.query_one("#local_locations_panel").display is True
-            assert screen.query_one("#local_fixers_panel").display is True
+            assert screen.query_one("#local_locations_panel").display is False
+            assert screen.query_one("#local_fixers_panel").display is False
+            assert screen.query_one("#local_boxes_scroll").display is True
 
             await pilot.click("#cat_job")
             await pilot.pause()
             assert screen.query_one("#local_locations_panel").display is False
             assert screen.query_one("#local_fixers_panel").display is False
+            assert screen.query_one("#local_boxes_scroll").display is False
 
     run(body())
 
