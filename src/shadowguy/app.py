@@ -23,9 +23,7 @@ from shadowguy.runners import RUNNERS_BY_ID, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.corp_map_screen import CorpMapScreen
-from shadowguy.screens.corp_screen import CorpMainMenu
 from shadowguy.screens.creation_screen import CharacterCreationScreen
-from shadowguy.screens.main_menu import MainMenu
 from shadowguy.screens.menu_screens import QuitMenu, TitleMenu
 from shadowguy.security import resolve_security_night
 from shadowguy.surveillance import resolve_surveillance_day
@@ -55,11 +53,9 @@ class ShadowguyApp(App):
         self.faction_events: dict[str, list[FactionEvent]] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
-        # MainMenu is now recreated fresh every time it's pushed from CorpMapScreen
-        # (Textual removes a popped screen's widgets, so the instance itself can't
-        # carry this) -- read/written by MainMenu.__init__/_select_category so a map
-        # round-trip doesn't dump the player back on the first sidebar category.
-        self.main_menu_category = MainMenu.CATEGORIES[0][0]
+        # The sidebar on CorpMapScreen persists the last-viewed category across
+        # map -> activity -> map round-trips.
+        self.main_menu_category = "gig"
 
     def spend_time(
         self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
@@ -254,10 +250,10 @@ class ShadowguyApp(App):
         self.push_screen(QuitMenu())
 
     def home_menu(self) -> Screen:
-        """MainMenu/CorpMainMenu, whichever this run's activities list is — pushed from
-        CorpMapScreen (the actual home screen, see load_state) via its own 'm' binding,
-        not reopened directly. corp_only picks the same way it always has."""
-        return CorpMainMenu() if self.corp_only else MainMenu()
+        """Backwards-compatible stub: the sidebar is now part of CorpMapScreen itself,
+        so pressing 'm' on the map is no longer a thing -- callers that still pass
+        through here get the home screen directly instead."""
+        return CorpMapScreen()
 
     def restart_run(self) -> None:
         self._new_run()

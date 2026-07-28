@@ -365,7 +365,7 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
     return f"{marker}[{' '.join(parts)}]"
 
 
-CONNECTOR_WIDTH = 6
+CONNECTOR_WIDTH = 4
 
 
 @dataclass(frozen=True)
@@ -471,8 +471,8 @@ def render_ascii_map(
 
 # The grid is deliberately roomier than TERRITORY_COUNT: the leftover cells are
 # the holes that keep _grow_region's blob from degenerating into a full rectangle.
-GRID_COLS = 11
-GRID_ROWS = 8
+GRID_COLS = 7
+GRID_ROWS = 12
 TERRITORY_COUNT = 65
 TERRITORIES_PER_FACTION = 6
 
