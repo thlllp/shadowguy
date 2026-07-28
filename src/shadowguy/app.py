@@ -53,9 +53,10 @@ class ShadowguyApp(App):
         self.faction_events: dict[str, list[FactionEvent]] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
-        # The sidebar on CorpMapScreen persists the last-viewed category across
-        # map -> activity -> map round-trips.
-        self.main_menu_category = "gig"
+        # CorpMapScreen reads this back to restore the last-viewed category across a
+        # full screen rebuild (load_state/restart_run) -- None (the map itself) is the
+        # correct default for a fresh run, same as CorpMapScreen.selected_category.
+        self.main_menu_category: str | None = None
 
     def spend_time(
         self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
