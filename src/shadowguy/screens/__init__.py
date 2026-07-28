@@ -5,10 +5,8 @@ from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
-from shadowguy.factions import FACTIONS
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
-from shadowguy.shops import ITEMS_BY_ID
 from shadowguy.skills import skill_value
 from shadowguy.tactical import Grid, Tile
 
@@ -137,13 +135,8 @@ class CharacterSheet(Static):
 
     def render(self) -> str:
         c = self.character
-        gear = ", ".join(
-            ITEMS_BY_ID[entry.item_id].name if entry.equipped else f"{ITEMS_BY_ID[entry.item_id].name} (stowed)"
-            for entry in c.inventory
-        ) or "none"
         fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
         stun = "None" if c.stun == 0 else str(c.stun)
-        standing_lines = "\n".join(f"  {f.name}: {c.standing_with(f.id):+d}" for f in FACTIONS)
         return (
             f"{c.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
             f"Health: {c.health}/{c.max_health}   {fatigue}   Stun: {stun}\n"
@@ -151,9 +144,7 @@ class CharacterSheet(Static):
             f"Humanity: {c.humanity}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
-            f"Cool: {c.stat('cool')}\n"
-            f"Standing:\n{standing_lines}\n"
-            f"Gear: {gear}"
+            f"Cool: {c.stat('cool')}"
         )
 
 

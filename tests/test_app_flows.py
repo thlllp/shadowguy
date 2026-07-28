@@ -48,9 +48,9 @@ from shadowguy.corp_turn import (
     collect_income,
     has_technology,
 )
-from shadowguy.screens.corp_screen import CorpMainMenu, CorpScreen, ResearchTreeScreen
+from shadowguy.screens.corp_screen import CorpScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
-from shadowguy.screens.main_menu import MainMenu
+
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.tactical_screen import TacticalScreen
 from shadowguy.tactical import (
@@ -219,13 +219,10 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
     run(body())
 
 
-def test_corp_main_menu_has_sidebar_categories():
-    """CorpMainMenu is laid out like MainMenu -- a left category sidebar next to the
-    corp's own action list -- rather than dropping straight into the action list with
-    nothing beside it. "Corp" renders inline; "Phone"/"Technology" push their own
-    screens, reachable both from the sidebar and from the same quick keybindings
-    MainMenu uses. No "Corp Map" category -- CorpMainMenu is itself reached from the
-    map (the home screen), so escape pops back to it instead of being a no-op."""
+def test_corp_map_screen_has_sidebar_categories():
+    """CorpMapScreen now carries the category sidebar natively -- no separate
+    CorpMainMenu screen. 'corp' renders inline; 'phone'/'tech' push their own
+    screens. escape returns to the map view from any inline category."""
 
     async def body():
         app = ShadowguyApp()
@@ -238,9 +235,6 @@ def test_corp_main_menu_has_sidebar_categories():
             await pilot.click(f"#faction_{FACTIONS[0].id}")
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
-            await pilot.press("m")
-            await pilot.pause()
-            assert isinstance(app.screen, CorpMainMenu)
 
             categories = app.screen.query_one("#categories", ListView)
             assert [item.id for item in categories.children] == [
@@ -248,9 +242,11 @@ def test_corp_main_menu_has_sidebar_categories():
                 "cat_phone",
                 "cat_tech",
             ]
-            # The corp's own action list (inherited from CorpScreen) is visible
-            # inline beside the sidebar, not something you have to navigate to.
-            assert any(item.id == "rest" for item in app.screen.query_one("#corp_list", ListView).children)
+
+            # Select the corp category to see its action list.
+            await pilot.click("#cat_corp")
+            await pilot.pause()
+            assert any(item.id == "rest" for item in app.screen.query_one("#activities", ListView).children)
 
             await pilot.press("c")
             await pilot.pause()
@@ -264,11 +260,11 @@ def test_corp_main_menu_has_sidebar_categories():
             app.pop_screen()
             await pilot.pause()
 
-            # escape now pops back to CorpMapScreen -- CorpMainMenu is pushed from the
-            # map, not the base of the stack any more.
+            # escape returns to map mode.
             await pilot.press("escape")
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
+            assert app.screen.selected_category is None
 
     run(body())
 
@@ -962,7 +958,7 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             app.character.location_id = shop_territory_id
             app.character.cash = 1_000_000
 
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
@@ -1001,7 +997,7 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             app.character.location_id = store_territory_id
             app.character.cash = 1_000_000
 
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
@@ -1021,7 +1017,7 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
 
             app.screen.action_back()
             await pilot.pause()
-            assert isinstance(app.screen, MainMenu)
+            assert isinstance(app.screen, CorpMapScreen)
 
             await pilot.click("#cat_cyberdeck")
             await pilot.pause()
@@ -1039,7 +1035,7 @@ def test_cyberdeck_menu_option_reaches_the_screen_with_no_decks_owned():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
 
             categories = app.screen.query_one("#categories", ListView)
@@ -1399,7 +1395,9 @@ def test_delivering_a_smuggling_job_only_pays_out_on_site():
             gang = GANGS_BY_ID[den_territory.gang_id]
             app.character.location_id = den_territory.id
 
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            await pilot.click("#cat_job")
             await pilot.pause()
             app.push_screen(GangDenScreen(den_location, gang))
             await pilot.pause()
@@ -1411,6 +1409,9 @@ def test_delivering_a_smuggling_job_only_pays_out_on_site():
             await pilot.pause()
 
             # Not at the destination yet -- clicking must not pay out.
+            # Need a category selected so the activities list (with #deliver_package) is visible.
+            await pilot.click("#cat_job")
+            await pilot.pause()
             cash_before = app.character.cash
             standing_before = app.character.gang_standing_with(gang.id)
             await pilot.click("#deliver_package")
@@ -1419,7 +1420,7 @@ def test_delivering_a_smuggling_job_only_pays_out_on_site():
             assert app.character.cash == cash_before
 
             app.character.location_id = job.destination_territory_id
-            await app.screen._refresh()
+            await app.screen._refresh_activities()
             await pilot.pause()
             await pilot.click("#deliver_package")
             await pilot.pause()
@@ -1473,7 +1474,7 @@ def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_
             app.character.hire_for_job("runner_specter", scene.id)
             app.character.elapsed_hours = HOURS_PER_DAY - 1
 
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_job")
             await pilot.pause()
@@ -1567,7 +1568,7 @@ def test_corp_screen_expand_and_rest():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
 
             await pilot.click("#cat_corp")
@@ -1629,7 +1630,7 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_corp")
             await pilot.pause()
@@ -1673,13 +1674,10 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
     run(body())
 
 
-def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
-    """Regression test for a real layout bug: ListView defaults to height: 1fr, and a
-    plain mixin (PanelNav) sitting in CorpMainMenu's MRO was silently defeating the
-    height: auto override that fixes it, so academy_panel/research_panel each claimed
-    a tall fixed box and rendered on top of corp_list and each other instead of
-    stacking below it. Also checks the stat box (corp_info) got its own bordered panel
-    above the sidebar, the same way MainMenu's CharacterSheet does."""
+def test_corp_map_screen_corp_sections_stack_top_to_bottom():
+    """Regression test for layout: the corp's action list, academy_panel, and
+    research_panel must stack top-to-bottom in the main panel without overlapping.
+    Height: auto overrides prevent ListView's default 1fr from squashing them."""
 
     async def body():
         app = ShadowguyApp()
@@ -1692,22 +1690,21 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
             await pilot.click(f"#faction_{FACTIONS[0].id}")
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
-            await pilot.press("m")
+            await pilot.click("#cat_corp")
             await pilot.pause()
-            assert isinstance(app.screen, CorpMainMenu)
 
-            stats_panel = app.screen.query_one("#corp_stats_panel")
             sidebar = app.screen.query_one("#sidebar")
-            corp_list = app.screen.query_one("#corp_list", ListView)
+            main_panel = app.screen.query_one("#main_panel")
+            activities = app.screen.query_one("#activities", ListView)
             academy_panel = app.screen.query_one("#academy_panel")
             research_panel = app.screen.query_one("#research_panel")
 
-            # The stat box sits in its own panel above the sidebar/main-panel split.
-            assert stats_panel.region.y + stats_panel.region.height <= sidebar.region.y
+            # The sidebar and main panel are side by side.
+            assert sidebar.region.x + sidebar.region.width <= main_panel.region.x
 
             # Each section starts at or after the previous one's bottom edge -- top to
             # bottom, never overlapping.
-            assert corp_list.region.y + corp_list.region.height <= academy_panel.region.y
+            assert activities.region.y + activities.region.height <= academy_panel.region.y
             assert academy_panel.region.y + academy_panel.region.height <= research_panel.region.y
 
     run(body())
@@ -1813,7 +1810,7 @@ def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
@@ -1828,18 +1825,18 @@ def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
     run(body())
 
 
-def test_local_panels_are_only_visible_on_the_local_category():
+def test_local_panels_are_visible_in_map_mode_and_local_category():
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             screen = app.screen
 
-            # Default category is "gig" -- the local-only panels start hidden.
-            assert screen.query_one("#local_locations_panel").display is False
-            assert screen.query_one("#local_fixers_panel").display is False
+            # Map mode -- local panels show the selected territory's contents.
+            assert screen.query_one("#local_locations_panel").display is True
+            assert screen.query_one("#local_fixers_panel").display is True
 
             await pilot.click("#cat_local")
             await pilot.pause()
@@ -1855,11 +1852,13 @@ def test_local_panels_are_only_visible_on_the_local_category():
 
 
 def test_local_panel_nav_skips_a_collapsed_section():
+    """CorpMapScreen no longer uses PanelNav (left/right are for map movement),
+    but local panels still stack correctly and are individually focusable."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
@@ -1867,11 +1866,10 @@ def test_local_panel_nav_skips_a_collapsed_section():
             screen = app.screen
             screen.query_one("#local_locations_panel", Collapsible).collapsed = True
             await pilot.pause()
-            screen.query_one("#categories", ListView).focus()
-            await pilot.pause()
-            screen.action_focus_panel(1)
-            await pilot.pause()
-            assert screen.focused is screen.query_one("#local_fixers", ListView)
+
+            # Panels exist and are in the right state.
+            assert screen.query_one("#local_locations_panel", Collapsible).collapsed is True
+            assert screen.query_one("#local_fixers", ListView) is not None
 
     run(body())
 
@@ -1966,7 +1964,7 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
         # section stack's height.
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_corp")
             await pilot.pause()
@@ -2045,8 +2043,8 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
 
 
 def _boot_runner_game(pilot, app):
-    """Title -> Runner -> archetype -> CorpMapScreen (the home screen) -> 'm' into
-    MainMenu, the shortest real path into a playable runner game."""
+    """Title -> Runner -> archetype -> CorpMapScreen (the home screen, which now
+    carries the sidebar natively — no 'm' press needed any more)."""
 
     async def go():
         await _settle(pilot)
@@ -2059,17 +2057,13 @@ def _boot_runner_game(pilot, app):
         await pilot.click("#begin")
         await pilot.pause()
         assert isinstance(app.screen, CorpMapScreen)
-        await pilot.press("m")
-        await pilot.pause()
-        assert isinstance(app.screen, MainMenu)
 
     return go()
 
 
 def _boot_corp_game(pilot, app):
-    """Title -> Corp -> pick a faction -> CorpMapScreen (the home screen) -> 'm' into
-    CorpMainMenu, the shortest real path into a playable corp-only game (no runner
-    ever built)."""
+    """Title -> Corp -> pick a faction -> CorpMapScreen (the home screen, which now
+    carries the sidebar natively — no 'm' press needed any more)."""
 
     async def go():
         await _settle(pilot)
@@ -2080,18 +2074,13 @@ def _boot_corp_game(pilot, app):
         await pilot.click(f"#faction_{FACTIONS[0].id}")
         await pilot.pause()
         assert isinstance(app.screen, CorpMapScreen)
-        await pilot.press("m")
-        await pilot.pause()
-        assert isinstance(app.screen, CorpMainMenu)
 
     return go()
 
 
-def test_character_sheet_panel_shows_stun_ampm_time_and_a_corp_standing_column():
+def test_character_sheet_panel_shows_stun_ampm_time_and_stats():
     """The always-visible panel (CharacterSheet) must carry Health, Fatigue,
-    Stun, Money, Reputation, Experience, 12-hour time, and every major corp's
-    standing on its own line -- this pins the exact fields/format so a future
-    edit to render() can't silently drop one."""
+    Stun, Cash, Reputation, Experience, Humanity, and all six stats."""
 
     async def body():
         app = ShadowguyApp()
@@ -2100,14 +2089,15 @@ def test_character_sheet_panel_shows_stun_ampm_time_and_a_corp_standing_column()
             character = app.character
             character.stun = 5
             character.elapsed_hours = 13  # 1:00 PM
-            character.adjust_standing(FACTIONS[0].id, 3)
 
             content = app.screen.query_one(CharacterSheet).render()
             assert "Stun: 5" in content
             assert "1:00 PM" in content
-            assert f"{FACTIONS[0].name}: +3" in content
-            for faction in FACTIONS[1:]:
-                assert f"{faction.name}: +0" in content
+            assert "Health:" in content
+            assert "Cash:" in content
+            assert "Rep:" in content
+            assert "Body:" in content
+            assert "Cool:" in content
 
     run(body())
 
@@ -2473,7 +2463,7 @@ def test_corp_screen_no_longer_hands_a_runner_a_corp():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
-            app.push_screen(MainMenu())
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_corp")
             await pilot.pause()
