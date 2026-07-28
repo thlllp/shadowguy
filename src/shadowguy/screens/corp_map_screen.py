@@ -206,7 +206,13 @@ class CorpMapScreen(BackScreen):
         self.hovered_id: str | None = None
         self.rendered = None
         self._render_key: tuple[str, str] | None = None
-        self.selected_category: str | None = None
+        self._map_locals_task: asyncio.Task | None = None
+        # Restore the last-viewed category (app.main_menu_category) across a full
+        # screen rebuild (load_state/restart_run) -- but only if it's one of this
+        # game's own categories, since a runner game and a corp-only game don't
+        # share the same category set and the app attribute is shared between them.
+        remembered = self.app.main_menu_category
+        self.selected_category = remembered if remembered in dict(self.categories) else None
 
     @property
     def categories(self) -> list[tuple[str, str]]:
@@ -248,7 +254,11 @@ class CorpMapScreen(BackScreen):
         await self._refresh_categories()
         self.query_one("#categories", ListView).can_focus = False
         self.query_one(CharacterSheet).refresh()
-        self._refresh_map()
+        if self.selected_category is None:
+            self._refresh_map()
+        else:
+            await self._refresh_activities()
+            self.focus_next()
 
     def _refresh(self) -> None:
         """Public entry point for tests that manipulate selected_id/hovered_id
@@ -300,8 +310,22 @@ class CorpMapScreen(BackScreen):
         self.selected_category = key
         self.app.main_menu_category = key
         await self._refresh_activities()
+        # #categories itself stays unfocusable (arrows drive the map while nothing's
+        # selected) -- focus the category's own list so up/down/enter work it, same
+        # as the old MainMenu/CorpMainMenu did via PanelNav. Tab/shift+tab (Textual's
+        # own default bindings) cycle to any other visible list a category shows
+        # (e.g. Local's location/fixer panels, Corp's academy/research/surveillance).
+        self.focus_next()
 
     # ── quick keybindings ───────────────────────────────────────────────────
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # A corp-only run never builds a runner, so the runner-only quick keys
+        # (r/i/d/k) have nothing to act on -- keep them out of the Footer entirely
+        # instead of advertising a keybinding that silently no-ops when pressed.
+        if self.app.corp_only and action in ("run_corp", "inventory", "cyberdeck", "skills"):
+            return False
+        return True
 
     def action_inventory(self) -> None:
         if not self.app.corp_only:
@@ -571,7 +595,14 @@ class CorpMapScreen(BackScreen):
         )
         self.query_one("#modifiers", Static).update(self._modifier_panel(t))
         self.query_one(CharacterSheet).refresh()
-        asyncio.create_task(self._refresh_map_locals(t))
+        # Cancel any still-running refresh for a previously hovered/selected territory
+        # before starting this one -- otherwise two overlapping tasks race to
+        # clear()/append() the same #local_locations/#local_fixers ListViews (rapid
+        # mouse movement or repeated clicks spawn one task per move), which can raise
+        # DuplicateIds or leave the panel showing a stale territory's rows.
+        if self._map_locals_task is not None and not self._map_locals_task.done():
+            self._map_locals_task.cancel()
+        self._map_locals_task = asyncio.create_task(self._refresh_map_locals(t))
 
     async def _refresh_map_locals(self, t: Territory) -> None:
         """Populate the local locations and fixers panels for territory *t*

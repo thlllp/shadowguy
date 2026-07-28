@@ -1,5 +1,5 @@
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
@@ -41,13 +41,10 @@ from shadowguy.runners import RUNNERS_BY_ID
 
 from . import (
     MENU_BACK_BINDINGS,
-    PANEL_NAV_BINDINGS,
     BackScreen,
-    PanelNav,
     _boxed_text,
     _replace_items,
 )
-from .info_screens import PhoneScreen
 
 
 def _sighting_label(sighting, corp_map) -> str:
@@ -371,113 +368,6 @@ class CorpScreen(BackScreen):
             else:
                 self.notify("Can't afford it.", severity="warning")
             await self._refresh()
-
-
-class CorpMainMenu(PanelNav, CorpScreen):
-    """Pushed from CorpMapScreen (the actual home screen for a corp-only game, same as
-    for a runner) via its 'm' binding: there's no runner in this kind of game, so none
-    of the runner activities (gigs, jobs, legwork) apply. Laid out like MainMenu -- a
-    left-hand category sidebar next to the main panel -- rather than dropping the
-    player straight into the corp's action list. "Corp" renders inline (CorpScreen's
-    own info/action list, grouped into Academy/Research Facility/Surveillance Log
-    collapsibles, inherited unchanged); "Phone"/"Technology" push their own screens,
-    same as MainMenu's equivalent categories. escape (CorpScreen's own
-    MENU_BACK_BINDINGS, inherited action_back) pops back to the map -- no "Corp Map"
-    category/binding here any more, same reasoning as MainMenu."""
-
-    # The "t" binding isn't redeclared here -- CorpScreen's own ("t", "research_tree",
-    # "Research Tree") is inherited unchanged, same as MENU_BACK_BINDINGS/action_back.
-    BINDINGS = [
-        ("c", "phone", "Phone"),
-        *PANEL_NAV_BINDINGS,
-    ]
-    PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "surveillance_list")
-
-    CATEGORIES = [("corp", "Corp"), ("phone", "Phone"), ("tech", "Technology")]
-
-    # The #corp_list/#academy_list/#research_list/#academy_panel/#research_panel rules
-    # are already on CorpScreen.CSS, but Textual's cross-hierarchy CSS merge silently
-    # drops them once PanelNav sits in the MRO (a confirmed Textual quirk: a plain
-    # mixin between a subclass and its CSS-defining base breaks the ID-selector scoping,
-    # leaving ListView's own default height: 1fr in effect instead). Re-declaring the
-    # same rules directly here routes around it -- without this, academy_panel/
-    # research_panel each claim a tall fixed box regardless of content and overlap
-    # corp_list and each other instead of stacking top to bottom.
-    CSS = """
-    #corp_stats_panel {
-        height: auto;
-        border: solid $accent;
-        padding: 0 1;
-    }
-
-    #sidebar {
-        width: 20;
-        border: solid $accent;
-        padding: 1;
-    }
-
-    #main_panel {
-        width: 1fr;
-        border: solid $accent;
-        padding: 0 1;
-    }
-
-    #corp_list, #academy_list, #research_list, #surveillance_list {
-        height: auto;
-    }
-
-    #academy_panel, #research_panel, #surveillance_panel {
-        height: auto;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Vertical(Static(id="corp_info"), id="corp_stats_panel")
-        yield Horizontal(
-            Vertical(ListView(id="categories"), id="sidebar"),
-            Vertical(
-                ListView(id="corp_list"),
-                Collapsible(
-                    ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
-                ),
-                Collapsible(
-                    ListView(id="research_list"),
-                    title="Research Facility",
-                    collapsed=False,
-                    id="research_panel",
-                ),
-                Collapsible(
-                    ListView(id="surveillance_list"),
-                    title="Surveillance Log",
-                    collapsed=True,
-                    id="surveillance_panel",
-                ),
-                id="main_panel",
-            ),
-        )
-        yield Footer()
-
-    async def on_mount(self) -> None:
-        items = [ListItem(Static(label), id=f"cat_{key}") for key, label in self.CATEGORIES]
-        await _replace_items(self.query_one("#categories", ListView), items)
-        await super().on_mount()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
-
-    def action_phone(self) -> None:
-        self.app.push_screen(PhoneScreen())
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id == "categories":
-            key = event.item.id.removeprefix("cat_")
-            if key == "phone":
-                self.app.push_screen(PhoneScreen())
-            elif key == "tech":
-                self.action_research_tree()
-            return
-        await super().on_list_view_selected(event)
 
 
 class ResearchTreeScreen(BackScreen):

@@ -85,8 +85,8 @@ SAVE_SUFFIX = ".save"
 # lacks the new field).
 # v27 added ShadowguyApp.corp_only (a pre-v27 save lacks the key): tracks whether
 # this run was started fresh as a Corp (New Game -> Corp, no runner ever built).
-# load_state always reopens CorpMapScreen regardless; corp_only instead decides what
-# app.home_menu() returns once the player pushes the activities menu from the map.
+# load_state always reopens CorpMapScreen regardless; corp_only instead decides which
+# category sidebar (_RUNNER_CATEGORIES or _CORP_CATEGORIES) that screen shows.
 # v28 added CorpMap.relations (a pre-v28 pickled CorpMap lacks the field): standing
 # between every Faction/Gang pair, independent of the player.
 # v29 replaced Character.day (a stored int) with elapsed_hours (a float; day became a
