@@ -349,13 +349,30 @@ class BarScreen(BackScreen):
             ListItem(Static(f"Keep on indefinitely — {wage}eb/day"), id="opt_indef")
         ]
         pct = round(recruit_cut(runner, leadership) * 100)
-        for job in self.app.character.accepted_jobs:
-            items.append(
-                ListItem(
-                    Static(f"For the job: {job.scene.title} — {pct}% cut of the payout"),
-                    id=f"opt_job_{job.scene.id}",
+        character = self.app.character
+        for job in character.accepted_jobs:
+            scene = job.scene
+            if scene.max_on_site is None and scene.max_support is None:
+                # Uncapped archetype: on-site vs support is meaningless here (nothing
+                # reads CrewHire.on_site outside a roster-cap check), so keep the single
+                # plain option rather than offering two identical-looking choices.
+                items.append(
+                    ListItem(
+                        Static(f"For the job: {scene.title} — {pct}% cut of the payout"),
+                        id=f"opt_job_onsite_{scene.id}",
+                    )
                 )
-            )
+                continue
+            for on_site, label in ((True, "on-site"), (False, "support")):
+                if not character.job_roster_has_room(scene.id, on_site):
+                    continue
+                prefix = "opt_job_onsite_" if on_site else "opt_job_support_"
+                items.append(
+                    ListItem(
+                        Static(f"For the job: {scene.title} ({label}) — {pct}% cut of the payout"),
+                        id=f"{prefix}{scene.id}",
+                    )
+                )
         items.append(ListItem(Static("Back"), id="opt_back"))
         return items
 
@@ -381,10 +398,14 @@ class BarScreen(BackScreen):
         if item_id == "opt_indef":
             character.hire_indefinite(runner.id)
             self.notify(f"{runner.name} is on the crew ({runner.daily_cost}eb/day).")
-        elif item_id.startswith("opt_job_"):
-            job_scene_id = item_id.removeprefix("opt_job_")
-            character.hire_for_job(runner.id, job_scene_id)
-            self.notify(f"{runner.name} signed on for the job.")
+        elif item_id.startswith("opt_job_onsite_"):
+            job_scene_id = item_id.removeprefix("opt_job_onsite_")
+            if character.hire_for_job(runner.id, job_scene_id, on_site=True):
+                self.notify(f"{runner.name} signed on for the job, on-site.")
+        elif item_id.startswith("opt_job_support_"):
+            job_scene_id = item_id.removeprefix("opt_job_support_")
+            if character.hire_for_job(runner.id, job_scene_id, on_site=False):
+                self.notify(f"{runner.name} signed on for the job, in support.")
         self.chosen_runner = None
         await self._refresh()
         await self._refresh()

@@ -213,6 +213,7 @@ Leaf modules, and why each has to stay one:
 | 46 | `BurglaryStage.building`/`guard`/`bailed` **replacing** its flat grid/objective/guards/spotted; `Entrance.spawn` is now (level, cell) |
 | 47 | the `OFFICE` `BuildingKind` — no shape change, but pre-v47 burglary targets are all residential and were placed by the old ground-floor rule |
 | 48 | `buildings.Level.doors`, `buildings.Building.locks`/`cameras` (locked doors and camera hazards) |
+| 49 | `Character.CrewHire.on_site`, `Scene.max_on_site`/`max_support` (per-archetype job roster caps) |
 
 ### Verifying changes
 

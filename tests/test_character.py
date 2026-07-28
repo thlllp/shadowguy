@@ -447,3 +447,65 @@ def test_pay_crew_wages_does_not_charge_for_job_hires():
     assert left == []
     assert c.on_crew("runner_specter")
     assert c.cash == 0
+
+
+def _job(job_id="job_1", max_on_site=None, max_support=None):
+    """The smallest accepted JobOffer that carries a roster cap -- see test_rivals.py's
+    own _scene for the same minimal-Scene shape."""
+    from shadowguy.fixer import JobOffer
+    from shadowguy.jobs import JobTiming
+    from shadowguy.scene import Scene, Stage
+
+    scene = Scene(
+        id=job_id,
+        title="Job",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        max_on_site=max_on_site,
+        max_support=max_support,
+    )
+    return JobOffer(id=f"offer_{job_id}", fixer_id="fx", scene=scene, timing=JobTiming(), offered_day=1)
+
+
+def test_hire_for_job_uncapped_when_job_unknown_or_archetype_has_no_cap():
+    c = Character(name="t")
+    # job_id not among accepted_jobs at all -- treated as uncapped, matching the tests
+    # elsewhere in this file that hire against a bare job_id string.
+    assert c.hire_for_job("runner_a", "job_1")
+    c.accepted_jobs.append(_job("job_2"))  # max_on_site/max_support both None
+    assert c.hire_for_job("runner_b", "job_2", on_site=True)
+    assert c.hire_for_job("runner_c", "job_2", on_site=False)
+
+
+def test_hire_for_job_respects_burglary_style_cap_one_on_site_one_support():
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=1, max_support=1))
+    # max_on_site=1 counts the player, so no additional on-site hire fits.
+    assert not c.hire_for_job("runner_a", "job_1", on_site=True)
+    assert not c.on_crew("runner_a")
+    # One support hire fits; a second does not.
+    assert c.hire_for_job("runner_b", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_c", "job_1", on_site=False)
+    assert c.on_crew("runner_b")
+    assert not c.on_crew("runner_c")
+
+
+def test_hire_for_job_respects_data_heist_style_cap_solo_no_crew_at_all():
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=1, max_support=0))
+    assert not c.job_roster_has_room("job_1", on_site=True)
+    assert not c.job_roster_has_room("job_1", on_site=False)
+    assert not c.hire_for_job("runner_a", "job_1", on_site=True)
+    assert not c.hire_for_job("runner_a", "job_1", on_site=False)
+    assert c.crew_for_job("job_1") == []
+
+
+def test_hire_for_job_respects_wetwork_style_cap_three_on_site_one_support():
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=3, max_support=1))
+    # Player fills one on-site slot, leaving room for two hired on-site runners.
+    assert c.hire_for_job("runner_a", "job_1", on_site=True)
+    assert c.hire_for_job("runner_b", "job_1", on_site=True)
+    assert not c.hire_for_job("runner_c", "job_1", on_site=True)
+    assert c.hire_for_job("runner_d", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_e", "job_1", on_site=False)
+    assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_d"}

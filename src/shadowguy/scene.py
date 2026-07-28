@@ -272,6 +272,12 @@ class Scene:
     # The crew positions this job offers, one per beat, derived at generation (jobs.py).
     # Empty for gigs/legwork. Descriptive for now — nothing fills them yet.
     roles: list[Role] = field(default_factory=list)
+    # Roster caps for hiring crew onto this job (Character.hire_for_job), carried over
+    # from jobs.JobArchetype.max_on_site/max_support at generation. None means uncapped —
+    # today's default for every archetype except Burglary/Data Heist/Wetwork. on_site
+    # counts the player, so a cap of 1 leaves no on-site hire slot at all.
+    max_on_site: int | None = None
+    max_support: int | None = None
 
     def __post_init__(self) -> None:
         self._validate_start_stage()
