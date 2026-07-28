@@ -962,6 +962,13 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             await pilot.pause()
             await pilot.click("#cat_local")
             await pilot.pause()
+            # Each Location is a Collapsible box, collapsed by default -- expand it and
+            # scroll #local_boxes_scroll all the way down (its bounded height means an
+            # expanded box's stock list often needs it) before clicking its "Enter" row.
+            app.screen.query_one(f"#local_box_{shop_location.id}", Collapsible).collapsed = False
+            await pilot.pause()
+            app.screen.query_one("#local_boxes_scroll").scroll_end(animate=False, immediate=True)
+            await pilot.pause()
             await pilot.click(f"#local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -1000,6 +1007,13 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_local")
+            await pilot.pause()
+            # Each Location is a Collapsible box, collapsed by default -- expand it and
+            # scroll #local_boxes_scroll all the way down (its bounded height means an
+            # expanded box's stock list often needs it) before clicking its "Enter" row.
+            app.screen.query_one(f"#local_box_{store_location.id}", Collapsible).collapsed = False
+            await pilot.pause()
+            app.screen.query_one("#local_boxes_scroll").scroll_end(animate=False, immediate=True)
             await pilot.pause()
             await pilot.click(f"#local_{store_location.id}")
             await pilot.pause()
@@ -1805,7 +1819,10 @@ def test_contacts_panel_nav_skips_a_collapsed_section():
     run(body())
 
 
-def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
+def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
+    """The Local category's #local_boxes is one Collapsible per Location (plus a
+    Fixers box), phone-tile style -- all start collapsed, and opening one closes
+    any other that was open (CorpMapScreen.on_collapsible_expanded)."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1815,17 +1832,26 @@ def test_local_tab_locations_and_fixers_are_collapsibles_expanded_by_default():
             await pilot.click("#cat_local")
             await pilot.pause()
 
-            panels = {
-                pid: app.screen.query_one(f"#{pid}", Collapsible)
-                for pid in ("local_locations_panel", "local_fixers_panel")
-            }
-            assert len(panels) == 2
-            assert all(not panel.collapsed for panel in panels.values())
+            boxes = list(app.screen.query("#local_boxes Collapsible"))
+            assert len(boxes) >= 2  # at least one Location plus the Fixers box
+            assert all(box.collapsed for box in boxes)
+
+            boxes[0].collapsed = False
+            await pilot.pause()
+            assert boxes[0].collapsed is False
+
+            boxes[1].collapsed = False
+            await pilot.pause()
+            assert boxes[0].collapsed is True, "opening box1 should have closed box0"
+            assert boxes[1].collapsed is False
 
     run(body())
 
 
-def test_local_panels_are_visible_in_map_mode_and_local_category():
+def test_local_panels_are_visible_only_in_map_mode():
+    """#map_local_boxes_scroll is the hover-preview panel below the map -- the
+    "Local" category itself has its own #local_boxes/#local_summary (one
+    Collapsible box per Location, phone-tile style)."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1834,42 +1860,57 @@ def test_local_panels_are_visible_in_map_mode_and_local_category():
             await pilot.pause()
             screen = app.screen
 
-            # Map mode -- local panels show the selected territory's contents.
-            assert screen.query_one("#local_locations_panel").display is True
-            assert screen.query_one("#local_fixers_panel").display is True
+            # Map mode -- the hover panel shows the hovered/selected territory's contents.
+            assert screen.query_one("#map_local_boxes_scroll").display is True
+            assert screen.query_one("#local_boxes_scroll").display is False
 
             await pilot.click("#cat_local")
             await pilot.pause()
-            assert screen.query_one("#local_locations_panel").display is True
-            assert screen.query_one("#local_fixers_panel").display is True
+            assert screen.query_one("#map_local_boxes_scroll").display is False
+            assert screen.query_one("#local_boxes_scroll").display is True
 
             await pilot.click("#cat_job")
             await pilot.pause()
-            assert screen.query_one("#local_locations_panel").display is False
-            assert screen.query_one("#local_fixers_panel").display is False
+            assert screen.query_one("#map_local_boxes_scroll").display is False
+            assert screen.query_one("#local_boxes_scroll").display is False
 
     run(body())
 
 
-def test_local_panel_nav_skips_a_collapsed_section():
-    """CorpMapScreen no longer uses PanelNav (left/right are for map movement),
-    but local panels still stack correctly and are individually focusable."""
+def test_map_hover_box_cannot_be_opened_away_from_current_territory():
+    """A map-hover box (#map_local_boxes) previews what's at a territory the runner
+    is only looking at, not standing in -- opening one for anywhere else is vetoed
+    (CorpMapScreen.on_collapsible_expanded re-collapses it and notifies)."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
             await pilot.pause()
-            await pilot.click("#cat_local")
-            await pilot.pause()
-
             screen = app.screen
-            screen.query_one("#local_locations_panel", Collapsible).collapsed = True
+
+            here = app.corp_map.territories[app.character.location_id]
+            neighbor_id = here.connections[0]
+            screen.hovered_id = neighbor_id
+            screen._refresh()
             await pilot.pause()
 
-            # Panels exist and are in the right state.
-            assert screen.query_one("#local_locations_panel", Collapsible).collapsed is True
-            assert screen.query_one("#local_fixers", ListView) is not None
+            boxes = list(screen.query("#map_local_boxes Collapsible"))
+            assert boxes, "hovering a bordering territory should still build boxes"
+            boxes[0].collapsed = False
+            await pilot.pause()
+            assert boxes[0].collapsed is True, "opening a box for a territory the runner isn't in should be vetoed"
+
+            # Hovering (or standing on) the runner's own current territory -- opening
+            # is allowed.
+            screen.hovered_id = here.id
+            screen._refresh()
+            await pilot.pause()
+            own_boxes = list(screen.query("#map_local_boxes Collapsible"))
+            assert own_boxes
+            own_boxes[0].collapsed = False
+            await pilot.pause()
+            assert own_boxes[0].collapsed is False
 
     run(body())
 
