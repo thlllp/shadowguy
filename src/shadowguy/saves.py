@@ -168,7 +168,11 @@ SAVE_SUFFIX = ".save"
 # v48 added locked doors and cameras: buildings.Level gained `doors`, buildings.Building
 # gained `locks`/`cameras`. A pre-v48 pickled Level/Building (inside an accepted Burglary
 # or Wetwork job) lacks all three fields.
-SAVE_VERSION = 48
+# v49 added per-archetype job roster caps: character.CrewHire gained `on_site`, and
+# scene.Scene gained `max_on_site`/`max_support` (set from jobs.JobArchetype at
+# generation). A pre-v49 pickled CrewHire or Scene (inside accepted_jobs or Character.crew)
+# lacks all three fields.
+SAVE_VERSION = 49
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

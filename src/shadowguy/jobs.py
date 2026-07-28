@@ -291,6 +291,11 @@ class JobArchetype:
     # the target is holed up in their own place rather than broken into as the job
     # site's own business.
     wetwork: bool = False
+    # Roster caps for hiring crew onto this job, carried onto the generated Scene and
+    # enforced by Character.hire_for_job. None means uncapped (every archetype but the
+    # three set at ARCHETYPES construction below). max_on_site counts the player.
+    max_on_site: int | None = None
+    max_support: int | None = None
 
 
 # name, verb, then one row per stage: (StageType, prompt, approach pool).
@@ -757,6 +762,10 @@ ARCHETYPES = [
         hours_cost=4 if name == "Bodyguard" else None,
         vigilance=(name == "Bodyguard"),
         wetwork=(name == "Wetwork"),
+        # Burglary: you plus one support. Data Heist: solo, no crew at all -- the
+        # netrunner works it alone. Wetwork: up to two hires beside you, plus support.
+        max_on_site=1 if name in ("Burglary", "Data Heist") else 3 if name == "Wetwork" else None,
+        max_support=0 if name == "Data Heist" else 1 if name in ("Burglary", "Wetwork") else None,
     )
     for name, verb, stages in _ARCHETYPE_ROWS
 ]
@@ -1276,6 +1285,8 @@ def generate_job(
         # One crew position per beat this job actually has (job_stages, after the optional
         # complication is rolled), so the roles match the stages the runner will play.
         roles=[_role_for_stage(job_stage) for job_stage in job_stages],
+        max_on_site=archetype.max_on_site,
+        max_support=archetype.max_support,
     )
     return scene, _random_timing(day, rng)
 

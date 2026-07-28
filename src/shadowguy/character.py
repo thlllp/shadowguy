@@ -13,6 +13,7 @@ from shadowguy.skills import SKILLS, skill_for, skill_value
 if TYPE_CHECKING:
     from shadowguy.fixer import JobOffer
     from shadowguy.jobs import SmugglingJob
+    from shadowguy.scene import Scene
     from shadowguy.security import SecurityContract
 
 BASE_HEALTH = 10
@@ -120,6 +121,10 @@ class CrewHire:
 
     runner_id: str
     job_id: str | None = None
+    # Whether this hire works the job in person or as remote/support cover. Read against
+    # that job's Scene.max_on_site/max_support at hire_for_job time; meaningless for an
+    # indefinite hire (job_id None), which no job's roster cap ever applies to.
+    on_site: bool = True
 
 
 @dataclass
@@ -303,9 +308,35 @@ class Character:
         if not self.on_crew(runner_id):
             self.crew.append(CrewHire(runner_id=runner_id))
 
-    def hire_for_job(self, runner_id: str, job_id: str) -> None:
-        if not self.on_crew(runner_id):
-            self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id))
+    def hire_for_job(self, runner_id: str, job_id: str, on_site: bool = True) -> bool:
+        """Sign a runner on for a single job, on-site or as support. Returns whether the
+        hire actually went through -- False if already on the crew or that job's roster
+        (Scene.max_on_site/max_support) has no room left for that posture."""
+        if self.on_crew(runner_id) or not self.job_roster_has_room(job_id, on_site):
+            return False
+        self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id, on_site=on_site))
+        return True
+
+    def _job_scene(self, job_id: str) -> "Scene | None":
+        for job in self.accepted_jobs:
+            if job.scene.id == job_id:
+                return job.scene
+        return None
+
+    def job_roster_has_room(self, job_id: str, on_site: bool) -> bool:
+        """Whether hire_for_job(..., on_site) would succeed for this job right now -- what
+        BarScreen reads to decide which postures to even offer. A job_id not among
+        accepted_jobs (a test double, or a job that's since expired) is treated as
+        uncapped, same as an archetype whose cap is None."""
+        scene = self._job_scene(job_id)
+        if scene is None:
+            return True
+        cap = scene.max_on_site if on_site else scene.max_support
+        if cap is None:
+            return True
+        taken = sum(1 for hire in self.crew_for_job(job_id) if hire.on_site == on_site)
+        reserved = 1 if on_site else 0  # the player already fills one on-site slot
+        return taken + reserved < cap
 
     def crew_for_job(self, job_id: str) -> list[CrewHire]:
         return [hire for hire in self.crew if hire.job_id == job_id]
