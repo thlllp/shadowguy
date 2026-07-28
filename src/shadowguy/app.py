@@ -22,6 +22,7 @@ from shadowguy.rivals import RivalAction, RunnerActivity, RunnerState, resolve_r
 from shadowguy.runners import RUNNERS_BY_ID, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
+from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.corp_screen import CorpMainMenu
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.main_menu import MainMenu
@@ -54,6 +55,11 @@ class ShadowguyApp(App):
         self.faction_events: dict[str, list[FactionEvent]] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
+        # MainMenu is now recreated fresh every time it's pushed from CorpMapScreen
+        # (Textual removes a popped screen's widgets, so the instance itself can't
+        # carry this) -- read/written by MainMenu.__init__/_select_category so a map
+        # round-trip doesn't dump the player back on the first sidebar category.
+        self.main_menu_category = MainMenu.CATEGORIES[0][0]
 
     def spend_time(
         self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
@@ -247,6 +253,12 @@ class ShadowguyApp(App):
     def action_quit_menu(self) -> None:
         self.push_screen(QuitMenu())
 
+    def home_menu(self) -> Screen:
+        """MainMenu/CorpMainMenu, whichever this run's activities list is — pushed from
+        CorpMapScreen (the actual home screen, see load_state) via its own 'm' binding,
+        not reopened directly. corp_only picks the same way it always has."""
+        return CorpMainMenu() if self.corp_only else MainMenu()
+
     def restart_run(self) -> None:
         self._new_run()
         self._reopen(CharacterCreationScreen())
@@ -285,7 +297,7 @@ class ShadowguyApp(App):
         if unspent:
             self._reopen(CharacterCreationScreen())
         else:
-            self._reopen(CorpMainMenu() if self.corp_only else MainMenu())
+            self._reopen(CorpMapScreen())
 
     def _reopen(self, screen: Screen) -> None:
         while len(self.screen_stack) > 1:

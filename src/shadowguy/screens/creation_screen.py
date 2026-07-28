@@ -15,7 +15,7 @@ from . import (
     _compact_skill_label,
     _replace_items,
 )
-from .main_menu import MainMenu
+from .corp_map_screen import CorpMapScreen
 
 
 class CharacterCreationScreen(PanelNav, Screen):
@@ -136,7 +136,7 @@ class CharacterCreationScreen(PanelNav, Screen):
         if self._unspent():
             self.notify("Spend every point before the run starts.", severity="warning")
             return
-        self.app.switch_screen(MainMenu())
+        self.app.switch_screen(CorpMapScreen())
 
     def _update_pools(self) -> None:
         character = self.app.character

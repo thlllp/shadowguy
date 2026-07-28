@@ -17,7 +17,7 @@ from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .burglary_screens import EntrancePickScreen
-from .corp_screen import CorpMainMenu
+from .corp_map_screen import CorpMapScreen
 from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
@@ -211,7 +211,7 @@ class ModeSelectScreen(BackScreen):
     """New Game's first choice: build a Runner the usual way, or set up as a
     Corp instead by picking one of the 4 seeded Factions -- Corp mode has no
     runner to build, so that path skips CharacterCreationScreen entirely and
-    drops straight into CorpMainMenu."""
+    drops straight into CorpMapScreen."""
 
     BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("ModeSelectScreen", "mode_dialog")
@@ -238,7 +238,7 @@ class ModeSelectScreen(BackScreen):
 class CorpSelectScreen(BackScreen):
     """Pick which Faction to run. Corp mode has no runner to build -- picking
     a Faction assigns app.corp_state, sets app.corp_only so save/load knows to
-    reopen the same screen, and switches straight to CorpMainMenu, skipping
+    reopen the same screen, and switches straight to CorpMapScreen, skipping
     character creation entirely. The stat/skill pools that creation would
     normally spend are zeroed here instead, so there's nothing left unspent to
     (pointlessly) force creation back open on a later save/load."""
@@ -266,7 +266,7 @@ class CorpSelectScreen(BackScreen):
         self.app.corp_only = True
         self.app.character.stat_points = 0
         self.app.character.skill_points = 0
-        self.app.switch_screen(CorpMainMenu())
+        self.app.switch_screen(CorpMapScreen())
 
 
 class TestMenu(BackScreen):

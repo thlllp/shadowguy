@@ -31,7 +31,7 @@ Six **core stats** (`character.CORE_STATS`): `Body`, `Strength`, `Agility`, `Per
 
 Both pools are **spent once and never refill**. Load-bearing consequences:
 
-- **Begin is gated on an empty pool** (`action_begin`): the screen refuses to leave until both pools are 0, then `switch_screen`s to `MainMenu` (no going back to respend).
+- **Begin is gated on an empty pool** (`action_begin`): the screen refuses to leave until both pools are 0, then `switch_screen`s to `CorpMapScreen` (no going back to respend).
 - **`r` resets the whole build** (`Character.reset_build()`) — 26 irreversible allocations, no undo.
 - **`SkillsScreen` is read-only for the creation pools, but not for `Character.experience`** — see Post-creation experience.
 - **Buying Body raises current health, not just max** (`spend_stat_point`), or a 30-max run would start at 15 health.
@@ -548,10 +548,10 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 
 **There are two ways in, producing different games.** New Game → `ModeSelectScreen` (Runner/Corp):
 
-- **Runner** — `CharacterCreationScreen`→`MainMenu`, with `CorpScreen` reachable as one activity among many.
-- **Corp** — `CorpSelectScreen` picks the Faction, sets `corp_state`, sets **`ShadowguyApp.corp_only = True`**, switches straight to `CorpMainMenu`. No runner built.
+- **Runner** — `CharacterCreationScreen`→`CorpMapScreen`, with `CorpScreen` reachable as one activity among many (off `MainMenu`, below).
+- **Corp** — `CorpSelectScreen` picks the Faction, sets `corp_state`, sets **`ShadowguyApp.corp_only = True`**, switches straight to `CorpMapScreen`. No runner built.
 
-`corp_only` decides which home screen `load_state` reopens (part of the save bundle, not a UI flag). `CorpMainMenu` subclasses `CorpScreen`, adds `MainMenu`'s sidebar layout, neutralizes escape-to-back. The `Character` still exists in a corp-only run (carries `elapsed_hours`/`day`) — just never built or played.
+**`CorpMapScreen` is the home screen for both** (`load_state` always reopens it, part of the save bundle) — gigs/jobs/legwork/Local, or the corp's own action list, live one level down, on `app.home_menu()` (`MainMenu` or `CorpMainMenu`, picked by `corp_only`), pushed from the map with `m` and returned from with escape like any other pushed screen. `CorpMainMenu` subclasses `CorpScreen`, adds `MainMenu`'s sidebar layout. Neither `MainMenu` nor `CorpMainMenu` carries a "Corp Map" category/binding any more — the map is what they sit on top of, not a destination reachable from inside them. The `Character` still exists in a corp-only run (carries `elapsed_hours`/`day`) — just never built or played.
 
 **Corp mode shares the runner's own day clock.** No separate calendar: `_apply_day_tick` (fired from any midnight-crossing action, any screen) collects corp income/research and resets `daily_action_used`, alongside `resolve_rival_day`.
 

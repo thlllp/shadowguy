@@ -171,7 +171,7 @@ MENU_BACK_BINDINGS = [*MENU_QUIT_BINDINGS, ("escape", "back", "Back")]
 class BackScreen(Screen):
     """Screen whose back action pops itself off the stack — the default for any screen
     reachable via `escape`. Subclasses needing different back behavior override
-    action_back (e.g. CorpMainMenu's no-op, BarScreen's async unwind)."""
+    action_back (e.g. CorpMapScreen's no-op, BarScreen's async unwind)."""
 
     def action_back(self) -> None:
         self.app.pop_screen()

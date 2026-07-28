@@ -1,5 +1,4 @@
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
@@ -42,14 +41,12 @@ from shadowguy.runners import RUNNERS_BY_ID
 
 from . import (
     MENU_BACK_BINDINGS,
-    MENU_QUIT_BINDINGS,
     PANEL_NAV_BINDINGS,
     BackScreen,
     PanelNav,
     _boxed_text,
     _replace_items,
 )
-from .corp_map_screen import CorpMapScreen
 from .info_screens import PhoneScreen
 
 
@@ -377,32 +374,26 @@ class CorpScreen(BackScreen):
 
 
 class CorpMainMenu(PanelNav, CorpScreen):
-    """Home screen for a game started fresh as a Corp (New Game -> Corp): there's no
-    runner in this kind of game, so none of the runner activities (gigs, jobs,
-    legwork) apply. Laid out like MainMenu -- a left-hand category sidebar next to
-    the main panel -- rather than dropping the player straight into the corp's
-    action list. "Corp" renders inline (CorpScreen's own info/action list, grouped
-    into Academy/Research Facility/Surveillance Log collapsibles, inherited
-    unchanged); "Corp Map"/"Phone"/"Technology" push their own screens, same as
-    MainMenu's equivalent categories."""
+    """Pushed from CorpMapScreen (the actual home screen for a corp-only game, same as
+    for a runner) via its 'm' binding: there's no runner in this kind of game, so none
+    of the runner activities (gigs, jobs, legwork) apply. Laid out like MainMenu -- a
+    left-hand category sidebar next to the main panel -- rather than dropping the
+    player straight into the corp's action list. "Corp" renders inline (CorpScreen's
+    own info/action list, grouped into Academy/Research Facility/Surveillance Log
+    collapsibles, inherited unchanged); "Phone"/"Technology" push their own screens,
+    same as MainMenu's equivalent categories. escape (CorpScreen's own
+    MENU_BACK_BINDINGS, inherited action_back) pops back to the map -- no "Corp Map"
+    category/binding here any more, same reasoning as MainMenu."""
 
-    # CorpScreen's escape->back is redeclared here (not just omitted) with show=False:
-    # Textual merges BINDINGS across the class hierarchy, so leaving it out would still
-    # leave the inherited binding live -- this is the top-level screen for a pure-corp
-    # game, with nothing below it worth popping back to (see action_back's override).
     # The "t" binding isn't redeclared here -- CorpScreen's own ("t", "research_tree",
-    # "Research Tree") is inherited unchanged, same as the merge rule that spared
-    # escape from needing this comment twice.
+    # "Research Tree") is inherited unchanged, same as MENU_BACK_BINDINGS/action_back.
     BINDINGS = [
-        *MENU_QUIT_BINDINGS,
-        ("m", "corp_map", "Corp Map"),
         ("c", "phone", "Phone"),
-        Binding("escape", "back", "Back", show=False),
         *PANEL_NAV_BINDINGS,
     ]
     PANEL_IDS = ("categories", "corp_list", "academy_list", "research_list", "surveillance_list")
 
-    CATEGORIES = [("corp", "Corp"), ("map", "Corp Map"), ("phone", "Phone"), ("tech", "Technology")]
+    CATEGORIES = [("corp", "Corp"), ("phone", "Phone"), ("tech", "Technology")]
 
     # The #corp_list/#academy_list/#research_list/#academy_panel/#research_panel rules
     # are already on CorpScreen.CSS, but Textual's cross-hierarchy CSS merge silently
@@ -475,23 +466,13 @@ class CorpMainMenu(PanelNav, CorpScreen):
     async def on_screen_resume(self) -> None:
         await self._refresh()
 
-    def action_back(self) -> None:
-        # No-op override of CorpScreen.action_back: escape is rebound above with
-        # show=False rather than removed, so it still resolves to this action.
-        pass
-
-    def action_corp_map(self) -> None:
-        self.app.push_screen(CorpMapScreen())
-
     def action_phone(self) -> None:
         self.app.push_screen(PhoneScreen())
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == "categories":
             key = event.item.id.removeprefix("cat_")
-            if key == "map":
-                self.app.push_screen(CorpMapScreen())
-            elif key == "phone":
+            if key == "phone":
                 self.app.push_screen(PhoneScreen())
             elif key == "tech":
                 self.action_research_tree()

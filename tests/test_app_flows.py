@@ -146,7 +146,7 @@ def test_app_boots_to_title_menu():
     run(body())
 
 
-def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
+def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -167,7 +167,9 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_main_menu():
 
             await pilot.click("#begin")
             await pilot.pause()
-            assert isinstance(app.screen, MainMenu)
+            # CorpMapScreen is the home screen -- MainMenu (gigs/jobs/legwork/...) is
+            # one 'm' press away, not where "begin" lands directly.
+            assert isinstance(app.screen, CorpMapScreen)
 
     run(body())
 
@@ -204,9 +206,10 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
             faction = FACTIONS[0]
             await pilot.click(f"#faction_{faction.id}")
             await pilot.pause()
-            # Corp mode has no runner to build -- straight to CorpMainMenu, no
-            # CharacterCreationScreen, and nothing left in the build pools.
-            assert isinstance(app.screen, CorpMainMenu)
+            # Corp mode has no runner to build -- straight to CorpMapScreen (the home
+            # screen, same as a runner game), no CharacterCreationScreen, and nothing
+            # left in the build pools.
+            assert isinstance(app.screen, CorpMapScreen)
             assert app.corp_state is not None
             assert app.corp_state.faction_id == faction.id
             assert app.character.stat_points == 0
@@ -219,9 +222,10 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
 def test_corp_main_menu_has_sidebar_categories():
     """CorpMainMenu is laid out like MainMenu -- a left category sidebar next to the
     corp's own action list -- rather than dropping straight into the action list with
-    nothing beside it. "Corp" renders inline; "Corp Map"/"Phone"/"Technology" push
-    their own screens, reachable both from the sidebar and from the same quick
-    keybindings MainMenu uses."""
+    nothing beside it. "Corp" renders inline; "Phone"/"Technology" push their own
+    screens, reachable both from the sidebar and from the same quick keybindings
+    MainMenu uses. No "Corp Map" category -- CorpMainMenu is itself reached from the
+    map (the home screen), so escape pops back to it instead of being a no-op."""
 
     async def body():
         app = ShadowguyApp()
@@ -233,24 +237,20 @@ def test_corp_main_menu_has_sidebar_categories():
             await pilot.pause()
             await pilot.click(f"#faction_{FACTIONS[0].id}")
             await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+            await pilot.press("m")
+            await pilot.pause()
             assert isinstance(app.screen, CorpMainMenu)
 
             categories = app.screen.query_one("#categories", ListView)
             assert [item.id for item in categories.children] == [
                 "cat_corp",
-                "cat_map",
                 "cat_phone",
                 "cat_tech",
             ]
             # The corp's own action list (inherited from CorpScreen) is visible
             # inline beside the sidebar, not something you have to navigate to.
             assert any(item.id == "rest" for item in app.screen.query_one("#corp_list", ListView).children)
-
-            await pilot.click("#cat_map")
-            await pilot.pause()
-            assert isinstance(app.screen, CorpMapScreen)
-            app.pop_screen()
-            await pilot.pause()
 
             await pilot.press("c")
             await pilot.pause()
@@ -264,11 +264,11 @@ def test_corp_main_menu_has_sidebar_categories():
             app.pop_screen()
             await pilot.pause()
 
-            # escape is a deliberate no-op here -- there's no MainMenu underneath
-            # to pop back to for a pure-corp game.
+            # escape now pops back to CorpMapScreen -- CorpMainMenu is pushed from the
+            # map, not the base of the stack any more.
             await pilot.press("escape")
             await pilot.pause()
-            assert isinstance(app.screen, CorpMainMenu)
+            assert isinstance(app.screen, CorpMapScreen)
 
     run(body())
 
@@ -1691,6 +1691,9 @@ def test_corp_main_menu_stats_panel_and_sections_stack_top_to_bottom():
             await pilot.pause()
             await pilot.click(f"#faction_{FACTIONS[0].id}")
             await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+            await pilot.press("m")
+            await pilot.pause()
             assert isinstance(app.screen, CorpMainMenu)
 
             stats_panel = app.screen.query_one("#corp_stats_panel")
@@ -2042,8 +2045,8 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
 
 
 def _boot_runner_game(pilot, app):
-    """Title -> Runner -> archetype -> MainMenu, the shortest real path into a
-    playable runner game."""
+    """Title -> Runner -> archetype -> CorpMapScreen (the home screen) -> 'm' into
+    MainMenu, the shortest real path into a playable runner game."""
 
     async def go():
         await _settle(pilot)
@@ -2055,14 +2058,18 @@ def _boot_runner_game(pilot, app):
         await pilot.pause()
         await pilot.click("#begin")
         await pilot.pause()
+        assert isinstance(app.screen, CorpMapScreen)
+        await pilot.press("m")
+        await pilot.pause()
         assert isinstance(app.screen, MainMenu)
 
     return go()
 
 
 def _boot_corp_game(pilot, app):
-    """Title -> Corp -> pick a faction, the shortest real path into a playable
-    corp-only game (no runner ever built)."""
+    """Title -> Corp -> pick a faction -> CorpMapScreen (the home screen) -> 'm' into
+    CorpMainMenu, the shortest real path into a playable corp-only game (no runner
+    ever built)."""
 
     async def go():
         await _settle(pilot)
@@ -2071,6 +2078,9 @@ def _boot_corp_game(pilot, app):
         await pilot.click("#corp")
         await pilot.pause()
         await pilot.click(f"#faction_{FACTIONS[0].id}")
+        await pilot.pause()
+        assert isinstance(app.screen, CorpMapScreen)
+        await pilot.press("m")
         await pilot.pause()
         assert isinstance(app.screen, CorpMainMenu)
 

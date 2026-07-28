@@ -1,6 +1,7 @@
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
@@ -20,7 +21,7 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.shops import equipped_travel_reduction
 
-from . import MENU_BACK_BINDINGS, BackScreen, CharacterSheet, _menu_css
+from . import MENU_QUIT_BINDINGS, BackScreen, CharacterSheet, _menu_css
 from .combat_screen import CombatScreen
 
 TRAVEL_HOURS_COST = 2.0
@@ -34,14 +35,31 @@ def _travel_hours(character: Character) -> float:
 
 
 class CorpMapScreen(BackScreen):
+    """The home screen for both a runner and a corp-only run (switch_screen'd in by
+    CharacterCreationScreen/CorpSelectScreen and reopened by load_state) -- gigs/jobs/
+    legwork/Local or the corp's own action list live one level down, on MainMenu/
+    CorpMainMenu (app.home_menu()), reached with 'm' and returned from with escape,
+    same as any other pushed screen. escape here is a no-op (Binding with show=False,
+    same reasoning as the old CorpMainMenu had when it was the base of the stack) since
+    there's nothing below this to pop back to -- shown but disabled would be worse than
+    just not showing it."""
+
     BINDINGS = [
-        *MENU_BACK_BINDINGS,
+        *MENU_QUIT_BINDINGS,
+        Binding("escape", "back", "Back", show=False),
+        ("m", "menu", "Activities"),
         ("up", "move('up')", "Move"),
         ("down", "move('down')", "Move"),
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
         ("enter", "travel", "Travel here"),
     ]
+
+    def action_back(self) -> None:
+        pass
+
+    def action_menu(self) -> None:
+        self.app.push_screen(self.app.home_menu())
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
