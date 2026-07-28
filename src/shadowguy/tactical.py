@@ -357,6 +357,10 @@ class TacticalState:
     level_index: int = 0
     objective: tuple[int, Coord] | None = None
     off_level_units: dict[int, list[Unit]] = field(default_factory=dict, repr=False)
+    # Tiles the player has ever had FOV on, by level index -- fog of war. The renderer
+    # treats these as "known but not presently in sight" and everything else as hidden
+    # outright. Keyed by level because a burglary's levels are separate grids.
+    explored: dict[int, set[Coord]] = field(default_factory=dict, repr=False)
     # Set the moment anybody sees you. Guards that were standing their post start
     # fighting, and no amount of hiding puts it back.
     alarm: bool = False
@@ -566,6 +570,7 @@ def enter_level(state: TacticalState, index: int, coord: Coord) -> None:
     state.level_index = index
     state.grid = state.building.levels[index].grid
     player.coord = coord
+    _reveal(state)
     arriving = state.off_level_units.pop(index, [])
     for ally, spot in zip(crew, ally_spawns(state.grid, coord, len(crew), frozenset(u.coord for u in arriving)), strict=False):
         ally.coord = spot
@@ -650,9 +655,20 @@ def reached_score(state: TacticalState) -> bool:
     return state.objective is not None and (state.level_index, state.player.coord) == state.objective
 
 
+def _reveal(state: TacticalState) -> None:
+    """Fold the player's current FOV into state.explored -- the fog-of-war memory the
+    renderer falls back on for tiles outside present sight. Idempotent, so any call site
+    that might have moved the player can just call it."""
+    seen = visible_tiles(state.grid, state.player.coord)
+    explored = state.explored.setdefault(state.level_index, set())
+    for y, x in zip(*np.nonzero(seen), strict=True):
+        explored.add((int(x), int(y)))
+
+
 def _begin_player_turn(state: TacticalState) -> None:
     state.moves_left = state.player.speed
     state.acted = False
+    _reveal(state)
 
 
 def legal_moves(state: TacticalState) -> list[Coord]:
@@ -677,6 +693,7 @@ def move_player(state: TacticalState, dest: Coord, rng: random.Random | None = N
         return True
     state.player.coord = dest
     state.moves_left -= 1
+    _reveal(state)
     check_detection(state)
     _settle(state)
     return True
@@ -700,6 +717,7 @@ def attempt_lock(state: TacticalState, dest: Coord, lock: "Lock", rng: random.Ra
     if roll.result.passed:
         del state.building.locks[(state.level_index, dest)]
         state.player.coord = dest
+        _reveal(state)
         state.log.append("The lock gives. You're through.")
     elif roll.result is CheckResult.CRITICAL_FAILURE or rng.random() < LOCK_FAILURE_ALARM_CHANCE:
         state.log.append("The lock holds, and something trips.")

@@ -58,10 +58,12 @@ from shadowguy.tactical import (
     CrewFate,
     Side,
     TacticalOutcome,
+    Tile,
     Unit,
     enter_level,
     parse_grid,
     step_neighbors,
+    visible_tiles,
 )
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
@@ -663,6 +665,72 @@ def test_tactical_look_cursor_ignores_next_target_instead_of_reporting_nothing_i
             assert tac_screen.state.aim_kind is AimKind.LOOK
             assert tac_screen.state.aim_cursor == cursor_before
             assert notified == []
+
+    run(body())
+
+
+def test_tactical_map_hides_unexplored_tiles_and_renders_currently_seen_ones():
+    """Fog of war, rendered: a tile the player has never had FOV on doesn't draw at all
+    (blank), while one currently in FOV draws its terrain glyph -- not a space, since
+    _terrain_glyph never returns one."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            grid = state.grid
+            explored = state.explored[state.level_index]
+            assert 0 < len(explored) < grid.width * grid.height  # sanity: fog hides something
+
+            map_lines = tac_screen.query_one("#tac_map", Static).content.plain.split("\n")
+            unexplored = next(
+                (x, y) for y in range(grid.height) for x in range(grid.width) if (x, y) not in explored
+            )
+            assert map_lines[unexplored[1]][unexplored[0]] == " "
+
+            seen = visible_tiles(grid, state.player.coord)
+            visible_floor = next(
+                (x, y)
+                for y in range(grid.height)
+                for x in range(grid.width)
+                if seen[y, x] and grid.tile((x, y)) is Tile.FLOOR
+            )
+            assert map_lines[visible_floor[1]][visible_floor[0]] != " "
+
+    run(body())
+
+
+def test_tactical_look_reports_unknown_for_a_tile_never_seen():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            tac_screen = app.screen
+            state = tac_screen.state
+            grid = state.grid
+            explored = state.explored[state.level_index]
+            unexplored = next(
+                (x, y) for y in range(grid.height) for x in range(grid.width) if (x, y) not in explored
+            )
+
+            tac_screen.action_look()
+            state.aim_cursor = unexplored
+            tac_screen._refresh()
+            assert tac_screen.query_one("#tac_end", Static).content.startswith("Unknown")
 
     run(body())
 

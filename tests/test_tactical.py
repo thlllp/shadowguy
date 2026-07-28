@@ -41,6 +41,7 @@ from shadowguy.tactical import (
     confirm_aim,
     confirm_attack_aim,
     confirm_grenade_aim,
+    _reveal,
     _settle,
     check_detection,
     cover_bonus,
@@ -222,6 +223,39 @@ def test_legal_moves_empty_once_moves_exhausted():
     state = _simple_state()
     state.moves_left = 0
     assert legal_moves(state) == []
+
+
+# --- fog of war: TacticalState.explored ---
+
+
+def test_fight_start_reveals_the_players_own_fov():
+    state = _simple_state()
+    seen = {(x, y) for y in range(state.grid.height) for x in range(state.grid.width) if visible_tiles(state.grid, (0, 0))[y, x]}
+    assert seen  # sanity: an open room sees at least itself
+    assert state.explored[0] == seen
+
+
+def test_explored_keeps_tiles_that_drop_out_of_current_fov():
+    """A tile once seen stays "known" (fog of war) even once a wall cuts off the current
+    line of sight back to it -- explored is a memory, not a snapshot of visible_tiles."""
+    grid = parse_grid(["..#..", "..#..", "....."])
+    character = Character(name="t")
+    enemy = ENEMIES_BY_ID["thug"]
+    state = start_tactical(character, grid, player_start=(0, 0), enemy_placements=[(enemy, (4, 2))])
+    start_explored = set(state.explored[0])
+    assert start_explored  # sanity
+
+    state.player.coord = (4, 0)
+    _reveal(state)
+    far_seen = {(x, y) for y in range(grid.height) for x in range(grid.width) if visible_tiles(grid, (4, 0))[y, x]}
+    assert far_seen  # sanity
+
+    left_room_only = start_explored - far_seen
+    assert left_room_only  # sanity: the wall column actually blocked something
+    # Nothing seen from the start position is forgotten once the far room's FOV
+    # doesn't include it anymore.
+    assert left_room_only <= state.explored[0]
+    assert far_seen <= state.explored[0]
 
 
 def test_leave_succeeds_from_an_exit_tile_with_no_roll():
@@ -1129,6 +1163,29 @@ def test_taking_the_stairs_swaps_the_level_and_costs_a_move():
     assert (state.level_index, state.player.coord) == destination
     assert state.grid is building.levels[state.level_index].grid
     assert state.moves_left == moves - 1
+
+
+def test_explored_is_kept_separately_per_level():
+    """A burglary's levels are separate grids (same DESIGN.md point buildings.py makes
+    about Building not being a corpmap.Location) -- explored has to be keyed by level or
+    a coordinate seen on one floor would wrongly read as "known" on another."""
+    building, state = _burglary()
+    entry_level = state.level_index
+    entry_explored = set(state.explored[entry_level])
+    assert entry_explored
+
+    stair = next(cell for link in building.links for level, cell in (link.a, link.b) if level == entry_level)
+    state.player.coord = stair
+    destination_level, destination_coord = stairs_here(state)
+    assert take_stairs(state)
+    assert state.level_index == destination_level
+
+    assert destination_level in state.explored
+    assert state.explored[destination_level]
+    # Walking upstairs didn't touch what was already known about the entry level, and
+    # the two levels' explored sets aren't the same object or a match by coincidence.
+    assert state.explored[entry_level] == entry_explored
+    assert entry_level != destination_level
 
 
 def test_a_guard_left_behind_is_still_there_when_you_come_back():
