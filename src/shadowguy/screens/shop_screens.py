@@ -22,12 +22,12 @@ from shadowguy.factions import (
     officer_unlocked,
     takeover_gate,
 )
-from shadowguy.fixer import Fixer, JobOffer
+from shadowguy.fixer import RUNNER_BROKER_FIXER_IDS, Fixer, JobOffer
 from shadowguy.gangs import Gang
 from shadowguy.jobs import generate_smuggling_job
 from shadowguy.rivals import RunnerActivity
 from shadowguy.security import SecurityContract
-from shadowguy.runners import RUNNERS_BY_ID, recruit_cut, recruit_wage
+from shadowguy.runners import RUNNERS_BY_ID, intro_cost, recruit_cut, recruit_wage
 from shadowguy.skills import skill_value
 from shadowguy.shops import (
     CATALOG,
@@ -72,6 +72,10 @@ def offer_label(character: Character, offer: JobOffer) -> str:
         f"{offer.scene.title} ({offer.scene.hours_cost}h) — {offer.timing.label}"
         f"{matrix_warning(character, offer.scene)}"
     )
+
+
+def _contact_label(runner) -> str:
+    return f"Ask about {runner.name} ({runner.archetype}) — {intro_cost(runner)}eb, introduce"
 
 
 class FixerOffersScreen(BackScreen):
@@ -120,6 +124,14 @@ class FixerOffersScreen(BackScreen):
             ListItem(Static(self._security_label(contract)), id=contract.id)
             for contract in self.fixer.security_offers
         ]
+        if self.fixer.id in RUNNER_BROKER_FIXER_IDS:
+            items += [
+                ListItem(Static(_contact_label(runner)), id=f"intro_{runner.id}")
+                for runner in self.app.runners
+                if character.runner_available(runner.id)
+                and not character.knows_runner(runner.id)
+                and not character.on_crew(runner.id)
+            ]
         offers = self.query_one("#offers", ListView)
         await _replace_items(offers, items)
         first_id = items[0].id if items else None
@@ -150,6 +162,18 @@ class FixerOffersScreen(BackScreen):
             contract = next(c for c in self.fixer.security_offers if c.id == item_id)
             self.app.character.accept_security_contract(contract)
             self.fixer.security_offers = [c for c in self.fixer.security_offers if c.id != item_id]
+            await self._refresh()
+            return
+        if item_id.startswith("intro_"):
+            character = self.app.character
+            runner = RUNNERS_BY_ID[item_id.removeprefix("intro_")]
+            cost = intro_cost(runner)
+            if character.cash < cost:
+                self.notify(f"Can't afford the introduction ({cost}eb).", severity="warning")
+                return
+            character.cash -= cost
+            character.meet_runner(runner.id)
+            self.notify(f"{self.fixer.name} makes a call. You've got {runner.name}'s number now.")
             await self._refresh()
             return
         offer = next(offer for offer in self.fixer.offers if offer.id == item_id)
