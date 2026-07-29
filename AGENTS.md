@@ -22,7 +22,7 @@ Two coupled modes: **Runner** (RPG, one character, permadeath) + **Corp** (4X, t
 ## Key commands
 
 ```
-uv run pytest -q              # test suite (22 files, pytest>=8)
+uv run pytest -q              # test suite (24 files, pytest>=8)
 uv run ruff check src/        # lint (ruff pinned in dev group)
 ```
 
@@ -46,6 +46,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 | `gangs.py` | Street Gangs + `GANG_RANKS` | — |
 | `relations.py` | Seeded Faction↔Gang standing | `factions`, `gangs` only |
 | `corpmap.py` | Territory map, Locations, `LocalCharacter`s, ASCII renderer | `scene` |
+| `buildings.py` | Burglary targets: rooms/levels/links between them | nothing but `tactical` (grid primitives) |
 | `corp_turn.py` | Corp mode: `CorpState`, income/research, daily action, `TECHNOLOGIES` | `corpmap` only |
 | `security.py` | Parallel: multi-night security contracts | — |
 | `encounters.py` | Parallel: gang turf-entry toll-or-attack | — |
@@ -61,15 +62,14 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 |---|---|
 | `__init__.py` | `CharacterSheet`, `BackScreen`, `PanelNav`, map glyph helpers |
 | `creation_screen.py` | `CharacterCreationScreen` |
-| `main_menu.py` | `MainMenu` |
 | `menu_screens.py` | `TitleMenu`, `ModeSelect`, `CorpSelect`, `Test`, `Quit`, `Load` |
 | `scene_screen.py` | `SceneScreen` |
 | `combat_screen.py` | `CombatScreen` |
 | `tactical_screen.py` | `TacticalScreen` + `GrenadePickScreen` |
 | `matrix_screen.py` | `MatrixScreen` |
-| `burglary_screens.py` | `EntrancePick` + `BurglaryWalk` |
-| `corp_map_screen.py` | `CorpMapScreen` + `GangTollScreen` |
-| `corp_screen.py` | `CorpScreen` + `CorpMainMenu` + `ResearchTreeScreen` |
+| `burglary_screens.py` | `EntrancePickScreen` (the interior itself plays on `TacticalScreen`) |
+| `corp_map_screen.py` | `CorpMapScreen` (the home screen for both runner and corp-only runs, no separate menu screen) + `GangTollScreen` |
+| `corp_screen.py` | `CorpScreen` + `ResearchTreeScreen` |
 | `shop_screens.py` | `FixerOffers`, `Shop`, `Bar`, `CorpHQ`, `Hospital`, `RealEstate`, `Safehouse`, `Junkyard`, `GangDen` |
 | `info_screens.py` | `Phone` + apps (Contacts, Web, CorpWebsite, AlarmClock, Messages); `Inventory`, `Cyberdeck`, `Skills` |
 
@@ -95,7 +95,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 
 ## Save versions
 
-Bump `saves.SAVE_VERSION` on any breaking state change. Last version: **47** (the `OFFICE` `BuildingKind`). Full version history in `CLAUDE.md:185-214`.
+Bump `saves.SAVE_VERSION` on any breaking state change. Last version: **49** (`Character.CrewHire.on_site`, `Scene.max_on_site`/`max_support`). Full version history in CLAUDE.md's "Save versions" section.
 
 ## Critical Textual gotchas
 
@@ -107,7 +107,7 @@ Bump `saves.SAVE_VERSION` on any breaking state change. Last version: **47** (th
 | Resume hook is `on_screen_resume` | Override the public one, not `_on_screen_resume` |
 | Mouse hit-testing: `event.get_content_offset(widget)` | Returns `Offset` or `None` (pointer outside) |
 | `Static` has no `.renderable` in Textual 8 | Use `.content` |
-| `run_test()` hands back pilot before first layout | Two `pilot.pause()` before first `click()` (cold boot only) |
+| A layout-affecting mutation (boot, expand/collapse, scroll) precedes a coordinate click/hover | Two `pilot.pause()`s (`_settle`) after the mutation, not one — recurs beyond cold boot |
 | `app.notify()` toasts steal `pilot.click()` coordinates | Gate frequent notifications on player state (e.g. `discovered_fixers`) |
 
 ## Key design invariants (details in DESIGN.md)
