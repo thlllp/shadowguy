@@ -96,7 +96,7 @@ from shadowguy.screens.shop_screens import (
 )
 from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
 from shadowguy.rivals import RunnerActivity, RunnerState
-from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.widgets import Collapsible, ListView, Static
 
@@ -2349,6 +2349,38 @@ def test_bar_gates_recruiting_on_meeting_the_runner_first():
             assert app.character.knows_runner(runner.id)
             rows = app.screen.query_one("#bar_runners", ListView)
             assert any(item.id == f"runner_{runner.id}" for item in rows.children)
+
+    run(body())
+
+
+def test_neon_choir_can_introduce_a_runner_for_a_fee():
+    """An info-broker fixer (fixer.RUNNER_BROKER_FIXER_IDS) can vouch for an
+    independent runner directly from FixerOffersScreen, skipping the bar-luck
+    encounter -- costs cash and immediately makes the runner knows_runner()."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            fixer = next(f for f in app.fixers if f.id == "fixer_neon_choir")
+            runner = RIVAL_RUNNERS[0]
+            cost = intro_cost(runner)
+            character.cash = cost
+
+            app.push_screen(FixerOffersScreen(fixer))
+            await pilot.pause()
+            rows = app.screen.query_one("#offers", ListView)
+            rows.focus()
+            rows.index = next(
+                i for i, item in enumerate(rows.children) if item.id == f"intro_{runner.id}"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert character.knows_runner(runner.id)
+            assert character.cash == 0
 
     run(body())
 

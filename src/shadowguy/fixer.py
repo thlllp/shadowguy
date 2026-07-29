@@ -30,6 +30,12 @@ FIXER_ROSTER = [
     ("fixer_doc_vex", "Doc Vex", "Meridian black-clinic contracts", "faction_meridian"),
 ]
 
+# Fixers whose specialty is knowing people rather than moving product -- they can
+# introduce the player straight to an independent runner (runners.intro_cost) instead
+# of the player having to stumble into that runner drinking at a bar (see
+# shop_screens.FixerOffersScreen's Contacts section).
+RUNNER_BROKER_FIXER_IDS = frozenset({"fixer_neon_choir"})
+
 # Catches a typo'd faction_id at import rather than a KeyError deep in create_fixers.
 for _fixer_id, _name, _specialty, _faction_id in FIXER_ROSTER:
     if _faction_id is not None and _faction_id not in FACTIONS_BY_ID:

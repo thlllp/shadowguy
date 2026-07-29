@@ -204,3 +204,13 @@ def recruit_cut(runner: RivalRunner, leadership: int) -> float:
     """The fraction of a job's payout `runner` takes, discounted by the recruiter's
     Leadership. At or below base it's the listed cut; higher Leadership shrinks it."""
     return runner.job_cut * (1 - _leadership_discount(leadership))
+
+
+# What an info-broker fixer (fixer.RUNNER_BROKER_FIXER_IDS) charges to introduce an
+# independent runner directly -- a flat multiple of daily_cost so a better runner
+# (already pricier to hire) is also pricier to get a number for.
+RUNNER_INTRO_COST_MULT = 2
+
+
+def intro_cost(runner: RivalRunner) -> int:
+    return runner.daily_cost * RUNNER_INTRO_COST_MULT
