@@ -386,9 +386,9 @@ _ARCHETYPE_ROWS = (
                 StageType.COMPLICATION,
                 "The target panics, and panic is loud.",
                 (
-                    ("read_face", 1, "See it coming in their eyes and get ahead of it"),
+                    ("intuition", 1, "See it coming in their eyes and get ahead of it"),
                     ("negotiations", 0, "Cut them a deal on the spot"),
-                    ("center_of_gravity", -2, "Take them off their feet and keep moving"),
+                    ("sturdy", -2, "Take them off their feet and keep moving"),
                 ),
             ),
             (
@@ -396,7 +396,7 @@ _ARCHETYPE_ROWS = (
                 "You have them. Now get them off {faction}'s ground.",
                 (
                     ("forgery", 1, "Badge the two of you through the checkpoint"),
-                    ("lung_capacity", 0, "Carry them, and don't stop"),
+                    ("running", 0, "Carry them, and don't stop"),
                     ("short_blade", -2, "Cut through the cordon"),
                 ),
             ),
@@ -429,7 +429,7 @@ _ARCHETYPE_ROWS = (
                 "A coolant line lets go, and a tech comes to find out why.",
                 (
                     ("pattern_seeking", 1, "Spot the cascade before it reaches you"),
-                    ("resist_poison", 0, "Ride out the chemical wash and keep working"),
+                    ("fortitude", 0, "Ride out the chemical wash and keep working"),
                     ("grapple", -2, "Put the tech in a locker"),
                 ),
             ),
@@ -437,7 +437,7 @@ _ARCHETYPE_ROWS = (
                 StageType.EXFIL,
                 "It's going to go, and you are still inside {location}.",
                 (
-                    ("lung_capacity", 1, "Run, and keep running until the sirens fade"),
+                    ("running", 1, "Run, and keep running until the sirens fade"),
                     ("dodge", 0, "Slip the response team in the stairwell"),
                     ("short_blade", -2, "Cut your way out through whoever is closest"),
                 ),
@@ -477,7 +477,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("infer", 1, "Read the trace's shape and stay ahead of it"),
                     ("listening", 0, "Catch the subroutine's rhythm and time your jumps"),
-                    ("resist_poison", -2, "Tank the neural feedback and keep working"),
+                    ("fortitude", -2, "Tank the neural feedback and keep working"),
                 ),
             ),
             (
@@ -636,7 +636,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("hack", 1, "Loop the tracer back on itself"),
                     ("dodge", 0, "Bounce your signal through a dozen dead relays"),
-                    ("resist_poison", -2, "Tank the neural feedback and keep working"),
+                    ("fortitude", -2, "Tank the neural feedback and keep working"),
                 ),
             ),
             (
@@ -736,7 +736,7 @@ _ARCHETYPE_ROWS = (
                 StageType.EXFIL,
                 "You have what you came for. Getting clear without being made is the other half of the job.",
                 (
-                    ("read_the_room", 1, "Feel the exit clear before you take it"),
+                    ("intuition", 1, "Feel the exit clear before you take it"),
                     ("deception", 0, "Walk out looking like you belong"),
                     ("acrobatics", -2, "Take the fast way down and don't look back"),
                 ),

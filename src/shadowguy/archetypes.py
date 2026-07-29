@@ -45,7 +45,7 @@ _ARCHETYPE_ROWS = (
         "Enforcer",
         "Muscle. Hits hard, soaks hits, and is no good at all at casing a place.",
         {"body": 3, "strength": 3},
-        {"grapple": 7, "toughness": 6, "negotiations": 4, "read_the_room": 2},
+        {"grapple": 7, "toughness": 6, "negotiations": 4, "intuition": 2},
     ),
     (
         "hacker",
@@ -59,7 +59,7 @@ _ARCHETYPE_ROWS = (
         "Infiltrator",
         "Gets in unseen and talks their way out. Broad, but tops out lower than a specialist.",
         {"agility": 4, "perception": 2},
-        {"stealth": 7, "deception": 5, "sight": 4, "read_the_room": 4},
+        {"stealth": 7, "deception": 5, "sight": 4, "intuition": 4},
     ),
 )
 

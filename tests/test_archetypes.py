@@ -53,7 +53,7 @@ def test_enforcer():
     a = archetypes.ARCHETYPES_BY_ID["enforcer"]
     assert a.name == "Enforcer"
     assert a.stats == {"body": 3, "strength": 3}
-    assert a.skills == {"grapple": 7, "toughness": 6, "negotiations": 4, "read_the_room": 2}
+    assert a.skills == {"grapple": 7, "toughness": 6, "negotiations": 4, "intuition": 2}
 
 
 def test_hacker():
@@ -67,7 +67,7 @@ def test_infiltrator():
     a = archetypes.ARCHETYPES_BY_ID["infiltrator"]
     assert a.name == "Infiltrator"
     assert a.stats == {"agility": 4, "perception": 2}
-    assert a.skills == {"stealth": 7, "deception": 5, "sight": 4, "read_the_room": 4}
+    assert a.skills == {"stealth": 7, "deception": 5, "sight": 4, "intuition": 4}
 
 
 def test_apply_spends_all_points():

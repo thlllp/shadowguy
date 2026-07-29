@@ -33,11 +33,10 @@ class Skill:
 # can't be filed under one stat and claim another.
 _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
     "body": [
-        ("resist_poison", "Resist Poison", "Shrugging off toxins"),
-        ("resist_disease", "Resist Disease", "Fighting off infection"),
-        ("center_of_gravity", "Center of Gravity", "Staying upright and balanced"),
-        ("lung_capacity", "Lung Capacity", "Holding your breath, enduring exertion"),
+        ("fortitude", "Fortitude", "Shrugging off toxins, disease, and other assaults on the body"),
+        ("sturdy", "Sturdy", "Staying upright and balanced"),
         ("toughness", "Toughness", "Shrugging off blows"),
+        ("running", "Running", "Sprinting and outlasting a chase"),
     ],
     "strength": [
         ("short_blade", "Short Blade", "Fighting with knives and short blades"),
@@ -54,11 +53,10 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         ("sleight_of_hand", "Sleight of Hand", "Concealing weapons and pickpocketing"),
     ],
     "perception": [
-        ("read_face", "Read Face", "Reading expressions and body language"),
         ("pattern_seeking", "Pattern Seeking", "Spotting patterns and anomalies"),
         ("listening", "Listening", "Picking up sounds and conversations"),
         ("sight", "Sight", "Spotting details at range or in the dark"),
-        ("read_the_room", "Read the Room", "Sensing social undercurrents and mood"),
+        ("intuition", "Intuition", "Reading a face and a room: expressions, body language, social undercurrents"),
         # Filed under perception, not strength: a gun is aimed, not swung, so what
         # it rolls is the same faculty as Sight. This is the one stat with six
         # skills — nothing enforces five, and a stat's cost is per-skill anyway,
