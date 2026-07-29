@@ -398,6 +398,9 @@ class CorpMapScreen(BackScreen):
             return
 
         if item_id == "deliver_package":
+            if character.smuggling_job is None:
+                await self._refresh_activities()
+                return
             if character.location_id != character.smuggling_job.destination_territory_id:
                 return
             job = character.deliver_smuggling_job(GANG_JOB_STANDING_GAIN)
@@ -601,18 +604,19 @@ class CorpMapScreen(BackScreen):
                 text.stylize("reverse", span.offset, span.offset + span.end - span.start)
         self.query_one("#map", Static).update(text)
 
-        t = corp_map.territories[self.hovered_id or self.selected_id]
+        focus_id = self.hovered_id or self.selected_id
+        if focus_id is None:
+            return
+        t = corp_map.territories[focus_id]
         here = corp_map.territories[character.location_id]
         self.query_one("#territory_summary", Static).update(self._territory_summary_text(t, here, character))
         self.query_one(CharacterSheet).refresh()
-        # Cancel any still-running refresh for a previously hovered/selected territory
-        # before starting this one -- otherwise two overlapping tasks race to
-        # clear()/mount() the same #map_local_boxes grid (rapid mouse movement or
-        # repeated clicks spawn one task per move), which can raise DuplicateIds or
-        # leave the panel showing a stale territory's boxes.
-        if self._map_locals_task is not None and not self._map_locals_task.done():
-            self._map_locals_task.cancel()
-        self._map_locals_task = asyncio.create_task(self._refresh_map_local_boxes(t))
+        # Avoid spawning overlapping tasks for the same grid — cancel() + immediate
+        # create_task() races where the old task might still be mutating widget state
+        # during the new task's remove_children/mount_all, which can cause native
+        # crashes. Instead, just skip if one is already running.
+        if self._map_locals_task is None or self._map_locals_task.done():
+            self._map_locals_task = asyncio.create_task(self._refresh_map_local_boxes(t))
 
     async def _refresh_map_local_boxes(self, t: Territory) -> None:
         """Populate the map-hover boxes for territory *t* (the one under the cursor).
@@ -772,11 +776,13 @@ class CorpMapScreen(BackScreen):
         elif location.kind == LocationKind.REAL_ESTATE:
             self.app.push_screen(RealEstateScreen(location))
         elif location.kind == LocationKind.CORP_HQ:
-            self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[territory.owner]))
+            if territory.owner is not None:
+                self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[territory.owner]))
         elif location.kind == LocationKind.BAR:
             self.app.push_screen(BarScreen(location))
         elif location.kind == LocationKind.GANG_DEN:
-            self.app.push_screen(GangDenScreen(location, GANGS_BY_ID[territory.gang_id]))
+            if territory.gang_id:
+                self.app.push_screen(GangDenScreen(location, GANGS_BY_ID[territory.gang_id]))
         elif location.kind in PLAYER_OWNED_KINDS:
             self.app.push_screen(SafehouseScreen(location))
 
@@ -996,7 +1002,11 @@ class CorpMapScreen(BackScreen):
         action_travel's own "Enter" row already gives."""
         box_id = event.collapsible.id or ""
         if box_id.startswith("map_local_box"):
-            t = self.app.corp_map.territories[self.hovered_id or self.selected_id]
+            focus_id = self.hovered_id or self.selected_id
+            if focus_id is None:
+                event.collapsible.collapsed = True
+                return
+            t = self.app.corp_map.territories[focus_id]
             if t.id != self.app.character.location_id:
                 event.collapsible.collapsed = True
                 self.notify(f"Travel to {t.name} first.", severity="warning")

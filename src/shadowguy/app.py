@@ -1,7 +1,14 @@
+import os
 import random
+import sys
+import traceback
+from datetime import datetime, timezone
 
-from textual.app import App
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.screen import Screen
+from textual.widgets import Button, Static
+from rich.text import Text
 
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character
 from shadowguy.corp_turn import (
@@ -29,8 +36,64 @@ from shadowguy.security import resolve_security_night
 from shadowguy.surveillance import resolve_surveillance_day
 
 
+class CrashScreen(Screen):
+    CSS = """
+    CrashScreen {
+        align: center middle;
+    }
+    #crash-header {
+        color: red;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #crash-traceback {
+        width: 90%;
+        height: 70%;
+        border: solid red;
+        padding: 1;
+    }
+    #crash-exit {
+        margin-top: 1;
+        dock: bottom;
+    }
+    """
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self._error = error
+
+    def compose(self) -> ComposeResult:
+        tb = "".join(traceback.format_exception(self._error))
+        yield Static(Text.from_markup("[bold red]FATAL ERROR[/]\n\nThe game encountered an unexpected error:"), id="crash-header")
+        yield VerticalScroll(Static(Text(tb)), id="crash-traceback")
+        yield Button("Exit", id="crash-exit")
+
+    def on_button_pressed(self) -> None:
+        self.app.exit()
+
+
+def _write_crash_log(error: BaseException) -> str:
+    path = os.path.join("/tmp", "shadowguy_crash.log")
+    with open(path, "w") as f:
+        f.write(f"Crash at {datetime.now(timezone.utc).isoformat()}\n")
+        f.write("".join(traceback.format_exception(error)))
+    return path
+
+
 class ShadowguyApp(App):
     BINDINGS = [("q", "quit_menu", "Menu")]
+
+    def _handle_exception(self, error: BaseException) -> None:
+        _write_crash_log(error)
+        try:
+            while self.screen_stack:
+                self.pop_screen()
+        except Exception:
+            pass
+        try:
+            self.push_screen(CrashScreen(error))
+        except Exception:
+            self.exit()
 
     def __init__(self) -> None:
         super().__init__()
@@ -305,8 +368,24 @@ class ShadowguyApp(App):
         self.push_screen(TitleMenu())
 
 
+def _show_crash_console(error: BaseException) -> None:
+    path = _write_crash_log(error)
+    print("".join(traceback.format_exception(error)), flush=True)
+    print(f"\nCrash log saved to: {path}", flush=True)
+    input("\nThe game crashed. Press Enter to exit...")
+
+
 def main() -> None:
-    ShadowguyApp().run()
+    def _excepthook(etype, value, tb):
+        _show_crash_console(value)
+
+    sys.excepthook = _excepthook
+    try:
+        ShadowguyApp().run()
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        _show_crash_console(exc)
 
 
 if __name__ == "__main__":
