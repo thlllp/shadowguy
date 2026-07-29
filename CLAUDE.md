@@ -142,15 +142,15 @@ src/shadowguy/
     __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
                          BackScreen, PanelNav, the tactical/burglary map glyph helpers
     creation_screen.py   CharacterCreationScreen
-    main_menu.py         MainMenu
     menu_screens.py      TitleMenu (entry point) + ModeSelect + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen
     tactical_screen.py   TacticalScreen + GrenadePickScreen
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
-    corp_map_screen.py   CorpMapScreen + GangTollScreen
-    corp_screen.py       CorpScreen + CorpMainMenu (subclasses it) + ResearchTreeScreen
+    corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a
+                         runner and a corp-only run; no separate MainMenu any more
+    corp_screen.py       CorpScreen + ResearchTreeScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
                          Safehouse + Junkyard + GangDen
     info_screens.py      Phone (home grid) + its apps: Contacts + Web + CorpWebsite +
