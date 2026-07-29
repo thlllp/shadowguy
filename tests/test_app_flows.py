@@ -1907,8 +1907,7 @@ def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
-            await pilot.pause()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, app.screen)
 
             boxes = list(app.screen.query("#map_local_boxes Collapsible"))
             assert len(boxes) >= 2  # at least one Location plus the Fixers box
@@ -1955,14 +1954,14 @@ def test_map_hover_box_cannot_be_opened_away_from_current_territory():
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
-            await pilot.pause()
+            await _settle_map_boxes(pilot, app.screen)
             screen = app.screen
 
             here = app.corp_map.territories[app.character.location_id]
             neighbor_id = here.connections[0]
             screen.hovered_id = neighbor_id
             screen._refresh()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, screen)
 
             boxes = list(screen.query("#map_local_boxes Collapsible"))
             assert boxes, "hovering a bordering territory should still build boxes"
@@ -1974,7 +1973,7 @@ def test_map_hover_box_cannot_be_opened_away_from_current_territory():
             # is allowed.
             screen.hovered_id = here.id
             screen._refresh()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, screen)
             own_boxes = list(screen.query("#map_local_boxes Collapsible"))
             assert own_boxes
             own_boxes[0].collapsed = False
@@ -2010,8 +2009,7 @@ def test_map_hover_boxes_do_not_strand_on_a_stale_territory():
             screen._refresh()
             screen.hovered_id = here.id
             screen._refresh()
-            await pilot.pause()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, screen)
 
             box_titles = {box.title for box in screen.query("#map_local_boxes Collapsible")}
             expected_titles = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers", "Rest"}
