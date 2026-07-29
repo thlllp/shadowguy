@@ -17,7 +17,7 @@ purely acquisition: nothing calls install_cyberware from a screen yet.
 Humanity as capacity: every Cyberware carries a `humanity_cost`, and the sum
 across everything installed can never exceed Character.humanity
 (HUMANITY_BASELINE, 6) -- the same "capacity caps a purchase" shape
-shops.free_program_slots enforces for a deck's RAM. Nothing lowers
+inventory.free_program_slots enforces for a deck's RAM. Nothing lowers
 Character.humanity itself yet (it's a fixed baseline, see character.py), so
 today this is purely a loadout budget: how much of a runner's whole four-slot
 frame they can afford to replace at once, not a resource that depletes over a
@@ -266,7 +266,7 @@ if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
 
 def installed_humanity_cost(installed: dict[CyberSlot, str]) -> float:
     """Total Humanity capacity spent by everything currently installed -- the
-    cyberware counterpart to shops.equipped_bonus, and the `used` half of
+    cyberware counterpart to inventory.equipped_bonus, and the `used` half of
     free_humanity below. Takes the raw dict rather than a Character to stay a
     leaf, same reason installed_bonus does."""
     return sum(CYBERWARE_BY_ID[cyberware_id].humanity_cost for cyberware_id in installed.values())
@@ -274,7 +274,7 @@ def installed_humanity_cost(installed: dict[CyberSlot, str]) -> float:
 
 def free_humanity(character: "Character") -> float:
     """How much of Character.humanity's capacity is still unspent -- the
-    cyberware counterpart to shops.free_program_slots."""
+    cyberware counterpart to inventory.free_program_slots."""
     return character.humanity - installed_humanity_cost(character.installed_cyberware)
 
 
@@ -311,13 +311,13 @@ def remove_cyberware(character: "Character", slot: CyberSlot) -> str | None:
 
 def installed_bonus(installed: dict[CyberSlot, str], stat: str) -> int:
     """Every installed piece's contribution to `stat`, the cyberware
-    counterpart to shops.equipped_bonus -- takes the raw dict rather than a
+    counterpart to inventory.equipped_bonus -- takes the raw dict rather than a
     Character to stay a leaf, same reason equipped_bonus takes a bare list."""
     return sum(CYBERWARE_BY_ID[cyberware_id].bonuses.get(stat, 0) for cyberware_id in installed.values())
 
 
 def installed_skill_bonus(installed: dict[CyberSlot, str], skill_id: str) -> int:
-    """The cyberware counterpart to shops.equipped_skill_bonus."""
+    """The cyberware counterpart to inventory.equipped_skill_bonus."""
     return sum(
         CYBERWARE_BY_ID[cyberware_id].skill_bonuses.get(skill_id, 0) for cyberware_id in installed.values()
     )
@@ -325,7 +325,7 @@ def installed_skill_bonus(installed: dict[CyberSlot, str], skill_id: str) -> int
 
 def installed_defense(installed: dict[CyberSlot, str]) -> int:
     """Every installed piece's contribution to the soak pool -- the cyberware
-    counterpart to shops.equipped_defense, folded into combat.player_soak
+    counterpart to inventory.equipped_defense, folded into combat.player_soak
     alongside worn armor."""
     return sum(CYBERWARE_BY_ID[cyberware_id].defense for cyberware_id in installed.values())
 

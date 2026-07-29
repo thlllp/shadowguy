@@ -40,7 +40,7 @@ firewall_soak/player_attack_damage) or, if Program.uses_per_fight > 0, a limited
 MatrixAction (MatrixActionKind.PROGRAM) offered alongside the four fixed actions —
 uses_per_fight alone tells the two apart, so there's no separate kind field to drift
 out of sync with the bonus fields actually set. Only the *active* deck's programs count
-(shops.active_deck_entry — the same one equipped_deck_rating already reads off), and
+(inventory.active_deck_entry — the same one equipped_deck_rating already reads off), and
 charges (MatrixState.program_uses) are per-fight, seeded fresh in start_matrix like
 integrity itself.
 """
@@ -54,14 +54,8 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolve_check, resolve_rng
 from shadowguy.combat import Drop, resolve_hit
 from shadowguy.cybernetics import installed_matrix_action_bonus
-from shadowguy.shops import (
-    STOLEN_DATASHARD_ID,
-    InventoryItem,
-    Program,
-    active_deck_entry,
-    equipped_deck_rating,
-    installed_programs_for,
-)
+from shadowguy.inventory import active_deck_entry, equipped_deck_rating, installed_programs_for
+from shadowguy.shops import STOLEN_DATASHARD_ID, InventoryItem, Program
 from shadowguy.skills import skill_value
 
 # The runner's matrix hit points, rebuilt each fight from Intelligence (gear included,
@@ -308,7 +302,7 @@ def generate_matrix_network(tier: int, rng: random.Random) -> MatrixNetwork:
 
 
 def _installed_programs(character: Character) -> list[Program]:
-    """Programs live on the active deck (shops.active_deck_entry) — the same one
+    """Programs live on the active deck (inventory.active_deck_entry) — the same one
     equipped_deck_rating's number comes from, since a matrix fight only ever rides on
     one deck. No deck equipped means no programs, passive or otherwise."""
     entry = active_deck_entry(character.inventory)

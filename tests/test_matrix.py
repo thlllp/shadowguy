@@ -57,7 +57,7 @@ SEEDS = range(150)
 # generic *mechanism* (a passive bonus folding into a base formula, an action program
 # with some other guaranteed effect) rather than any one program's flavor, it builds a
 # synthetic Program and monkeypatches it into PROGRAMS_BY_ID for the test's duration --
-# installed_programs is resolved by id through that dict (shops.installed_programs_for),
+# installed_programs is resolved by id through that dict (inventory.installed_programs_for),
 # so this is the real resolution path, not a mock of it.
 
 
@@ -792,7 +792,7 @@ def test_clearing_a_cache_node_grants_a_sellable_item_and_never_gates_the_run():
     assert not run.is_over  # a cache is side loot, not a stage in reaching/extracting data
     assert any(entry.item_id == STOLEN_DATASHARD_ID for entry in char.inventory)
     # unequipped: it's junk to sell, not gear -- and mustn't be picked up as "the"
-    # active deck by shops.active_deck_entry (slot=None is that convention's whole
+    # active deck by inventory.active_deck_entry (slot=None is that convention's whole
     # signal, so an equipped, bonus-less item would silently look like one).
     got = next(entry for entry in char.inventory if entry.item_id == STOLEN_DATASHARD_ID)
     assert got.equipped is False

@@ -53,6 +53,7 @@ from shadowguy.checks import (
     resolve_rng,
 )
 from shadowguy.cybernetics import has_smartlink, installed_defense
+from shadowguy.inventory import equipped_defense
 from shadowguy.runners import RivalRunner
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
@@ -66,7 +67,6 @@ from shadowguy.shops import (
     EffectKind,
     Item,
     Slot,
-    equipped_defense,
 )
 from shadowguy.skills import skill_for, skill_value
 
@@ -741,7 +741,7 @@ def _throw(state: CombatState, action: Action) -> None:
         state.outcome = CombatOutcome.ESCAPED
         state.log.append(f"{consumable.name} — you walk out of the fight clean.")
     else:
-        # Same guard as shops.use_consumable, from the other side: a new combat-only
+        # Same guard as inventory.use_consumable, from the other side: a new combat-only
         # effect with no branch here would otherwise be popped and silently do nothing.
         raise ValueError(f"consumable effect not handled in combat: {consumable.effect}")
 

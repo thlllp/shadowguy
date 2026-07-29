@@ -133,7 +133,10 @@ src/shadowguy/
   surveillance.py parallel resolution: detection rolls in the player corp's territory
   corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action
 
-  shops.py       the retail catalogs (items, consumables, programs) + pricing
+  shops.py       the retail catalogs (items, consumables, programs) + pricing +
+                 buy/sell transactions
+  inventory.py   equip state, deck programs and using a consumable -- what happens to
+                 a Character's inventory *after* shops.py adds something to it
   cybernetics.py the Cyberware catalog + install/remove; no shop wired to it yet
   saves.py       pickle-based whole-run save/load
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
@@ -173,6 +176,7 @@ Leaf modules, and why each has to stay one:
 - **`relations.py`** — imports only `factions.py`/`gangs.py`.
 - **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
 - **`saves.py`** — imports no game classes.
+- **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
 
 `scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`).
 

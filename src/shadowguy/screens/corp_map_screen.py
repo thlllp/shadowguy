@@ -53,16 +53,12 @@ from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
+from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.rivals import RunnerActivity
 from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.scene import Scene
-from shadowguy.shops import (
-    CATALOG,
-    CONSUMABLE_CATALOG,
-    PROGRAM_CATALOG,
-    equipped_travel_reduction,
-)
+from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG
 
 from . import (
     MENU_QUIT_BINDINGS,

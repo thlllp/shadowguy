@@ -6,14 +6,8 @@ from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Chara
 from shadowguy.corp_turn import TECHNOLOGIES_BY_ID, FactionEvent
 from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, Faction
-from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
-from shadowguy.runners import RivalRunner
-from shadowguy.shops import (
-    CONSUMABLES_BY_ID,
-    ITEMS_BY_ID,
-    PROGRAMS_BY_ID,
+from shadowguy.inventory import (
     active_deck_entry,
-    bonus_text,
     free_program_slots,
     install_program,
     installed_programs_for,
@@ -21,6 +15,9 @@ from shadowguy.shops import (
     uninstall_program,
     use_consumable,
 )
+from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
+from shadowguy.runners import RivalRunner
+from shadowguy.shops import CONSUMABLES_BY_ID, ITEMS_BY_ID, PROGRAMS_BY_ID, bonus_text
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
@@ -91,7 +88,7 @@ class InventoryScreen(BackScreen):
 class CyberdeckScreen(BackScreen):
     """Deck + Program management, split out of InventoryScreen: a deck's
     installed_programs and which deck is Character.stat()'s and matrix.py's
-    active one (shops.active_deck_entry -- the equipped deck with the best
+    active one (inventory.active_deck_entry -- the equipped deck with the best
     Intelligence bonus) are cyberdeck-specific concerns, not general gear.
     Equip/stow itself stays generic and lives on InventoryScreen too (a deck
     is still an Item there); a deck's equip toggle is repeated here only
