@@ -106,7 +106,7 @@ src/shadowguy/
                  skill ranks, experience, every standing, crew, inventory, accepted work
   archetypes.py  Enforcer/Hacker/Infiltrator creation presets
   checks.py      resolve_check() — the one place any check resolves
-  skills.py      the 32-skill table, skill_value(), skill_for()
+  skills.py      the 30-skill table, skill_value(), skill_for()
   scene.py       Scene/Stage/Choice/Outcome + the four fight/stage wrappers; apply_outcome()
 
   combat.py      fight surface 1: abstract rounds, enemy roster, shared resolve_hit

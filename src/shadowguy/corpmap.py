@@ -121,14 +121,14 @@ LOCATION_SKILL = {
     LocationKind.DATA: "hack",
     LocationKind.LAB: "pattern_seeking",
     LocationKind.DEPOT: "stealth",
-    LocationKind.BAR: "read_the_room",
+    LocationKind.BAR: "intuition",
     LocationKind.PAWN: "negotiations",
     LocationKind.WEAPON_SHOP: "sight",
     LocationKind.AUTO_DEALER: "deception",
     LocationKind.PHARMACY: "infer",
     LocationKind.COMPUTER_STORE: "hack",
     LocationKind.HOSPITAL: "infer",
-    LocationKind.REAL_ESTATE: "read_the_room",
+    LocationKind.REAL_ESTATE: "intuition",
     LocationKind.CYBER_CLINIC: "infer",
 }
 if set(LOCATION_SKILL) != set(GENERATED_KINDS):

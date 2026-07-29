@@ -44,7 +44,7 @@ CRITICAL_SUCCESS_PAY_MULT = 1.6
 # What a nightly watch rolls — picked once per contract at generation, same as a job's
 # difficulty: what you're watching for varies (patrol gaps, camera blind spots, a fast
 # talker at the gate), but a given contract rolls the same faculty every night.
-WATCH_SKILLS = ("sight", "listening", "tactics", "read_the_room")
+WATCH_SKILLS = ("sight", "listening", "tactics", "intuition")
 for _skill_id in WATCH_SKILLS:
     skill_for(_skill_id)  # unknown id: fail at import, not mid-generation
 

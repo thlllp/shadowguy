@@ -107,9 +107,9 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "{place} is short a volunteer and {who} is holding a fat envelope.",
         ),
         approaches=(
-            _GigApproach("resist_poison", "Take the full dose", "Your liver files a complaint. Paid in full.", "You come out shaking and get docked for the mess."),
+            _GigApproach("fortitude", "Take the full dose", "Your liver files a complaint. Paid in full.", "You come out shaking and get docked for the mess."),
             _GigApproach("tinkering", "Calibrate the rig instead", "You fix their dosing gear and they pay for the save.", "You fry a sensor and eat the cost of it."),
-            _GigApproach("read_face", "Watch for the tell", "You clock the bad batch before it hits you.", "You miss the warning and wear the reaction."),
+            _GigApproach("intuition", "Watch for the tell", "You clock the bad batch before it hits you.", "You miss the warning and wear the reaction."),
         ),
     ),
     LocationKind.DEPOT: _GigTemplate(
@@ -131,7 +131,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "There's a read to be made across the bar at {place}, and {who} is buying the intel.",
         ),
         approaches=(
-            _GigApproach("read_face", "Read them cold", "You know their whole hand before they fold it.", "You misread the room and they clam up."),
+            _GigApproach("intuition", "Read them cold", "You know their whole hand before they fold it.", "You misread the room and they clam up."),
             _GigApproach("deception", "Run a story on them", "They buy every word and pay for the privilege.", "The story falls apart and so does the tip."),
             _GigApproach("sleight_of_hand", "Lift what they won't miss", "In and out, they never feel it.", "A hand closes on your wrist mid-lift."),
         ),
@@ -144,7 +144,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         ),
         approaches=(
             _GigApproach("negotiations", "Haggle the seller down", "You shave the price to nothing and take a cut.", "They walk, and {who} isn't pleased."),
-            _GigApproach("read_face", "Spot the fake", "You call the forgery on sight.", "You vouch for a fake and it costs you."),
+            _GigApproach("intuition", "Spot the fake", "You call the forgery on sight.", "You vouch for a fake and it costs you."),
             _GigApproach("infer", "Trace the serials", "The numbers tell you exactly what it's worth.", "The trail goes cold before you can price it."),
         ),
     ),
@@ -179,7 +179,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A customer at {place} is faking a script and {who} wants them made.",
         ),
         approaches=(
-            _GigApproach("resist_disease", "Test it on yourself", "Your blood eats it and {who} pays for the proof.", "You run a fever for two days over it."),
+            _GigApproach("fortitude", "Test it on yourself", "Your blood eats it and {who} pays for the proof.", "You run a fever for two days over it."),
             _GigApproach("infer", "Read the chem tags", "The labels give the bad lot up.", "The tags don't add up and you guess wrong."),
             _GigApproach("deception", "Draw out the faker", "You get the fake script in hand.", "They spook and bolt before you're sure."),
         ),
@@ -215,7 +215,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A buyer's getting cold feet on a listing at {place} and {who} wants them warmed back up.",
         ),
         approaches=(
-            _GigApproach("read_the_room", "Read what they really want", "You find the angle and close it clean.", "You misjudge them and the deal walks."),
+            _GigApproach("intuition", "Read what they really want", "You find the angle and close it clean.", "You misjudge them and the deal walks."),
             _GigApproach("intimidation", "Make staying sound expensive", "One quiet word and the unit's empty by morning.", "They dig in and lawyer up on you."),
             _GigApproach("deception", "Stage the place to lie", "Fresh paint over the damp and they never look twice.", "The buyer spots the cover-up and bolts."),
         ),
@@ -229,7 +229,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("infer", "Read the diagnostics", "The rig's telling you exactly what's wrong with it.", "The readout lies to you and you guess wrong."),
             _GigApproach("tinkering", "Rework the install by hand", "Steady hands, clean seat, done.", "You nick a nerve line and the client feels it."),
-            _GigApproach("resist_disease", "Ride out the rejection yourself", "Your body burns through it and {who} pays for the test.", "You spend the next day sweating it out."),
+            _GigApproach("fortitude", "Ride out the rejection yourself", "Your body burns through it and {who} pays for the test.", "You spend the next day sweating it out."),
         ),
     ),
 }
