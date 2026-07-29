@@ -321,10 +321,9 @@ class BarScreen(BackScreen):
         character = self.app.character
         items = []
         for runner in self.app.runners:
-            # A runner who died on one of your jobs is gone for the run, and one who was
-            # picked up at a scene is inside until their day comes round — neither is at
-            # the bar to hire (Character.runner_available).
             if not character.runner_available(runner.id):
+                continue
+            if not self._runner_here(runner.id):
                 continue
             tag = f"{runner.name} ({runner.archetype}, rating {runner.rating})"
             if character.on_crew(runner.id):
@@ -333,12 +332,9 @@ class BarScreen(BackScreen):
             elif character.knows_runner(runner.id):
                 label = f"Recruit {tag}"
                 item_id = f"runner_{runner.id}"
-            elif self._runner_here(runner.id):
+            else:
                 label = f"{runner.name} is here, nursing a drink — exchange numbers?"
                 item_id = f"meet_{runner.id}"
-            else:
-                label = f"{tag} — no way to reach them yet"
-                item_id = f"locked_{runner.id}"
             items.append(ListItem(Static(label), id=item_id))
         return items
 
@@ -380,8 +376,6 @@ class BarScreen(BackScreen):
         character = self.app.character
         item_id = event.item.id
         if self.chosen_runner is None:
-            if item_id.startswith("locked_"):
-                return
             if item_id.startswith("meet_"):
                 runner = RUNNERS_BY_ID[item_id.removeprefix("meet_")]
                 character.meet_runner(runner.id)
