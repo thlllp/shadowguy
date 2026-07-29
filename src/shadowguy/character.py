@@ -2,12 +2,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
+from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
-from shadowguy.shops import (
-    InventoryItem,
-    equipped_bonus,
-    equipped_skill_bonus,
-)
+from shadowguy.shops import InventoryItem
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
@@ -199,10 +196,10 @@ class Character:
     # cybernetics.install_cyberware is called (no shop wired to it yet).
     installed_cyberware: dict[CyberSlot, str] = field(default_factory=dict)
     # Owned consumables, ids from shops.CONSUMABLES_BY_ID. Duplicates allowed.
-    # Removed (via shops.use_consumable) once used, unlike persistent gear.
+    # Removed (via inventory.use_consumable) once used, unlike persistent gear.
     consumables: list[str] = field(default_factory=list)
     # Program ids (shops.PROGRAMS_BY_ID) bought into the runner's owned pool. Not
-    # installed on any deck by itself — see shops.install_program/InventoryItem.
+    # installed on any deck by itself — see inventory.install_program/InventoryItem.
     # installed_programs. Mirrors discovered_fixers' shape: a set of owned ids.
     owned_programs: set[str] = field(default_factory=set)
     # stat name -> bonus from a used Chem, active until the next rest().
@@ -229,7 +226,7 @@ class Character:
     # encounters.py.
     crew_experience: dict[str, int] = field(default_factory=dict)
     # Whether a Health Kit has already been used today. A kit is a small emergency
-    # top-up, not a stack you burn to full — one per day (shops.use_consumable enforces
+    # top-up, not a stack you burn to full — one per day (inventory.use_consumable enforces
     # it), cleared on on_new_day(). Real recovery is time in a hospital ward.
     health_kit_used_today: bool = False
     # elapsed_hours at the runner's last completed Rest (or hospital stay) — see
