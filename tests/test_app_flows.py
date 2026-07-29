@@ -119,23 +119,46 @@ def run(coro):
 
 
 async def _settle(pilot) -> None:
-    """Let the opening screen finish laying out before anything is clicked.
+    """Let a pending layout finish before anything is aimed by coordinate.
 
-    run_test() hands back a pilot while the first layout is still pending, and
-    a single pilot.pause() isn't enough to flush it: pause() *ends* by calling
-    screen._on_timer_update(), which is what actually runs the layout. Meanwhile
-    pilot.click(selector) reads the target's .region once, up front, then pauses
-    between the MouseDown/MouseUp/Click it posts -- so a click can be aimed with
-    a pre-layout region and delivered against the post-layout screen.
+    A single pilot.pause() isn't enough to flush a layout-affecting change:
+    pause() *ends* by calling screen._on_timer_update(), which is what actually
+    runs the layout. Meanwhile pilot.click(selector) reads the target's .region
+    once, up front, then pauses between the MouseDown/MouseUp/Click it posts --
+    so a click can be aimed with a pre-layout region and delivered against the
+    post-layout screen. The second pause runs the pending layout before any
+    coordinates are taken.
 
-    On TitleMenu that shifted #new_game between y=18 and y=17 and put the click
-    one row low, opening Load Game instead of New Game in ~2% of runs (measured:
-    3/150). The second pause runs the pending layout before any coordinates are
-    taken. Use this instead of a bare pause() wherever the first thing a test
-    does after boot is a coordinate-based click.
+    First found on the cold-boot screen: run_test() hands back a pilot while the
+    first layout is still pending, which shifted TitleMenu's #new_game between
+    y=18 and y=17 and put the click one row low, opening Load Game instead of
+    New Game in ~2% of runs (measured: 3/150). The same race turned up again on
+    an already-mounted screen after expanding a Collapsible and calling
+    scroll_end() back to back -- one pause per mutation wasn't enough there
+    either (test_shop_screen_buy_flow_spends_cash_and_adds_inventory /
+    test_buy_deck_and_program_then_install_via_cyberdeck_screen, both flaky in
+    CI). Use this instead of a bare pause() wherever a test mutates layout
+    (boot, expanding/collapsing, scrolling) and then aims a coordinate-based
+    click or hover at the result.
     """
     await pilot.pause()
     await pilot.pause()
+
+
+async def _settle_map_boxes(pilot, screen) -> None:
+    """CorpMapScreen builds #map_local_boxes (the per-Location hover/select preview,
+    including any "Enter" row a test wants to click) on a background asyncio task
+    (_do_refresh_map schedules _drain_map_local_boxes -- see corp_map_screen.py's own
+    comment on why: cancel()+immediate create_task() could race a still-mutating old
+    task against a new one's remove_children/mount_all and crash). That task's own
+    mount/layout work isn't bounded by a fixed number of pilot.pause()s the way a
+    plain layout reflow is (_settle) -- awaiting it directly is the only way to know
+    the boxes actually exist and are laid out, rather than reducing but not
+    eliminating the odds a click lands before they are (measured: still ~1/45 with
+    two _settle()s alone)."""
+    if screen._map_locals_task is not None:
+        await screen._map_locals_task
+    await _settle(pilot)
 
 
 def test_app_boots_to_title_menu():
@@ -981,14 +1004,18 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             assert shop_location is not None
             app.character.location_id = shop_territory_id
             app.character.cash = 1_000_000
+            # A live gig at this location adds an extra row to its box's ListView,
+            # ahead of the "Enter" row this test clicks (corp_map_screen._location_box)
+            # -- gigs.refresh_gigs spawns one probabilistically now, so without this the
+            # "Enter" row's position (and thus this test's click) would vary by run.
+            app.location_gigs.pop(shop_location.id, None)
 
             app.push_screen(CorpMapScreen())
-            await pilot.pause()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{shop_location.id}", Collapsible).collapsed = False
-            await pilot.pause()
+            await _settle(pilot)
             app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click(f"#map_local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -1023,14 +1050,16 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             assert store_location is not None
             app.character.location_id = store_territory_id
             app.character.cash = 1_000_000
+            # See test_shop_screen_buy_flow_spends_cash_and_adds_inventory: a live gig
+            # here would shift the "Enter" row this test clicks.
+            app.location_gigs.pop(store_location.id, None)
 
             app.push_screen(CorpMapScreen())
-            await pilot.pause()
-            await pilot.pause()
+            await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{store_location.id}", Collapsible).collapsed = False
-            await pilot.pause()
+            await _settle(pilot)
             app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
-            await pilot.pause()
+            await _settle(pilot)
             await pilot.click(f"#map_local_{store_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
