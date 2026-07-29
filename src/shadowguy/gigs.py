@@ -15,8 +15,9 @@ as jobs, though gigs (being optional) aren't held to the cross-stat rule stages 
 
 Gigs are stored on the App as dict[location_id, Scene] (see app.ShadowguyApp), not on the
 Location: corpmap is a leaf that must not import scene, and gigs live alongside the map
-the way a fixer's offers do. refresh_gigs tops up empty slots on day advance; a completed
-gig is cleared and a fresh one spawns next rest.
+the way a fixer's offers do. refresh_gigs rolls GIG_SPAWN_CHANCE per empty slot on day
+advance; a completed gig is cleared and has that same daily chance to be replaced, rather
+than refilling outright.
 """
 
 import random
@@ -58,6 +59,10 @@ GIG_CRIT_FAIL_DAMAGE = -3
 GIG_CRIT_FAIL_REP_HIT = -2
 # The most approaches one gig can offer; the real count is 1..this, drawn per gig.
 GIG_MAX_APPROACHES = 3
+# Per empty eligible location, the odds it spawns a gig on any given day tick (run-start
+# counts as one) -- so the map doesn't saturate with a gig at every location on day one,
+# and a completed gig's slot trickles back rather than refilling the very next day.
+GIG_SPAWN_CHANCE = 0.3
 
 _CRIT_SUCCESS_TAG = "They won't forget this."
 _CRIT_FAIL_TAG = "Word gets around, and not the good kind."
@@ -326,15 +331,19 @@ def generate_gig(
 def refresh_gigs(
     corp_map: CorpMap, gigs: dict[str, Scene], day: int, rng: random.Random | None = None
 ) -> None:
-    """Fill every location that has characters but no live gig with a fresh one, owned by
-    a random one of its characters. Idempotent: a location that already has a gig is left
-    alone, so this can run every day advance without churning existing offers."""
+    """Roll GIG_SPAWN_CHANCE for every location that has characters but no live gig,
+    spawning a fresh one (owned by a random one of its characters) on a hit. A location
+    that already has a gig is left alone, so this can run every day advance without
+    churning existing offers -- and a miss just means it stays empty, tried again the
+    next tick, rather than the whole map refilling at once."""
     rng = resolve_rng(rng)
     for territory in corp_map.territories.values():
         for location in territory.locations:
             # A corp HQ has characters (its officers) but no gig template — skip it, and
             # any other injected kind, rather than KeyError in generate_gig.
             if location.id in gigs or not location.characters or location.kind not in _GIG_TEMPLATES:
+                continue
+            if rng.random() >= GIG_SPAWN_CHANCE:
                 continue
             character = rng.choice(location.characters)
             gigs[location.id] = generate_gig(day, location, character, territory, rng)
