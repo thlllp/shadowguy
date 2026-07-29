@@ -231,6 +231,7 @@ class CorpMapScreen(BackScreen):
         self.rendered = None
         self._render_key: tuple[str, str] | None = None
         self._map_locals_task: asyncio.Task | None = None
+        self._map_locals_pending_id: str | None = None
         # Restore the last-viewed category (app.main_menu_category) across a full
         # screen rebuild (load_state/restart_run) -- but only if it's one of this
         # game's own categories, since a runner game and a corp-only game don't
@@ -589,9 +590,21 @@ class CorpMapScreen(BackScreen):
         # Avoid spawning overlapping tasks for the same grid — cancel() + immediate
         # create_task() races where the old task might still be mutating widget state
         # during the new task's remove_children/mount_all, which can cause native
-        # crashes. Instead, just skip if one is already running.
+        # crashes. Instead, remember the latest territory and let a single draining
+        # task work through it once the in-flight one finishes, rather than dropping
+        # the refresh outright (which could strand the boxes on a stale territory if
+        # the mouse stops moving before the in-flight task completes).
+        self._map_locals_pending_id = t.id
         if self._map_locals_task is None or self._map_locals_task.done():
-            self._map_locals_task = asyncio.create_task(self._refresh_map_local_boxes(t))
+            self._map_locals_task = asyncio.create_task(self._drain_map_local_boxes())
+
+    async def _drain_map_local_boxes(self) -> None:
+        """Runs _refresh_map_local_boxes for the latest pending territory, then checks
+        again in case _do_refresh_map recorded a newer one while it was running."""
+        while self._map_locals_pending_id is not None:
+            pending_id = self._map_locals_pending_id
+            self._map_locals_pending_id = None
+            await self._refresh_map_local_boxes(self.app.corp_map.territories[pending_id])
 
     async def _refresh_map_local_boxes(self, t: Territory) -> None:
         """Populate the map-hover boxes for territory *t* (the one under the cursor).
@@ -605,8 +618,8 @@ class CorpMapScreen(BackScreen):
         fixers_here = [
             f for f in self.app.fixers if f.location_id == t.id and f.id in character.discovered_fixers
         ]
-        boxes = [self._location_box(location, t, surface="map") for location in t.locations]
-        boxes.append(self._fixers_box(fixers_here, surface="map"))
+        boxes = [self._location_box(location, t) for location in t.locations]
+        boxes.append(self._fixers_box(fixers_here))
         if t.id == character.location_id:
             rest_box = Collapsible(
                 ListView(ListItem(Static(self.app.rest_label()), id="rest")),
@@ -846,14 +859,7 @@ class CorpMapScreen(BackScreen):
         ContactsScreen._status's own pick when a territory has more than one."""
         return next((loc for loc in territory.locations if loc.kind == LocationKind.BAR), None)
 
-    def _fixers_box(self, fixers_here: list, *, surface: str) -> Collapsible:
-        """`surface` is "local" (the Local category, always the runner's own
-        territory) or "map" (the map-hover preview, any territory) -- it only picks
-        the id prefixes, so the two box grids (#local_boxes/#map_local_boxes) never
-        collide if both happen to hold a box for the same fixer at once."""
-        id_prefix = "local_fixer_" if surface == "local" else "map_local_fixer_"
-        box_id = "local_box_fixers" if surface == "local" else "map_local_box_fixers"
-        empty_id = "no_local_fixers" if surface == "local" else "no_map_local_fixers"
+    def _fixers_box(self, fixers_here: list) -> Collapsible:
         if fixers_here:
             items = [
                 ListItem(
@@ -861,20 +867,20 @@ class CorpMapScreen(BackScreen):
                         f"{fixer.name} — {fixer.specialty} "
                         f"({len(fixer.open_offers)} jobs, {len(fixer.security_offers)} security available)"
                     ),
-                    id=f"{id_prefix}{fixer.id}",
+                    id=f"map_local_fixer_{fixer.id}",
                 )
                 for fixer in fixers_here
             ]
         else:
-            items = [ListItem(Static("No fixer seated here."), id=empty_id)]
-        return Collapsible(ListView(*items), title="Fixers", collapsed=True, id=box_id, classes="local_box")
+            items = [ListItem(Static("No fixer seated here."), id="no_map_local_fixers")]
+        return Collapsible(
+            ListView(*items), title="Fixers", collapsed=True, id="map_local_box_fixers", classes="local_box"
+        )
 
-    def _location_box(self, location: Location, here: Territory, *, surface: str) -> Collapsible:
-        """See _fixers_box for what `surface` picks. Box content is the same either
-        way -- whether a map-surface box can even be *opened* is gated separately,
-        in on_collapsible_expanded, on whether the runner is standing in `here`."""
+    def _location_box(self, location: Location, here: Territory) -> Collapsible:
+        """Whether this box can even be *opened* is gated separately, in
+        on_collapsible_expanded, on whether the runner is standing in `here`."""
         character = self.app.character
-        prefix = "local_" if surface == "local" else "map_local_"
         content: list = []
 
         npc_text = "\n".join(
@@ -928,14 +934,14 @@ class CorpMapScreen(BackScreen):
                 stock_text = f"{shown}, +{len(names) - _STOCK_PREVIEW_COUNT} more"
             content.append(Static(f"For sale ({len(names)}): {stock_text}", markup=False))
 
-        action_items.append(ListItem(Static("Enter"), id=f"{prefix}{location.id}"))
+        action_items.append(ListItem(Static("Enter"), id=f"map_local_{location.id}"))
         content.append(ListView(*action_items))
 
         return Collapsible(
             *content,
             title=f"{location.name} ({location.kind})",
             collapsed=True,
-            id=f"{prefix}box_{location.id}",
+            id=f"map_local_box_{location.id}",
             classes="local_box",
         )
 

@@ -85,6 +85,13 @@ class ShadowguyApp(App):
 
     def _handle_exception(self, error: BaseException) -> None:
         _write_crash_log(error)
+        if self.is_headless:
+            # Under run_test() (the whole test suite), fall back to Textual's own
+            # handling -- it records self._exception so run_test() re-raises it to
+            # the test framework instead of us swallowing it into a CrashScreen the
+            # pilot can never click through, which would hang the test forever.
+            super()._handle_exception(error)
+            return
         try:
             while self.screen_stack:
                 self.pop_screen()
