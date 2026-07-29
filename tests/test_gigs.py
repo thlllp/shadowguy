@@ -16,6 +16,15 @@ from shadowguy.gigs import (
     refresh_gigs,
 )
 
+
+def _eligible_location_ids(corp_map):
+    return {
+        location.id
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.characters and location.kind in GENERATED_KINDS
+    }
+
 SEEDS = range(150)
 
 
@@ -79,29 +88,42 @@ def test_gig_critical_failure_costs_health_unlike_plain_failure(corp_map, seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_refresh_gigs_fills_every_eligible_location_exactly_once(corp_map, seed):
+def test_refresh_gigs_only_ever_fills_eligible_locations(corp_map, seed):
+    """Spawning is a GIG_SPAWN_CHANCE roll per location now, not a guaranteed fill, but
+    it must still never touch a location outside the eligible set (mirrors refresh_gigs'
+    own eligibility test -- location.kind not in _GIG_TEMPLATES, gigs.py -- via the
+    public equivalent, GENERATED_KINDS -- so a future UNROLLED_KINDS addition doesn't
+    need this test hand-edited to match, the way corp_hq/gang_den/junkyard each did)."""
     gigs: dict[str, object] = {}
     refresh_gigs(corp_map, gigs, day=1, rng=random.Random(seed))
-    # Mirrors refresh_gigs' own eligibility test (location.kind not in _GIG_TEMPLATES,
-    # gigs.py) via the public equivalent, GENERATED_KINDS -- so a future UNROLLED_KINDS
-    # addition (another injected kind with characters but no gig template) doesn't need
-    # this test hand-edited to match, the way corp_hq/gang_den/junkyard each did.
-    eligible = [
-        location
-        for territory in corp_map.territories.values()
-        for location in territory.locations
-        if location.characters and location.kind in GENERATED_KINDS
-    ]
-    assert len(gigs) == len(eligible)
+    assert set(gigs) <= _eligible_location_ids(corp_map)
 
 
-def test_refresh_gigs_is_idempotent_and_does_not_churn_existing_offers():
+@pytest.mark.parametrize("seed", SEEDS)
+def test_refresh_gigs_eventually_fills_every_eligible_location(seed):
+    """No single tick guarantees a fill any more, but GIG_SPAWN_CHANCE per empty slot
+    per day means every eligible location should fill within enough ticks -- a wide
+    seed sweep over the roll, not just the map layout, catches an off-by-one in the
+    spawn-chance comparison that would leave a slot permanently empty."""
+    corp_map_ = generate_corp_map(FACTIONS, random.Random(seed))
+    eligible = _eligible_location_ids(corp_map_)
+    gigs: dict[str, object] = {}
+    rng = random.Random(seed)
+    for day in range(1, 200):
+        refresh_gigs(corp_map_, gigs, day=day, rng=rng)
+        if set(gigs) == eligible:
+            break
+    assert set(gigs) == eligible
+
+
+def test_refresh_gigs_never_churns_an_existing_gig():
     corp_map_ = generate_corp_map(FACTIONS, random.Random(1))
     gigs: dict[str, object] = {}
     refresh_gigs(corp_map_, gigs, day=1, rng=random.Random(1))
     before = dict(gigs)
     refresh_gigs(corp_map_, gigs, day=2, rng=random.Random(2))
-    assert gigs == before
+    for location_id, scene in before.items():
+        assert gigs[location_id] is scene
 
 
 def test_refresh_gigs_skips_corp_hq():
