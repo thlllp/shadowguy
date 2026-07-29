@@ -12,6 +12,8 @@ in asyncio.run() rather than using an async def test function directly.
 import asyncio
 import random
 
+import pytest
+
 from shadowguy.app import ShadowguyApp
 from shadowguy.buildings import BuildingKind, Lock
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
@@ -144,6 +146,28 @@ def test_app_boots_to_title_menu():
             assert isinstance(app.screen, TitleMenu)
 
     run(body())
+
+
+def test_unhandled_exception_under_test_fails_fast_instead_of_hanging():
+    """ShadowguyApp._handle_exception shows a CrashScreen for real interactive
+    play, but under run_test() (headless) it must fall back to Textual's own
+    handling -- otherwise an unhandled exception leaves the pilot waiting on a
+    CrashScreen nothing can click through, hanging the test instead of failing
+    it (this is exactly what would have happened before the is_headless check:
+    self._exception never gets set, so run_test()'s "re-raise so test frameworks
+    are aware" never fires)."""
+
+    def boom() -> None:
+        raise RuntimeError("simulated bug")
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test() as pilot:
+            app.call_later(boom)
+            await pilot.pause()
+
+    with pytest.raises(RuntimeError, match="simulated bug"):
+        run(asyncio.wait_for(body(), timeout=10))
 
 
 def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
@@ -1457,6 +1481,43 @@ def test_missing_a_smuggling_deadline_clears_it_and_costs_gang_standing():
     run(body())
 
 
+def test_deliver_package_with_no_active_job_is_a_safe_no_op():
+    """A #deliver_package row rendered while a job was active can go stale if the
+    job clears out from under it (e.g. a missed deadline) before the next refresh
+    -- clicking it must not crash on character.smuggling_job being None."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            den_territory, den_location = _find_gang_den(app)
+            gang = GANGS_BY_ID[den_territory.gang_id]
+            app.character.location_id = den_territory.id
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            await pilot.click("#cat_job")
+            await pilot.pause()
+            app.push_screen(GangDenScreen(den_location, gang))
+            await pilot.pause()
+            await pilot.click("#take_job")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.click("#cat_job")
+            await pilot.pause()
+
+            # The row is on screen from the click above; clear the job out from under
+            # it without refreshing, the way a missed deadline mid-render would.
+            app.character.smuggling_job = None
+            await pilot.click("#deliver_package")
+            await pilot.pause()
+
+            assert app.character.smuggling_job is None
+
+    run(body())
+
+
 def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_crew():
     """Regression test: the job-run handler used to call spend_time() (charging the
     job's own hours_cost) before pushing its Scene, and if that spend crossed
@@ -1890,6 +1951,45 @@ def test_map_hover_box_cannot_be_opened_away_from_current_territory():
             own_boxes[0].collapsed = False
             await pilot.pause()
             assert own_boxes[0].collapsed is False
+
+    run(body())
+
+
+def test_map_hover_boxes_do_not_strand_on_a_stale_territory():
+    """_do_refresh_map used to skip queuing a box rebuild outright whenever one was
+    already running (the segfault fix from PR #127), which could leave
+    #map_local_boxes showing a stale territory forever if the mouse stopped moving
+    before that in-flight rebuild finished. It now records the latest hovered
+    territory (_map_locals_pending_id) and the same background task picks it up
+    once free, instead of dropping the refresh."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+
+            here = app.corp_map.territories[app.character.location_id]
+            neighbor_id = here.connections[0]
+
+            # Hover the neighbor, then immediately hover back home -- both calls land
+            # before the event loop gets a chance to run the first rebuild task, the
+            # same way two rapid mouse-move events would.
+            screen.hovered_id = neighbor_id
+            screen._refresh()
+            screen.hovered_id = here.id
+            screen._refresh()
+            await pilot.pause()
+            await pilot.pause()
+
+            box_titles = {box.title for box in screen.query("#map_local_boxes Collapsible")}
+            expected_titles = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers", "Rest"}
+            assert box_titles == expected_titles, (
+                f"boxes should reflect the last-hovered territory ({here.name}), not "
+                "a stale one a still-running rebuild left behind"
+            )
 
     run(body())
 
@@ -2449,6 +2549,59 @@ def _find_corp_hq(app):
             if location.kind is LocationKind.CORP_HQ:
                 return location, FACTIONS_BY_ID[territory.owner]
     raise AssertionError("no corp HQ found on the map")
+
+
+def test_entering_corp_hq_with_no_territory_owner_is_a_safe_no_op():
+    """No code currently nulls out a CORP_HQ territory's owner (corp-vs-corp
+    takeover isn't implemented yet -- see corp_turn.py), but _push_location_screen
+    guards against it anyway. Corrupt the value only after the screen's initial
+    (valid-state) mount/render, so this exercises just that guard rather than
+    render_ascii_map's separate, unrelated assumption that owner is never None."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            hq_location, _faction = _find_corp_hq(app)
+            territory = next(
+                t for t in app.corp_map.territories.values() if hq_location in t.locations
+            )
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+
+            territory.owner = None
+            screen._push_location_screen(hq_location, territory)
+            await pilot.pause()
+
+            assert app.screen is screen
+
+    run(body())
+
+
+def test_entering_gang_den_with_no_territory_gang_is_a_safe_no_op():
+    """No code currently nulls out a gang den's territory's gang_id once the den
+    exists there. See test_entering_corp_hq_with_no_territory_owner_is_a_safe_no_op
+    for why the corruption happens after the initial mount/render, not before."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            den_territory, den_location = _find_gang_den(app)
+
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+
+            den_territory.gang_id = None
+            screen._push_location_screen(den_location, den_territory)
+            await pilot.pause()
+
+            assert app.screen is screen
+
+    run(body())
 
 
 def test_corp_screen_no_longer_hands_a_runner_a_corp():
