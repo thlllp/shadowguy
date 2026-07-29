@@ -181,15 +181,15 @@ class CyberdeckScreen(BackScreen):
 
 
 class ContactsScreen(PanelNav, BackScreen):
-    PANEL_IDS = ("fixers_list", "corps_list", "locals_list", "runners_list")
+    PANEL_IDS = ("fixers_list", "locals_list", "runners_list")
     BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
-    #fixers_panel, #corps_panel, #locals_panel, #runners_panel {
+    #fixers_panel, #locals_panel, #runners_panel {
         height: auto;
     }
 
-    #fixers_list, #corps_list, #locals_list, #runners_list {
+    #fixers_list, #locals_list, #runners_list {
         height: auto;
     }
     """
@@ -199,9 +199,6 @@ class ContactsScreen(PanelNav, BackScreen):
         yield CharacterSheet(self.app.character)
         yield Collapsible(
             ListView(id="fixers_list"), title="Fixers", collapsed=False, id="fixers_panel"
-        )
-        yield Collapsible(
-            ListView(id="corps_list"), title="Corps", collapsed=False, id="corps_panel"
         )
         yield Collapsible(
             ListView(id="locals_list"), title="Locals", collapsed=False, id="locals_panel"
@@ -233,15 +230,6 @@ class ContactsScreen(PanelNav, BackScreen):
             empty_label="No established contacts yet.",
             empty_id="no_fixers",
         )
-        await _populate_list(
-            self.query_one("#corps_list", ListView),
-            FACTIONS,
-            id_prefix="faction_",
-            label=lambda faction: (
-                f"{faction.name} — {faction.specialty.value} "
-                f"(standing {character.standing_with(faction.id):+d})"
-            ),
-        )
 
         map_characters = self.app.corp_map.characters()
         loc_by_char = {char.id: loc for loc, char in map_characters}
@@ -259,15 +247,21 @@ class ContactsScreen(PanelNav, BackScreen):
             empty_label="No locals know you yet.",
             empty_id="no_locals",
         )
+        known_runners = [
+            r for r in self.app.runners
+            if character.knows_runner(r.id) or character.on_crew(r.id)
+        ]
         await _populate_list(
             self.query_one("#runners_list", ListView),
-            self.app.runners,
+            known_runners,
             id_prefix="runner_",
             label=lambda runner: (
                 f"{runner.name} — {runner.archetype}"
                 + (" (on your crew)" if character.on_crew(runner.id) else f" — {self._status(runner)}")
                 + f": {runner.description}"
             ),
+            empty_label="No runner contacts yet — visit a bar to meet some.",
+            empty_id="no_runners",
         )
 
     def _status(self, runner: RivalRunner) -> str:
@@ -294,12 +288,6 @@ class ContactsScreen(PanelNav, BackScreen):
             fixer = next((fixer for fixer in self.app.fixers if fixer.id == fixer_id), None)
             if fixer is not None:
                 self.app.push_screen(FixerOffersScreen(fixer))
-            return
-
-        if item_id.startswith("faction_"):
-            faction_id = item_id.removeprefix("faction_")
-            faction = next(f for f in FACTIONS if f.id == faction_id)
-            self.app.push_screen(CorpWebsiteScreen(faction))
 
 
 class WebScreen(BackScreen):

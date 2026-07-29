@@ -100,10 +100,8 @@ def _travel_hours(character: Character) -> float:
 
 
 _RUNNER_CATEGORIES = [
-    ("gig", "Gigs"),
     ("job", "Jobs"),
     ("legwork", "Legwork"),
-    ("local", "Local"),
     ("gear", "Gear"),
     ("cyberdeck", "Cyberdeck"),
     ("skills", "Skills"),
@@ -188,13 +186,7 @@ class CorpMapScreen(BackScreen):
         height: auto;
     }
 
-    #local_summary {
-        height: auto;
-        border-top: solid $accent;
-        padding: 0 1;
-    }
-
-    #local_boxes_scroll, #map_local_boxes_scroll {
+    #map_local_boxes_scroll {
         /* Bounded, not 1fr -- these are a preview strip, not the main event (the
         map above needs most of the vertical room in map mode; #activities' Rest
         row needs the room in the Local category). An expanded box (stock lists,
@@ -261,8 +253,6 @@ class CorpMapScreen(BackScreen):
                 yield Static(markup=False, id="territory_summary")
                 yield ListView(id="activities")
                 yield ScrollableContainer(Grid(id="map_local_boxes"), id="map_local_boxes_scroll")
-                yield Static(markup=False, id="local_summary")
-                yield ScrollableContainer(Grid(id="local_boxes"), id="local_boxes_scroll")
                 yield Static(id="corp_info")
                 yield Collapsible(
                     ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
@@ -393,7 +383,10 @@ class CorpMapScreen(BackScreen):
 
         if item_id == "rest":
             self.app.rest()
-            await self._refresh_activities()
+            if self.selected_category is None:
+                self._do_refresh_map()
+            else:
+                await self._refresh_activities()
             self.query_one(CharacterSheet).refresh()
             return
 
@@ -444,12 +437,6 @@ class CorpMapScreen(BackScreen):
             self.app.push_screen(SceneScreen(job.scene))
             return
 
-        if item_id.startswith("local_fixer_"):
-            fixer_id = item_id.removeprefix("local_fixer_")
-            fixer = next(fixer for fixer in self.app.fixers if fixer.id == fixer_id)
-            self.app.push_screen(FixerOffersScreen(fixer))
-            return
-
         if item_id.startswith("map_local_fixer_"):
             fixer_id = item_id.removeprefix("map_local_fixer_")
             fixer = next(fixer for fixer in self.app.fixers if fixer.id == fixer_id)
@@ -466,15 +453,6 @@ class CorpMapScreen(BackScreen):
                 self.notify(f"Travel to {t.name} first.", severity="warning")
                 return
             self._push_location_screen(location, t)
-            return
-
-        if item_id.startswith("local_"):
-            location_id = item_id.removeprefix("local_")
-            here = self.app.corp_map.territories[character.location_id]
-            location = next((loc for loc in here.locations if loc.id == location_id), None)
-            if location is None:
-                return
-            self._push_location_screen(location, here)
             return
 
         if item_id.startswith("corpinfo_"):
@@ -565,15 +543,12 @@ class CorpMapScreen(BackScreen):
     def _set_content_visibility(self) -> None:
         """Show/hide widgets based on self.selected_category."""
         in_map = self.selected_category is None
-        is_local = self.selected_category == "local"
         is_corp = self.selected_category == "corp"
 
         self.query_one("#map_scroll").display = in_map
         self.query_one("#territory_summary").display = in_map
         self.query_one("#activities").display = not in_map
         self.query_one("#map_local_boxes_scroll").display = in_map
-        self.query_one("#local_summary").display = is_local
-        self.query_one("#local_boxes_scroll").display = is_local
         self.query_one("#corp_info").display = is_corp
         self.query_one("#academy_panel").display = is_corp
         self.query_one("#research_panel").display = is_corp
@@ -632,6 +607,15 @@ class CorpMapScreen(BackScreen):
         ]
         boxes = [self._location_box(location, t, surface="map") for location in t.locations]
         boxes.append(self._fixers_box(fixers_here, surface="map"))
+        if t.id == character.location_id:
+            rest_box = Collapsible(
+                ListView(ListItem(Static(self.app.rest_label()), id="rest")),
+                title="Rest",
+                collapsed=True,
+                id="map_local_box_rest",
+                classes="local_box",
+            )
+            boxes.append(rest_box)
 
         container = self.query_one("#map_local_boxes", Grid)
         await container.remove_children()
@@ -810,20 +794,7 @@ class CorpMapScreen(BackScreen):
         character = self.app.character
         items: list[ListItem] = []
 
-        if self.selected_category == "gig":
-            here = self.app.corp_map.territories[character.location_id]
-            for location in here.locations:
-                gig = self.app.location_gigs.get(location.id)
-                if gig is None:
-                    continue
-                owner = next((c for c in location.characters if c.id == gig.target_character_id), None)
-                who = f" — {owner.name}" if owner else ""
-                label = f"Gig — {gig.title} @ {location.name}{who} ({gig.hours_cost}h)"
-                if character.cash < gig.max_cash_loss:
-                    label += f" — can't cover the stake ({gig.max_cash_loss} cash)"
-                items.append(ListItem(Static(label), id=f"gig_{location.id}"))
-
-        elif self.selected_category == "job":
+        if self.selected_category == "job":
             today = character.day
             for job in character.accepted_jobs:
                 label = f"Job — {job.scene.title} ({job.scene.hours_cost}h) — {job.timing.label}"
@@ -854,9 +825,6 @@ class CorpMapScreen(BackScreen):
                 if not self._on_site(job.scene):
                     legwork_label += f" — travel to {self._district(job.scene)}"
                 items.append(ListItem(Static(legwork_label), id=f"legwork_{job.id}"))
-
-        elif self.selected_category == "local":
-            await self._refresh_local_boxes()
 
         if character.smuggling_job is not None:
             job = character.smuggling_job
@@ -971,30 +939,9 @@ class CorpMapScreen(BackScreen):
             classes="local_box",
         )
 
-    async def _refresh_local_boxes(self) -> None:
-        character = self.app.character
-        here = self.app.corp_map.territories[character.location_id]
-        gang_suffix = f", gang: {GANGS_BY_ID[here.gang_id].name}" if here.gang_id else ""
-        self.query_one("#local_summary", Static).update(
-            f"{here.name} — {owner_label(here.owner)}{gang_suffix}"
-        )
-
-        discover_fixers_here(self.app.fixers, character)
-        fixers_here = [f for f in self.app.fixers if f.location_id == character.location_id]
-
-        boxes = [self._location_box(location, here, surface="local") for location in here.locations]
-        boxes.append(self._fixers_box(fixers_here, surface="local"))
-
-        container = self.query_one("#local_boxes", Grid)
-        await container.remove_children()
-        await container.mount_all(boxes)
-
     def on_collapsible_expanded(self, event: Collapsible.Expanded) -> None:
-        """Accordion behavior for #local_boxes/#map_local_boxes: opening one box in a
-        grid closes any other box in that *same* grid, so at most one is expanded at
-        a time -- each grid is scoped to its own id prefix, since Collapsible.Expanded
-        bubbles from every Collapsible on the screen (academy/research/surveillance
-        panels too) and this must not reach across and collapse an unrelated one.
+        """Accordion behavior for #map_local_boxes: opening one box closes any
+        other box in that same grid, so at most one is expanded at a time.
 
         The map-hover grid additionally vetoes opening a box for a territory the
         runner isn't standing in -- it's a preview, not a place to act from a

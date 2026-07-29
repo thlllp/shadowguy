@@ -960,16 +960,12 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
 
             app.push_screen(CorpMapScreen())
             await pilot.pause()
-            await pilot.click("#cat_local")
             await pilot.pause()
-            # Each Location is a Collapsible box, collapsed by default -- expand it and
-            # scroll #local_boxes_scroll all the way down (its bounded height means an
-            # expanded box's stock list often needs it) before clicking its "Enter" row.
-            app.screen.query_one(f"#local_box_{shop_location.id}", Collapsible).collapsed = False
+            app.screen.query_one(f"#map_local_box_{shop_location.id}", Collapsible).collapsed = False
             await pilot.pause()
-            app.screen.query_one("#local_boxes_scroll").scroll_end(animate=False, immediate=True)
+            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
             await pilot.pause()
-            await pilot.click(f"#local_{shop_location.id}")
+            await pilot.click(f"#map_local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
 
@@ -1006,16 +1002,12 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
 
             app.push_screen(CorpMapScreen())
             await pilot.pause()
-            await pilot.click("#cat_local")
             await pilot.pause()
-            # Each Location is a Collapsible box, collapsed by default -- expand it and
-            # scroll #local_boxes_scroll all the way down (its bounded height means an
-            # expanded box's stock list often needs it) before clicking its "Enter" row.
-            app.screen.query_one(f"#local_box_{store_location.id}", Collapsible).collapsed = False
+            app.screen.query_one(f"#map_local_box_{store_location.id}", Collapsible).collapsed = False
             await pilot.pause()
-            app.screen.query_one("#local_boxes_scroll").scroll_end(animate=False, immediate=True)
+            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
             await pilot.pause()
-            await pilot.click(f"#local_{store_location.id}")
+            await pilot.click(f"#map_local_{store_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
 
@@ -1786,12 +1778,11 @@ def test_contacts_screen_panels_are_collapsibles_expanded_by_default():
                 pid: app.screen.query_one(f"#{pid}", Collapsible)
                 for pid in (
                     "fixers_panel",
-                    "corps_panel",
                     "locals_panel",
                     "runners_panel",
                 )
             }
-            assert len(panels) == 4
+            assert len(panels) == 3
             assert all(not panel.collapsed for panel in panels.values())
 
     run(body())
@@ -1806,15 +1797,13 @@ def test_contacts_panel_nav_skips_a_collapsed_section():
             await pilot.pause()
 
             screen = app.screen
-            # Collapse the middle "Corps" panel; stepping right off Fixers should land on
-            # Locals (skipping the hidden Corps list), not on the collapsed Corps list.
-            screen.query_one("#corps_panel", Collapsible).collapsed = True
+            screen.query_one("#locals_panel", Collapsible).collapsed = True
             await pilot.pause()
             screen.query_one("#fixers_list", ListView).focus()
             await pilot.pause()
             screen.action_focus_panel(1)
             await pilot.pause()
-            assert screen.focused is screen.query_one("#locals_list", ListView)
+            assert screen.focused is screen.query_one("#runners_list", ListView)
 
     run(body())
 
@@ -1829,10 +1818,9 @@ def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
             await pilot.pause()
             app.push_screen(CorpMapScreen())
             await pilot.pause()
-            await pilot.click("#cat_local")
             await pilot.pause()
 
-            boxes = list(app.screen.query("#local_boxes Collapsible"))
+            boxes = list(app.screen.query("#map_local_boxes Collapsible"))
             assert len(boxes) >= 2  # at least one Location plus the Fixers box
             assert all(box.collapsed for box in boxes)
 
@@ -1848,10 +1836,9 @@ def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
     run(body())
 
 
-def test_local_panels_are_visible_only_in_map_mode():
-    """#map_local_boxes_scroll is the hover-preview panel below the map -- the
-    "Local" category itself has its own #local_boxes/#local_summary (one
-    Collapsible box per Location, phone-tile style)."""
+def test_map_hover_boxes_visible_in_map_mode_and_hidden_otherwise():
+    """#map_local_boxes_scroll is the hover-preview panel below the map, shown
+    only in map mode and hidden on every sidebar category tab."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1860,19 +1847,11 @@ def test_local_panels_are_visible_only_in_map_mode():
             await pilot.pause()
             screen = app.screen
 
-            # Map mode -- the hover panel shows the hovered/selected territory's contents.
             assert screen.query_one("#map_local_boxes_scroll").display is True
-            assert screen.query_one("#local_boxes_scroll").display is False
-
-            await pilot.click("#cat_local")
-            await pilot.pause()
-            assert screen.query_one("#map_local_boxes_scroll").display is False
-            assert screen.query_one("#local_boxes_scroll").display is True
 
             await pilot.click("#cat_job")
             await pilot.pause()
             assert screen.query_one("#map_local_boxes_scroll").display is False
-            assert screen.query_one("#local_boxes_scroll").display is False
 
     run(body())
 
@@ -2204,13 +2183,17 @@ def test_offer_taken_by_a_rival_runner_is_shown_and_cannot_be_accepted():
 
 def test_contacts_runner_panel_reports_what_each_runner_is_doing():
     """The Runners panel reads rivals.RunnerState, so a runner with a state
-    shows where they are and what they're up to, and one without says so."""
+    shows where they are and what they're up to, and one without says so —
+    but only for runners whose number you actually have."""
 
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await _boot_runner_game(pilot, app)
-            territory = app.corp_map.territories[app.character.location_id]
+            character = app.character
+            territory = app.corp_map.territories[character.location_id]
+            character.meet_runner(RIVAL_RUNNERS[0].id)
+            character.meet_runner(RIVAL_RUNNERS[1].id)
             app.rival_runner_states[RIVAL_RUNNERS[0].id] = RunnerState(
                 territory_id=territory.id,
                 activity=RunnerActivity.WORKING,
@@ -2231,11 +2214,9 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
 
 
 def test_bar_gates_recruiting_on_meeting_the_runner_first():
-    """A runner can't be recruited sight-unseen. BarScreen locks a runner's row
-    until the player runs into them drinking at a bar (rivals.RunnerActivity.
-    DRINKING in their current territory), at which point it offers to exchange
-    numbers instead -- and only after that does the row turn into a normal
-    recruit option."""
+    """A runner can't be recruited sight-unseen. BarScreen only shows runners
+    who are actually drinking at the bar (rivals.RunnerActivity.DRINKING in
+    the player's current territory). Before that, the bar is empty."""
 
     async def body():
         app = ShadowguyApp()
@@ -2248,7 +2229,8 @@ def test_bar_gates_recruiting_on_meeting_the_runner_first():
             app.push_screen(BarScreen(bar))
             await pilot.pause()
             rows = app.screen.query_one("#bar_runners", ListView)
-            assert any(item.id == f"locked_{runner.id}" for item in rows.children)
+            assert not any(item.id.startswith("meet_") or item.id.startswith("runner_")
+                           for item in rows.children)
             app.pop_screen()
             await pilot.pause()
 
@@ -2267,33 +2249,6 @@ def test_bar_gates_recruiting_on_meeting_the_runner_first():
             assert app.character.knows_runner(runner.id)
             rows = app.screen.query_one("#bar_runners", ListView)
             assert any(item.id == f"runner_{runner.id}" for item in rows.children)
-
-    run(body())
-
-
-def test_contacts_corps_panel_row_opens_that_corps_website():
-    """The other way to reach a corp's site besides Web -- Contacts' Corps
-    panel rows (faction_<id>) push the same CorpWebsiteScreen."""
-
-    async def body():
-        app = ShadowguyApp()
-        async with app.run_test(size=(80, 60)) as pilot:
-            await _boot_runner_game(pilot, app)
-            faction = FACTIONS[0]
-
-            app.push_screen(ContactsScreen())
-            await pilot.pause()
-            corps_list = app.screen.query_one("#corps_list", ListView)
-            corps_list.focus()
-            corps_list.index = next(
-                i for i, item in enumerate(corps_list.children) if item.id == f"faction_{faction.id}"
-            )
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-
-            assert isinstance(app.screen, CorpWebsiteScreen)
-            assert app.screen.faction is faction
 
     run(body())
 
