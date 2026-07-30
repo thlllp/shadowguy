@@ -9,8 +9,8 @@ from shadowguy.character import CORE_STATS, Character
 from shadowguy.skills import SKILLS, SKILLS_BY_ID, skill_for, skill_value
 
 
-def test_30_skills_total():
-    assert len(SKILLS) == 30
+def test_33_skills_total():
+    assert len(SKILLS) == 33
 
 
 def test_skill_ids_unique():
@@ -25,7 +25,10 @@ def test_agility_carries_every_weapon_skill():
     """Every weapon a Slot.WEAPON item can roll is an agility skill -- handling the
     weapon, not the muscle behind it or the eye down the sight."""
     agility_skills = {s.id for s in SKILLS if s.stat == "agility"}
-    assert {"short_blade", "long_blade", "blunt", "firearms", "misc"} <= agility_skills
+    assert {
+        "pistols", "automatics", "longarms", "clubs",
+        "blades", "archery", "throwing", "gunnery",
+    } <= agility_skills
 
 
 def test_perception_carries_four_skills():

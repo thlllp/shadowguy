@@ -227,6 +227,7 @@ Leaf modules, and why each has to stay one:
 | 49 | `Character.CrewHire.on_site`, `Scene.max_on_site`/`max_support` (per-archetype job roster caps) |
 | 50 | no new state — `Grid`/`Tile` moved from `tactical.py` to a new `grid.py`, and pickle resolves a class by module path (a `Grid` hangs off `scene.TacticalStage` and every `buildings.Level`) |
 | 51 | the core stat `intelligence` **renamed** to `logic` (`Character` field, `CORE_STATS`, every `_SKILL_ROWS`/`bonuses` key) |
+| 52 | the weapon skills **split by category**: `short_blade`/`long_blade`/`blunt`/`firearms`/`misc` replaced by `pistols`/`automatics`/`longarms`/`clubs`/`blades`/`archery`/`throwing`/`gunnery` (33 skills, up from 30), so a pre-v52 `Character.skill_ranks` is keyed by ids that no longer exist |
 
 ### Verifying changes
 

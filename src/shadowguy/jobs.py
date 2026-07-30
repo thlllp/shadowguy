@@ -397,7 +397,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("forgery", 1, "Badge the two of you through the checkpoint"),
                     ("running", 0, "Carry them, and don't stop"),
-                    ("short_blade", -2, "Cut through the cordon"),
+                    ("blades", -2, "Cut through the cordon"),
                 ),
             ),
         ),
@@ -523,7 +523,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("toughness", 1, "Put them down before they finish reaching for the alarm"),
                     ("tactics", 0, "Time it to the gap in their coverage"),
-                    ("firearms", -2, "Put them down loud and don't wait to see who noticed"),
+                    ("pistols", -2, "Put them down loud and don't wait to see who noticed"),
                 ),
             ),
             (
@@ -688,7 +688,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("listening", 1, "Hear the follow before it closes the distance"),
                     ("intimidation", 0, "Make it very clear this isn't worth it"),
-                    ("short_blade", -2, "Put down whoever's still following and keep walking"),
+                    ("blades", -2, "Put down whoever's still following and keep walking"),
                 ),
             ),
         ),

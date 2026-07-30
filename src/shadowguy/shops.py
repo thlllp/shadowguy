@@ -92,6 +92,26 @@ WEARABLE_SLOTS: frozenset[Slot] = frozenset(
 )
 
 
+# Which weapon skills reach across a room, by category (skills.py files one skill per
+# weapon category, all on agility). Two sets because they answer two different
+# questions: FIREARM_SKILLS is "is this a gun" — what the smartlink guard below tests,
+# since a smartgun interface is a firearm's and never a bow's — and RANGED_SKILLS is
+# "does this shoot rather than reach", which is what tactical.weapon_range turns into a
+# distance. Everything not named here is melee. `throwing` is deliberately in neither:
+# a thrown knife outranges a fist and is outranged by a rifle, so tactical.py gives it
+# its own middle band. Lives here rather than in tactical.py because a weapon's profile
+# is written in this module and nowhere else — the grid reads it, it doesn't own it.
+FIREARM_SKILLS: frozenset[str] = frozenset({"pistols", "automatics", "longarms", "gunnery"})
+RANGED_SKILLS: frozenset[str] = FIREARM_SKILLS | {"archery"}
+
+# Same reason every Item.skill goes through skill_for below: a typo here fails silently
+# in two directions — the gun quietly drops to melee reach in tactical.weapon_range, and
+# the smartlink guard starts rejecting a legitimately smartlinked one. These are skill
+# ids written a second time, so they need the same chokepoint the first copy has.
+for _skill_id in RANGED_SKILLS:
+    skill_for(_skill_id)
+
+
 @dataclass(frozen=True)
 class Item:
     id: str
@@ -149,7 +169,7 @@ class Item:
     # inventory.equipped_deck_rating already relies on) — enforced at import.
     program_slots: int = 0
     # Whether this weapon carries a smartgun interface — only meaningful (and only
-    # valid, enforced at import) on a firearm (skill == "firearms"). combat.py's
+    # valid, enforced at import) on a gun (skill in FIREARM_SKILLS). combat.py's
     # smartlink_bonus() reads this alongside cybernetics.has_smartlink to grant a
     # to-hit bonus only when both the weapon and the runner's implant agree; an
     # unlinked gun gets nothing from the cyberware, and the cyberware does
@@ -239,8 +259,9 @@ class Consumable:
 # Slot.VEHICLE item's percentage cut off travel time, e.g. Beater Bike), then
 # min_standing (tier gate), then recharge_rounds (weapon cooldown between shots), and
 # finally stun_damage (non-lethal knockout damage). A weapon's skill is what its attack
-# rolls in combat and its damage is what a hit takes off — the pool spans blunt/
-# short_blade/long_blade/firearms, so no build is stuck swinging a weapon it can't use.
+# rolls in combat and its damage is what a hit takes off — the pool spans every weapon
+# skill except gunnery (there is nothing to mount a turret to yet), so no build is stuck
+# swinging a weapon it can't use.
 # The bloodiest one is two-handed, which costs both weapon slots (SLOT_CAPACITY).
 # Weapons carry no stat bonus by default — damage/skill are their whole profile — so
 # `bonuses` is {} unless a specific weapon deliberately earns one. Armor is the same
@@ -248,12 +269,30 @@ class Consumable:
 # while equipped, and it's not restricted to Slot.TORSO — any wearable can carry it.
 _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.WEAPON_SHOP: [
-        ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "blunt", 4, 5),
-        ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "short_blade", 5, 4),
-        ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "long_blade", 6, 1, True),
-        # Trailing 0, True: program_slots (n/a), smartlinked — the one gun in the
-        # catalog today, so it's what makes cybernetics.SMARTLINK_ID reachable at all.
-        ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "firearms", 5, 4, False, {}, 0, 0, 0, 0, "old tech", 0, True),
+        ("brass_knuckles", "Brass Knuckles", 150, {}, Slot.WEAPON, 0, "clubs", 4, 5),
+        ("combat_knife", "Combat Knife", 400, {}, Slot.WEAPON, 0, "blades", 5, 4),
+        ("monoblade", "Monoblade", 700, {}, Slot.WEAPON, 0, "blades", 6, 1, True),
+        # Trailing 0, True: program_slots (n/a), smartlinked — the cheap gun, and the
+        # one that makes cybernetics.SMARTLINK_ID reachable on a starting budget.
+        ("pipe_pistol", "Pipe Pistol", 250, {}, Slot.WEAPON, 0, "pistols", 5, 4, False, {}, 0, 0, 0, 0, "old tech", 0, True),
+        # One buyable weapon per category, so no weapon skill is dead on arrival.
+        # Damage stays inside the 4-7 band the melee catalog already spans, and the
+        # 7s stay behind the standing gate below. The three levers that actually
+        # separate these are reach (RANGED_SKILLS), whether the weapon costs both
+        # weapon slots (SLOT_CAPACITY), and recharge_rounds — so the ladder runs
+        # cheap-and-slow (bow) -> same damage every round (shotgun) -> same damage
+        # with a hand free (machine pistol). recharge_rounds is 2, not 1: a 1 is
+        # set and ticked away inside the same round, so it does nothing (see
+        # abstract_combat._tick_cooldowns; taser_h6 has the same dead 1 on it).
+        # Hand-set against the existing curve, not balance-simulated.
+        ("machine_pistol", "Machine Pistol", 800, {}, Slot.WEAPON, 0, "automatics", 6, 3),
+        ("pump_shotgun", "Pump Shotgun", 650, {}, Slot.WEAPON, 0, "longarms", 6, 1, True),
+        ("compound_bow", "Compound Bow", 550, {}, Slot.WEAPON, 0, "archery",
+         6,   # damage
+         1,   # concealment
+         True, {}, 0, 0,  # two_handed, skill_bonuses, travel_reduction, min_standing
+         2),  # recharge_rounds — drawing and loosing is a whole round's work
+        ("throwing_knives", "Throwing Knives", 300, {}, Slot.WEAPON, 0, "throwing", 4, 5),
         ("leather_jacket", "Leather Jacket", 200, {}, Slot.TORSO, 3),
         ("kevlar_vest", "Kevlar Vest", 450, {}, Slot.TORSO, 3, None, 0, 4),
         ("hardsuit", "Hardsuit", 900, {}, Slot.TORSO, 8),
@@ -263,16 +302,20 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("kevlar_helmet", "Kevlar Helmet", 120, {}, Slot.HEADWEAR, 1),
         ("steel_toe_boots", "Steel Toe Boots", 120, {}, Slot.BOOTS, 1),
         ("slippers", "Slippers", 100, {}, Slot.BOOTS, 0, None, 0, 0, False, {"stealth": 1}),
-        # Misc weapons (Misc Weapons skill): tasers with a cooldown between shots.
-        # The M5 fires every 3 rounds; the H6 fires every 2. Both do stun damage
-        # (non-lethal — builds a stun meter instead of reducing health).
-        ("taser_m5", "Taser (M5)", 600, {}, Slot.WEAPON, 0, "misc",
+        # Tasers roll Pistols: handheld, aimed one-handed, and there's no exotic
+        # category to file them under any more. They keep their cooldown between
+        # shots — the M5 fires every 3 rounds, the H6 every 2 — and do stun damage
+        # (non-lethal: builds a stun meter instead of reducing health). Consequence
+        # worth naming: reach follows the skill (RANGED_SKILLS), so filing them here
+        # gives a taser a pistol's range on the grid rather than the arm's length it
+        # had as a Misc weapon.
+        ("taser_m5", "Taser (M5)", 600, {}, Slot.WEAPON, 0, "pistols",
          0,   # damage (lethal)
          5,   # concealment
          False, {}, 0, 0,  # two_handed, skill_bonuses, travel_reduction, min_standing
          2,   # recharge_rounds
          5),  # stun_damage
-        ("taser_h6", "Taser (H6)", 800, {}, Slot.WEAPON, 0, "misc",
+        ("taser_h6", "Taser (H6)", 800, {}, Slot.WEAPON, 0, "pistols",
          0,   # damage (lethal)
          4,   # concealment
          False, {}, 0, 0,  # two_handed, skill_bonuses, travel_reduction, min_standing
@@ -286,7 +329,7 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
             {},
             Slot.WEAPON,
             0,
-            "long_blade",
+            "blades",
             7,
             1,
             True,
@@ -294,6 +337,12 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
             0,
             2,
         ),
+        # The gun end of the back room: the katana's damage at the shotgun's reach,
+        # which is why it costs more than either. The second smartlinked weapon in
+        # the catalog (the pipe pistol is the other), and the one that makes the
+        # smartlink implant worth its price rather than just reachable.
+        ("assault_rifle", "Assault Rifle", 1600, {}, Slot.WEAPON, 0, "automatics",
+         7, 1, True, {}, 0, 2, 0, 0, "", 0, True),
     ],
     LocationKind.AUTO_DEALER: [
         ("beater_bike", "Beater Bike", 200, {"cool": 1}, Slot.VEHICLE, 0, None, 0, 0, False, {}, 0.10),
@@ -342,7 +391,7 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         ("zetatech_rig", "Zetatech Rig", 1000, {"logic": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
     ],
     LocationKind.PAWN: [
-        ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "blunt", 4, 5),
+        ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "clubs", 4, 5),
         ("pawned_deck", "Pawned Deck", 80, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
         # Tier 2 — the pawnbroker keeps the interesting finds under the counter.
@@ -486,8 +535,8 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: program_slots is only valid on a deck (slot is None)")
     if _item.program_slots < 0:
         raise ValueError(f"{_item.id}: program_slots must be >= 0")
-    if _item.smartlinked and _item.skill != "firearms":
-        raise ValueError(f"{_item.id}: smartlinked is only valid on a firearms weapon")
+    if _item.smartlinked and _item.skill not in FIREARM_SKILLS:
+        raise ValueError(f"{_item.id}: smartlinked is only valid on a gun ({sorted(FIREARM_SKILLS)})")
 
 
 # id, name, price, effect, amount, stat, min_standing

@@ -14,6 +14,7 @@ from shadowguy.combat import (
     drop_for_result,
     player_soak,
     resolve_hit,
+    melee_damage_bonus,
     smartlink_bonus,
 )
 from shadowguy.cybernetics import CyberSlot, install_cyberware
@@ -51,18 +52,17 @@ def test_attack_verbs_cover_every_weapon_skill_in_the_catalog():
         assert attack_verbs(weapon) is not _DEFAULT_ATTACK_VERBS, weapon.skill
 
 
-def test_attack_verbs_differ_between_a_firearm_and_each_melee_type():
+def test_attack_verbs_read_differently_for_every_weapon_category():
     by_skill = {
         item.skill: attack_verbs(item)
         for item in ITEMS_BY_ID.values()
         if item.slot is Slot.WEAPON
     }
-    assert by_skill["firearms"] == ("fire on", "shoot")
-    # Every melee skill reads differently from the gun and from each other, which is the
-    # whole point -- a knife shouldn't "fire" and a katana shouldn't read like knuckles.
-    melee = {skill: verbs for skill, verbs in by_skill.items() if skill != "firearms"}
-    assert by_skill["firearms"] not in melee.values()
-    assert len(set(melee.values())) == len(melee)
+    assert by_skill["pistols"] == ("fire on", "shoot")
+    # No two categories read alike, which is the whole point -- a knife shouldn't
+    # "fire", a bow shouldn't read like a shotgun, and knuckles shouldn't read like
+    # either. Every stocked category is covered, so this compares all of them.
+    assert len(set(by_skill.values())) == len(by_skill)
 
 
 def test_attack_verbs_fall_back_for_an_unknown_skill():
@@ -109,6 +109,37 @@ def test_resolve_hit_landed_hit_adds_margin_to_base_damage_before_soak():
                                 to_hit_difficulty=9, base_damage=3, soak_pool=0)
     assert roll.result.passed
     assert damage == 3 + roll.margin
+
+
+# --- melee_damage_bonus ---
+
+
+def test_melee_damage_bonus_is_full_strength_on_a_melee_weapon():
+    character = Character(name="t", strength=6)
+    for weapon_id in ("mono_katana", "brass_knuckles", "combat_knife"):
+        assert melee_damage_bonus(character, ITEMS_BY_ID[weapon_id]) == 6
+
+
+def test_melee_damage_bonus_applies_to_bare_hands_and_to_a_thrown_weapon():
+    """Grapple and Throwing both put your body behind the hit -- neither is a
+    RANGED_SKILLS weapon, which is the whole test."""
+    character = Character(name="t", strength=4)
+    assert melee_damage_bonus(character, UNARMED) == 4
+    assert melee_damage_bonus(character, ITEMS_BY_ID["throwing_knives"]) == 4
+
+
+def test_melee_damage_bonus_is_zero_on_anything_that_shoots():
+    character = Character(name="t", strength=9)
+    for weapon_id in ("pipe_pistol", "machine_pistol", "pump_shotgun", "compound_bow"):
+        assert melee_damage_bonus(character, ITEMS_BY_ID[weapon_id]) == 0
+
+
+def test_melee_damage_bonus_reads_the_gear_included_stat_not_the_raw_field():
+    """character.stat() folds gear/cyberware/chems/fatigue in, so a Strength buff has
+    to reach the swing -- the same number every other check sees."""
+    character = Character(name="t", strength=3)
+    character.temp_bonuses["strength"] = 2
+    assert melee_damage_bonus(character, ITEMS_BY_ID["mono_katana"]) == 5
 
 
 # --- smartlink_bonus ---

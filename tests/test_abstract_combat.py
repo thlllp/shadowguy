@@ -15,6 +15,8 @@ from shadowguy.character import Character
 from shadowguy.combat import ENEMIES_BY_ID, UNARMED, Drop, Enemy, equipped_weapons
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 
+from helpers import AlwaysSix
+
 
 # --- available_actions ---
 
@@ -169,3 +171,49 @@ def test_stun_reaching_current_health_knocks_the_player_out():
     brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
     take_turn(state, brace, rng=_AlwaysSix())
     assert state.outcome is CombatOutcome.KNOCKED_OUT
+
+
+# --- Strength on a melee hit (combat.melee_damage_bonus) ---
+
+
+def _one_melee_swing(strength: int) -> int:
+    """Health taken off a fat target by one katana swing at `strength`. AlwaysSix pins
+    both the to-hit roll and the enemy's soak, so the only thing that moves between two
+    calls is the Strength folded into base_damage."""
+    character = Character(
+        name="t", strength=strength,
+        inventory=[InventoryItem(item_id="mono_katana", equipped=True)],
+    )
+    enemy = Enemy(id="dummy", name="Dummy", health=999, attack=0, defense=1, damage=0, toughness=0)
+    state = start_combat(character, (enemy,), rng=AlwaysSix())
+    swing = next(
+        a for a in available_actions(character, state.weapon_cooldowns)
+        if a.kind is ActionKind.ATTACK and a.weapon and a.weapon.id == "mono_katana"
+    )
+    take_turn(state, swing, rng=AlwaysSix())
+    return 999 - state.fighters[0].health
+
+
+def test_strength_reaches_a_landed_melee_hit_point_for_point():
+    weak, strong = _one_melee_swing(1), _one_melee_swing(7)
+    assert strong - weak == 6
+
+
+def test_strength_does_not_reach_a_gun():
+    """The same swing with a pistol equipped instead: Strength is melee-only, so two
+    very different runners hit for exactly the same."""
+    def one_shot(strength: int) -> int:
+        character = Character(
+            name="t", strength=strength,
+            inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)],
+        )
+        enemy = Enemy(id="d", name="D", health=999, attack=0, defense=1, damage=0, toughness=0)
+        state = start_combat(character, (enemy,), rng=AlwaysSix())
+        shot = next(
+            a for a in available_actions(character, state.weapon_cooldowns)
+            if a.kind is ActionKind.ATTACK and a.weapon and a.weapon.id == "pipe_pistol"
+        )
+        take_turn(state, shot, rng=AlwaysSix())
+        return 999 - state.fighters[0].health
+
+    assert one_shot(1) == one_shot(9)

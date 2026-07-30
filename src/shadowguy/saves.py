@@ -182,7 +182,12 @@ SAVE_SUFFIX = ".save"
 # CORE_STATS entry, every skills._SKILL_ROWS key, and every bonuses/temp_bonuses key
 # that named it. A pre-v51 pickled Character carries `intelligence` and no `logic`, so
 # every stat() read of it would raise.
-SAVE_VERSION = 51
+# v52 split the weapon skills by category: short_blade/long_blade/blunt/firearms/misc
+# are gone, replaced by pistols/automatics/longarms/clubs/blades/archery/throwing/
+# gunnery (33 skills, up from 30). A pre-v52 pickled Character's skill_ranks is keyed
+# by the old ids -- every new skill would read as missing, and the ranks bought for the
+# old ones would be unspendable.
+SAVE_VERSION = 52
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

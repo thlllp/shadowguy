@@ -13,7 +13,7 @@ uv run shadowguy
 
 ## How it plays
 
-You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 32 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
+You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 33 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
 
 From there you work. **Gigs** are quick single-scene street work, runnable wherever you're standing, owned by a local who'll think better of you for it. They turn up gradually, one location at a time, rather than blanketing the map on day one. **Jobs** come from fixers, are aimed at a real corp's real building on the real map, and have to be run *on site* — so an accepted job is a place you have to travel to, and a scheduled one means being in the right district on the right day. **Legwork** scouts a job beforehand to bank an advantage on its first check. **Security contracts** are the inverse of a heist: a fixer signs you to guard a corp for several nights, and you work them by ending the day on-site — steady pay and free lodging, but they pin you to one district.
 
@@ -28,7 +28,7 @@ Death is permanent. No meta-progression between runs.
 | | |
 |---|---|
 | **Checks** | An opposed d6 dice pool. Roll `skill_value + advantage` dice, count 5s and 6s; the opposition rolls against you. Net successes decide it; a gap of 3+ either way is a critical. |
-| **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span five of the six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit. Running always works; the roll only decides what it costs you. |
+| **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span five of the six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit, and Strength adds straight onto a melee or thrown hit. Running always works; the roll only decides what it costs you. |
 | **Tactical** | ~35% of jobs play their fights on a generated grid instead: tcod FOV and A*, cover as a raised to-hit difficulty, firearms that kite and melee that has to close. Reach an exit to leave, no roll. |
 | **Matrix** | A Data Heist's fights are against ICE, not muscle, played out node by node across a small hacked network. Round-based like combat and rolling the same dice, but it drains a separate integrity pool instead of your health — lose and you're ejected (the contract blown) rather than killed. The cyberdeck is the damage, Hack is the hit; jacking out always works. Installed programs add a bypass roll, a soak-ignoring data grab, and remote recon — but pushing them raises the network's alert level, making every ICE hit harder to dodge for the rest of the run. |
 | **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
@@ -65,7 +65,7 @@ src/shadowguy/
   character.py    Character dataclass: stats, health, skills, experience, inventory, crew, standing
                   (faction/gang/local/fixer), accepted jobs, security contracts
   archetypes.py   Enforcer/Hacker/Infiltrator creation presets
-  skills.py       Skill table (32 skills across 6 core stats); leaf module
+  skills.py       Skill table (33 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
   combat.py       Round-based combat: enemy roster, the five-stat action set, shared resolve_hit
   tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation
