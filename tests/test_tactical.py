@@ -155,6 +155,14 @@ def test_move_player_accepts_legal_step_and_spends_a_move():
     assert state.moves_left == before - 1
 
 
+def test_move_player_accepts_a_diagonal_step_for_one_move():
+    state = _simple_state()
+    before = state.moves_left
+    assert move_player(state, (1, 1))
+    assert state.player.coord == (1, 1)
+    assert state.moves_left == before - 1
+
+
 def test_legal_moves_empty_once_moves_exhausted():
     state = _simple_state()
     state.moves_left = 0

@@ -28,10 +28,20 @@ import tcod
 
 Coord = tuple[int, int]  # (x, y)
 
-# Cardinal moves only, for now: a clean grid to reason about and render, and it keeps
-# "distance" and "adjacent to cover" unambiguous. Diagonal movement is a lever (tcod's
-# A* takes a diagonal cost) to revisit once the base game feels right, not day one.
-_STEPS: tuple[Coord, ...] = ((0, -1), (0, 1), (-1, 0), (1, 0))
+# Eight-way movement: a diagonal step costs the same one move as a cardinal one, which
+# is exactly what chebyshev already says a diagonal is worth (distance 1 -- the metric
+# melee reach, grenade blasts and cover adjacency have always used). Both sides of a
+# fight step through this same table, so nobody outruns anybody by cutting corners.
+_STEPS: tuple[Coord, ...] = (
+    (0, -1),
+    (0, 1),
+    (-1, 0),
+    (1, 0),
+    (-1, -1),
+    (1, -1),
+    (-1, 1),
+    (1, 1),
+)
 
 
 class Tile(StrEnum):
@@ -160,21 +170,22 @@ def path_between(
 ) -> list[Coord]:
     """A* from `start` to `goal` over walkable floor, treating `blocked` cells (other units)
     as impassable. Returns the steps *after* start, ending on goal, or [] if unreachable.
-    Cardinal moves only (diagonal cost 0 disables them). `goal` itself is left walkable so a
+    Eight-way, diagonals at the same cost as a cardinal step -- the AI closes distance the
+    way the player does, and `chebyshev` stays the honest step count. `goal` itself is left walkable so a
     unit can path *up to* an occupied target and stop adjacent — the AI wants to reach the
     player's tile conceptually, then attack from range, not fail because the player stands on it."""
     cost = grid.walkable().astype(np.int8)
     for bx, by in blocked:
         if grid.in_bounds((bx, by)) and (bx, by) != goal:
             cost[by, bx] = 0
-    finder = tcod.path.AStar(cost, diagonal=0.0)
+    finder = tcod.path.AStar(cost, diagonal=1.0)
     path = finder.get_path(*_yx(start), *_yx(goal))
     return [(x, y) for (y, x) in path]
 
 
 def step_neighbors(grid: Grid, coord: Coord, blocked: frozenset[Coord] = frozenset()) -> list[Coord]:
-    """The cells one cardinal step from `coord` a unit may move into: in bounds, walkable,
-    and not occupied. The move-legality counterpart to path_between's routing."""
+    """The cells one step from `coord` a unit may move into -- any of the eight, in bounds,
+    walkable, and not occupied. The move-legality counterpart to path_between's routing."""
     return [
         n
         for dx, dy in _STEPS
