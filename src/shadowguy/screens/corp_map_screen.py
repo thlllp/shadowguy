@@ -106,6 +106,10 @@ _RUNNER_CATEGORIES = [
     ("corp", "Corp"),
 ]
 
+# Categories whose activity list gets the whole screen: the sidebar is hidden while
+# one is selected, and 'escape' (action_back) is the way out of it.
+_FULL_WIDTH_CATEGORIES = frozenset({"job", "legwork"})
+
 _CORP_CATEGORIES = [
     ("corp", "Corp"),
     ("phone", "Phone"),
@@ -121,7 +125,8 @@ def _sighting_label(sighting, corp_map) -> str:
 
 class CorpMapScreen(BackScreen):
     """The home screen for both a runner and a corp-only run, with a left-side
-    category sidebar always visible. The main content area shows the map by default;
+    category sidebar (hidden on the _FULL_WIDTH_CATEGORIES tabs, which take the whole
+    width). The main content area shows the map by default;
     selecting an inline category (gigs, jobs, legwork, local, corp) replaces it with
     that category's activity list. 'escape' returns to the map. Categories that push
     their own screen (gear, cyberdeck, skills, phone, tech) do so on top of the map,
@@ -543,6 +548,7 @@ class CorpMapScreen(BackScreen):
         in_map = self.selected_category is None
         is_corp = self.selected_category == "corp"
 
+        self.query_one("#sidebar").display = self.selected_category not in _FULL_WIDTH_CATEGORIES
         self.query_one("#map_scroll").display = in_map
         self.query_one("#territory_summary").display = in_map
         self.query_one("#activities").display = not in_map
