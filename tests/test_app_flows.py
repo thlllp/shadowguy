@@ -72,7 +72,7 @@ from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
 from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.scene import Outcome
+from shadowguy.scene import Outcome, TacticalStage
 from shadowguy.screens.info_screens import (
     AlarmClockScreen,
     ContactsScreen,
@@ -621,7 +621,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
             assert not state.is_over
 
             # Content that doesn't depend on the randomly generated map/enemy roll.
-            assert "Move (arrows)" in tac_screen.query_one("#tac_box_move").content.plain
+            assert "Move (arrows/numpad)" in tac_screen.query_one("#tac_box_move").content.plain
             assert "Attack (f)" in tac_screen.query_one("#tac_box_attack").content.plain
             assert "End turn (e)" in tac_screen.query_one("#tac_box_end").content.plain
             assert "Leave (l)" in tac_screen.query_one("#tac_box_leave").content.plain
@@ -676,6 +676,77 @@ def test_tactical_look_cursor_reads_the_map_without_spending_the_turn():
             await pilot.press("escape")
             assert state.aim_cursor is None
             assert state.aim_kind is None
+
+    run(body())
+
+
+def _open_field_stage(player_start=(4, 4)):
+    """A 9x9 room with one thug in the far corner: every direction off player_start is
+    open floor, so a movement test doesn't depend on generate_map's RNG."""
+    return TacticalStage(
+        prompt="Numpad test.",
+        grid=parse_grid(["." * 9] * 9),
+        player_start=player_start,
+        enemies=((ENEMIES_BY_ID["thug"], (8, 0)),),
+        victory=Outcome(text="Cleared."),
+        escape=Outcome(text="Out."),
+        exits=frozenset({(0, 8)}),
+    )
+
+
+def test_numpad_keys_move_the_player_in_all_eight_directions():
+    """1-9 (the numpad with NumLock on) walk the eight directions; home/end/pageup/pagedown
+    (with it off) cover the four corners. A diagonal costs the same single move."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            app.push_screen(TacticalScreen(_open_field_stage()))
+            await pilot.pause()
+            state = app.screen.state
+
+            for key, (dx, dy) in (
+                ("8", (0, -1)),
+                ("2", (0, 1)),
+                ("4", (-1, 0)),
+                ("6", (1, 0)),
+                ("7", (-1, -1)),
+                ("9", (1, -1)),
+                ("1", (-1, 1)),
+                ("3", (1, 1)),
+                ("home", (-1, -1)),
+                ("pageup", (1, -1)),
+                ("end", (-1, 1)),
+                ("pagedown", (1, 1)),
+            ):
+                state.player.coord = (4, 4)
+                state.moves_left = 2
+                await pilot.press(key)
+                assert state.player.coord == (4 + dx, 4 + dy), key
+                assert state.moves_left == 1, key  # a diagonal is one move, same as a cardinal
+
+    run(body())
+
+
+def test_numpad_diagonals_drive_the_aim_cursor_too():
+    """While aiming, the move keys walk the cursor rather than the player -- the numpad
+    diagonals are no exception."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            app.push_screen(TacticalScreen(_open_field_stage()))
+            await pilot.pause()
+            state = app.screen.state
+
+            await pilot.press("x")  # look: opens the cursor on the player's own tile
+            assert state.aim_cursor == (4, 4)
+
+            await pilot.press("9")
+            assert state.aim_cursor == (5, 3)
+            assert state.player.coord == (4, 4)
 
     run(body())
 

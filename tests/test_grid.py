@@ -80,3 +80,23 @@ def test_step_neighbors_excludes_blocked_cells():
     neighbors = step_neighbors(grid, (1, 0), blocked=frozenset({(0, 0)}))
     assert (0, 0) not in neighbors
     assert (2, 0) in neighbors
+
+
+def test_step_neighbors_offers_all_eight_directions():
+    grid = parse_grid(["...", "...", "..."])
+    assert set(step_neighbors(grid, (1, 1))) == {
+        (1, 0),
+        (1, 2),
+        (0, 1),
+        (2, 1),
+        (0, 0),
+        (2, 0),
+        (0, 2),
+        (2, 2),
+    }
+
+
+def test_path_between_takes_the_diagonal():
+    """Three cells over and three down is three king moves, not six."""
+    grid = parse_grid(["....", "....", "....", "...."])
+    assert path_between(grid, (0, 0), (3, 3)) == [(1, 1), (2, 2), (3, 3)]

@@ -100,6 +100,27 @@ class TacticalScreen(Screen):
         ("down", "move('down')", "Move"),
         ("left", "move('left')", "Move"),
         ("right", "move('right')", "Move"),
+        # The numpad, both ways a terminal can deliver it: with NumLock on the keys arrive
+        # as plain digits (the roguelike 1-9 layout), with it off as home/pageup/end/pagedown
+        # for the four corners. Hidden from the Footer -- the arrow row already says "Move",
+        # and eight more "Move" tiles would crowd out every other binding.
+        *[
+            Binding(key, f"move('{direction}')", "Move", show=False)
+            for key, direction in (
+                ("7", "up_left"),
+                ("8", "up"),
+                ("9", "up_right"),
+                ("4", "left"),
+                ("6", "right"),
+                ("1", "down_left"),
+                ("2", "down"),
+                ("3", "down_right"),
+                ("home", "up_left"),
+                ("pageup", "up_right"),
+                ("end", "down_left"),
+                ("pagedown", "down_right"),
+            )
+        ],
         ("f", "fire", "Aim attack"),
         ("g", "throw_grenade", "Grenade"),
         # Priority so the aim cursor's target-cycling wins over Screen's own default
@@ -115,7 +136,16 @@ class TacticalScreen(Screen):
         *MENU_QUIT_BINDINGS,
     ]
 
-    DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+    DIRECTIONS = {
+        "up": (0, -1),
+        "down": (0, 1),
+        "left": (-1, 0),
+        "right": (1, 0),
+        "up_left": (-1, -1),
+        "up_right": (1, -1),
+        "down_left": (-1, 1),
+        "down_right": (1, 1),
+    }
 
     CSS = """
     #tac_map { height: 1fr; padding: 0 1; }
@@ -503,7 +533,7 @@ class TacticalScreen(Screen):
             grenade_detail = "aiming — enter/esc"
         else:
             grenade_detail = "used" if state.acted else (f"{len(grenades)} ready" if grenades else "none carried")
-        self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows)", move_detail))
+        self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows/numpad)", move_detail))
         self.query_one("#tac_box_attack", Static).update(_boxed_text("Attack (f)", attack_detail))
         self.query_one("#tac_box_grenade", Static).update(_boxed_text("Grenade (g)", grenade_detail))
         self.query_one("#tac_box_end", Static).update(_boxed_text("End turn (e)", "advance the round"))
