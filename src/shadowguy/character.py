@@ -77,7 +77,7 @@ if set(SKILL_RANK_COST) != set(range(STARTING_SKILL_RANK + 1, MAX_SKILL_RANK + 1
 
 # The stats a skill can be layered on, and what gear/chem bonuses apply to. Checks
 # roll a *skill* (skills.skill_value), never one of these on its own.
-CORE_STATS = ("body", "strength", "agility", "perception", "intelligence", "cool")
+CORE_STATS = ("body", "strength", "agility", "perception", "logic", "cool")
 # Every runner's starting (and, for now, only ever) Humanity. Unlike the core stats
 # it has no skills, no gear/temp bonus, and nothing in the game raises or lowers it
 # yet — a fixed baseline, laid down ahead of whatever eventually costs it (cyberware
@@ -131,7 +131,7 @@ class Character:
     strength: int = STARTING_STAT
     agility: int = STARTING_STAT
     perception: int = STARTING_STAT
-    intelligence: int = STARTING_STAT
+    logic: int = STARTING_STAT
     cool: int = STARTING_STAT
     cash: int = STARTING_CASH
     rep: int = 0

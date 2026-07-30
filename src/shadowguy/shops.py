@@ -319,12 +319,12 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         # id, name, price, bonuses, slot(None=deck), defense, skill, damage, concealment,
         # two_handed, skill_bonuses, travel_reduction, min_standing, recharge_rounds,
         # stun_damage, tag, program_slots (a deck's matrix-program capacity).
-        ("burner_deck", "Burner Deck", 200, {"intelligence": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
+        ("burner_deck", "Burner Deck", 200, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         (
             "cracked_cyberdeck",
             "Cracked Cyberdeck",
             500,
-            {"intelligence": 2},
+            {"logic": 2},
             None,
             0,
             None,
@@ -339,11 +339,11 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
             "",
             2,
         ),
-        ("zetatech_rig", "Zetatech Rig", 1000, {"intelligence": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
+        ("zetatech_rig", "Zetatech Rig", 1000, {"logic": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
     ],
     LocationKind.PAWN: [
         ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "blunt", 4, 5),
-        ("pawned_deck", "Pawned Deck", 80, {"intelligence": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
+        ("pawned_deck", "Pawned Deck", 80, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
         # Tier 2 — the pawnbroker keeps the interesting finds under the counter.
         (
@@ -495,7 +495,7 @@ _CONSUMABLE_ROWS: dict[LocationKind, list[tuple[str, str, int, EffectKind, int, 
     LocationKind.PHARMACY: [
         ("health_kit", "Health Kit", 100, EffectKind.HEAL, 5, None),
         ("chem_x", "Chem X", 150, EffectKind.TEMP_STAT_BOOST, 2, "body"),
-        ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "intelligence"),
+        ("chem_y", "Chem Y", 150, EffectKind.TEMP_STAT_BOOST, 2, "logic"),
         # Tier 2 — stronger stock the pharmacist reserves for regulars.
         (
             "advanced_health_kit",

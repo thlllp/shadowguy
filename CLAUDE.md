@@ -226,6 +226,7 @@ Leaf modules, and why each has to stay one:
 | 48 | `buildings.Level.doors`, `buildings.Building.locks`/`cameras` (locked doors and camera hazards) |
 | 49 | `Character.CrewHire.on_site`, `Scene.max_on_site`/`max_support` (per-archetype job roster caps) |
 | 50 | no new state — `Grid`/`Tile` moved from `tactical.py` to a new `grid.py`, and pickle resolves a class by module path (a `Grid` hangs off `scene.TacticalStage` and every `buildings.Level`) |
+| 51 | the core stat `intelligence` **renamed** to `logic` (`Character` field, `CORE_STATS`, every `_SKILL_ROWS`/`bonuses` key) |
 
 ### Verifying changes
 

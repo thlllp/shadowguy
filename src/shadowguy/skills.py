@@ -39,9 +39,6 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         ("running", "Running", "Sprinting and outlasting a chase"),
     ],
     "strength": [
-        ("short_blade", "Short Blade", "Fighting with knives and short blades"),
-        ("long_blade", "Long Blade", "Fighting with swords and long blades"),
-        ("blunt", "Blunt", "Fighting with clubs and blunt weapons"),
         ("grapple", "Grapple", "Wrestling, restraining, breaking holds"),
         ("lift", "Lift", "Lifting, hauling, and forcing objects"),
     ],
@@ -51,21 +48,23 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         ("acrobatics", "Acrobatics", "Jumping, climbing"),
         ("infiltration", "Infiltration", "Locks"),
         ("sleight_of_hand", "Sleight of Hand", "Concealing weapons and pickpocketing"),
+        # Every weapon skill is filed here: what a weapon rolls is handling it,
+        # not the muscle behind it or the eye down the sight. Nothing enforces a
+        # fixed count per stat, and a stat's cost is per-skill anyway, so this
+        # makes agility broader, not stronger.
+        ("short_blade", "Short Blade", "Fighting with knives and short blades"),
+        ("long_blade", "Long Blade", "Fighting with swords and long blades"),
+        ("blunt", "Blunt", "Fighting with clubs and blunt weapons"),
+        ("firearms", "Firearms", "Shooting straight under pressure"),
+        ("misc", "Misc Weapons", "Exotic and improvised weapons"),
     ],
     "perception": [
         ("pattern_seeking", "Pattern Seeking", "Spotting patterns and anomalies"),
         ("listening", "Listening", "Picking up sounds and conversations"),
         ("sight", "Sight", "Spotting details at range or in the dark"),
         ("intuition", "Intuition", "Reading a face and a room: expressions, body language, social undercurrents"),
-        # Filed under perception, not strength: a gun is aimed, not swung, so what
-        # it rolls is the same faculty as Sight. Nothing enforces a fixed count
-        # per stat, and a stat's cost is per-skill anyway, so these two extras
-        # make perception broader, not stronger. Misc follows the same rule:
-        # exotic and improvised weapons are aimed, too.
-        ("firearms", "Firearms", "Shooting straight under pressure"),
-        ("misc", "Misc Weapons", "Exotic and improvised weapons"),
     ],
-    "intelligence": [
+    "logic": [
         ("hack", "Hack", "Breaking into networks and systems"),
         ("recon", "Recon", "Gathering intel and casing a target"),
         ("infer", "Infer", "Understanding new systems and interfaces"),

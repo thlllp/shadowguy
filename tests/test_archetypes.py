@@ -59,7 +59,7 @@ def test_enforcer():
 def test_hacker():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     assert a.name == "Hacker"
-    assert a.stats == {"intelligence": 4, "perception": 2}
+    assert a.stats == {"logic": 4, "perception": 2}
     assert a.skills == {"hack": 7, "tinkering": 5, "infer": 4, "pattern_seeking": 4}
 
 

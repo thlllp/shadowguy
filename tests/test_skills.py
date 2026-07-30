@@ -21,19 +21,23 @@ def test_every_skill_stat_is_a_core_stat():
     assert all(skill.stat in CORE_STATS for skill in SKILLS)
 
 
-def test_perception_carries_six_skills():
-    """Perception is a four-skill base (Read Face/Read the Room having folded into
-    Intuition) plus Firearms and Misc Weapons (a gun/exotic weapon is aimed, so it
-    rolls the same faculty)."""
-    perception_skills = [s for s in SKILLS if s.stat == "perception"]
-    assert len(perception_skills) == 6
-    assert {"firearms", "misc"} <= {s.id for s in perception_skills}
+def test_agility_carries_every_weapon_skill():
+    """Every weapon a Slot.WEAPON item can roll is an agility skill -- handling the
+    weapon, not the muscle behind it or the eye down the sight."""
+    agility_skills = {s.id for s in SKILLS if s.stat == "agility"}
+    assert {"short_blade", "long_blade", "blunt", "firearms", "misc"} <= agility_skills
+
+
+def test_perception_carries_four_skills():
+    """Read Face/Read the Room folded into Intuition, and the weapon skills that used
+    to sit here moved to agility."""
+    assert len([s for s in SKILLS if s.stat == "perception"]) == 4
 
 
 def test_skill_for_known_id_returns_skill():
     skill = skill_for("hack")
     assert skill.id == "hack"
-    assert skill.stat == "intelligence"
+    assert skill.stat == "logic"
 
 
 def test_skill_for_unknown_id_raises_value_error():
@@ -42,9 +46,9 @@ def test_skill_for_unknown_id_raises_value_error():
 
 
 def test_skill_value_combines_stat_rank_and_gear():
-    c = Character(name="t", intelligence=3)
+    c = Character(name="t", logic=3)
     # skill_rank defaults to STARTING_SKILL_RANK (1), no gear equipped.
-    assert skill_value(c, "hack") == c.stat("intelligence") + c.skill_rank("hack")
+    assert skill_value(c, "hack") == c.stat("logic") + c.skill_rank("hack")
 
 
 def test_skill_value_rises_with_invested_rank():

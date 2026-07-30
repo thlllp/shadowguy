@@ -143,7 +143,7 @@ class CharacterSheet(Static):
             f"Cash: {c.cash}eb   Rep: {c.rep}   Experience: {c.experience}xp   "
             f"Humanity: {c.humanity}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
-            f"Perception: {c.stat('perception')}  Intelligence: {c.stat('intelligence')}  "
+            f"Perception: {c.stat('perception')}  Logic: {c.stat('logic')}  "
             f"Cool: {c.stat('cool')}"
         )
 

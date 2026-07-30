@@ -1459,7 +1459,7 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
             await pilot.pause()
 
             app.rng = AlwaysSix()
-            app.character.intelligence = 20
+            app.character.logic = 20
             hours_before = app.character.elapsed_hours
 
             junkyard_location = Location(id="test_junkyard", name="Test Yard", kind=LocationKind.JUNKYARD)

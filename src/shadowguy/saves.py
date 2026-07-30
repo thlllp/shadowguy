@@ -178,7 +178,11 @@ SAVE_SUFFIX = ".save"
 # this module's own docstring). Every pre-v50 save holds `shadowguy.tactical.Grid`
 # instances -- reachable from a pickled scene.TacticalStage and from every
 # buildings.Level inside a Burglary target -- which no longer resolves.
-SAVE_VERSION = 50
+# v51 renamed the core stat `intelligence` to `logic`: Character's field, the
+# CORE_STATS entry, every skills._SKILL_ROWS key, and every bonuses/temp_bonuses key
+# that named it. A pre-v51 pickled Character carries `intelligence` and no `logic`, so
+# every stat() read of it would raise.
+SAVE_VERSION = 51
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
