@@ -109,8 +109,11 @@ src/shadowguy/
   skills.py      the 30-skill table, skill_value(), skill_for()
   scene.py       Scene/Stage/Choice/Outcome + the four fight/stage wrappers; apply_outcome()
 
-  combat.py      fight surface 1: abstract rounds, enemy roster, shared resolve_hit
-  tactical.py    fight surface 2: grid (tcod FOV+A*); also generate_building for Burglary walks
+  combat.py      what a fight is made of, shared by all three surfaces: enemy roster,
+                 resolve_hit, player defense/soak, weapon+consumable queries, the Drop
+  abstract_combat.py  fight surface 1: abstract rounds, no positions
+  grid.py        space itself: Grid/Tile, tcod FOV+A*, distance -- no game state
+  tactical.py    fight surface 2: the grid fight, plus the BSP generate_map
   matrix.py      fight surface 3: ICE, node networks, integrity pool, cyberdeck programs
 
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
@@ -121,7 +124,9 @@ src/shadowguy/
   factions.py    corp Factions + the HQ officer ladder
   gangs.py       street Gangs + GANG_RANKS
   relations.py   seeded Faction<->Gang standing
-  corpmap.py     the territory map, its Locations/LocalCharacters, and the ASCII renderer
+  corpmap.py     the territory map model, its Locations/LocalCharacters, the modifier
+                 levers, and the ASCII renderer -- what every other system reads
+  corpmap_gen.py generate_corp_map: laying one new map out, run once per run
   buildings.py   burglary targets: rooms, levels and the links between them. Job-scoped
                  and never a corpmap.Location — see Burglary in DESIGN.md
 
@@ -147,7 +152,7 @@ src/shadowguy/
     creation_screen.py   CharacterCreationScreen
     menu_screens.py      TitleMenu (entry point) + ModeSelect + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
-    combat_screen.py     CombatScreen
+    combat_screen.py     CombatScreen (the abstract_combat surface)
     tactical_screen.py   TacticalScreen + GrenadePickScreen
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
@@ -169,9 +174,11 @@ The four **parallel resolution** modules are a deliberate category: day-advance 
 Leaf modules, and why each has to stay one:
 
 - **`skills.py`** — imports nothing from the package; `character.py → shops.py → corpmap.py` all import it. The "every `Skill.stat` is a real core stat" guard therefore lives in `character.py`, the one module seeing both tables. A runtime `character` import here is a cycle.
-- **`combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
-- **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`.
-- **`buildings.py`** — imports `tactical` for grid primitives and nothing else from the package; `scene`/`jobs` import *it*. `tactical.py` reaches back for `Building` under `TYPE_CHECKING` only, so the runtime arrow still points one way.
+- **`combat.py`** — the shared fight foundation, no `scene`. All three fight surfaces (`abstract_combat.py` / `tactical.py` / `matrix.py`) import *it* and never each other; `soak_damage` is public (not `_soak_damage`) because `abstract_combat`'s flee resolves a parting shot through it. `Enemy` stays here rather than moving to `abstract_combat.py` — a pickled `scene.Encounter` holds one, so the move would cost a save version for nothing.
+- **`abstract_combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
+- **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
+- **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`. `corpmap_gen.py` imports it and it never imports back; the modifier cluster (`make_modifiers` and friends) stays here rather than moving to the generator because `claim_territory` reseeds a district at runtime through it.
+- **`buildings.py`** — imports `grid` for the geometry and nothing else from the package; `scene`/`jobs`/`tactical` import *it*. `tactical.py` imports `Building`/`Lock` at runtime, no `TYPE_CHECKING` dance: extracting `grid.py` is what removed the cycle that used to need one.
 - **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle.
 - **`relations.py`** — imports only `factions.py`/`gangs.py`.
 - **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
@@ -218,12 +225,13 @@ Leaf modules, and why each has to stay one:
 | 47 | the `OFFICE` `BuildingKind` — no shape change, but pre-v47 burglary targets are all residential and were placed by the old ground-floor rule |
 | 48 | `buildings.Level.doors`, `buildings.Building.locks`/`cameras` (locked doors and camera hazards) |
 | 49 | `Character.CrewHire.on_site`, `Scene.max_on_site`/`max_support` (per-archetype job roster caps) |
+| 50 | no new state — `Grid`/`Tile` moved from `tactical.py` to a new `grid.py`, and pickle resolves a class by module path (a `Grid` hangs off `scene.TacticalStage` and every `buildings.Level`) |
 
 ### Verifying changes
 
-A real test suite exists (`tests/`, 22 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
+A real test suite exists (`tests/`, 25 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
-- **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
+- **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap_gen.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
 - Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky.

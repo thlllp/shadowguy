@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import generate_corp_map
+from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS
 
 

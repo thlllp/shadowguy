@@ -23,7 +23,7 @@ from shadowguy.buildings import (
     _connected,
     generate_building,
 )
-from shadowguy.tactical import Tile, step_neighbors
+from shadowguy.grid import Tile, step_neighbors
 
 SEEDS = range(80)
 # The invariants below hold for any sort of building, so every kind gets swept through

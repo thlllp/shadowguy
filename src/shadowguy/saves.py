@@ -137,7 +137,7 @@ SAVE_SUFFIX = ".save"
 # corp_turn.FactionEvent, the blog itself) -- a pre-v40 save lacks both keys.
 # v41 made stun a persistent Character stat instead of a per-fight counter:
 # Character gained `stun` (a pre-v41 pickled Character lacks it), and
-# combat.CombatState lost its own `player_stun` field entirely -- _stun_player
+# abstract_combat.CombatState lost its own `player_stun` field entirely -- _stun_player
 # now reads/writes Character.stun directly, so it carries across fights and is
 # only cleared by Character.mark_rested (a full clear, unlike fatigue's halving).
 # v42 gated recruiting a RivalRunner on having met them: Character gained
@@ -173,7 +173,12 @@ SAVE_SUFFIX = ".save"
 # scene.Scene gained `max_on_site`/`max_support` (set from jobs.JobArchetype at
 # generation). A pre-v49 pickled CrewHire or Scene (inside accepted_jobs or Character.crew)
 # lacks all three fields.
-SAVE_VERSION = 49
+# v50 is the one bump with no new state at all: the grid primitives moved out of
+# tactical.py into a new grid.py, and pickle resolves a class by its module path (see
+# this module's own docstring). Every pre-v50 save holds `shadowguy.tactical.Grid`
+# instances -- reachable from a pickled scene.TacticalStage and from every
+# buildings.Level inside a Burglary target -- which no longer resolves.
+SAVE_VERSION = 50
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

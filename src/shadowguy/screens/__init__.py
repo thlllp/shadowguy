@@ -5,16 +5,16 @@ from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
+from shadowguy.grid import Grid, Tile
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
 from shadowguy.skills import skill_value
-from shadowguy.tactical import Grid, Tile
 
 # Terrain glyph/style, shared by TacticalScreen and BurglaryWalkScreen so the two grid
-# renderers (same tactical.Grid/Tile underneath) look like one visual language. Wall and
+# renderers (same grid.Grid/Tile underneath) look like one visual language. Wall and
 # low cover previously rendered as flat "#"/"%" in the same grey -- indistinguishable at
 # a glance. Solid vs. shaded blocks plus a distinct color for cover reads as "hide here",
-# without changing any tactical.py data.
+# without changing any grid.py data.
 
 # Bitmask of which cardinal neighbors are also wall -- N/S/E/W as bits 1/2/4/8 -- mapped
 # to the box-drawing glyph that connects in those directions, so a wall reads as an actual

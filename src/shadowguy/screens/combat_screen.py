@@ -4,7 +4,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.combat import Action, Drop, available_actions, start_combat, take_turn
+from shadowguy.abstract_combat import Action, available_actions, start_combat, take_turn
+from shadowguy.combat import Drop
 from shadowguy.scene import Encounter
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items

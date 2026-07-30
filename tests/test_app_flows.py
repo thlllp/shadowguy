@@ -17,7 +17,8 @@ import pytest
 from shadowguy.app import ShadowguyApp
 from shadowguy.buildings import BuildingKind, Lock
 from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
-from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS, ActionKind
+from shadowguy.abstract_combat import ActionKind
+from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
     Location,
     LocationKind,
@@ -55,17 +56,14 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen
 
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.tactical_screen import TacticalScreen
+from shadowguy.grid import Tile, parse_grid, step_neighbors, visible_tiles
 from shadowguy.tactical import (
     AimKind,
     CrewFate,
     Side,
     TacticalOutcome,
-    Tile,
     Unit,
     enter_level,
-    parse_grid,
-    step_neighbors,
-    visible_tiles,
 )
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
@@ -1407,7 +1405,7 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
 
 def _find_gang_den(app):
     """The first real gang den on this run's generated map, and the territory it's
-    seated in -- corpmap._make_gang_den only builds one per gang (den_ids), so a
+    seated in -- corpmap_gen._make_gang_den only builds one per gang (den_ids), so a
     hand-set Territory.gang_id (see _stage_gang_turf) wouldn't have a Location to
     click on."""
     return next(

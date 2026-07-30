@@ -40,7 +40,7 @@ GANGS = [
 
 GANGS_BY_ID = {gang.id: gang for gang in GANGS}
 
-# The two ranks manning a gang's den (see corpmap._make_gang_den), low to high. No
+# The two ranks manning a gang's den (see corpmap_gen._make_gang_den), low to high. No
 # rep/standing gate yet, unlike the corp equivalent (factions.CORP_OFFICER_TIERS) —
 # just who's there.
 GANG_RANKS = ("soldier", "lieutenant")

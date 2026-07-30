@@ -68,7 +68,7 @@ CORP_OFFICER_TIERS = (
     (EXECUTIVE_ROLE, 12, 8),
 )
 
-# Keyed by role rather than position: an HQ's officers (corpmap._make_officers) and this
+# Keyed by role rather than position: an HQ's officers (corpmap_gen._make_officers) and this
 # table line up by role, not list order, so a reorder of Location.characters can't
 # silently hand one officer another's gate.
 _CORP_OFFICER_TIERS_BY_ROLE = {role: (min_rep, min_standing) for role, min_rep, min_standing in CORP_OFFICER_TIERS}

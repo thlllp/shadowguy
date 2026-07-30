@@ -1,5 +1,7 @@
-"""Tests for tactical.py: grid primitives, LOS/range gating, attack resolution,
-enemy-phase movement/combat, and generated-map invariants."""
+"""Tests for tactical.py: LOS/range gating, attack resolution, enemy-phase
+movement/combat, and generated-map invariants.
+
+The grid geometry underneath is grid.py — see test_grid.py."""
 
 import random
 
@@ -9,6 +11,14 @@ from shadowguy.buildings import BuildingKind, Lock, generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
 from shadowguy.combat import ENEMIES_BY_ID, attack_verbs, player_defense
+from shadowguy.grid import (
+    Tile,
+    chebyshev,
+    has_line_of_sight,
+    parse_grid,
+    path_between,
+    visible_tiles,
+)
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 from shadowguy.tactical import (
     ARREST_DAYS,
@@ -26,7 +36,6 @@ from shadowguy.tactical import (
     CrewFate,
     Side,
     TacticalOutcome,
-    Tile,
     Unit,
     aim_is_legal,
     attack_targets,
@@ -37,7 +46,6 @@ from shadowguy.tactical import (
     begin_look,
     best_shot,
     cancel_aim,
-    chebyshev,
     confirm_aim,
     confirm_attack_aim,
     confirm_grenade_aim,
@@ -50,7 +58,6 @@ from shadowguy.tactical import (
     enemy_at,
     enemy_target,
     generate_map,
-    has_line_of_sight,
     leave,
     legal_attack_target,
     legal_grenade_target,
@@ -58,8 +65,6 @@ from shadowguy.tactical import (
     lock_at,
     move_aim_cursor,
     move_player,
-    parse_grid,
-    path_between,
     player_attack,
     player_weapons,
     resolve_downed_crew,
@@ -70,10 +75,8 @@ from shadowguy.tactical import (
     stabilize_targets,
     start_tactical,
     take_stairs,
-    step_neighbors,
     targets_for,
     throw_grenade,
-    visible_tiles,
     weapon_for_target,
     weapon_range,
 )
@@ -83,79 +86,12 @@ from helpers import AlwaysOne, AlwaysSix, ForcedChance, crew_stats_for
 SEEDS = range(80)
 
 
-def test_parse_grid_reads_wall_and_low_cover_glyphs():
-    grid = parse_grid(["#%.", "..."])
-    assert grid.tile((0, 0)) is Tile.WALL
-    assert grid.tile((1, 0)) is Tile.LOW_COVER
-    assert grid.tile((2, 0)) is Tile.FLOOR
-
-
-def test_is_walkable_only_floor():
-    grid = parse_grid(["#%."])
-    assert not grid.is_walkable((0, 0))
-    assert not grid.is_walkable((1, 0))
-    assert grid.is_walkable((2, 0))
-
-
-def test_has_line_of_sight_blocked_by_wall():
-    grid = parse_grid(["...", "###", "..."])
-    assert not has_line_of_sight(grid, (0, 0), (0, 2))
-
-
-def test_has_line_of_sight_open_floor():
-    grid = parse_grid(["....."])
-    assert has_line_of_sight(grid, (0, 0), (4, 0))
-
-
-def test_low_cover_blocks_movement_but_not_sight():
-    grid = parse_grid(["...", ".%.", "..."])
-    assert not grid.is_walkable((1, 1))
-    assert has_line_of_sight(grid, (0, 1), (2, 1))
-
-
 def test_weapon_range_firearms_outranges_melee():
     firearm = next(i for i in ITEMS_BY_ID.values() if i.skill == "firearms")
     melee = next(i for i in ITEMS_BY_ID.values() if i.skill and i.skill != "firearms" and i.damage)
     assert weapon_range(firearm) == FIREARM_RANGE
     assert weapon_range(melee) == MELEE_RANGE
     assert FIREARM_RANGE > MELEE_RANGE
-
-
-def test_chebyshev_is_king_move_distance():
-    assert chebyshev((0, 0), (3, 4)) == 4
-    assert chebyshev((0, 0), (0, 0)) == 0
-
-
-def test_path_between_returns_empty_when_unreachable():
-    grid = parse_grid(["...", "###", "..."])
-    assert path_between(grid, (0, 0), (0, 2)) == []
-
-
-def test_path_between_finds_a_route_around_an_obstacle():
-    grid = parse_grid(["...", "##.", "..."])
-    path = path_between(grid, (0, 0), (0, 2))
-    assert path
-    assert path[-1] == (0, 2)
-
-
-def test_visible_tiles_agrees_with_has_line_of_sight_per_cell():
-    grid = parse_grid(["...", "###", "..."])
-    vis = visible_tiles(grid, (0, 0))
-    assert bool(vis[0][0]) == has_line_of_sight(grid, (0, 0), (0, 0))
-    assert bool(vis[0][2]) == has_line_of_sight(grid, (0, 0), (2, 0))  # open, same row
-    assert bool(vis[2][0]) == has_line_of_sight(grid, (0, 0), (0, 2))  # blocked by wall row
-
-
-def test_step_neighbors_excludes_walls_and_out_of_bounds():
-    grid = parse_grid(["###", "#.#", "###"])
-    assert step_neighbors(grid, (1, 1)) == []  # boxed in on every side
-
-
-def test_step_neighbors_excludes_blocked_cells():
-    grid = parse_grid(["..."])
-    neighbors = step_neighbors(grid, (1, 0), blocked=frozenset({(0, 0)}))
-    assert (0, 0) not in neighbors
-    assert (2, 0) in neighbors
 
 
 # --- cover_bonus ---
