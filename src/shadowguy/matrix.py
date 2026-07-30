@@ -86,7 +86,7 @@ ANALYZE_DIFFICULTY = 12
 ANALYZE_BONUS = 4
 
 # A landed clean breach (the ambush drop) buys a free round, same lever and same reason
-# as combat.FREE_ROUND: ICE *count* is the lethality knob, since every standing program
+# as abstract_combat.FREE_ROUND: ICE *count* is the lethality knob, since every standing program
 # claws at your integrity every round.
 FREE_ROUND = 1
 
@@ -408,11 +408,11 @@ def available_matrix_actions(
     character: Character, program_uses: dict[str, int] | None = None
 ) -> list[MatrixAction]:
     """Everything the runner can do with a round in the matrix. The four base actions are
-    fixed, unlike combat's weapon-derived list — your intrusion is your deck-plus-Hack,
-    not a rack of weapons to pick between. Always includes JACK_OUT — a matrix fight is
-    never a cage, same law as combat's flee (combat.FLEE_DIFFICULTY).
+    fixed, unlike the abstract fight's weapon-derived list — your intrusion is your
+    deck-plus-Hack, not a rack of weapons to pick between. Always includes JACK_OUT — a
+    matrix fight is never a cage, same law as its flee (abstract_combat.FLEE_DIFFICULTY).
 
-    `program_uses` mirrors combat.available_actions' `cooldowns` param exactly: an
+    `program_uses` mirrors abstract_combat.available_actions' `cooldowns` param exactly: an
     installed action-program with a positive uses_per_fight only appears while it still
     has a charge left this fight. None (the default) means nothing's been spent yet, so
     every installed action-program is offered — this is what keeps every existing call

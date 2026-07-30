@@ -19,7 +19,8 @@ from shadowguy.corp_turn import (
     collect_research,
     employee_plural,
 )
-from shadowguy.corpmap import generate_corp_map, lodging_cost
+from shadowguy.corpmap import lodging_cost
+from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
 from shadowguy.gangs import GANGS_BY_ID

@@ -7,13 +7,13 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
+from shadowguy.grid import Tile, visible_tiles
 from shadowguy.tactical import (
     GRENADE_RADIUS,
     AimKind,
     CrewFate,
     Side,
     TacticalOutcome,
-    Tile,
     aim_is_legal,
     available_grenades,
     begin_attack_aim,
@@ -35,7 +35,6 @@ from shadowguy.tactical import (
     start_tactical,
     take_stairs,
     throw_grenade,
-    visible_tiles,
     weapon_for_target,
 )
 

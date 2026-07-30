@@ -19,7 +19,7 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
   - expand_into a bordering neutral territory, the same area-control move
     rivals.py's AI factions make (reusing corpmap.expansion_candidates/
     claim_territory).
-  - train_employees at the corp's one guaranteed ACADEMY (corpmap._make_academy),
+  - train_employees at the corp's one guaranteed ACADEMY (corpmap_gen._make_academy),
     spending cash to queue a batch of CorpState.scientists/operatives/
     research_assistants (EmployeeCategory picks which — three separate pools,
     not one, since they're meant to eventually do different things for the
@@ -27,7 +27,7 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
     (one batch at a time, held in pending_recruit) and advance_training drops
     the hires into the pool on the day tick.
 
-Each faction's one guaranteed RESEARCH_FACILITY (corpmap._make_research_facility)
+Each faction's one guaranteed RESEARCH_FACILITY (corpmap_gen._make_research_facility)
 generates research_points every day too, at 1 RP per tier — collect_research is
 the read side of that, and research_technology is what finally spends it.
 
@@ -533,7 +533,7 @@ def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Locatio
     """The corp's research facility, or None if it holds none.
 
     Singular on purpose: a faction is seeded with exactly one
-    (corpmap._make_research_facility), and expand_into only claims *neutral*
+    (corpmap_gen._make_research_facility), and expand_into only claims *neutral*
     ground, which never carries one — so a corp can't come to hold a second.
     collect_research and both upgrade actions all read this same one place.
     """

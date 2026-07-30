@@ -1,28 +1,33 @@
-"""Grid primitives for tactical-combat job stages — the leaf that owns *space*.
+"""Fight surface 2: combat played out on a grid.
 
-A tactical stage is combat played out on a grid: position, line of sight and cover
-decide which of combat.py's existing attacks are legal and how hard they land, but the
-dice underneath are still checks.resolve_check (see CLAUDE.md's Combat section). This
-module is that spatial layer and nothing else. It imports tcod for field-of-view and
-pathfinding, but — like combat.py — it imports no scene: it owns *how position works*,
-not what a job is worth. scene.py holds the Outcome-bearing wrapper (TacticalStage),
-importing this the same way it imports combat for Enemy.
+Position, line of sight and cover decide which of combat.py's existing attacks are
+legal and how hard they land, but the dice underneath are still checks.resolve_check
+(see CLAUDE.md's Combat section). Cover is nothing more fancy than a raised to-hit
+difficulty, and every attack — either side's — is combat.resolve_hit, so the grid can
+never quietly become a second set of combat rules.
 
-Coordinates are (x, y) everywhere in this module's public surface. tcod and numpy index
-[row, col] = [y, x]; that flip is confined to _yx() and the array builders below, so
-callers never deal in it.
+Space itself is grid.py, one layer down: `Grid`/`Tile` and the field-of-view,
+pathfinding and distance functions over them. buildings.py sits between the two — it
+needs that geometry to carve a burglary target, and this module needs a whole
+`Building` to walk one — so the arrow runs grid -> buildings -> tactical, one way.
+
+Like combat.py it imports no scene: it owns space, turn order and movement, not what
+winning is worth. scene.py holds the Outcome-bearing wrappers (TacticalStage,
+BurglaryStage), importing this the same way it imports combat for Enemy.
+
+The tail of the module is the BSP map generator (generate_map), which emits a Grid for
+an ordinary tactical stage; a burglary walks a buildings.Building instead.
 """
 
 import random
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 import numpy as np
-import tcod
 import tcod.bsp
 import tcod.random
 
+from shadowguy.buildings import Building, Lock
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
@@ -36,187 +41,19 @@ from shadowguy.combat import (
     resolve_hit,
     smartlink_bonus,
 )
+from shadowguy.grid import (
+    Coord,
+    Grid,
+    Tile,
+    chebyshev,
+    has_line_of_sight,
+    path_between,
+    step_neighbors,
+    visible_tiles,
+)
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
 
-if TYPE_CHECKING:
-    # buildings.py imports *this* module for its grid primitives, so the arrow only
-    # points one way at runtime: a burglary hands its Building in, and everything this
-    # module does with one (walk a level's grid, follow a link) is duck-typed. Same
-    # trick, same reason, as rivals.py's Fixer import.
-    from shadowguy.buildings import Building, Lock
-
-Coord = tuple[int, int]  # (x, y)
-
-# Cardinal moves only, for now: a clean grid to reason about and render, and it keeps
-# "distance" and "adjacent to cover" unambiguous. Diagonal movement is a lever (tcod's
-# A* takes a diagonal cost) to revisit once the base game feels right, not day one.
-_STEPS: tuple[Coord, ...] = ((0, -1), (0, 1), (-1, 0), (1, 0))
-
-
-class Tile(StrEnum):
-    """What occupies a cell. Walkability and transparency are derived from the kind
-    (see _WALKABLE/_TRANSPARENT), never stored per-cell — one table, no drift."""
-
-    FLOOR = "floor"  # open ground: you can stand and see through it
-    WALL = "wall"  # blocks movement and line of sight — full cover to hide behind
-    LOW_COVER = "low_cover"  # a crate/railing: blocks movement, but you see and shoot *over* it
-
-
-# Standing *on* a tile. Only floor is stand-able; walls and low cover are objects you
-# move around, not into. (Low cover's whole point is that a unit hugging it — adjacent,
-# not on it — gets a defense bonus; that's a tactical.py increment-1 concern, computed
-# from adjacency, not a property of the tile you occupy.)
-_WALKABLE = frozenset({Tile.FLOOR})
-# Seeing/shooting *through* a tile. Low cover is transparent (you shoot over the crate);
-# only a full wall is opaque. This is the array tcod's FOV and our LOS check read.
-_TRANSPARENT = frozenset({Tile.FLOOR, Tile.LOW_COVER})
-
-
-@dataclass
-class Grid:
-    """A rectangular tile map. The numpy/tcod arrays it feeds are built once and cached:
-    only the *units* move, so the terrain is fixed for the fight and there's nothing to
-    invalidate. That matters because has_line_of_sight runs an unlimited-radius FOV per
-    call and is hit hard — once per movement step per enemy in _enemy_phase, per guard
-    per keypress while sneaking — and rebuilding the array from `tiles` was ~70% of
-    each call. Generation mutates `tiles` in place while carving (see generate_map), so
-    the cache is keyed on the tile data's identity-and-contents via _invalidate below;
-    callers that edit tiles after construction must go through it."""
-
-    width: int
-    height: int
-    tiles: list[list[Tile]]  # tiles[y][x]
-    _arrays: dict[frozenset[Tile], np.ndarray] = field(default_factory=dict, repr=False, compare=False)
-
-    def _invalidate(self) -> None:
-        """Drop the cached arrays after an in-place edit to `tiles`."""
-        self._arrays.clear()
-
-    def in_bounds(self, coord: Coord) -> bool:
-        x, y = coord
-        return 0 <= x < self.width and 0 <= y < self.height
-
-    def tile(self, coord: Coord) -> Tile:
-        x, y = coord
-        return self.tiles[y][x]
-
-    def is_walkable(self, coord: Coord) -> bool:
-        """Whether a unit may stand here — bounds and terrain only. Other units blocking
-        a cell is a per-turn fact the caller supplies (see path_between/step_neighbors),
-        not a property of the map."""
-        return self.in_bounds(coord) and self.tile(coord) in _WALKABLE
-
-    def _bool_array(self, kinds: frozenset[Tile]) -> np.ndarray:
-        """A [y, x] boolean grid, True where the tile is in `kinds` — the shape tcod wants.
-        Cached per `kinds` (see the class docstring); the returned array is shared, so
-        treat it as read-only — tcod's FOV/A* only ever read it."""
-        cached = self._arrays.get(kinds)
-        if cached is None:
-            cached = np.array(
-                [[self.tiles[y][x] in kinds for x in range(self.width)] for y in range(self.height)],
-                dtype=bool,
-            )
-            self._arrays[kinds] = cached
-        return cached
-
-    def transparency(self) -> np.ndarray:
-        return self._bool_array(_TRANSPARENT)
-
-    def walkable(self) -> np.ndarray:
-        return self._bool_array(_WALKABLE)
-
-
-def parse_grid(rows: list[str]) -> Grid:
-    """Build a Grid from ASCII art — '#' wall, '%' low cover, anything else floor. The way
-    tactical maps are written in tests and hand-authored fixtures; procedural generation
-    (tcod BSP, keyed off the job's LocationKind) is a later increment that also emits a Grid."""
-    glyphs = {"#": Tile.WALL, "%": Tile.LOW_COVER}
-    width = max(len(row) for row in rows)
-    tiles = [
-        [glyphs.get(row[x] if x < len(row) else " ", Tile.FLOOR) for x in range(width)]
-        for row in rows
-    ]
-    return Grid(width=width, height=len(rows), tiles=tiles)
-
-
-def _yx(coord: Coord) -> tuple[int, int]:
-    x, y = coord
-    return (y, x)
-
-
-def _fov(grid: Grid, origin: Coord) -> np.ndarray:
-    """Unlimited symmetric-shadowcast FOV from `origin` as a [y, x] bool array. Symmetric
-    so 'A sees B' iff 'B sees A' — the property a fair fight needs, since one array decides
-    both who the player sees and who can shoot the player. Unlimited (radius 0) because
-    reach is never read off FOV: a weapon's range is a separate explicit distance check
-    (see has_line_of_sight / weapon_range), which also sidesteps tcod's Euclidean-radius
-    off-by-one at the edge."""
-    return tcod.map.compute_fov(
-        grid.transparency(), _yx(origin), radius=0,
-        algorithm=tcod.constants.FOV_SYMMETRIC_SHADOWCAST,
-    )
-
-
-def has_line_of_sight(grid: Grid, a: Coord, b: Coord) -> bool:
-    """Whether the line from `a` to `b` is unobstructed by walls — can a shot connect,
-    range aside. A pure obstruction test; a weapon's reach is a separate distance gate the
-    caller applies."""
-    if a == b:
-        return True
-    return bool(_fov(grid, a)[_yx(b)])
-
-
-def visible_tiles(grid: Grid, origin: Coord) -> np.ndarray:
-    """Every tile `origin` can currently see, as the same [y, x] bool array
-    has_line_of_sight reads one cell from — exposed for renderers that want the whole
-    picture at once (e.g. dimming what the player can't presently see) instead of one
-    has_line_of_sight call per tile, which would recompute the FOV from scratch each time."""
-    return _fov(grid, origin)
-
-
-def path_between(
-    grid: Grid, start: Coord, goal: Coord, blocked: frozenset[Coord] = frozenset()
-) -> list[Coord]:
-    """A* from `start` to `goal` over walkable floor, treating `blocked` cells (other units)
-    as impassable. Returns the steps *after* start, ending on goal, or [] if unreachable.
-    Cardinal moves only (diagonal cost 0 disables them). `goal` itself is left walkable so a
-    unit can path *up to* an occupied target and stop adjacent — the AI wants to reach the
-    player's tile conceptually, then attack from range, not fail because the player stands on it."""
-    cost = grid.walkable().astype(np.int8)
-    for bx, by in blocked:
-        if grid.in_bounds((bx, by)) and (bx, by) != goal:
-            cost[by, bx] = 0
-    finder = tcod.path.AStar(cost, diagonal=0.0)
-    path = finder.get_path(*_yx(start), *_yx(goal))
-    return [(x, y) for (y, x) in path]
-
-
-def step_neighbors(grid: Grid, coord: Coord, blocked: frozenset[Coord] = frozenset()) -> list[Coord]:
-    """The cells one cardinal step from `coord` a unit may move into: in bounds, walkable,
-    and not occupied. The move-legality counterpart to path_between's routing."""
-    return [
-        n
-        for dx, dy in _STEPS
-        if grid.is_walkable((n := (coord[0] + dx, coord[1] + dy))) and n not in blocked
-    ]
-
-
-def chebyshev(a: Coord, b: Coord) -> int:
-    """King-move distance — the range metric. Movement is cardinal (see _STEPS), but a
-    unit reaches/attacks the whole 8-cell ring around it, so distance is measured that
-    way: a diagonal neighbour is 'adjacent' for a melee swing though it takes two steps
-    to walk to. LOS/obstruction is separate (has_line_of_sight)."""
-    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
-
-
-# ---------------------------------------------------------------------------
-# The tactical fight. This is combat.py's resolution *given positions*: every
-# attack is combat.resolve_hit (one hit formula, two surfaces — see its docstring),
-# and cover is nothing more than a raised to-hit difficulty. This layer owns space,
-# turn order and movement; it does not own what winning is worth (that's the
-# Outcome on scene.TacticalStage, wired in a later increment).
-# ---------------------------------------------------------------------------
 
 # A weapon's reach, derived from its skill rather than a new Item field: Firearms is
 # the ranged skill (see CLAUDE.md's Combat section), everything else is arm's length.
@@ -248,6 +85,20 @@ HALF_COVER = 2
 # comment) — not yet balance-simulated.
 GRENADE_RANGE = 5
 GRENADE_RADIUS = 1
+
+# A guard's static sightline is capped the same way combat.Enemy.reach caps an
+# attack's: has_line_of_sight is unlimited-range by design (see grid._fov's docstring),
+# so an uncapped guard would spot the walker from clear across an open room the
+# instant a sightline cleared -- far harsher than anything else in the game. A
+# Building.cameras position reuses this same range rather than getting its own --
+# one fewer unbalanced knob, and there's no basis yet to tune it separately.
+GUARD_SIGHT_RANGE = 4
+
+# A failed lock pick (attempt_lock) doesn't raise the alarm outright -- this is the
+# chance an ordinary failure still trips it; a critical failure always does, the same
+# shape as a burglary entrance's own critical failure always going loud. First-slice
+# number, not balance-simulated.
+LOCK_FAILURE_ALARM_CHANCE = 0.3
 
 
 class Side(StrEnum):
@@ -299,7 +150,7 @@ class Unit:
     health: int = 0
     # Enemy-only, set by a thrown Webbing/Flash-family grenade (EffectKind.COMBAT_STUN):
     # this unit sits out its next `stunned_rounds` enemy phases entirely — no move, no
-    # attack — same "a round they owe you" meaning as combat.Fighter.stunned_rounds.
+    # attack — same "a round they owe you" meaning as abstract_combat.Fighter.stunned_rounds.
     stunned_rounds: int = 0
 
     # Ally-only: a downed hire whose bleeding the player stopped with a health kit
@@ -353,7 +204,7 @@ class TacticalState:
     # board right now, and `units` the people standing on it -- everyone else waits in
     # `off_level_units` until the player takes a stair to them. `objective` is where the
     # score is, as (level, cell), and reaching it is how a burglary ends.
-    building: "Building | None" = None
+    building: Building | None = None
     level_index: int = 0
     objective: tuple[int, Coord] | None = None
     off_level_units: dict[int, list[Unit]] = field(default_factory=dict, repr=False)
@@ -502,7 +353,7 @@ def start_tactical(
 
 def start_burglary(
     character: Character,
-    building: "Building",
+    building: Building,
     spawn: tuple[int, Coord],
     guard: Enemy,
     allies: list[Enemy] = (),
@@ -699,14 +550,14 @@ def move_player(state: TacticalState, dest: Coord, rng: random.Random | None = N
     return True
 
 
-def lock_at(state: TacticalState, coord: Coord) -> "Lock | None":
+def lock_at(state: TacticalState, coord: Coord) -> Lock | None:
     """The still-locked door on this cell of the level currently on the board, if any."""
     if state.building is None:
         return None
     return state.building.locks.get((state.level_index, coord))
 
 
-def attempt_lock(state: TacticalState, dest: Coord, lock: "Lock", rng: random.Random | None = None) -> None:
+def attempt_lock(state: TacticalState, dest: Coord, lock: Lock, rng: random.Random | None = None) -> None:
     """Try the lock instead of just walking through it. Costs the move either way:
     success clears it for good and steps the player through; failure leaves it standing
     and risks the alarm -- an ordinary failure only sometimes (LOCK_FAILURE_ALARM_CHANCE),
@@ -949,7 +800,7 @@ def confirm_aim(state: TacticalState, rng: random.Random | None = None) -> bool:
 
 # The two grenade effects a blast radius actually applies to. COMBAT_ESCAPE isn't aimed
 # at anyone (walking out isn't a target), so it's the one grenade throw_grenade resolves
-# with no tile at all — same three-way split as combat._throw, this is just the subset
+# with no tile at all — same three-way split as abstract_combat._throw, this is just the subset
 # that also needs a place to land first.
 _TARGETED_GRENADE_EFFECTS = frozenset({EffectKind.COMBAT_STUN, EffectKind.COMBAT_DAMAGE_ALL})
 
@@ -1028,7 +879,7 @@ def confirm_grenade_aim(state: TacticalState) -> bool:
 def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | None = None) -> None:
     """Resolve the player's one action as a grenade throw instead of an attack: pops
     Character.consumables[consumable_index] and applies it exactly the way combat.py's
-    abstract fight does (see combat._throw), with one difference space adds — COMBAT_STUN
+    abstract fight does (see abstract_combat._throw), with one difference space adds — COMBAT_STUN
     and COMBAT_DAMAGE_ALL land as a blast centered on `target`, hitting every enemy within
     GRENADE_RADIUS of it (a 3x3 square) rather than everyone standing, while COMBAT_ESCAPE
     stays positionless, same as the abstract fight, since walking out isn't aimed at
@@ -1057,7 +908,7 @@ def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | N
         state.log.append(f"{consumable.name} — you slip out under cover.")
         _end_fight(state, TacticalOutcome.ESCAPED)
     else:
-        # Same guard as combat._throw, from the other side: a new combat-only effect
+        # Same guard as abstract_combat._throw, from the other side: a new combat-only effect
         # with no branch here would otherwise be popped and silently do nothing.
         raise ValueError(f"consumable effect not handled in tactical combat: {consumable.effect}")
 
@@ -1463,17 +1314,3 @@ def generate_map(
 # tunnels; nothing here assumes a single entry room the way generate_map's own
 # player_start/exits selection does).
 # ---------------------------------------------------------------------------
-
-# A guard's static sightline is capped the same way combat.Enemy.reach caps an
-# attack's: has_line_of_sight is unlimited-range by design (see _fov's docstring),
-# so an uncapped guard would spot the walker from clear across an open room the
-# instant a sightline cleared -- far harsher than anything else in the game. A
-# Building.cameras position reuses this same range rather than getting its own --
-# one fewer unbalanced knob, and there's no basis yet to tune it separately.
-GUARD_SIGHT_RANGE = 4
-
-# A failed lock pick (attempt_lock) doesn't raise the alarm outright -- this is the
-# chance an ordinary failure still trips it; a critical failure always does, the same
-# shape as a burglary entrance's own critical failure always going loud. First-slice
-# number, not balance-simulated.
-LOCK_FAILURE_ALARM_CHANCE = 0.3

@@ -1292,7 +1292,7 @@ def generate_job(
 
 
 # How each kind of place is scouted, in flavor text. The skill itself lives in
-# corpmap.LOCATION_SKILL — that's also what corpmap._location_kinds reads to
+# corpmap.LOCATION_SKILL — that's also what corpmap_gen._location_kinds reads to
 # keep a district's filler slot off its own specialty's stat, so there is one
 # place that says "DATA is a Hack check" rather than two that must agree.
 LEGWORK_APPROACH_TEXT = {

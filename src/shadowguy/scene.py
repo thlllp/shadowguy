@@ -9,7 +9,7 @@ from shadowguy.factions import standing_shift
 from shadowguy.matrix import MatrixNetwork
 from shadowguy.skills import skill_for, skill_value
 from shadowguy.buildings import Building, BuildingKind
-from shadowguy.tactical import Coord, Grid
+from shadowguy.grid import Coord, Grid
 
 
 class SceneKind(StrEnum):
@@ -233,7 +233,7 @@ class Stage:
     # A stage is a set of choices, a fight, a tactical map, a burglary, a matrix
     # fight, or narration -- exactly one, never a mix (guarded in Scene.__post_init__).
     # A fight's/map's "choices" come from the runner's own gear and skills
-    # (combat.available_actions / matrix.available_matrix_actions / the grid), not the
+    # (abstract_combat.available_actions / matrix.available_matrix_actions / the grid), not the
     # scene; a burglary's choices are its Entrances, picked on a diagram screen rather
     # than a text list.
     combat: Encounter | None = None

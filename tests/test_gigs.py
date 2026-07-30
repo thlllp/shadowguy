@@ -4,7 +4,8 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import GENERATED_KINDS, generate_corp_map
+from shadowguy.corpmap import GENERATED_KINDS
+from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.gigs import (
     GIG_CRIT_MULT,

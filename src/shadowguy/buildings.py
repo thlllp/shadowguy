@@ -22,9 +22,10 @@ Three ideas, in the order they nest:
   links and a compound is several ground-level grids side by side with a couple below,
   and neither needs a special case.
 
-Leaf above tactical.py: imports Grid/Tile and the pathing helper to carve and verify,
-and is imported in turn by scene.py (BurglaryStage holds a Building) and jobs.py. It
-must never import scene -- same rule, same reason, as tactical.py and combat.py.
+Leaf above grid.py: imports Grid/Tile and the pathing helper to carve and verify, and
+is imported in turn by tactical.py (which walks a Building), scene.py (BurglaryStage
+holds one) and jobs.py. It must never import scene -- same rule, same reason, as
+tactical.py and combat.py.
 """
 
 import random
@@ -32,7 +33,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
 
-from shadowguy.tactical import Coord, Grid, Tile, path_between
+from shadowguy.grid import Coord, Grid, Tile, path_between
 
 
 class BuildingKind(StrEnum):

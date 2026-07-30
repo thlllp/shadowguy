@@ -9,7 +9,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
-from shadowguy.combat import CombatOutcome, Drop
+from shadowguy.abstract_combat import CombatOutcome
+from shadowguy.combat import Drop
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     OWNER_COLORS,
