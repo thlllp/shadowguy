@@ -22,16 +22,19 @@ from shadowguy.tactical import (
     TacticalOutcome,
     Tile,
     available_grenades,
+    begin_attack_aim,
     begin_grenade_aim,
     best_shot,
-    cancel_grenade_aim,
+    cancel_aim,
     chebyshev,
+    confirm_attack_aim,
     confirm_grenade_aim,
     cover_bonus,
     end_turn,
     generate_map,
     has_line_of_sight,
     leave,
+    legal_attack_target,
     legal_grenade_target,
     legal_moves,
     move_aim_cursor,
@@ -341,12 +344,12 @@ def test_begin_grenade_aim_is_a_noop_once_already_acted():
     assert state.pending_grenade_index is None
 
 
-def test_cancel_grenade_aim_spends_nothing():
+def test_cancel_aim_spends_nothing():
     state = _simple_state()
     state.character.consumables.append("grenade_frag")
     index, _ = available_grenades(state)[0]
     begin_grenade_aim(state, index)
-    cancel_grenade_aim(state)
+    cancel_aim(state)
     assert state.aim_cursor is None
     assert state.pending_grenade_index is None
     assert not state.acted
@@ -532,6 +535,79 @@ def test_best_shot_picks_the_nearest_enemy_in_range():
     )
     _weapon, target = best_shot(state)
     assert target.coord == near
+
+
+# --- attack reticle aiming (begin_attack_aim / legal_attack_target / confirm|cancel) ---
+
+
+def test_legal_attack_target_is_none_on_an_empty_tile():
+    state = _adjacent_state()
+    assert legal_attack_target(state, (5, 5)) is None
+
+
+def test_legal_attack_target_is_none_out_of_range():
+    grid = parse_grid(["." * 20])
+    state = start_tactical(
+        Character(name="t"), grid, player_start=(0, 0),
+        enemy_placements=[(ENEMIES_BY_ID["thug"], (19, 0))], exits=frozenset(),
+    )
+    assert legal_attack_target(state, (19, 0)) is None  # bare hands, way outside MELEE_RANGE
+
+
+def test_legal_attack_target_returns_the_enemy_in_range_and_los():
+    state = _adjacent_state()
+    assert legal_attack_target(state, (1, 0)) is state.enemies[0]
+
+
+def test_begin_attack_aim_starts_on_best_shots_pick():
+    state = _adjacent_state()
+    begin_attack_aim(state)
+    assert state.aim_cursor == (1, 0)
+    assert state.pending_grenade_index is None
+
+
+def test_begin_attack_aim_falls_back_to_the_player_tile_with_no_shot():
+    grid = parse_grid(["." * 20])
+    state = start_tactical(
+        Character(name="t"), grid, player_start=(0, 0),
+        enemy_placements=[(ENEMIES_BY_ID["thug"], (19, 0))], exits=frozenset(),
+    )
+    begin_attack_aim(state)
+    assert state.aim_cursor == (0, 0)
+
+
+def test_begin_attack_aim_is_a_noop_once_already_acted():
+    state = _adjacent_state()
+    state.acted = True
+    begin_attack_aim(state)
+    assert state.aim_cursor is None
+
+
+def test_confirm_attack_aim_refuses_an_empty_tile():
+    state = _adjacent_state()
+    begin_attack_aim(state)
+    state.aim_cursor = (5, 5)
+    assert not confirm_attack_aim(state, rng=AlwaysSix())
+    assert state.aim_cursor == (5, 5)  # unchanged -- still aiming, nothing spent
+    assert not state.acted
+
+
+def test_confirm_attack_aim_resolves_the_shot():
+    state = _adjacent_state()
+    begin_attack_aim(state)
+    health_before = state.enemies[0].health
+    assert confirm_attack_aim(state, rng=AlwaysSix())
+    assert state.aim_cursor is None
+    assert state.acted
+    assert state.enemies[0].health < health_before
+
+
+def test_cancel_aim_backs_out_of_an_attack_aim_too():
+    state = _adjacent_state()
+    begin_attack_aim(state)
+    cancel_aim(state)
+    assert state.aim_cursor is None
+    assert not state.acted
 
 
 # --- end_turn / _enemy_phase: movement policy and attack resolution ---

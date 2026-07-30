@@ -285,12 +285,16 @@ class TacticalState:
     log: list[str] = field(default_factory=list)
     moves_left: int = 0
     acted: bool = False
-    # Grenade tile-targeting, in progress between begin_grenade_aim and
-    # confirm_grenade_aim/cancel_grenade_aim. Non-None means the screen is in aim mode:
-    # arrow keys move this cursor instead of the player (tactical_screen.action_move).
-    # Neither field costs the turn's action on its own — only a resolved throw
-    # (throw_grenade, called by confirm_grenade_aim) sets `acted`, so backing out of an
-    # aim is free.
+    # Free-look reticle aiming, shared by attacks and grenades: in progress between
+    # begin_attack_aim/begin_grenade_aim and confirm_attack_aim/confirm_grenade_aim or
+    # cancel_aim. Non-None means the screen is in aim mode: arrow keys move this cursor
+    # instead of the player (tactical_screen.action_move), freely over the whole grid
+    # the same way move_aim_cursor always has — legality is only checked at confirm.
+    # pending_grenade_index distinguishes which aim is running: None means it's an
+    # attack aim, otherwise it's the grenade at that Character.consumables index.
+    # Neither field costs the turn's action on its own — only a resolved shot
+    # (confirm_attack_aim) or throw (confirm_grenade_aim) sets `acted`, so backing out
+    # of an aim is free.
     aim_cursor: Coord | None = None
     pending_grenade_index: int | None = None
 
@@ -406,6 +410,54 @@ def targets_for(state: TacticalState, weapon: Item) -> list[Unit]:
     ]
 
 
+def legal_attack_target(state: TacticalState, coord: Coord) -> Unit | None:
+    """The enemy the player could actually fire on right now if the reticle were sitting
+    on `coord`: a living enemy standing there that at least one of the player's weapons
+    can reach (targets_for's range+LOS gate) — the attack-aim counterpart of
+    legal_grenade_target's tile check."""
+    unit = next((u for u in state.enemies if u.coord == coord), None)
+    if unit is None:
+        return None
+    return unit if any(unit in targets_for(state, weapon) for weapon in player_weapons(state)) else None
+
+
+def _best_weapon_against(state: TacticalState, target: Unit) -> Item:
+    """Among the player's weapons that can actually reach `target` right now, the one
+    that does the most damage — same tie-break best_shot uses, just pinned to a single
+    target instead of picking the target too."""
+    reaching = [weapon for weapon in player_weapons(state) if target in targets_for(state, weapon)]
+    return max(reaching, key=lambda weapon: weapon.damage)
+
+
+def begin_attack_aim(state: TacticalState) -> None:
+    """Enter reticle-aiming mode for an attack: arrow keys move state.aim_cursor over
+    the whole grid (tactical_screen.action_move) until confirm_attack_aim fires on
+    whatever legal_attack_target sits under it, or cancel_aim backs out untouched.
+    Starts the cursor on best_shot's pick when there is one — a sensible default to
+    confirm or nudge from — or the player's own tile otherwise. Doesn't touch
+    state.acted; only a resolved shot spends it."""
+    if state.acted or state.is_over:
+        return
+    shot = best_shot(state)
+    state.aim_cursor = shot[1].coord if shot is not None else state.player.coord
+    state.pending_grenade_index = None
+
+
+def confirm_attack_aim(state: TacticalState, rng: random.Random | None = None) -> bool:
+    """Resolve an attack on whatever's under the aim cursor. Returns False and leaves
+    aim mode running if legal_attack_target refuses the tile, so the screen can prompt
+    the player to adjust rather than lose the turn to an empty tile."""
+    if state.aim_cursor is None or state.pending_grenade_index is not None:
+        return False
+    target = legal_attack_target(state, state.aim_cursor)
+    if target is None:
+        return False
+    weapon = _best_weapon_against(state, target)
+    state.aim_cursor = None
+    player_attack(state, target, weapon, rng)
+    return True
+
+
 def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.Random | None = None) -> None:
     """Resolve the player's one action: an attack, through combat.resolve_hit, with the
     target's cover folded into the to-hit difficulty. Spends the action for the turn."""
@@ -461,7 +513,7 @@ def legal_grenade_target(state: TacticalState, coord: Coord) -> bool:
 def begin_grenade_aim(state: TacticalState, consumable_index: int) -> None:
     """Enter tile-targeting mode for Character.consumables[consumable_index]: arrow keys
     move state.aim_cursor instead of the player (tactical_screen.action_move) until
-    confirm_grenade_aim resolves the throw or cancel_grenade_aim backs out. Starts the
+    confirm_grenade_aim resolves the throw or cancel_aim backs out. Starts the
     cursor on the player's own tile — always a legal target (range 0), a safe default
     to nudge from. Doesn't touch Character.consumables or state.acted; only a resolved
     throw spends either."""
@@ -484,8 +536,9 @@ def move_aim_cursor(state: TacticalState, dx: int, dy: int) -> None:
         state.aim_cursor = dest
 
 
-def cancel_grenade_aim(state: TacticalState) -> None:
-    """Back out of tile-targeting with nothing spent — see begin_grenade_aim."""
+def cancel_aim(state: TacticalState) -> None:
+    """Back out of reticle-aiming mode with nothing spent, whichever kind is running —
+    see begin_attack_aim / begin_grenade_aim."""
     state.aim_cursor = None
     state.pending_grenade_index = None
 

@@ -11,17 +11,18 @@ from shadowguy.tactical import (
     TacticalOutcome,
     Tile,
     available_grenades,
+    begin_attack_aim,
     begin_grenade_aim,
-    best_shot,
-    cancel_grenade_aim,
+    cancel_aim,
+    confirm_attack_aim,
     confirm_grenade_aim,
     end_turn,
     grenade_needs_target,
     leave,
+    legal_attack_target,
     legal_grenade_target,
     move_aim_cursor,
     move_player,
-    player_attack,
     start_tactical,
     throw_grenade,
     visible_tiles,
@@ -81,8 +82,8 @@ class TacticalScreen(Screen):
         ("g", "throw_grenade", "Grenade"),
         ("e", "end_turn", "End turn"),
         ("l", "leave", "Leave (on exit)"),
-        ("enter", "continue", "Continue / confirm throw"),
-        ("escape", "cancel_aim", "Cancel throw"),
+        ("enter", "continue", "Continue / confirm aim"),
+        ("escape", "cancel_aim", "Cancel aim"),
         *MENU_QUIT_BINDINGS,
     ]
 
@@ -149,14 +150,10 @@ class TacticalScreen(Screen):
     def action_fire(self) -> None:
         if self.state.is_over or self.state.aim_cursor is not None:
             return
-        shot = best_shot(self.state)
-        if shot is None:
-            self.notify(
-                "You've already acted this turn." if self.state.acted else "No target in sight and range."
-            )
+        if self.state.acted:
+            self.notify("You've already acted this turn.")
             return
-        weapon, target = shot
-        player_attack(self.state, target, weapon, self.app.rng)
+        begin_attack_aim(self.state)
         self._refresh()
 
     def action_throw_grenade(self) -> None:
@@ -204,8 +201,14 @@ class TacticalScreen(Screen):
 
     def action_continue(self) -> None:
         if self.state.aim_cursor is not None:
-            if not confirm_grenade_aim(self.state):
-                self.notify("Out of range or blocked — pick another tile.")
+            if self.state.pending_grenade_index is not None:
+                ok = confirm_grenade_aim(self.state)
+                fail_message = "Out of range or blocked — pick another tile."
+            else:
+                ok = confirm_attack_aim(self.state, self.app.rng)
+                fail_message = "No target there, or it's out of range."
+            if not ok:
+                self.notify(fail_message)
             self._refresh()
             return
         if self.state.is_over:
@@ -213,7 +216,7 @@ class TacticalScreen(Screen):
 
     def action_cancel_aim(self) -> None:
         if self.state.aim_cursor is not None:
-            cancel_grenade_aim(self.state)
+            cancel_aim(self.state)
             self._refresh()
 
     def _map_text(self) -> Text:
@@ -239,22 +242,27 @@ class TacticalScreen(Screen):
             else:
                 glyphs[uy][ux], styles[(uy, ux)] = "x", "grey37"
 
-        # While aiming a grenade: shade the 3x3 blast around the cursor and mark the
-        # cursor itself, in a color that says whether it's a legal_grenade_target right
-        # now (green) or not (red) -- so the player sees the throw's actual reach and
-        # radius before committing, not just where their cursor happens to be sitting.
+        # While aiming (attack or grenade): mark the cursor itself in a color that says
+        # whether it's a legal target right now (green) or not (red), so the player sees
+        # the shot's actual reach before committing, not just where the reticle happens
+        # to be sitting. A grenade additionally shades its 3x3 blast radius -- an attack
+        # reticle has no area to preview.
         cursor: tuple[int, int] | None = None
         cursor_style = ""
         blast: frozenset[tuple[int, int]] = frozenset()
         if state.aim_cursor is not None:
             cx, cy = state.aim_cursor
             cursor = (cy, cx)
-            blast = frozenset(
-                (by, bx)
-                for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
-                for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
-            )
-            cursor_style = "bold green underline" if legal_grenade_target(state, state.aim_cursor) else "bold red underline"
+            if state.pending_grenade_index is not None:
+                blast = frozenset(
+                    (by, bx)
+                    for by in range(max(0, cy - GRENADE_RADIUS), min(grid.height, cy + GRENADE_RADIUS + 1))
+                    for bx in range(max(0, cx - GRENADE_RADIUS), min(grid.width, cx + GRENADE_RADIUS + 1))
+                )
+                legal = legal_grenade_target(state, state.aim_cursor)
+            else:
+                legal = legal_attack_target(state, state.aim_cursor) is not None
+            cursor_style = "bold green underline" if legal else "bold red underline"
 
         text = Text()
         for y in range(grid.height):
@@ -288,15 +296,21 @@ class TacticalScreen(Screen):
         status.display = True
 
         aiming = state.aim_cursor is not None
-        self.query_one("#tac_end", Static).update(
-            "Aiming — arrows move the target, Enter to throw, Esc to cancel." if aiming else ""
-        )
+        grenade_aiming = aiming and state.pending_grenade_index is not None
+        attack_aiming = aiming and not grenade_aiming
+        if grenade_aiming:
+            end_text = "Aiming — arrows move the target, Enter to throw, Esc to cancel."
+        elif attack_aiming:
+            end_text = "Aiming — arrows move the reticle, Enter to fire, Esc to cancel."
+        else:
+            end_text = ""
+        self.query_one("#tac_end", Static).update(end_text)
 
         on_exit = state.player.coord in state.exits
         move_detail = "aiming target" if aiming else f"{state.moves_left}/{state.player.speed} left"
-        attack_detail = "used" if state.acted else ("ready" if best_shot(state) is not None else "no shot")
+        attack_detail = "aiming — enter/esc" if attack_aiming else ("used" if state.acted else "ready")
         grenades = available_grenades(state)
-        if aiming:
+        if grenade_aiming:
             grenade_detail = "aiming — enter/esc"
         else:
             grenade_detail = "used" if state.acted else (f"{len(grenades)} ready" if grenades else "none carried")
