@@ -96,6 +96,7 @@ from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MA
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
+from textual.geometry import Offset
 from textual.widgets import Collapsible, ListView, Static
 
 from helpers import ForcedChance, crew_stats_for
@@ -144,9 +145,9 @@ async def _settle(pilot) -> None:
 
 
 async def _settle_map_boxes(pilot, screen) -> None:
-    """CorpMapScreen builds #map_local_boxes (the per-Location hover/select preview,
-    including any "Enter" row a test wants to click) on a background asyncio task
-    (_do_refresh_map schedules _drain_map_local_boxes -- see corp_map_screen.py's own
+    """CorpMapScreen builds #map_local_boxes (the Locals panel for the runner's own
+    territory, including any "Enter" row a test wants to click) on a background asyncio
+    task (_schedule_map_local_boxes starts _drain_map_local_boxes -- see the module's own
     comment on why: cancel()+immediate create_task() could race a still-mutating old
     task against a new one's remove_children/mount_all and crash). That task's own
     mount/layout work isn't bounded by a fixed number of pilot.pause()s the way a
@@ -1943,10 +1944,27 @@ def test_map_hover_boxes_visible_in_map_mode_and_hidden_otherwise():
     run(body())
 
 
-def test_map_hover_box_cannot_be_opened_away_from_current_territory():
-    """A map-hover box (#map_local_boxes) previews what's at a territory the runner
-    is only looking at, not standing in -- opening one for anywhere else is vetoed
-    (CorpMapScreen.on_collapsible_expanded re-collapses it and notifies)."""
+def _hover_territory(screen, territory_id: str) -> None:
+    """Drive CorpMapScreen.on_mouse_move onto a territory's map label.
+
+    Goes through the real handler (and its own hit-test) rather than a coordinate
+    pilot.hover(): the map is a ~240-column ASCII blob inside a horizontally scrolled
+    container, so deriving true screen coordinates for one label would be fragile in a
+    way that reading its NodeSpan is not. on_mouse_move only ever asks the event for a
+    content offset into #map, which is all this stands in for."""
+    span = next(s for s in screen.rendered.spans if s.territory_id == territory_id)
+
+    class _MouseMove:
+        def get_content_offset(self, widget):
+            return Offset(span.start, span.line)
+
+    screen.on_mouse_move(_MouseMove())
+
+
+def test_hovering_a_territory_leaves_the_locals_panel_on_the_current_location():
+    """The Locals panel below the map shows where the runner is *standing*. Mousing over
+    another territory retargets the summary bar between the two and nothing else -- the
+    panel used to follow the cursor and preview whatever was under it."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1956,65 +1974,91 @@ def test_map_hover_box_cannot_be_opened_away_from_current_territory():
             screen = app.screen
 
             here = app.corp_map.territories[app.character.location_id]
-            neighbor_id = here.connections[0]
-            screen.hovered_id = neighbor_id
-            screen._refresh()
+            neighbor = app.corp_map.territories[here.connections[0]]
+            expected = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers", "Rest"}
+            assert {box.title for box in screen.query("#map_local_boxes Collapsible")} == expected
+
+            _hover_territory(screen, neighbor.id)
             await _settle_map_boxes(pilot, screen)
 
-            boxes = list(screen.query("#map_local_boxes Collapsible"))
-            assert boxes, "hovering a bordering territory should still build boxes"
-            boxes[0].collapsed = False
-            await pilot.pause()
-            assert boxes[0].collapsed is True, "opening a box for a territory the runner isn't in should be vetoed"
-
-            # Hovering (or standing on) the runner's own current territory -- opening
-            # is allowed.
-            screen.hovered_id = here.id
-            screen._refresh()
-            await _settle_map_boxes(pilot, screen)
-            own_boxes = list(screen.query("#map_local_boxes Collapsible"))
-            assert own_boxes
-            own_boxes[0].collapsed = False
-            await pilot.pause()
-            assert own_boxes[0].collapsed is False
+            # The panel is untouched...
+            assert {box.title for box in screen.query("#map_local_boxes Collapsible")} == expected, (
+                "hovering another territory must not repoint the Locals panel"
+            )
+            # ...while the bar between map and panel is exactly what may follow the mouse.
+            summary = screen.query_one("#territory_summary", Static)
+            assert neighbor.name in str(summary.content)
 
     run(body())
 
 
-def test_map_hover_boxes_do_not_strand_on_a_stale_territory():
-    """_do_refresh_map used to skip queuing a box rebuild outright whenever one was
-    already running (the segfault fix from PR #127), which could leave
-    #map_local_boxes showing a stale territory forever if the mouse stopped moving
-    before that in-flight rebuild finished. It now records the latest hovered
-    territory (_map_locals_pending_id) and the same background task picks it up
-    once free, instead of dropping the refresh."""
-
+def test_hovering_does_not_collapse_an_open_locals_box():
+    """The other half of "the panel doesn't change on hover", and the reason the hover
+    path must not rebuild it at all: a rebuild replaces those widgets outright, so
+    refreshing on mouse-move would snap shut whichever box the player had open."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
             app.push_screen(CorpMapScreen())
-            await pilot.pause()
+            await _settle_map_boxes(pilot, app.screen)
             screen = app.screen
 
             here = app.corp_map.territories[app.character.location_id]
-            neighbor_id = here.connections[0]
+            box = screen.query_one(f"#map_local_box_{here.locations[0].id}", Collapsible)
+            box.collapsed = False
+            await _settle(pilot)
+            assert box.collapsed is False
 
-            # Hover the neighbor, then immediately hover back home -- both calls land
-            # before the event loop gets a chance to run the first rebuild task, the
-            # same way two rapid mouse-move events would.
-            screen.hovered_id = neighbor_id
-            screen._refresh()
-            screen.hovered_id = here.id
-            screen._refresh()
+            _hover_territory(screen, here.connections[0])
             await _settle_map_boxes(pilot, screen)
 
-            box_titles = {box.title for box in screen.query("#map_local_boxes Collapsible")}
-            expected_titles = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers", "Rest"}
-            assert box_titles == expected_titles, (
-                f"boxes should reflect the last-hovered territory ({here.name}), not "
-                "a stale one a still-running rebuild left behind"
-            )
+            assert box.collapsed is False, "a mouse-move must not close an open box"
+            assert box.parent is not None, "the box should be the same widget, not a rebuild"
+
+    run(body())
+
+
+def test_a_locals_box_is_openable_and_enterable_while_hovering_elsewhere():
+    """Every box in the panel is somewhere the runner can act, so opening one needs no
+    travel gate any more (on_collapsible_expanded used to veto it and say "Travel to X
+    first"). The "Enter" row also has to resolve against the runner's own territory
+    rather than the cursor's -- looking the id up in a hovered territory finds nothing."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            shop_location = shop_territory_id = None
+            for territory in app.corp_map.territories.values():
+                for location in territory.locations:
+                    if location.kind == LocationKind.WEAPON_SHOP:
+                        shop_location, shop_territory_id = location, territory.id
+                        break
+                if shop_location:
+                    break
+            assert shop_location is not None
+            app.character.location_id = shop_territory_id
+            # Same reason as the buy-flow test: a live gig would add a row ahead of "Enter".
+            app.location_gigs.pop(shop_location.id, None)
+
+            app.push_screen(CorpMapScreen())
+            await _settle_map_boxes(pilot, app.screen)
+            screen = app.screen
+
+            here = app.corp_map.territories[shop_territory_id]
+            _hover_territory(screen, here.connections[0])
+            await _settle_map_boxes(pilot, screen)
+
+            box = screen.query_one(f"#map_local_box_{shop_location.id}", Collapsible)
+            box.collapsed = False
+            await _settle(pilot)
+            assert box.collapsed is False, "opening a box in your own territory is never vetoed"
+
+            screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
+            await _settle(pilot)
+            await pilot.click(f"#map_local_{shop_location.id}")
+            await pilot.pause()
+            assert isinstance(app.screen, ShopScreen)
 
     run(body())
 

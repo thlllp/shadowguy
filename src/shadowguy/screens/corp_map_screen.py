@@ -198,8 +198,8 @@ class CorpMapScreen(BackScreen):
         /* Phone-tile look: a grid of bordered boxes, one per Location (plus a
         Fixers box). Each box's height is auto -- rows aren't fixed like
         #territory_summary since these only rebuild on an explicit refresh
-        (entering the category, a hovered/selected territory changing, ...),
-        never on every passing mouse pixel. */
+        (entering the category, the runner travelling, an action changing what's
+        here, ...), never on hover and never on every passing mouse pixel. */
         layout: grid;
         grid-size: 3;
         grid-gutter: 1 2;
@@ -442,15 +442,15 @@ class CorpMapScreen(BackScreen):
             return
 
         if item_id.startswith("map_local_"):
+            # Resolved against where the runner is standing, not the cursor: the Locals
+            # panel only ever lists this territory, so a hovered one is the wrong place
+            # to look the id up (and would find nothing).
             location_id = item_id.removeprefix("map_local_")
-            t = self.app.corp_map.territories[self.hovered_id or self.selected_id]
-            location = next((loc for loc in t.locations if loc.id == location_id), None)
+            here = self.app.corp_map.territories[character.location_id]
+            location = next((loc for loc in here.locations if loc.id == location_id), None)
             if location is None:
                 return
-            if t.id != character.location_id:
-                self.notify(f"Travel to {t.name} first.", severity="warning")
-                return
-            self._push_location_screen(location, t)
+            self._push_location_screen(location, here)
             return
 
         if item_id.startswith("corpinfo_"):
@@ -560,6 +560,24 @@ class CorpMapScreen(BackScreen):
         self._do_refresh_map()
 
     def _do_refresh_map(self) -> None:
+        """A full map-mode refresh: the map view *and* the Locals panel.
+
+        Anything that only moves the cursor or the mouse must call _refresh_map_view
+        instead — see its docstring for why the Locals panel is not part of that.
+        """
+        self._refresh_map_view()
+        self._schedule_map_local_boxes()
+
+    def _refresh_map_view(self) -> None:
+        """The map text and the territory summary bar — the two things that do follow
+        the cursor and the mouse.
+
+        Deliberately leaves #map_local_boxes alone. The Locals panel shows where the
+        runner is *standing*, not what they're looking at, so hovering or arrowing over
+        a territory must not disturb it. That isn't only a display rule: a rebuild
+        replaces those widgets outright, so refreshing the panel on mouse-move would
+        also snap shut whichever box the player had open.
+        """
         corp_map = self.app.corp_map
         character = self.app.character
         discover_fixers_here(self.app.fixers, character)
@@ -584,31 +602,44 @@ class CorpMapScreen(BackScreen):
         here = corp_map.territories[character.location_id]
         self.query_one("#territory_summary", Static).update(self._territory_summary_text(t, here, character))
         self.query_one(CharacterSheet).refresh()
-        # Avoid spawning overlapping tasks for the same grid — cancel() + immediate
-        # create_task() races where the old task might still be mutating widget state
-        # during the new task's remove_children/mount_all, which can cause native
-        # crashes. Instead, remember the latest territory and let a single draining
-        # task work through it once the in-flight one finishes, rather than dropping
-        # the refresh outright (which could strand the boxes on a stale territory if
-        # the mouse stops moving before the in-flight task completes).
-        self._map_locals_pending_id = t.id
+
+    def _schedule_map_local_boxes(self) -> None:
+        """Queue a Locals-panel rebuild for the territory the runner is standing in.
+
+        Always that one — the panel is not a preview of wherever the cursor happens to
+        be. So the pending id is really just "a rebuild is wanted"; it stays an id
+        because _drain_map_local_boxes resolves it at the moment it runs, which is what
+        keeps a rebuild queued behind a travel from using the pre-travel territory.
+
+        Avoid spawning overlapping tasks for the same grid — cancel() + immediate
+        create_task() races where the old task might still be mutating widget state
+        during the new task's remove_children/mount_all, which can cause native
+        crashes. Instead, remember the pending territory and let a single draining task
+        work through it once the in-flight one finishes, rather than dropping the
+        refresh outright (which could strand the boxes on a stale territory if nothing
+        else refreshes before the in-flight task completes).
+        """
+        self._map_locals_pending_id = self.app.character.location_id
         if self._map_locals_task is None or self._map_locals_task.done():
             self._map_locals_task = asyncio.create_task(self._drain_map_local_boxes())
 
     async def _drain_map_local_boxes(self) -> None:
         """Runs _refresh_map_local_boxes for the latest pending territory, then checks
-        again in case _do_refresh_map recorded a newer one while it was running."""
+        again in case _schedule_map_local_boxes recorded a newer one while it ran."""
         while self._map_locals_pending_id is not None:
             pending_id = self._map_locals_pending_id
             self._map_locals_pending_id = None
             await self._refresh_map_local_boxes(self.app.corp_map.territories[pending_id])
 
     async def _refresh_map_local_boxes(self, t: Territory) -> None:
-        """Populate the map-hover boxes for territory *t* (the one under the cursor).
-        Called as a background task from _do_refresh_map so it never blocks mouse-move
-        or keyboard movement. Boxes for a territory the runner isn't standing in are
-        still built (so the preview lists what's there) but can't be opened --
-        on_collapsible_expanded vetoes it."""
+        """Populate the Locals boxes for territory *t* — always the one the runner is
+        standing in (see _schedule_map_local_boxes), never a hovered one.
+
+        Called as a background task so it never blocks mouse-move or keyboard movement.
+        Every box here is therefore somewhere the runner can actually act, which is why
+        on_collapsible_expanded needs no travel gate: it only has to keep the accordion
+        to one open box.
+        """
         if self.selected_category is not None:
             return
         character = self.app.character
@@ -617,15 +648,15 @@ class CorpMapScreen(BackScreen):
         ]
         boxes = [self._location_box(location, t) for location in t.locations]
         boxes.append(self._fixers_box(fixers_here))
-        if t.id == character.location_id:
-            rest_box = Collapsible(
+        boxes.append(
+            Collapsible(
                 ListView(ListItem(Static(self.app.rest_label()), id="rest")),
                 title="Rest",
                 collapsed=True,
                 id="map_local_box_rest",
                 classes="local_box",
             )
-            boxes.append(rest_box)
+        )
 
         container = self.query_one("#map_local_boxes", Grid)
         await container.remove_children()
@@ -674,7 +705,7 @@ class CorpMapScreen(BackScreen):
             candidate = self.app.corp_map.territories[conn_id]
             if (candidate.x - current.x, candidate.y - current.y) == (dx, dy):
                 self.selected_id = conn_id
-                self._do_refresh_map()
+                self._refresh_map_view()
                 return
 
     def action_enter_action(self) -> None:
@@ -706,12 +737,12 @@ class CorpMapScreen(BackScreen):
         )
         if hovered != self.hovered_id:
             self.hovered_id = hovered
-            self._do_refresh_map()
+            self._refresh_map_view()
 
     def on_click(self) -> None:
         if self.hovered_id is not None:
             self.selected_id = self.hovered_id
-            self._do_refresh_map()
+            self._refresh_map_view()
 
     # ── gang encounters ─────────────────────────────────────────────────────
 
@@ -943,24 +974,16 @@ class CorpMapScreen(BackScreen):
         )
 
     def on_collapsible_expanded(self, event: Collapsible.Expanded) -> None:
-        """Accordion behavior for #map_local_boxes: opening one box closes any
-        other box in that same grid, so at most one is expanded at a time.
+        """Accordion behavior for both box grids: opening one box closes any other box
+        in that same grid, so at most one is expanded at a time.
 
-        The map-hover grid additionally vetoes opening a box for a territory the
-        runner isn't standing in -- it's a preview, not a place to act from a
-        distance; re-collapses it immediately and explains why, same message
-        action_travel's own "Enter" row already gives."""
+        No travel gate any more. #map_local_boxes used to double as a preview of a
+        hovered territory, so opening a box for somewhere the runner wasn't standing had
+        to be vetoed; the panel now only ever lists the runner's own territory (see
+        _schedule_map_local_boxes), so every box in it is already somewhere they can
+        act."""
         box_id = event.collapsible.id or ""
         if box_id.startswith("map_local_box"):
-            focus_id = self.hovered_id or self.selected_id
-            if focus_id is None:
-                event.collapsible.collapsed = True
-                return
-            t = self.app.corp_map.territories[focus_id]
-            if t.id != self.app.character.location_id:
-                event.collapsible.collapsed = True
-                self.notify(f"Travel to {t.name} first.", severity="warning")
-                return
             group_selector = "#map_local_boxes Collapsible"
         elif box_id.startswith("local_box"):
             group_selector = "#local_boxes Collapsible"
