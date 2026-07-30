@@ -1466,10 +1466,9 @@ def test_delivering_a_smuggling_job_only_pays_out_on_site():
             await pilot.press("escape")
             await pilot.pause()
 
-            # Not at the destination yet -- clicking must not pay out.
-            # Need a category selected so the activities list (with #deliver_package) is visible.
-            await pilot.click("#cat_job")
-            await pilot.pause()
+            # Not at the destination yet -- clicking must not pay out. The Jobs tab is
+            # still selected after the escape, so the activities list (with
+            # #deliver_package) is already the visible content.
             cash_before = app.character.cash
             standing_before = app.character.gang_standing_with(gang.id)
             await pilot.click("#deliver_package")
@@ -1532,8 +1531,6 @@ def test_deliver_package_with_no_active_job_is_a_safe_no_op():
             await pilot.pause()
             await pilot.press("escape")
             await pilot.pause()
-            await pilot.click("#cat_job")
-            await pilot.pause()
 
             # The row is on screen from the click above; clear the job out from under
             # it without refreshing, the way a missed deadline mid-render would.
@@ -1572,7 +1569,9 @@ def test_running_a_job_that_crosses_midnight_does_not_expire_itself_or_drop_its_
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             await pilot.click("#cat_job")
-            await pilot.pause()
+            # Selecting Jobs hides the sidebar -- a layout-affecting mutation, so two
+            # pauses before the coordinate click on the job row.
+            await _settle(pilot)
             await pilot.click(f"#job_{offer.id}")
             await pilot.pause()
 
@@ -1940,6 +1939,44 @@ def test_map_hover_boxes_visible_in_map_mode_and_hidden_otherwise():
             await pilot.click("#cat_job")
             await pilot.pause()
             assert screen.query_one("#map_local_boxes_scroll").display is False
+
+    run(body())
+
+
+def test_jobs_and_legwork_tabs_hide_the_sidebar_and_escape_brings_it_back():
+    """The Jobs and Legwork activity lists take the full width: the category sidebar
+    is hidden while either is selected, and 'escape' restores it with the map."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+            sidebar = screen.query_one("#sidebar")
+            activities = screen.query_one("#activities", ListView)
+
+            assert sidebar.display is True
+
+            for category in ("job", "legwork"):
+                screen.selected_category = category
+                await screen._refresh_activities()
+                await _settle(pilot)
+                assert sidebar.display is False
+                # ... and the activity list really does get the whole width.
+                assert activities.region.x == 0
+                assert activities.region.width == 80
+
+                await pilot.press("escape")
+                await _settle(pilot)
+                assert screen.selected_category is None
+                assert sidebar.display is True
+
+            # A tab that isn't full-width keeps the sidebar.
+            screen.selected_category = "corp"
+            await screen._refresh_activities()
+            await pilot.pause()
+            assert sidebar.display is True
 
     run(body())
 
