@@ -61,9 +61,9 @@ SEEDS = range(150)
 # so this is the real resolution path, not a mock of it.
 
 
-def _char(intelligence=1, hack_rank=1, deck_id=None, installed_programs=()):
+def _char(logic=1, hack_rank=1, deck_id=None, installed_programs=()):
     c = Character(name="T", location_id="start")
-    c.intelligence = intelligence
+    c.logic = logic
     c.skill_ranks["hack"] = hack_rank
     if deck_id is not None:
         c.inventory.append(InventoryItem(deck_id, equipped=True, installed_programs=list(installed_programs)))
@@ -73,16 +73,16 @@ def _char(intelligence=1, hack_rank=1, deck_id=None, installed_programs=()):
 # --- pure helpers -----------------------------------------------------------
 
 
-def test_integrity_scales_off_intelligence_gear_included():
-    assert player_integrity(_char(intelligence=1)) == 7
-    # zetatech_rig adds +3 Intelligence, so a stat-6 hacker fights at Int 9.
-    assert player_integrity(_char(intelligence=6, deck_id="zetatech_rig")) == 5 + 2 * 9
+def test_integrity_scales_off_logic_gear_included():
+    assert player_integrity(_char(logic=1)) == 7
+    # zetatech_rig adds +3 Logic, so a stat-6 hacker fights at Logic 9.
+    assert player_integrity(_char(logic=6, deck_id="zetatech_rig")) == 5 + 2 * 9
 
 
 def test_attack_damage_comes_from_the_deck_not_the_skill():
     # No deck: the bare-jack floor, however much Hack you have.
-    assert player_attack_damage(_char(intelligence=6, hack_rank=8)) == BARE_JACK_DAMAGE
-    # Deck rating (its Intelligence bonus) drives it: burner +1, zetatech +3.
+    assert player_attack_damage(_char(logic=6, hack_rank=8)) == BARE_JACK_DAMAGE
+    # Deck rating (its Logic bonus) drives it: burner +1, zetatech +3.
     assert player_attack_damage(_char(deck_id="burner_deck")) == 3
     assert player_attack_damage(_char(deck_id="zetatech_rig")) == 5
 
@@ -92,10 +92,10 @@ def test_readiness_flags_missing_deck_and_low_hack():
     # A deck alone isn't enough if Hack is still weak.
     assert matrix_readiness(_char(deck_id="burner_deck")) == ["more Hack skill"]
     # Hack skill alone isn't enough without a deck.
-    ready_hack = _char(intelligence=MIN_READY_HACK)  # skill_value = Int + rank(1) >= MIN
+    ready_hack = _char(logic=MIN_READY_HACK)  # skill_value = Logic + rank(1) >= MIN
     assert matrix_readiness(ready_hack) == ["a cyberdeck"]
     # Both: no warning.
-    assert matrix_readiness(_char(intelligence=6, hack_rank=4, deck_id="zetatech_rig")) == []
+    assert matrix_readiness(_char(logic=6, hack_rank=4, deck_id="zetatech_rig")) == []
 
 
 def test_actions_always_offer_attack_and_jack_out():
@@ -126,12 +126,12 @@ def test_intrude_pool_includes_the_datajack_bonus():
 
 def test_harden_action_gets_a_datajack_bonus():
     """AlwaysSix makes every die a success, so margin = player_pool - opposing_pool
-    exactly. HARDEN_DIFFICULTY (11) converts to an opposing pool of 1; intelligence 0
+    exactly. HARDEN_DIFFICULTY (11) converts to an opposing pool of 1; logic 0
     makes Tinkering's skill_value exactly 1 (default rank 1, no gear), so the baseline
     margin is exactly 0 -- a plain failure -- and Datajack's +1 advantage is what
     tips it into a pass."""
     c = _char()
-    c.intelligence = 0
+    c.logic = 0
     state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
     _harden(state, AlwaysSix())
     assert state.soak == HARDEN_SOAK_ON_FAILURE
@@ -166,8 +166,8 @@ def test_passive_program_bonuses_fold_into_the_base_formulas(monkeypatch):
         integrity_bonus=3, firewall_bonus=2, soak_bonus=1, damage_bonus=4,
     )
     monkeypatch.setitem(PROGRAMS_BY_ID, program.id, program)
-    bare = _char(intelligence=1, deck_id="burner_deck")
-    equipped = _char(intelligence=1, deck_id="burner_deck", installed_programs=[program.id])
+    bare = _char(logic=1, deck_id="burner_deck")
+    equipped = _char(logic=1, deck_id="burner_deck", installed_programs=[program.id])
     assert player_integrity(equipped) == player_integrity(bare) + program.integrity_bonus
     assert firewall_defense(equipped) == firewall_defense(bare) + program.firewall_bonus
     assert firewall_soak(equipped) == firewall_soak(bare) + program.soak_bonus
@@ -179,9 +179,9 @@ def test_passive_program_only_counts_on_the_active_deck(monkeypatch):
     equipped deck's programs matter (matrix.active_deck_entry)."""
     program = Program(id="test_passive", name="Test Passive", price=0, integrity_bonus=3)
     monkeypatch.setitem(PROGRAMS_BY_ID, program.id, program)
-    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[program.id])
+    c = _char(logic=1, deck_id="burner_deck", installed_programs=[program.id])
     c.inventory[0].equipped = False
-    assert player_integrity(c) == player_integrity(_char(intelligence=1))
+    assert player_integrity(c) == player_integrity(_char(logic=1))
 
 
 def test_action_program_appears_in_available_actions_with_uses_remaining(monkeypatch):
@@ -232,7 +232,7 @@ def test_passive_program_never_offered_as_an_action(monkeypatch):
 def test_damage_program_deals_guaranteed_no_roll_damage(monkeypatch):
     program = Program(id="test_action", name="Test Action", price=0, uses_per_fight=3, action_damage=5)
     monkeypatch.setitem(PROGRAMS_BY_ID, program.id, program)
-    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[program.id])
+    c = _char(logic=1, deck_id="burner_deck", installed_programs=[program.id])
     state = start_matrix(c, roll_ice(0, random.Random(0)), Drop.NONE, random.Random(0))
     target = state.standing[0]
     before = target.integrity
@@ -245,7 +245,7 @@ def test_damage_program_deals_guaranteed_no_roll_damage(monkeypatch):
 def test_skip_ice_program_grants_a_free_round_via_ice_skip_rounds(monkeypatch):
     program = Program(id="test_action", name="Test Action", price=0, uses_per_fight=3, action_skip_ice=True)
     monkeypatch.setitem(PROGRAMS_BY_ID, program.id, program)
-    c = _char(intelligence=1, deck_id="burner_deck", installed_programs=[program.id])
+    c = _char(logic=1, deck_id="burner_deck", installed_programs=[program.id])
     state = start_matrix(c, roll_ice(0, random.Random(0)), Drop.NONE, random.Random(0))
     assert state.ice_skip_rounds == 0
     action = next(a for a in available_matrix_actions(c, state.program_uses) if a.kind is MatrixActionKind.PROGRAM)
@@ -330,7 +330,7 @@ def test_sleaze_critical_fail_bites_twice_in_the_same_round():
 def test_sleaze_success_rate_improves_with_hack_skill_against_tougher_ice():
     program = PROGRAMS_BY_ID["sleaze"]
     weak = _char(deck_id="burner_deck", installed_programs=[program.id])
-    strong = _char(intelligence=6, hack_rank=8, deck_id="burner_deck", installed_programs=[program.id])
+    strong = _char(logic=6, hack_rank=8, deck_id="burner_deck", installed_programs=[program.id])
 
     def success_rate(character, ice, seeds):
         successes = 0
@@ -502,7 +502,7 @@ def test_enemy_drop_can_bite_before_you_act():
     # opening bite often enough that at least one of these seeds drops integrity.
     bitten = False
     for seed in SEEDS:
-        state = start_matrix(_char(intelligence=1), roll_ice(2, random.Random(seed)), Drop.ENEMY, random.Random(seed))
+        state = start_matrix(_char(logic=1), roll_ice(2, random.Random(seed)), Drop.ENEMY, random.Random(seed))
         if state.integrity < state.max_integrity:
             bitten = True
             break
@@ -522,8 +522,8 @@ def test_the_matrix_belongs_to_the_hacker():
     """The design claim, stated as rates rather than absolutes (a deckless runner *can*
     fluke a win, a hacker *could* in principle whiff a whole fight — neither is the point):
     a decked hacker seizes nearly every tier-2 run on a bare always-attack policy, and a
-    deckless Int-1 runner is ejected from nearly all of them. Ejection, never death."""
-    hacker = _char(intelligence=6, hack_rank=4, deck_id="zetatech_rig")
+    deckless Logic-1 runner is ejected from nearly all of them. Ejection, never death."""
+    hacker = _char(logic=6, hack_rank=4, deck_id="zetatech_rig")
     hacker_seized = sum(_run(hacker, seed, tier=2) is MatrixOutcome.SEIZED for seed in SEEDS)
     weakling_ejected = sum(_run(_char(), seed, tier=2) is MatrixOutcome.EJECTED for seed in SEEDS)
     assert hacker_seized >= 0.95 * len(SEEDS)
@@ -532,7 +532,7 @@ def test_the_matrix_belongs_to_the_hacker():
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_matrix_fight_always_terminates_and_leaves_one_outcome(seed):
-    outcome = _run(_char(intelligence=3, hack_rank=2, deck_id="cracked_cyberdeck"), seed, tier=1)
+    outcome = _run(_char(logic=3, hack_rank=2, deck_id="cracked_cyberdeck"), seed, tier=1)
     assert outcome in (MatrixOutcome.SEIZED, MatrixOutcome.EJECTED)
 
 
@@ -655,7 +655,7 @@ def _hand_built_network(data_ice=WEAK_ICE, with_cpu=False, with_cache=False):
 
 
 def _ready_char():
-    return _char(intelligence=6, hack_rank=6, deck_id="zetatech_rig")
+    return _char(logic=6, hack_rank=6, deck_id="zetatech_rig")
 
 
 def _clear_node(run, rng, max_rounds=50):
@@ -971,7 +971,7 @@ def test_render_marks_current_node_and_spine_connectors():
 
 def test_render_reflects_cleared_and_guarded_status():
     program = PROGRAMS_BY_ID["analyze"]
-    c = _char(intelligence=6, hack_rank=6, deck_id="zetatech_rig", installed_programs=[program.id])
+    c = _char(logic=6, hack_rank=6, deck_id="zetatech_rig", installed_programs=[program.id])
     run = start_matrix_run(c, _hand_built_network(), Drop.NONE, random.Random(1))
     move_to(run, "slave", random.Random(1))
     move_to(run, "ic", random.Random(1))

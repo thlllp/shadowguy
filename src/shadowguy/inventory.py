@@ -47,7 +47,7 @@ def equipped_travel_reduction(inventory: list[InventoryItem]) -> float:
 
 
 def active_deck_entry(inventory: list[InventoryItem]) -> tuple[InventoryItem, Item] | None:
-    """The equipped deck with the best Intelligence bonus (ties: first found), or None if
+    """The equipped deck with the best Logic bonus (ties: first found), or None if
     the runner has no deck equipped. This is *which* deck equipped_deck_rating's number
     comes from, and — since a matrix fight only ever rides on one deck — the one whose
     installed_programs (Item.program_slots) actually matter this fight."""
@@ -59,7 +59,7 @@ def active_deck_entry(inventory: list[InventoryItem]) -> tuple[InventoryItem, It
         item = ITEMS_BY_ID[entry.item_id]
         if item.slot is not None:
             continue
-        rating = item.bonuses.get("intelligence", 0)
+        rating = item.bonuses.get("logic", 0)
         if rating > best_rating:
             best, best_rating = (entry, item), rating
     return best
@@ -69,12 +69,12 @@ def equipped_deck_rating(inventory: list[InventoryItem]) -> int:
     """The best equipped cyberdeck's matrix strength, or 0 if the runner is jacking in
     bare-handed. A cyberdeck is a Slot None item (see Slot / Item.slot: decks aren't
     worn, so any number can be equipped) — burner_deck, cracked_cyberdeck, zetatech_rig,
-    pawned_deck today — and its rating *is* its Intelligence bonus, the same number that
+    pawned_deck today — and its rating *is* its Logic bonus, the same number that
     makes a better deck a better hacker. matrix.py reads this the way combat.py reads a
     weapon's damage: it's the deck, not the skill, that decides what a landed intrusion
     costs the ICE, so a runner with no deck can still fight in the matrix, just weakly."""
     entry = active_deck_entry(inventory)
-    return entry[1].bonuses.get("intelligence", 0) if entry else 0
+    return entry[1].bonuses.get("logic", 0) if entry else 0
 
 
 def installed_programs_for(entry: InventoryItem) -> list[Program]:

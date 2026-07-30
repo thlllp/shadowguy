@@ -11,7 +11,7 @@ Outcomes.
 
 The rule that carries most of the design: **every action rolls a different core
 stat.** Attacking is strength (or perception, with a gun); bracing is body;
-reading the fight is intelligence; facing them down is cool; running is agility.
+reading the fight is logic; facing them down is cool; running is agility.
 A fight is therefore not a Strength minigame that only an Enforcer can play —
 it's the same "every build has a way through, but not the same way" rule that
 jobs.py enforces across a stage's approaches, applied to a round.

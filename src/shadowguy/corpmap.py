@@ -120,7 +120,7 @@ SHOP_KINDS = (
 # repeating its own specialty's stat (via location_stat() below).
 #
 # Legwork is scouting, so this table leans on the watching-and-casing skills:
-# perception and agility mostly, intelligence on the wired places, cool where
+# perception and agility mostly, logic on the wired places, cool where
 # the read comes out of a conversation.
 LOCATION_SKILL = {
     LocationKind.DATA: "hack",

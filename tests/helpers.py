@@ -33,12 +33,12 @@ class ForcedChance(random.Random):
 
 def character_with_skill_value(skill_id: str, value: int) -> Character:
     """A fresh Character with the given skill forced to an exact skill_value, by
-    zeroing its rank and setting perception/intelligence directly (bypasses spend_*,
+    zeroing its rank and setting perception/logic directly (bypasses spend_*,
     fine for a resolution test that only cares about the resulting pool size)."""
     character = Character(name="t")
     character.skill_ranks[skill_id] = 0
     character.perception = value
-    character.intelligence = value
+    character.logic = value
     return character
 
 

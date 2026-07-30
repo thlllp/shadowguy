@@ -89,7 +89,7 @@ class CyberdeckScreen(BackScreen):
     """Deck + Program management, split out of InventoryScreen: a deck's
     installed_programs and which deck is Character.stat()'s and matrix.py's
     active one (inventory.active_deck_entry -- the equipped deck with the best
-    Intelligence bonus) are cyberdeck-specific concerns, not general gear.
+    Logic bonus) are cyberdeck-specific concerns, not general gear.
     Equip/stow itself stays generic and lives on InventoryScreen too (a deck
     is still an Item there); a deck's equip toggle is repeated here only
     because it's what active_deck_entry actually reads."""

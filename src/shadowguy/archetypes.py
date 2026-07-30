@@ -51,7 +51,7 @@ _ARCHETYPE_ROWS = (
         "hacker",
         "Hacker",
         "Breaks systems. Owns the wired half of the board, weak the moment it turns physical.",
-        {"intelligence": 4, "perception": 2},
+        {"logic": 4, "perception": 2},
         {"hack": 7, "tinkering": 5, "infer": 4, "pattern_seeking": 4},
     ),
     (

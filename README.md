@@ -28,7 +28,7 @@ Death is permanent. No meta-progression between runs.
 | | |
 |---|---|
 | **Checks** | An opposed d6 dice pool. Roll `skill_value + advantage` dice, count 5s and 6s; the opposition rolls against you. Net successes decide it; a gap of 3+ either way is a critical. |
-| **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span all six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit. Running always works; the roll only decides what it costs you. |
+| **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span five of the six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit. Running always works; the roll only decides what it costs you. |
 | **Tactical** | ~35% of jobs play their fights on a generated grid instead: tcod FOV and A*, cover as a raised to-hit difficulty, firearms that kite and melee that has to close. Reach an exit to leave, no roll. |
 | **Matrix** | A Data Heist's fights are against ICE, not muscle, played out node by node across a small hacked network. Round-based like combat and rolling the same dice, but it drains a separate integrity pool instead of your health — lose and you're ejected (the contract blown) rather than killed. The cyberdeck is the damage, Hack is the hit; jacking out always works. Installed programs add a bypass roll, a soak-ignoring data grab, and remote recon — but pushing them raises the network's alert level, making every ICE hit harder to dodge for the rest of the run. |
 | **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
@@ -67,7 +67,7 @@ src/shadowguy/
   archetypes.py   Enforcer/Hacker/Infiltrator creation presets
   skills.py       Skill table (32 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
-  combat.py       Round-based combat: enemy roster, the six-stat action set, shared resolve_hit
+  combat.py       Round-based combat: enemy roster, the five-stat action set, shared resolve_hit
   tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation
   buildings.py    Burglary targets: rooms, levels and the links between them; job-scoped, built on
                   tactical's grid primitives

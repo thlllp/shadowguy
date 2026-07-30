@@ -337,7 +337,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("hack", 1, "Crack the ice around the prize"),
                     ("infiltration", 0, "Work the vault's locks by hand"),
-                    ("blunt", -2, "Put the case through with a wrecking bar"),
+                    ("lift", -2, "Put the case through with a wrecking bar"),
                 ),
             ),
             (
@@ -439,13 +439,13 @@ _ARCHETYPE_ROWS = (
                 (
                     ("running", 1, "Run, and keep running until the sirens fade"),
                     ("dodge", 0, "Slip the response team in the stairwell"),
-                    ("short_blade", -2, "Cut your way out through whoever is closest"),
+                    ("grapple", -2, "Put down whoever is closest and keep moving"),
                 ),
             ),
         ),
     ),
     (
-        # A specialist job: every beat leads with an intelligence skill, which is what
+        # A specialist job: every beat leads with an logic skill, which is what
         # archetype_specialist() reads to call it Netrunner work — and what makes
         # generate_job keep that lead through the partial draw. The other two approaches
         # on each beat still sit on different stats, so this is a job a Solo can take and
@@ -468,7 +468,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("hack", 1, "Break the ICE around it"),
                     ("sleight_of_hand", 0, "Jack a physical tap straight into the terminal"),
-                    ("blunt", -2, "Pull the drive out of the rack and take it with you"),
+                    ("lift", -2, "Pull the drive out of the rack and take it with you"),
                 ),
             ),
             (
@@ -574,7 +574,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("hack", 1, "Crack the electronic lock before it screams"),
                     ("infiltration", 0, "Pick the mechanical backup by hand"),
-                    ("blunt", -2, "Break the vault open with a crowbar"),
+                    ("lift", -2, "Break the vault open with a crowbar"),
                 ),
             ),
             (
@@ -592,7 +592,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("dodge", 1, "Slip out the way you came before anyone's the wiser"),
                     ("deception", 0, "Walk out like you belong there"),
-                    ("short_blade", -2, "Cut past whoever's between you and the street"),
+                    ("grapple", -2, "Put down whoever's between you and the street"),
                 ),
             ),
         ),
@@ -627,7 +627,7 @@ _ARCHETYPE_ROWS = (
                 (
                     ("hack", 1, "Peel the black ICE apart, layer by layer"),
                     ("infiltration", 0, "Pick the datastore's logical locks by hand"),
-                    ("blunt", -2, "Crash the node and rip the data as it falls"),
+                    ("toughness", -2, "Crash the node and rip the data as it falls"),
                 ),
             ),
             (
@@ -831,7 +831,7 @@ for _archetype in ARCHETYPES:
 # specialist is always whatever skill actually leads it — an Extraction's grab-the-target
 # objective reads as muscle, a Heist's crack-the-ice one as a netrunner, from the same table.
 SPECIALIST_FOR_STAT = {
-    "intelligence": "Netrunner",
+    "logic": "Netrunner",
     "strength": "Solo",
     "body": "Solo",
     "agility": "Infiltrator",

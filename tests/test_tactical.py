@@ -1252,7 +1252,7 @@ def test_stepping_into_a_pickable_locked_door_opens_it_and_moves_you_through():
     building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
-    state.character.intelligence = 6  # comfortably clears a difficulty-9 lock (opposing pool 0)
+    state.character.logic = 6  # comfortably clears a difficulty-9 lock (opposing pool 0)
     state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
     moves = state.moves_left
 
@@ -1267,7 +1267,7 @@ def test_a_failed_lock_pick_leaves_it_locked_and_still_costs_the_move():
     building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
-    state.character.intelligence = 0  # a difficulty-9 lock still has an opposing pool of 0,
+    state.character.logic = 0  # a difficulty-9 lock still has an opposing pool of 0,
     state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
     moves = state.moves_left
 
@@ -1284,7 +1284,7 @@ def test_a_failed_lock_pick_can_still_trip_the_alarm():
     building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
-    state.character.intelligence = 0
+    state.character.logic = 0
     state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
 
     assert move_player(state, dest, ForcedChance(LOCK_FAILURE_ALARM_CHANCE - 0.01))
@@ -1299,7 +1299,7 @@ def test_a_critical_failure_lock_pick_always_trips_the_alarm():
     building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
-    state.character.intelligence = 0
+    state.character.logic = 0
     state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=21)
 
     assert move_player(state, dest, AlwaysSix())
@@ -1314,7 +1314,7 @@ def test_attempt_lock_is_what_move_player_dispatches_to():
     building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
-    state.character.intelligence = 6
+    state.character.logic = 6
     lock = Lock(skill="hack", difficulty=9)
     state.building.locks[(state.level_index, dest)] = lock
 

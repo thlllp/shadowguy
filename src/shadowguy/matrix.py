@@ -10,9 +10,9 @@ tactical.py reuses (one hit formula, now three surfaces). What it deliberately d
   running it dry doesn't kill you — it ejects you (MatrixOutcome.EJECTED). A *remote*
   Data Heist (the only kind today) is fought jacked in from outside, so losing blows the
   contract but never the run; there is no death in the matrix. Integrity is per-fight,
-  rebuilt from Intelligence each time a MatrixScreen opens, so nothing here persists onto
+  rebuilt from Logic each time a MatrixScreen opens, so nothing here persists onto
   the Character the way health does.
-- **The actions are Intelligence's, not the six-stat spread.** The matrix is the
+- **The actions are Logic's, not the six-stat spread.** The matrix is the
   Hacker's arena on purpose (unlike meat combat, which spans every stat so no build is
   locked out of a round): you breach with Hack, harden with Tinkering, analyze with
   Infer. A non-hacker can still fight here, but bleeds — the deckless/low-Hack warning
@@ -58,11 +58,11 @@ from shadowguy.inventory import active_deck_entry, equipped_deck_rating, install
 from shadowguy.shops import STOLEN_DATASHARD_ID, InventoryItem, Program
 from shadowguy.skills import skill_value
 
-# The runner's matrix hit points, rebuilt each fight from Intelligence (gear included,
-# unlike health's raw Body — a better deck raises Int, so it buys resilience in the
-# matrix as well as reach). A fresh Int-1 runner brings 7; a decked Hacker brings ~20.
+# The runner's matrix hit points, rebuilt each fight from Logic (gear included,
+# unlike health's raw Body — a better deck raises Logic, so it buys resilience in the
+# matrix as well as reach). A fresh Logic-1 runner brings 7; a decked Hacker brings ~20.
 BASE_INTEGRITY = 5
-INTEGRITY_PER_INT = 2
+INTEGRITY_PER_LOGIC = 2
 
 # What an ICE program's attack pool has to beat to bite your integrity: your firewall,
 # built from Infer (reading the system to slip its countermeasures) the way combat's
@@ -314,13 +314,13 @@ def _passive_bonus(character: Character, attr: str) -> int:
 
 
 def player_integrity(character: Character) -> int:
-    return BASE_INTEGRITY + INTEGRITY_PER_INT * character.stat("intelligence") + _passive_bonus(
+    return BASE_INTEGRITY + INTEGRITY_PER_LOGIC * character.stat("logic") + _passive_bonus(
         character, "integrity_bonus"
     )
 
 
 def firewall_defense(character: Character) -> int:
-    """FIREWALL_BASE + Infer, minus the equipped deck's own Intelligence bonus: a
+    """FIREWALL_BASE + Infer, minus the equipped deck's own Logic bonus: a
     better deck should make your hacking sharper (player_attack_damage), not your
     firewall too -- left in, the same deck rating was compounding into player_
     integrity, firewall_defense *and* the Hack roll all at once, which is what made
@@ -335,9 +335,9 @@ def firewall_defense(character: Character) -> int:
 
 def firewall_soak(character: Character) -> int:
     """Dice rolled to shrug off a landed ICE hit — the matrix counterpart to combat's
-    body+armor soak, here just the runner's own Intelligence (no armor in cyberspace),
+    body+armor soak, here just the runner's own Logic (no armor in cyberspace),
     plus any installed program's soak_bonus."""
-    return character.stat("intelligence") + _passive_bonus(character, "soak_bonus")
+    return character.stat("logic") + _passive_bonus(character, "soak_bonus")
 
 
 def player_attack_damage(character: Character) -> int:
@@ -351,7 +351,7 @@ def player_attack_damage(character: Character) -> int:
 
 
 # Below this Hack value, matrix_readiness flags the runner — a fresh runner rolls Hack 2,
-# so this warns anyone who hasn't put real Intelligence and rank behind it.
+# so this warns anyone who hasn't put real Logic and rank behind it.
 MIN_READY_HACK = 5
 
 
@@ -518,7 +518,7 @@ def start_matrix(
     drop: Drop = Drop.NONE,
     rng: random.Random | None = None,
 ) -> MatrixState:
-    """Open a matrix fight. Integrity is rolled fresh from Intelligence; an ICE drop is
+    """Open a matrix fight. Integrity is rolled fresh from Logic; an ICE drop is
     paid immediately, before you act."""
     integrity = player_integrity(character)
     state = MatrixState(

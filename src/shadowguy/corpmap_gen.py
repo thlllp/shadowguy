@@ -239,7 +239,7 @@ def _filler_pool(owned_kind: LocationKind) -> list[LocationKind]:
     """Filler kinds that don't repeat the specialty's own stat.
 
     A district is SPECIALTY_LOCATIONS of one kind plus filler, so a filler that
-    shared the specialty's stat (e.g. COMPUTER_STORE, also intelligence, next to
+    shared the specialty's stat (e.g. COMPUTER_STORE, also logic, next to
     a Hacking corp's DATA) would make that district's legwork three checks of one
     stat and no real choice.
     """

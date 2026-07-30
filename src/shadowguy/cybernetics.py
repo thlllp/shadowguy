@@ -145,7 +145,7 @@ _TIER_1_CYBERWARE = [
         "Neural Processor",
         1100,
         CyberSlot.NEURALWARE,
-        {"intelligence": 1},
+        {"logic": 1},
         {},
         humanity_cost=2,
     ),
