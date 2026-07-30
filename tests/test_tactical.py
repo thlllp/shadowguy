@@ -19,7 +19,7 @@ from shadowguy.grid import (
     path_between,
     visible_tiles,
 )
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, InventoryItem
 from shadowguy.tactical import (
     ARREST_DAYS,
     ENEMY_SPEED,
@@ -32,6 +32,7 @@ from shadowguy.tactical import (
     MELEE_RANGE,
     TAC_MAP_HEIGHT,
     TAC_MAP_WIDTH,
+    THROWN_RANGE,
     AimKind,
     CrewFate,
     Side,
@@ -86,12 +87,20 @@ from helpers import AlwaysOne, AlwaysSix, ForcedChance, crew_stats_for
 SEEDS = range(80)
 
 
-def test_weapon_range_firearms_outranges_melee():
-    firearm = next(i for i in ITEMS_BY_ID.values() if i.skill == "firearms")
-    melee = next(i for i in ITEMS_BY_ID.values() if i.skill and i.skill != "firearms" and i.damage)
-    assert weapon_range(firearm) == FIREARM_RANGE
+def test_weapon_range_bands_run_melee_then_thrown_then_ranged():
+    """Three bands now that weapons are categorized: a shooting skill (RANGED_SKILLS)
+    reaches across the map, a thrown weapon sits between, everything else is arm's
+    length."""
+    ranged = next(i for i in ITEMS_BY_ID.values() if i.skill in RANGED_SKILLS)
+    thrown = next(i for i in ITEMS_BY_ID.values() if i.skill == "throwing")
+    melee = next(
+        i for i in ITEMS_BY_ID.values()
+        if i.skill and i.skill not in RANGED_SKILLS and i.skill != "throwing" and i.damage
+    )
+    assert weapon_range(ranged) == FIREARM_RANGE
+    assert weapon_range(thrown) == THROWN_RANGE
     assert weapon_range(melee) == MELEE_RANGE
-    assert FIREARM_RANGE > MELEE_RANGE
+    assert FIREARM_RANGE > THROWN_RANGE > MELEE_RANGE
 
 
 # --- cover_bonus ---
@@ -430,7 +439,7 @@ def test_grenade_aim_begin_move_confirm_resolves_the_throw():
 
 
 def _firearm_id():
-    return next(i.id for i in ITEMS_BY_ID.values() if i.skill == "firearms")
+    return next(i.id for i in ITEMS_BY_ID.values() if i.skill in RANGED_SKILLS and i.damage)
 
 
 def test_targets_for_excludes_an_out_of_range_enemy():
@@ -493,13 +502,18 @@ def test_player_attack_guaranteed_hit_deals_the_exact_margin_damage():
     """Same 0-dice opposing pool as above, but under AlwaysSix every die the attacker
     rolls succeeds too, so margin == the attacker's whole pool (bare-hands grapple
     skill_value 2 for a fresh Character). Soak (thug toughness 1) is also fully
-    saturated under AlwaysSix, so damage is UNARMED.damage (0) + 2 - 1 = 1, an exact,
-    non-random number to pin instead of only asserting "some damage happened"."""
+    saturated under AlwaysSix. Every term is pinned, which is the point -- an exact,
+    non-random number instead of only asserting "some damage happened":
+
+        UNARMED.damage (0) + Strength (1, a fresh Character -- combat.melee_damage_bonus
+        applies to bare hands) + margin (2) - soak (1) = 2
+    """
     state = _adjacent_state()
     weapon = player_weapons(state)[0]
+    assert state.character.stat("strength") == 1
     health_before = state.enemies[0].health
     player_attack(state, state.enemies[0], weapon, rng=AlwaysSix())
-    assert state.enemies[0].health == health_before - 1
+    assert state.enemies[0].health == health_before - 2
     assert state.acted
     # The log line reads off the weapon's own verb (combat.attack_verbs), so assert
     # against the table rather than a literal -- bare hands "wrestle", they don't "hit".
@@ -654,12 +668,32 @@ def _armed_state(enemy_coords, player_start=(0, 0), rows=None, weapons=("pipe_pi
     )
 
 
+def test_a_recharging_weapon_is_gated_out_until_its_cooldown_ticks_off():
+    """recharge_rounds used to be inert on the grid -- set and read only by
+    abstract_combat, so a taser paced itself in an abstract fight and fired every turn
+    here. can_hit is the gate, so the weapon drops out of targets_for with it."""
+    state = _armed_state([(4, 0)], weapons=("taser_m5",))
+    taser = ITEMS_BY_ID["taser_m5"]
+    assert taser.recharge_rounds == 2
+    target = state.enemies[0]
+
+    assert targets_for(state, taser) == [target]
+    player_attack(state, target, taser, rng=random.Random(1))
+    assert state.weapon_cooldowns["taser_m5"] == 2
+
+    end_turn(state, rng=random.Random(1))
+    assert targets_for(state, taser) == []  # still cooling, no shot offered
+    end_turn(state, rng=random.Random(1))
+    assert targets_for(state, taser) == [target]  # back on line
+    assert "taser_m5" not in state.weapon_cooldowns
+
+
 def test_weapon_for_target_takes_the_firearm_at_range_and_the_blade_up_close():
     state = _armed_state([(1, 0), (6, 0)])
     adjacent, distant = state.enemies
     # The knife out-damages the pistol (5 vs 5 base, blade wins on ties by catalog order
     # only if it's actually reaching) -- what matters is the gun is the *only* option at 6.
-    assert weapon_for_target(state, distant).skill == "firearms"
+    assert weapon_for_target(state, distant).skill in RANGED_SKILLS
     assert weapon_for_target(state, adjacent).damage >= weapon_for_target(state, distant).damage
 
 

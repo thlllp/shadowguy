@@ -51,12 +51,16 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         # Every weapon skill is filed here: what a weapon rolls is handling it,
         # not the muscle behind it or the eye down the sight. Nothing enforces a
         # fixed count per stat, and a stat's cost is per-skill anyway, so this
-        # makes agility broader, not stronger.
-        ("short_blade", "Short Blade", "Fighting with knives and short blades"),
-        ("long_blade", "Long Blade", "Fighting with swords and long blades"),
-        ("blunt", "Blunt", "Fighting with clubs and blunt weapons"),
-        ("firearms", "Firearms", "Shooting straight under pressure"),
-        ("misc", "Misc Weapons", "Exotic and improvised weapons"),
+        # makes agility broader, not stronger. One skill per weapon *category* --
+        # a build buys the guns it actually carries, not "firearms" wholesale.
+        ("pistols", "Pistols", "Handguns, and anything else fired one-handed"),
+        ("automatics", "Automatics", "Submachine guns and assault rifles on full auto"),
+        ("longarms", "Longarms", "Rifles and shotguns, fired from the shoulder"),
+        ("clubs", "Clubs", "Fighting with knuckles, batons and blunt weapons"),
+        ("blades", "Blades", "Fighting with knives, swords and anything edged"),
+        ("archery", "Archery", "Bows and crossbows"),
+        ("throwing", "Throwing", "Knives, stars and anything else thrown"),
+        ("gunnery", "Gunnery", "Turrets, mounts and stationary guns"),
     ],
     "perception": [
         ("pattern_seeking", "Pattern Seeking", "Spotting patterns and anomalies"),

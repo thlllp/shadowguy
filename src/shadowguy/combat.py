@@ -60,6 +60,7 @@ from shadowguy.shops import (
     MAX_WEAPON_CONCEALMENT,
     MIN_STUN_DAMAGE,
     MIN_WEAPON_CONCEALMENT,
+    RANGED_SKILLS,
     Consumable,
     Item,
     Slot,
@@ -84,6 +85,30 @@ def smartlink_bonus(character: Character, weapon: Item) -> int:
     if not weapon.smartlinked or not has_smartlink(character.installed_cyberware):
         return 0
     return SMARTLINK_ATTACK_BONUS
+
+
+def melee_damage_bonus(character: Character, weapon: Item) -> int:
+    """Strength added to the damage of a hit you put your body behind — full stat, 1:1,
+    uncapped. Blades, clubs, bare hands and a thrown knife qualify; a gun or a bow does
+    not (pulling a trigger or a string isn't muscle), which is exactly "not a
+    shops.RANGED_SKILLS weapon" and so needs no second list to keep in step.
+
+    Weapon-conditional like smartlink_bonus, and threaded in the same way — the two
+    player attack sites pass it into resolve_hit's base_damage, rather than it living
+    inside resolve_hit, because resolve_hit is the *shared* formula: an Enemy has no
+    strength (combat.Enemy is health/attack/defense/damage/toughness and nothing else),
+    so folding this in there would mean inventing one for every NPC. Consequence worth
+    naming: this is a player-only bonus. A hired runner swinging a blade beside you
+    resolves through the same resolve_hit with their Enemy stat block and gets nothing.
+
+    Deliberately large. Enemy health tops out at 11 (ENEMY_TIERS' Chromed Enforcer) and
+    a melee weapon already does 4-7 before the roll's margin, so a Strength 6 runner
+    with a katana one-shots anything in the roster and Strength alone out-damages the
+    whole weapon catalog at the top end. That is the intent -- Strength carries only two
+    skills (see DESIGN.md's Stats and skills) and this is what it buys instead. **Not
+    balance-simulated.**
+    """
+    return 0 if weapon.skill in RANGED_SKILLS else character.stat("strength")
 
 # Empty-handed. A real weapon is strictly better, but there is always *an* attack:
 # a runner who sold their last knife can still fight, badly. Built by hand rather
@@ -367,12 +392,15 @@ def combat_consumables(character: Character) -> list[tuple[int, Consumable]]:
 # the day it's added to the catalog, and unknown skills fall back to the generic pair
 # rather than raising: a missing verb should not be able to break a fight mid-round.
 _ATTACK_VERBS: dict[str, tuple[str, str]] = {
-    "firearms": ("fire on", "shoot"),
-    "long_blade": ("swing at", "slash"),
-    "short_blade": ("stab at", "stab"),
-    "blunt": ("swing at", "smash"),
+    "pistols": ("fire on", "shoot"),
+    "automatics": ("open up on", "riddle"),
+    "longarms": ("draw a bead on", "blast"),
+    "blades": ("cut at", "cut"),
+    "clubs": ("swing at", "smash"),
+    "archery": ("loose at", "skewer"),
+    "throwing": ("throw at", "hit"),
+    "gunnery": ("traverse onto", "shred"),
     "grapple": ("grab at", "wrestle"),
-    "misc": ("aim at", "zap"),  # the tasers, today
 }
 _DEFAULT_ATTACK_VERBS = ("swing at", "hit")
 

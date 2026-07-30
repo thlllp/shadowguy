@@ -36,6 +36,7 @@ from shadowguy.combat import (
     combat_consumables,
     consumables_with,
     equipped_weapons,
+    melee_damage_bonus,
     player_defense,
     player_soak,
     resolve_hit,
@@ -51,13 +52,17 @@ from shadowguy.grid import (
     step_neighbors,
     visible_tiles,
 )
-from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
+from shadowguy.shops import CONSUMABLES_BY_ID, RANGED_SKILLS, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
 
 
-# A weapon's reach, derived from its skill rather than a new Item field: Firearms is
-# the ranged skill (see CLAUDE.md's Combat section), everything else is arm's length.
+# A weapon's reach, derived from its skill rather than a new Item field: the shooting
+# skills (shops.RANGED_SKILLS — the three gun categories, gunnery and archery) reach
+# across the map, throwing gets a middle band of its own, everything else is arm's
+# length. Three bands rather than two because the weapon categories made "ranged or
+# not" too coarse: a thrown knife shouldn't cover the same ground as a rifle.
 MELEE_RANGE = 1
+THROWN_RANGE = 4
 FIREARM_RANGE = 8
 
 # How far an enemy can attack is per-enemy, on combat.Enemy.reach (a guard shoots, street
@@ -215,6 +220,14 @@ class TacticalState:
     # Set the moment anybody sees you. Guards that were standing their post start
     # fighting, and no amount of hiding puts it back.
     alarm: bool = False
+    # weapon id -> turns remaining before it can fire again, exactly as
+    # abstract_combat.CombatState carries it: set by player_attack when the weapon has
+    # recharge_rounds, decremented at the end of the player's turn. A cooling weapon is
+    # gated out in can_hit, which is the one place "can this weapon reach that enemy"
+    # is answered, so it drops out of targets_for/weapon_for_target/attack_targets and
+    # the Attack tile together. Without this the field was simply inert on the grid —
+    # the tasers fired every round here while pacing themselves in an abstract fight.
+    weapon_cooldowns: dict[str, int] = field(default_factory=dict)
     # What became of any hire who went down, filled by _end_fight when the fight ends
     # (None while it's still running). The screen reports it; it isn't the screen's to
     # decide — see resolve_downed_crew.
@@ -288,7 +301,9 @@ def cover_bonus(grid: Grid, defender: Coord, attacker: Coord) -> int:
 
 
 def weapon_range(weapon: Item) -> int:
-    return FIREARM_RANGE if weapon.skill == "firearms" else MELEE_RANGE
+    if weapon.skill in RANGED_SKILLS:
+        return FIREARM_RANGE
+    return THROWN_RANGE if weapon.skill == "throwing" else MELEE_RANGE
 
 
 def ally_spawns(grid: Grid, player_start: Coord, count: int, taken: frozenset[Coord]) -> list[Coord]:
@@ -519,6 +534,10 @@ def _reveal(state: TacticalState) -> None:
 def _begin_player_turn(state: TacticalState) -> None:
     state.moves_left = state.player.speed
     state.acted = False
+    for weapon_id in list(state.weapon_cooldowns):
+        state.weapon_cooldowns[weapon_id] -= 1
+        if state.weapon_cooldowns[weapon_id] <= 0:
+            del state.weapon_cooldowns[weapon_id]
     _reveal(state)
 
 
@@ -588,10 +607,13 @@ def in_reach(grid: Grid, origin: Coord, target: Coord, reach: int) -> bool:
 
 
 def can_hit(state: TacticalState, weapon: Item, target: Unit) -> bool:
-    """Whether this weapon reaches this enemy right now: standing, in range and in sight.
-    targets_for lists it per weapon, weapon_for_target inverts it per target."""
-    return target.health > 0 and in_reach(
-        state.grid, state.player.coord, target.coord, weapon_range(weapon)
+    """Whether this weapon reaches this enemy right now: standing, off cooldown, in range
+    and in sight. targets_for lists it per weapon, weapon_for_target inverts it per
+    target."""
+    return (
+        target.health > 0
+        and not state.weapon_cooldowns.get(weapon.id)
+        and in_reach(state.grid, state.player.coord, target.coord, weapon_range(weapon))
     )
 
 
@@ -627,6 +649,8 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
     if state.acted or state.is_over or not can_hit(state, weapon, target):
         return
     state.acted = True
+    if weapon.recharge_rounds:
+        state.weapon_cooldowns[weapon.id] = weapon.recharge_rounds
     raise_alarm(state, "The noise carries. They know you're here.")
     difficulty = target.stats.defense + cover_bonus(state.grid, target.coord, state.player.coord)
     roll, damage = resolve_hit(
@@ -634,7 +658,7 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
         skill_value(state.character, weapon.skill),
         smartlink_bonus(state.character, weapon),
         difficulty,
-        weapon.damage,
+        weapon.damage + melee_damage_bonus(state.character, weapon),
         target.stats.toughness,
     )
     miss_verb, hit_verb = attack_verbs(weapon)

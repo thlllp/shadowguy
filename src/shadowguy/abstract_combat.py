@@ -34,6 +34,7 @@ from shadowguy.combat import (
     Drop,
     Enemy,
     attack_verbs,
+    melee_damage_bonus,
     combat_consumables,
     equipped_weapons,
     player_defense,
@@ -317,7 +318,7 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
         skill_value(state.character, weapon.skill),
         bonus,
         target.enemy.defense,
-        weapon.damage,
+        weapon.damage + melee_damage_bonus(state.character, weapon),
         target.enemy.toughness,
     )
     if not roll.result.passed:

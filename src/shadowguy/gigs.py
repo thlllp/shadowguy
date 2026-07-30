@@ -155,7 +155,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A shipment of iron at {place} needs someone who can tell junk from gold.",
         ),
         approaches=(
-            _GigApproach("firearms", "Run it on the range", "Tight groups all day. {who} marks it sold.", "It jams on you and the test's a wash."),
+            _GigApproach("longarms", "Run it on the range", "Tight groups all day. {who} marks it sold.", "It jams on you and the test's a wash."),
             _GigApproach("tinkering", "Strip and inspect it", "You find the flaw they'd have missed.", "You reassemble it wrong and eat the part."),
             _GigApproach("intimidation", "Lean on the supplier", "One look and they knock the price down.", "They call your bluff and it sours."),
         ),
