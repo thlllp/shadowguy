@@ -176,7 +176,14 @@ _NPC_WEAPON_ROWS = (
     ("switchblade", "Switchblade", "blades", 1, 0, 5, False),
     ("machete", "Machete", "blades", 2, 0, 2, False),
     ("chrome_fist", "Chrome Fist", "clubs", 2, 0, 5, False),
-    ("stun_baton", "Stun Baton", "clubs", 1, 2, 2, False),
+    # Stun 1, not 2. Stun is the harshest number in the table for its size: it bypasses
+    # the soak roll entirely, it persists between fights (Character.stun), and the KO
+    # threshold is `stun >= current health` — so the bar falls to meet the total as the
+    # target is hurt, rather than the total having to climb to a fixed bar. At 2 this put
+    # a Hacker down 72% of the time it turned up in a pair, at half health, *without the
+    # flee threshold ever tripping* — a loss the escape valve doesn't watch for is close
+    # to the cage abstract_combat's flee rules exist to prevent. See tools/combat_sim.py.
+    ("stun_baton", "Stun Baton", "clubs", 1, 1, 2, False),
     ("holdout_pistol", "Holdout Pistol", "pistols", 3, 0, 5, False),
     ("guard_smg", "Guard SMG", "automatics", 3, 0, 2, False),
     ("riot_shotgun", "Riot Shotgun", "longarms", 4, 0, 1, True),
