@@ -16,7 +16,13 @@ import pytest
 
 from shadowguy.app import ShadowguyApp
 from shadowguy.buildings import BuildingKind, Lock
-from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character, InventoryItem
+from shadowguy.character import (
+    GEAR_EB_PER_POINT,
+    HOURS_PER_DAY,
+    REST_HOURS_COST,
+    Character,
+    InventoryItem,
+)
 from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
@@ -52,7 +58,7 @@ from shadowguy.corp_turn import (
     has_technology,
 )
 from shadowguy.screens.corp_screen import CorpScreen, ResearchTreeScreen
-from shadowguy.screens.creation_screen import CharacterCreationScreen
+from shadowguy.screens.creation_screen import CharacterCreationScreen, GearScreen
 
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.tactical_screen import HackerPickScreen, TacticalScreen
@@ -3201,5 +3207,64 @@ def test_a_traced_hacker_drops_off_the_line_and_the_tile_says_so():
             tile = app.screen.query_one("#tac_box_hacker", Static)
             assert tile.display
             assert "traced" in str(tile.content)
+
+    run(body())
+
+
+# --- creation gear: buying the kit you walk in with ---
+
+
+def test_g_opens_the_gear_screen_and_converting_a_point_shows_up_back_on_creation():
+    """The pools line on the creation screen has to follow a point spent on the gear
+    screen -- a stale one reads as a lost point (hence on_screen_resume)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await _settle(pilot)
+            app.push_screen(CharacterCreationScreen())
+            await _settle(pilot)
+            character = app.character
+            before = character.skill_points
+
+            await pilot.press("g")
+            await _settle(pilot)
+            assert isinstance(app.screen, GearScreen)
+
+            await pilot.press("enter")  # top row converts a skill point
+            await _settle(pilot)
+            assert character.skill_points == before - 1
+            assert character.gear_budget == GEAR_EB_PER_POINT
+
+            await pilot.press("escape")
+            await _settle(pilot)
+            assert isinstance(app.screen, CharacterCreationScreen)
+            pools = str(app.screen.query_one("#pools", Static).content)
+            assert f"Skill points: {before - 1}" in pools
+            assert f"{GEAR_EB_PER_POINT}eb" in pools
+
+    run(body())
+
+
+def test_beginning_the_run_writes_off_unspent_gear_budget_instead_of_banking_it():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await _settle(pilot)
+            app.push_screen(CharacterCreationScreen())
+            await _settle(pilot)
+            character = app.character
+            character.convert_skill_point_to_gear()
+            cash = character.cash
+            while character.stat_points:
+                character.spend_stat_point("body")
+            while character.skill_points:
+                if not any(character.spend_skill_point(s) for s in ("toughness", "sturdy", "running", "fortitude")):
+                    break
+
+            await pilot.press("b")
+            await _settle(pilot)
+            assert character.gear_budget == 0
+            assert character.cash == cash  # written off, never banked
 
     run(body())

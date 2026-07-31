@@ -2,7 +2,8 @@ from textual.app import ComposeResult
 from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, MAX_SKILL_RANK
+from shadowguy.shops import ITEMS_BY_ID, bonus_text
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
@@ -32,6 +33,7 @@ class CharacterCreationScreen(PanelNav, BackScreen):
     BINDINGS = [
         *MENU_BACK_BINDINGS,
         ("r", "reset", "Reset build"),
+        ("g", "gear", "Gear"),
         ("b", "begin", "Begin run"),
         *PANEL_NAV_BINDINGS,
     ]
@@ -116,17 +118,33 @@ class CharacterCreationScreen(PanelNav, BackScreen):
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
 
+    def action_gear(self) -> None:
+        self.app.push_screen(GearScreen())
+
+    async def on_screen_resume(self) -> None:
+        """Redraw when GearScreen pops back: converting a point there changes the skill
+        pool this screen is showing, and a stale pools line reads as a lost point."""
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
+
     def action_begin(self) -> None:
         if self._unspent():
             self.notify("Spend every point before the run starts.", severity="warning")
             return
+        # Whatever gear budget went unspent is burned here rather than banked -- that is
+        # what makes the conversion a gear purchase and not a way to print cash. Said out
+        # loud, because losing it silently would read as a bug.
+        lost = self.app.character.discard_gear_budget()
+        if lost:
+            self.notify(f"{lost}eb of unspent gear budget written off.")
         self.app.begin_run()
 
     def _update_pools(self) -> None:
         character = self.app.character
         self.query_one("#pools", Static).update(
             f"Stat points: {character.stat_points}   Skill points: {character.skill_points}"
-            "   —   enter spends · left/right change panel · r resets · b begins"
+            f"   Gear: {character.gear_budget}eb"
+            "   —   enter spends · g for gear · r resets · b begins"
         )
 
     async def _refresh_column(self, stat: str, index: int = 0) -> None:
@@ -181,3 +199,97 @@ class CharacterCreationScreen(PanelNav, BackScreen):
         self._update_pools()
         await self._refresh_column(stat, index)
         await self._refresh_begin()
+
+
+class GearScreen(PanelNav, BackScreen):
+    """Spend creation skill points on the gear you walk in carrying.
+
+    Its own screen rather than a seventh column on the build grid: that grid is a fixed
+    3x2 of the six core stats, and the catalog is a list that wants room. Same shape as
+    ArchetypeSelectScreen -- a step off the creation screen that comes straight back.
+
+    Two lists. The left buys: one row converts a skill point into
+    character.GEAR_EB_PER_POINT of budget, the rest are catalog items you can afford
+    right now. The right sells back, at full price, anything bought here -- nothing has
+    happened to it yet, and a creation screen has to be undoable.
+
+    Only ungated gear is listed (`min_standing` 0): standing is a relationship, and there
+    is nobody to have one with before the run starts.
+    """
+
+    PANEL_IDS = ("gear_buy", "gear_owned")
+    BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
+
+    CSS = """
+    #gear_head { padding: 0 1; }
+    #gear_cols { grid-size: 2 1; grid-gutter: 1 2; height: 1fr; }
+    .gear_col { height: 1fr; border-top: solid $accent; padding: 0 1; }
+    .gear_col ListView:focus { background: $boost; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(id="gear_head")
+        yield Grid(
+            Vertical(Static("For sale"), ListView(id="gear_buy"), classes="gear_col"),
+            Vertical(Static("Carrying"), ListView(id="gear_owned"), classes="gear_col"),
+            id="gear_cols",
+        )
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    def _catalog(self) -> list:
+        """Everything ungated the budget currently covers, dearest first — so the row at
+        the top is the best thing still in reach, which is what a player is looking for."""
+        budget = self.app.character.gear_budget
+        return sorted(
+            (i for i in ITEMS_BY_ID.values() if not i.min_standing and i.price <= budget),
+            key=lambda i: -i.price,
+        )
+
+    async def _refresh(self, buy_index: int = 0, owned_index: int = 0) -> None:
+        character = self.app.character
+        self.query_one("#gear_head", Static).update(
+            f"Gear budget: {character.gear_budget}eb   Skill points: {character.skill_points}"
+            f"   —   1 point = {GEAR_EB_PER_POINT}eb · unspent eb is lost, never cash"
+        )
+        rows = [
+            ListItem(
+                Static(f"Convert a skill point  →  +{GEAR_EB_PER_POINT}eb"), id="gear_convert"
+            )
+        ]
+        rows += [
+            ListItem(Static(f"{item.name}  —  {item.price}eb  {bonus_text(item)}"), id=f"gear_buy_{item.id}")
+            for item in self._catalog()
+        ]
+        await _replace_items(self.query_one("#gear_buy", ListView), rows, buy_index)
+
+        owned = [
+            ListItem(Static(f"{ITEMS_BY_ID[i].name}  —  refund {ITEMS_BY_ID[i].price}eb"), id=f"gear_sell_{n}")
+            for n, i in enumerate(character.creation_gear)
+        ]
+        await _replace_items(self.query_one("#gear_owned", ListView), owned, owned_index)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        item_id = event.item.id
+        index = event.list_view.index or 0
+        if item_id == "gear_convert":
+            if not character.convert_skill_point_to_gear():
+                self.notify("No skill points left to convert.", severity="warning")
+        elif item_id.startswith("gear_buy_"):
+            item = ITEMS_BY_ID[item_id.removeprefix("gear_buy_")]
+            if not character.buy_creation_gear(item):
+                self.notify(f"{item.name} costs {item.price}eb.", severity="warning")
+        else:
+            # Indexed rather than keyed by item id: the same item can be carried twice,
+            # and the row the player picked is the one that should go back.
+            picked = int(item_id.removeprefix("gear_sell_"))
+            character.refund_creation_gear(character.creation_gear[picked])
+
+        self.query_one(CharacterSheet).refresh()
+        buying = not item_id.startswith("gear_sell_")
+        await self._refresh(buy_index=index if buying else 0)

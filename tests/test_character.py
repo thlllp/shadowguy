@@ -2,9 +2,11 @@
 
 import pytest
 
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
+    GEAR_EB_PER_POINT,
     FATIGUE_GRACE_HOURS,
     FATIGUE_STAT_PENALTY_CAP,
     HEALTH_PER_BODY,
@@ -549,3 +551,87 @@ def test_hire_for_job_respects_wetwork_style_cap_three_on_site_one_support():
     assert c.hire_for_job("runner_specter", "job_1", on_site=False)
     assert not c.hire_for_job("runner_null", "job_1", on_site=False)
     assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_specter"}
+
+
+# --- creation gear: skill points traded for the kit you walk in with ---
+
+
+def test_converting_a_skill_point_buys_gear_budget_not_cash():
+    c = Character(name="t")
+    cash, points = c.cash, c.skill_points
+    assert c.convert_skill_point_to_gear()
+    assert c.skill_points == points - 1
+    assert c.gear_budget == GEAR_EB_PER_POINT
+    assert c.cash == cash  # budget is not, and never becomes, money
+
+
+def test_the_whole_skill_pool_can_go_to_gear_and_then_nothing_is_left_to_convert():
+    """Deliberately uncapped -- the trade caps itself, since gear with no ranks behind it
+    swings at skill_value 2 and misses nearly everything."""
+    c = Character(name="t")
+    converted = 0
+    while c.convert_skill_point_to_gear():
+        converted += 1
+    assert converted == STARTING_SKILL_POINTS
+    assert c.gear_budget == STARTING_SKILL_POINTS * GEAR_EB_PER_POINT
+    assert not c.convert_skill_point_to_gear()
+
+
+def test_unspent_gear_budget_is_written_off_rather_than_banked_as_cash():
+    """The rule that makes this a gear purchase instead of a way to print starting money."""
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    cash = c.cash
+    assert c.discard_gear_budget() == GEAR_EB_PER_POINT
+    assert c.gear_budget == 0
+    assert c.cash == cash
+    assert c.discard_gear_budget() == 0  # idempotent
+
+
+def test_buying_creation_gear_spends_budget_and_equips_what_fits():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    vest = ITEMS_BY_ID["kevlar_vest"]
+    assert c.buy_creation_gear(vest)
+    assert c.gear_budget == GEAR_EB_PER_POINT - vest.price
+    assert c.creation_gear == ["kevlar_vest"]
+    assert [e.item_id for e in c.inventory] == ["kevlar_vest"]
+    assert c.inventory[0].equipped  # the torso slot was free
+
+
+def test_creation_gear_refuses_what_the_budget_cannot_cover_or_standing_gates():
+    c = Character(name="t")
+    assert not c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])  # no budget at all yet
+    c.convert_skill_point_to_gear()
+    gated = next(i for i in ITEMS_BY_ID.values() if i.min_standing)
+    assert not c.buy_creation_gear(gated)  # nobody to have standing with pre-run
+    assert c.creation_gear == []
+
+
+def test_refunding_creation_gear_returns_the_full_price():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])
+    assert c.refund_creation_gear("kevlar_vest")
+    assert c.gear_budget == GEAR_EB_PER_POINT
+    assert c.creation_gear == [] and c.inventory == []
+    assert not c.refund_creation_gear("kevlar_vest")  # nothing left to give back
+
+
+def test_refund_only_reaches_gear_bought_at_creation():
+    """It must never become a way to sell starting kit at full price mid-run."""
+    c = Character(name="t")
+    c.inventory.append(InventoryItem("kevlar_vest"))
+    assert not c.refund_creation_gear("kevlar_vest")
+    assert len(c.inventory) == 1
+
+
+def test_reset_build_takes_back_creation_gear_and_the_points_that_paid_for_it():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])
+    c.reset_build()
+    assert c.skill_points == STARTING_SKILL_POINTS
+    assert c.gear_budget == 0
+    assert c.creation_gear == []
+    assert c.inventory == []

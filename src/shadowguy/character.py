@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, can_work_support, recruit_wage
-from shadowguy.shops import InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
@@ -51,6 +51,12 @@ STARTING_STAT = 1
 STARTING_SKILL_RANK = 1
 STARTING_STAT_POINTS = 6
 STARTING_SKILL_POINTS = 20
+# What one creation skill point is worth as gear, via convert_skill_point_to_gear. A
+# build's third spend: ranks, stats, or walking in already equipped. 2500eb buys a real
+# weapon and armor (the catalog runs 80-1600 an item), so one point is a kit rather than
+# a trinket -- which is the point, since a point is dear.
+GEAR_EB_PER_POINT = 2500
+
 # A little walking-around money so the first nights' lodging (corpmap.lodging_cost)
 # don't strand a fresh runner before their first payday. Not part of the build — the
 # creation screen spends points, not cash — so reset_build() leaves it alone.
@@ -213,6 +219,14 @@ class Character:
     # nothing puts them back.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
+    # Creation-only eb, bought with skill points (convert_skill_point_to_gear) and
+    # spendable only on gear. Never cash: whatever is left over when the run starts is
+    # burned (discard_gear_budget), so this can't be used to print starting money.
+    gear_budget: int = 0
+    # Item ids bought with that budget, so reset_build can take them back out of the
+    # inventory again -- a point spent on a vest is a point spent, and undoing the build
+    # has to undo it. Item ids rather than InventoryItem so a duplicate buy is two entries.
+    creation_gear: list[str] = field(default_factory=list)
     # Earned through play (currently: completed jobs only, see jobs.JOB_XP_BASE and
     # Outcome.experience_delta) and spent post-creation via spend_experience_on_stat/
     # spend_experience_on_skill — a single pool that buys either, the player's choice
@@ -513,6 +527,71 @@ class Character:
         self._raise_stat(name)
         return True
 
+    def convert_skill_point_to_gear(self) -> bool:
+        """Trade one creation skill point for GEAR_EB_PER_POINT of gear budget.
+
+        The third thing a build can spend its 20 points on, beside ranks: walk in with a
+        weapon and a vest instead of knowing how to use them. Deliberately *not* capped —
+        a runner may pour all 20 in — because the trade caps itself twice over. Ranks are
+        the to-hit half of every fight ("weapons are the damage, skills are the hit"), so
+        a runner who bought a katana and no Blades swings at skill_value 2 and misses
+        nearly everything; and armor can't simply be stacked, since shops.SLOT_CAPACITY
+        limits what can be worn at once. Gear with no ranks behind it is a bad build, not
+        a strong one, which is what makes the exchange rate safe without a ceiling.
+
+        `gear_budget` is not cash and never becomes cash — see discard_gear_budget.
+        """
+        if self.skill_points <= 0:
+            return False
+        self.skill_points -= 1
+        self.gear_budget += GEAR_EB_PER_POINT
+        return True
+
+    def discard_gear_budget(self) -> int:
+        """Drop whatever gear budget went unspent, at the moment the run begins.
+
+        The rule that makes the conversion a *gear* purchase rather than a way to print
+        starting money: leftover eb is burned, not banked. Without this a build could
+        convert all 20 points and walk in with 50,000 cash, which is a different (and much
+        worse) game than walking in with 50,000 of kit they can't shoot straight with.
+        Returns what was lost, so the creation screen can say so out loud.
+        """
+        lost, self.gear_budget = self.gear_budget, 0
+        return lost
+
+    def buy_creation_gear(self, item: "Item") -> bool:
+        """Spend gear budget (never cash) on one catalog item at creation.
+
+        Mirrors shops.buy_item's auto-equip rule -- equipped if the slot has room, stowed
+        otherwise -- so a runner who buys three torso pieces gets the same behaviour they
+        would at a shop. Standing gates don't apply: there's nobody to have standing with
+        before the run starts, so a min_standing item simply isn't offered.
+        """
+        if item.min_standing or item.price > self.gear_budget:
+            return False
+        self.gear_budget -= item.price
+        self.inventory.append(InventoryItem(item.id, equipped=fits_in_slot(self.inventory, item)))
+        self.creation_gear.append(item.id)
+        return True
+
+    def refund_creation_gear(self, item_id: str) -> bool:
+        """Put one creation purchase back, at full price -- nothing has happened to it yet.
+
+        Only reverses a *creation* buy (creation_gear), so it can never be used to sell
+        off starting kit an archetype granted after the run has begun: the creation screen
+        is the only thing that calls it, and discard_gear_budget zeroes the budget the
+        moment the run starts.
+        """
+        if item_id not in self.creation_gear:
+            return False
+        entry = next((e for e in reversed(self.inventory) if e.item_id == item_id), None)
+        if entry is None:
+            return False
+        self.inventory.remove(entry)
+        self.creation_gear.remove(item_id)
+        self.gear_budget += ITEMS_BY_ID[item_id].price
+        return True
+
     def spend_experience_on_skill(self, skill_id: str) -> bool:
         """Post-creation counterpart to spend_skill_point: same cost curve
         (next_rank_cost), paid out of `experience` instead of the one-shot
@@ -549,6 +628,11 @@ class Character:
         self.skill_ranks = {skill.id: STARTING_SKILL_RANK for skill in SKILLS}
         self.stat_points = STARTING_STAT_POINTS
         self.skill_points = STARTING_SKILL_POINTS
+        # Gear bought at creation goes back with the points that paid for it -- a reset
+        # is "undo every point spent", and a point spent on a vest is one of them.
+        self.gear_budget = 0
+        self.inventory = [entry for entry in self.inventory if entry.item_id not in self.creation_gear]
+        self.creation_gear = []
         self.health = self.max_health
 
     def accept_job(self, offer: "JobOffer") -> None:

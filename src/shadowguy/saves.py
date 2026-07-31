@@ -209,7 +209,12 @@ SAVE_SUFFIX = ".save"
 # carry. RivalRunner instances are pickled directly (ShadowguyApp.runners, save v43), so
 # a pre-v55 roster has objects with no `deck_id` attribute at all -- every support
 # lookup on one would raise rather than read as "no deck".
-SAVE_VERSION = 55
+# v56 added creation gear: Character gained `gear_budget` and `creation_gear`
+# (convert_skill_point_to_gear trades a creation skill point for GEAR_EB_PER_POINT of
+# gear-only eb, and archetypes.Archetype gained a `gear` loadout spent the same way). A
+# pre-v56 pickled Character lacks both fields, so reset_build would raise on the first
+# one it touches -- and every preset's rank list changed to free the point its kit costs.
+SAVE_VERSION = 56
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
