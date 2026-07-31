@@ -52,10 +52,13 @@ STARTING_SKILL_RANK = 1
 STARTING_STAT_POINTS = 6
 STARTING_SKILL_POINTS = 20
 # What one creation skill point is worth as gear, via convert_skill_point_to_gear. A
-# build's third spend: ranks, stats, or walking in already equipped. 2500eb buys a real
-# weapon and armor (the catalog runs 80-1600 an item), so one point is a kit rather than
-# a trinket -- which is the point, since a point is dear.
-GEAR_EB_PER_POINT = 2500
+# build's third spend: ranks, stats, or walking in already equipped. The catalog runs
+# 80-1600 an item, so one point is roughly *one thing* -- a weapon or a torso piece, not
+# a whole kit. Deliberately that granular: at a coarser rate a single point covered a
+# runner head to toe and the choice stopped being a choice, and the leftover (which is
+# burned, not banked -- see discard_gear_budget) was large enough to feel like a penalty
+# for not min-maxing the shopping list.
+GEAR_EB_PER_POINT = 1000
 
 # A little walking-around money so the first nights' lodging (corpmap.lodging_cost)
 # don't strand a fresh runner before their first payday. Not part of the build — the

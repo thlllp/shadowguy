@@ -27,9 +27,12 @@ class Archetype:
     stats: dict[str, int]
     skills: dict[str, int]
     # shops item ids this build walks in carrying, bought with the skill points the rank
-    # list deliberately leaves unspent (character.convert_skill_point_to_gear). A preset
-    # is the *whole* build, so it picks the kit too rather than leaving the player at a
-    # shop screen with a pool they may not know they have.
+    # list deliberately leaves unspent (character.convert_skill_point_to_gear -- two
+    # points, at today's GEAR_EB_PER_POINT). A preset is the *whole* build, so it picks
+    # the kit too rather than leaving the player at a shop screen with a pool they may
+    # not know they have. Change the rate and these rank lists have to move with it:
+    # _validate_preset fails the moment a loadout costs more points than its ranks left
+    # over, which is the guard that keeps the two in step.
     gear: tuple[str, ...] = ()
 
     def apply(self, character: "Character") -> None:
@@ -82,7 +85,7 @@ _ARCHETYPE_ROWS = (
         # Strength is bought for the damage, not the skill list: it adds to every melee
         # hit (combat.melee_damage_bonus), so a club in this build swings for its rating
         # plus 4 before the roll's margin.
-        {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 1},
+        {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1},
         # Walks in wearing the heaviest armor the ungated catalog sells: this build wins
         # by still standing, and Body already feeds the soak roll the Hardsuit adds to.
         ("brass_knuckles", "combat_knife", "hardsuit", "reinforced_helmet", "steel_toe_boots"),
@@ -100,7 +103,7 @@ _ARCHETYPE_ROWS = (
         # firewall (matrix.firewall_defense), Tinkering is Harden. Cybercombat leads
         # because that is what a Data Heist's fights actually roll -- and it clears
         # MIN_READY_CYBERCOMBAT, so this preset never trips the readiness warning.
-        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 2},
+        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2},
         # The deck *is* the build -- a hacker with no cyberdeck cannot enter the matrix
         # at all, and the Zetatech Rig's 3 program slots are the most the ungated catalog
         # offers. The pistol and jacket are so the walk to the job isn't fatal.
@@ -114,7 +117,7 @@ _ARCHETYPE_ROWS = (
         # Blades rather than a gun: this build's whole premise is not being heard, and
         # a blade is the weapon it can carry concealed. Sight stays because Recon --
         # the Infiltrator's own job archetype -- leads every beat with a perception skill.
-        {"stealth": 7, "deception": 5, "sight": 3, "blades": 4},
+        {"stealth": 7, "deception": 5, "sight": 3, "blades": 3},
         # Blades and nothing that bangs: Slippers carry a Stealth bonus of their own
         # (shops.Item.skill_bonuses), and light armor because being seen is the failure
         # state, not being shot.
@@ -133,7 +136,7 @@ _ARCHETYPE_ROWS = (
         # them on the shotgun, so its signature skill has a weapon to roll from day one
         # rather than after a job or two of shooting a Pipe Pistol. Pistols stays as the
         # sidearm the second weapon slot carries.
-        {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 3},
+        {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3},
         ("pump_shotgun", "pipe_pistol", "kevlar_vest", "reinforced_helmet", "steel_toe_boots"),
     ),
     (
@@ -147,7 +150,7 @@ _ARCHETYPE_ROWS = (
         # -- this build fields a crew the others can't afford. Computer is what those 2
         # logic points are for: digging up information is the other half of the job, and
         # a stat this preset buys should be a stat it actually rolls.
-        {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 3},
+        {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3},
         # The car is the buy nobody else makes: a Slot.VEHICLE item cuts TRAVEL_HOURS_COST
         # on every hop (shops.Item.travel_reduction), and this is the build that spends
         # its run moving between people rather than shooting them.

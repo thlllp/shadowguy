@@ -53,35 +53,35 @@ def test_enforcer():
     a = archetypes.ARCHETYPES_BY_ID["enforcer"]
     assert a.name == "Enforcer"
     assert a.stats == {"body": 3, "strength": 3}
-    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 1}
+    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1}
 
 
 def test_hacker():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     assert a.name == "Hacker"
     assert a.stats == {"logic": 6}
-    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 2}
+    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2}
 
 
 def test_infiltrator():
     a = archetypes.ARCHETYPES_BY_ID["infiltrator"]
     assert a.name == "Infiltrator"
     assert a.stats == {"agility": 4, "perception": 2}
-    assert a.skills == {"stealth": 7, "deception": 5, "sight": 3, "blades": 4}
+    assert a.skills == {"stealth": 7, "deception": 5, "sight": 3, "blades": 3}
 
 
 def test_gunslinger():
     a = archetypes.ARCHETYPES_BY_ID["gunslinger"]
     assert a.name == "Gunslinger"
     assert a.stats == {"agility": 3, "body": 3}
-    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 3}
+    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}
 
 
 def test_fixer():
     a = archetypes.ARCHETYPES_BY_ID["fixer"]
     assert a.name == "Fixer"
     assert a.stats == {"cool": 4, "logic": 2}
-    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 3}
+    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3}
 
 
 def test_no_preset_raises_a_stat_it_never_rolls():
@@ -162,18 +162,17 @@ def test_every_preset_ships_a_loadout_it_can_actually_afford():
     """A preset is the whole build, gear included -- the rank lists leave exactly the
     points the kit costs, and apply() converts and buys them."""
     from shadowguy.character import GEAR_EB_PER_POINT, Character
-    from shadowguy.shops import ITEMS_BY_ID
 
     for a in archetypes.ARCHETYPES:
         assert a.gear, f"{a.id}: ships no gear"
         character = Character(name="_gear")
         a.apply(character)
-        bill = sum(ITEMS_BY_ID[i].price for i in a.gear)
         assert [e.item_id for e in character.inventory] == list(a.gear)
         assert character.creation_gear == list(a.gear)
-        # One point's worth, and the leftover is under a point -- a preset that burned a
-        # whole point on nothing would be paying for air.
-        assert bill <= GEAR_EB_PER_POINT
+        # Written against the rate rather than a fixed point count, so changing
+        # GEAR_EB_PER_POINT doesn't need this test edited -- only the rank lists, which
+        # is exactly what should have to move. The leftover must be under a point: a
+        # preset burning a whole one on nothing would be paying for air.
         assert character.gear_budget < GEAR_EB_PER_POINT
 
 
