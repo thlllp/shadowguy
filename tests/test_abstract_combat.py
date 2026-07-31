@@ -15,7 +15,7 @@ from shadowguy.character import Character
 from shadowguy.combat import ENEMIES_BY_ID, UNARMED, Drop, Enemy, equipped_weapons
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 
-from helpers import AlwaysSix
+from helpers import AlwaysSix, npc_weapon, synthetic_enemy
 
 
 # --- available_actions ---
@@ -134,8 +134,13 @@ class _AlwaysSix(random.Random):
 
 
 def _stunning_enemy(stun_damage: int) -> Enemy:
-    return Enemy(id="test_stunner", name="Stunner", health=20, attack=5, defense=1, damage=1,
-                 toughness=0, stun_damage=stun_damage)
+    """A fat target that reliably lands a shocking hit. Its stun now comes off the
+    weapon it holds (Enemy.stun_damage is the weapon's), and a *ranged* weapon so its
+    damage stays 1 rather than picking up melee_damage_bonus's Strength."""
+    return synthetic_enemy(
+        npc_weapon("pistols", damage=1, stun_damage=stun_damage),
+        body=4, agility=5, id="test_stunner", name="Stunner",
+    )
 
 
 def test_a_landed_hit_from_a_stun_weapon_raises_character_stun():
@@ -179,19 +184,27 @@ def test_stun_reaching_current_health_knocks_the_player_out():
 def _one_melee_swing(strength: int) -> int:
     """Health taken off a fat target by one katana swing at `strength`. AlwaysSix pins
     both the to-hit roll and the enemy's soak, so the only thing that moves between two
-    calls is the Strength folded into base_damage."""
+    calls is the Strength folded into base_damage.
+
+    The target is body 4 (health 20, toughness 4) rather than the old health-999/
+    toughness-0 dummy: an Enemy's health and soak both derive from Body now, so a
+    punching bag that never soaks is no longer expressible. It doesn't matter — the soak
+    is identical across both calls, so it cancels out of the difference — but the health
+    does have to outlast the bigger swing, which is what 20 is for. The swinger needs
+    agility 6 to clear the target's dodge pool at all: every weapon skill is agility's.
+    """
     character = Character(
-        name="t", strength=strength,
+        name="t", strength=strength, agility=6,
         inventory=[InventoryItem(item_id="mono_katana", equipped=True)],
     )
-    enemy = Enemy(id="dummy", name="Dummy", health=999, attack=0, defense=1, damage=0, toughness=0)
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1), body=4, id="dummy", name="Dummy")
     state = start_combat(character, (enemy,), rng=AlwaysSix())
     swing = next(
         a for a in available_actions(character, state.weapon_cooldowns)
         if a.kind is ActionKind.ATTACK and a.weapon and a.weapon.id == "mono_katana"
     )
     take_turn(state, swing, rng=AlwaysSix())
-    return 999 - state.fighters[0].health
+    return enemy.health - state.fighters[0].health
 
 
 def test_strength_reaches_a_landed_melee_hit_point_for_point():
@@ -204,16 +217,16 @@ def test_strength_does_not_reach_a_gun():
     very different runners hit for exactly the same."""
     def one_shot(strength: int) -> int:
         character = Character(
-            name="t", strength=strength,
+            name="t", strength=strength, agility=6,
             inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)],
         )
-        enemy = Enemy(id="d", name="D", health=999, attack=0, defense=1, damage=0, toughness=0)
+        enemy = synthetic_enemy(npc_weapon("clubs", damage=1), body=4, id="d", name="D")
         state = start_combat(character, (enemy,), rng=AlwaysSix())
         shot = next(
             a for a in available_actions(character, state.weapon_cooldowns)
             if a.kind is ActionKind.ATTACK and a.weapon and a.weapon.id == "pipe_pistol"
         )
         take_turn(state, shot, rng=AlwaysSix())
-        return 999 - state.fighters[0].health
+        return enemy.health - state.fighters[0].health
 
     assert one_shot(1) == one_shot(9)

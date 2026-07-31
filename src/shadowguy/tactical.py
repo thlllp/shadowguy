@@ -31,6 +31,7 @@ from shadowguy.buildings import Building, Lock
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
+    MELEE_RANGE,
     Enemy,
     attack_verbs,
     combat_consumables,
@@ -41,6 +42,7 @@ from shadowguy.combat import (
     player_soak,
     resolve_hit,
     smartlink_bonus,
+    weapon_range,
 )
 from shadowguy.grid import (
     Coord,
@@ -52,21 +54,17 @@ from shadowguy.grid import (
     step_neighbors,
     visible_tiles,
 )
-from shadowguy.shops import CONSUMABLES_BY_ID, RANGED_SKILLS, Consumable, EffectKind, Item
+from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
 
 
-# A weapon's reach, derived from its skill rather than a new Item field: the shooting
-# skills (shops.RANGED_SKILLS — the three gun categories, gunnery and archery) reach
-# across the map, throwing gets a middle band of its own, everything else is arm's
-# length. Three bands rather than two because the weapon categories made "ranged or
-# not" too coarse: a thrown knife shouldn't cover the same ground as a rifle.
-MELEE_RANGE = 1
-THROWN_RANGE = 4
-FIREARM_RANGE = 8
-
-# How far an enemy can attack is per-enemy, on combat.Enemy.reach (a guard shoots, street
-# muscle closes) — read by _enemy_phase. There is deliberately no global enemy range.
+# MELEE_RANGE/THROWN_RANGE/FIREARM_RANGE and weapon_range now live in combat.py — an
+# Enemy's reach is weapon_range of the weapon it's holding, so the bands had to be
+# readable from the side of the fight that has no Character behind it.
+#
+# How far an enemy can attack is still per-enemy, on combat.Enemy.reach (a guard shoots,
+# street muscle closes) — read by _enemy_phase. There is deliberately no global enemy
+# range; it falls out of what each one is carrying.
 
 # Move budget per turn. A constant for now; Agility (or a future ability) raising the
 # player's is the obvious hook, which is why it's a field on the unit, not a global.
@@ -298,12 +296,6 @@ def cover_bonus(grid: Grid, defender: Coord, attacker: Coord) -> int:
         elif tile is Tile.LOW_COVER:
             best = max(best, HALF_COVER)
     return best
-
-
-def weapon_range(weapon: Item) -> int:
-    if weapon.skill in RANGED_SKILLS:
-        return FIREARM_RANGE
-    return THROWN_RANGE if weapon.skill == "throwing" else MELEE_RANGE
 
 
 def ally_spawns(grid: Grid, player_start: Coord, count: int, taken: frozenset[Coord]) -> list[Coord]:

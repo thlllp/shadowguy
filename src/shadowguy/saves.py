@@ -193,7 +193,17 @@ SAVE_SUFFIX = ".save"
 # analysis to `computer`. Character.skill_ranks tolerates the missing keys (skill_rank
 # defaults), but a pre-v53 runner's Hack rank silently stops applying to matrix fights
 # -- a live character would be markedly worse at the thing they built for.
-SAVE_VERSION = 53
+# v54 rewrote combat.Enemy onto the player's own stat sheet. It was seven hand-tuned
+# fields (health/attack/defense/damage/toughness/reach/stun_damage); it is now the six
+# CORE_STATS plus `ranks`/`weapon`/`armor`, with all seven of those derived as
+# properties through the same skill_value/melee_damage_bonus/DEFENSE_BASE the player
+# goes through. A pre-v54 pickled Enemy -- reachable from an accepted job's
+# scene.Encounter/TacticalStage and from scene.BurglaryStage.guard -- carries the old
+# fields as *instance attributes that now shadow the properties*, so it would keep
+# fighting on its old numbers with no stats behind it and no error to say so. The
+# roster also grew from 5 to 11 and ENEMY_TIERS was re-pooled, so a pre-v54 run's
+# accepted jobs hold squads the current generator would never roll.
+SAVE_VERSION = 54
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -1,4 +1,5 @@
-"""Tests for combat.py: drop_for_result, attack_verbs, resolve_hit, defense and soak."""
+"""Tests for combat.py: drop_for_result, attack_verbs, resolve_hit, defense and soak,
+and the Enemy stat block that derives its combat numbers the way the player does."""
 
 import random
 
@@ -6,19 +7,34 @@ import random
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult
 from shadowguy.combat import (
+    DEFENSE_BASE,
+    ENEMIES,
+    ENEMIES_BY_ID,
+    ENEMY_TIERS,
+    NPC_WEAPONS,
     SMARTLINK_ATTACK_BONUS,
     _DEFAULT_ATTACK_VERBS,
     Drop,
     UNARMED,
     attack_verbs,
+    crew_stats,
     drop_for_result,
+    player_defense,
     player_soak,
     resolve_hit,
     melee_damage_bonus,
+    roll_enemies,
     smartlink_bonus,
+    weapon_range,
 )
 from shadowguy.cybernetics import CyberSlot, install_cyberware
-from shadowguy.shops import ITEMS_BY_ID, Slot
+from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.shops import ITEMS_BY_ID, MIN_WEAPON_DAMAGE, Slot
+from shadowguy.skills import skill_value
+
+import pytest
+
+from helpers import npc_weapon, synthetic_enemy
 
 
 # --- drop_for_result ---
@@ -178,3 +194,121 @@ def test_player_soak_folds_in_installed_cyberware_defense():
     before = player_soak(character)
     install_cyberware(character, "titanium_bones")
     assert player_soak(character) == before + 2
+
+
+# --- Enemy: the stat block derives what a fight reads ---
+
+
+@pytest.mark.parametrize("enemy", ENEMIES, ids=lambda e: e.id)
+def test_every_enemy_derives_its_combat_numbers_from_its_own_sheet(enemy):
+    """The whole point of the rewrite: none of these seven is a stored number any more,
+    so each has to equal the formula behind it rather than whatever a table once said."""
+    assert enemy.health == enemy.body * 5
+    assert enemy.toughness == enemy.body + enemy.armor
+    assert enemy.attack == skill_value(enemy, enemy.weapon.skill)
+    assert enemy.defense == DEFENSE_BASE + skill_value(enemy, "dodge")
+    assert enemy.stun_damage == enemy.weapon.stun_damage
+    assert enemy.reach == weapon_range(enemy.weapon)
+
+
+@pytest.mark.parametrize("enemy", ENEMIES, ids=lambda e: e.id)
+def test_every_enemy_is_a_coherent_combatant(enemy):
+    """Invariants rather than exact values: whatever the roster is tuned to, an entry
+    that can't hurt anyone or can't be hurt is a bug, not a design."""
+    assert enemy.health > 0
+    assert enemy.attack > 0
+    assert enemy.damage > 0 or enemy.stun_damage > 0
+    assert all(rank > 0 for rank in enemy.ranks.values())
+
+
+def test_enemy_and_player_defense_agree_when_the_sheets_do():
+    """Same Dodge value on either side of the table, same defense — the symmetry the
+    derived stat block exists for. player_defense and Enemy.defense are the same
+    formula, so nothing but the sheet can make them differ."""
+    character = Character(name="t", agility=3)
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1), agility=3)
+    # The player starts every skill at rank 1 and the enemy at 0, so match them up.
+    enemy_matched = synthetic_enemy(npc_weapon("clubs", damage=1), agility=3, ranks={"dodge": 1})
+    assert skill_value(character, "dodge") == skill_value(enemy_matched, "dodge")
+    assert player_defense(character) == enemy_matched.defense
+    assert enemy.defense == enemy_matched.defense - 1
+
+
+def test_strength_reaches_an_enemy_melee_hit_the_way_it_reaches_the_players():
+    """melee_damage_bonus used to be player-only. An Enemy has a Strength now, so the
+    same rule applies to it — and still doesn't reach a gun."""
+    melee = synthetic_enemy(npc_weapon("clubs", damage=2), strength=4)
+    shooter = synthetic_enemy(npc_weapon("pistols", damage=2), strength=4)
+    assert melee.damage == 2 + 4
+    assert shooter.damage == 2
+
+
+def test_enemy_stat_rejects_a_name_that_is_not_a_core_stat():
+    """Same guard Character.stat has — an Enemy is only the six CORE_STATS, so a typo'd
+    skill table entry fails loudly rather than reading as 0."""
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1))
+    with pytest.raises(ValueError):
+        enemy.stat("cash")
+
+
+# --- the NPC weapon table ---
+
+
+def test_npc_weapons_are_not_for_sale_and_reach_under_the_catalog_floor():
+    """Why they can't just be catalog items: most sit below MIN_WEAPON_DAMAGE, which the
+    catalog rejects at import. Enemy damage picks up Strength now, so arming the roster
+    off the player's shelf would double what it was tuned to. Nothing here is buyable
+    either way — the three long guns do reach catalog-grade damage."""
+    assert NPC_WEAPONS
+    assert any(weapon.damage < MIN_WEAPON_DAMAGE for weapon in NPC_WEAPONS.values())
+    for weapon in NPC_WEAPONS.values():
+        assert weapon.id not in ITEMS_BY_ID  # not for sale, never in a shop listing
+        assert weapon.damage or weapon.stun_damage
+
+
+def test_no_npc_weapon_declares_a_cooldown_no_surface_would_honour():
+    """weapon_cooldowns is player-only state on both fight surfaces, so an NPC weapon
+    with recharge_rounds would fire every round anyway and the number would be a lie."""
+    assert all(weapon.recharge_rounds == 0 for weapon in NPC_WEAPONS.values())
+
+
+# --- the roster and its tiers ---
+
+
+def test_every_tier_pool_names_a_real_enemy_and_rolls_within_its_count():
+    rng = random.Random(0)
+    for tier, (pool, (low, high)) in ENEMY_TIERS.items():
+        assert pool and all(enemy_id in ENEMIES_BY_ID for enemy_id in pool)
+        for _ in range(50):
+            squad = roll_enemies(tier, rng)
+            assert low <= len(squad) <= high
+            assert all(enemy.id in pool for enemy in squad)
+
+
+def test_the_roster_spreads_shape_not_just_power():
+    """The diversity the roster is for: it is not one ladder of the same creature. At
+    least one of each must exist somewhere in it."""
+    assert any(enemy.reach > 1 for enemy in ENEMIES)   # something to kite
+    assert any(enemy.reach == 1 for enemy in ENEMIES)  # something that must close
+    assert any(enemy.stun_damage for enemy in ENEMIES)  # threatens a KO, not a death
+    assert any(enemy.armor for enemy in ENEMIES)       # soaks
+    # and no two entries are the same creature under a different name
+    profiles = {
+        (e.health, e.attack, e.defense, e.damage, e.toughness, e.reach, e.stun_damage)
+        for e in ENEMIES
+    }
+    assert len(profiles) >= len(ENEMIES) - 2
+
+
+# --- crew_stats: a hire is an Enemy pointed the other way ---
+
+
+@pytest.mark.parametrize("runner", RIVAL_RUNNERS, ids=lambda r: r.id)
+def test_crew_stats_lands_the_runners_rating_as_their_attack_pool(runner):
+    """rating is no longer assigned to `attack` — it's bought as rank in their weapon's
+    skill, so a better-rated hire is a better-trained one. It still has to come out at
+    the rating on the nose."""
+    stats = crew_stats(runner)
+    assert stats.attack == runner.rating
+    assert stats.id == runner.id and stats.name == runner.name
+    assert stats.health > 0 and stats.damage > 0

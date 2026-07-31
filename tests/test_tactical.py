@@ -10,7 +10,15 @@ import pytest
 from shadowguy.buildings import BuildingKind, Lock, generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
-from shadowguy.combat import ENEMIES_BY_ID, attack_verbs, player_defense
+from shadowguy.combat import (
+    FIREARM_RANGE,
+    MELEE_RANGE,
+    THROWN_RANGE,
+    ENEMIES_BY_ID,
+    attack_verbs,
+    player_defense,
+    weapon_range,
+)
 from shadowguy.grid import (
     Tile,
     chebyshev,
@@ -23,16 +31,13 @@ from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, InventoryItem
 from shadowguy.tactical import (
     ARREST_DAYS,
     ENEMY_SPEED,
-    FIREARM_RANGE,
     FULL_COVER,
     GRENADE_RADIUS,
     GRENADE_RANGE,
     HALF_COVER,
     LOCK_FAILURE_ALARM_CHANCE,
-    MELEE_RANGE,
     TAC_MAP_HEIGHT,
     TAC_MAP_WIDTH,
-    THROWN_RANGE,
     AimKind,
     CrewFate,
     Side,
@@ -79,7 +84,6 @@ from shadowguy.tactical import (
     targets_for,
     throw_grenade,
     weapon_for_target,
-    weapon_range,
 )
 
 from helpers import AlwaysOne, AlwaysSix, ForcedChance, crew_stats_for
@@ -476,9 +480,13 @@ def test_targets_for_includes_an_in_range_in_los_enemy():
 # --- player_attack ---
 
 
-def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0)):
+def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0), strength=1):
+    """`strength` is the bare-hands attack pool: UNARMED rolls Grapple, which is the one
+    weapon skill sitting on Strength rather than Agility. A fresh Character (all stats 1)
+    rolls 2 dice there, and the thug's dodge pool is now 2 as well — enough of a tie that
+    a test needing a *guaranteed* hit under AlwaysSix has to buy some."""
     grid = parse_grid(["......", "......", "......"])
-    character = Character(name="t")
+    character = Character(name="t", strength=strength)
     enemy = ENEMIES_BY_ID[enemy_id]
     return start_tactical(
         character, grid, player_start=(0, 0), enemy_placements=[(enemy, enemy_coord)], exits=frozenset({(0, 0)})
@@ -486,9 +494,9 @@ def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0)):
 
 
 def test_player_attack_guaranteed_miss_leaves_the_enemy_untouched():
-    """thug's defense (9) converts to a 0-dice opposing pool (checks.pool_for_
-    difficulty), so under AlwaysOne the attacker rolls 0 successes against an
-    opposition that also rolls 0 -- margin 0 is a miss regardless of build."""
+    """Under AlwaysOne nobody rolls a single success, on either side -- so the margin is
+    0 whatever the two pool sizes are, and margin 0 is a miss. Holds regardless of build
+    or of what the thug's defense converts to."""
     state = _adjacent_state()
     weapon = player_weapons(state)[0]
     health_before = state.enemies[0].health
@@ -499,21 +507,26 @@ def test_player_attack_guaranteed_miss_leaves_the_enemy_untouched():
 
 
 def test_player_attack_guaranteed_hit_deals_the_exact_margin_damage():
-    """Same 0-dice opposing pool as above, but under AlwaysSix every die the attacker
-    rolls succeeds too, so margin == the attacker's whole pool (bare-hands grapple
-    skill_value 2 for a fresh Character). Soak (thug toughness 1) is also fully
-    saturated under AlwaysSix. Every term is pinned, which is the point -- an exact,
-    non-random number instead of only asserting "some damage happened":
+    """Under AlwaysSix every die succeeds on both sides, so each pool contributes its own
+    size and margin == attacker pool - dodge pool. Every term is pinned, which is the
+    point -- an exact, non-random number instead of only asserting "some damage happened":
 
-        UNARMED.damage (0) + Strength (1, a fresh Character -- combat.melee_damage_bonus
-        applies to bare hands) + margin (2) - soak (1) = 2
+        attack pool  = Grapple skill_value = Strength (3) + rank (1)      = 4
+        dodge pool   = pool_for_difficulty(thug defense 13)               = 2
+        margin       = 4 - 2                                              = 2
+        base damage  = UNARMED.damage (0) + Strength (3, melee_damage_bonus
+                       applies to bare hands)                             = 3
+        soak         = thug toughness (body 1 + armor 0)                  = 1
+
+        (3 + 2) - 1 = 4
     """
-    state = _adjacent_state()
+    state = _adjacent_state(strength=3)
     weapon = player_weapons(state)[0]
-    assert state.character.stat("strength") == 1
+    assert state.character.stat("strength") == 3
+    assert ENEMIES_BY_ID["thug"].toughness == 1
     health_before = state.enemies[0].health
     player_attack(state, state.enemies[0], weapon, rng=AlwaysSix())
-    assert state.enemies[0].health == health_before - 2
+    assert state.enemies[0].health == health_before - 4
     assert state.acted
     # The log line reads off the weapon's own verb (combat.attack_verbs), so assert
     # against the table rather than a literal -- bare hands "wrestle", they don't "hit".
@@ -542,7 +555,7 @@ def test_player_attack_is_a_noop_once_already_acted():
 
 
 def test_player_attack_kills_the_last_enemy_and_ends_the_fight_in_victory():
-    state = _adjacent_state()
+    state = _adjacent_state(strength=3)
     state.enemies[0].health = 1  # one guaranteed hit (see the exact-damage test) is lethal
     weapon = player_weapons(state)[0]
     player_attack(state, state.enemies[0], weapon, rng=AlwaysSix())
@@ -651,12 +664,16 @@ def test_enemy_attack_lethal_damage_ends_the_fight_dead():
 # --- attack targeting (begin_attack_aim / snap / confirm, weapon_for_target) ---
 
 
-def _armed_state(enemy_coords, player_start=(0, 0), rows=None, weapons=("pipe_pistol", "combat_knife")):
+def _armed_state(enemy_coords, player_start=(0, 0), rows=None, weapons=("pipe_pistol", "combat_knife"),
+                 agility=1):
     """A fight where the player carries a gun and a knife, so weapon_for_target has an
-    actual choice to make at each range."""
+    actual choice to make at each range. `agility` is the attack pool for both (every
+    weapon skill but Grapple is Agility's) — raise it in a test that needs a forced hit
+    under AlwaysSix to actually land, since the thug now dodges with 2 dice of its own."""
     grid = parse_grid(rows or ["." * 12 for _ in range(3)])
     character = Character(
-        name="t", inventory=[InventoryItem(item_id=wid, equipped=True) for wid in weapons]
+        name="t", agility=agility,
+        inventory=[InventoryItem(item_id=wid, equipped=True) for wid in weapons],
     )
     thug = ENEMIES_BY_ID["thug"]
     return start_tactical(
@@ -765,7 +782,7 @@ def test_confirm_attack_aim_refuses_an_empty_tile_and_keeps_aiming():
 
 def test_confirm_attack_aim_hits_the_aimed_enemy_not_the_nearest():
     """The whole point of aiming: the player's pick beats best_shot's default."""
-    state = _armed_state([(1, 0), (5, 0)])
+    state = _armed_state([(1, 0), (5, 0)], agility=4)
     near, far = state.enemies
     begin_attack_aim(state)
     assert state.aim_cursor == near.coord
