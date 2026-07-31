@@ -1,30 +1,36 @@
 from textual.app import ComposeResult
 from textual.containers import Grid, ScrollableContainer, Vertical
-from textual.screen import Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-import shadowguy.archetypes as archetypes
 from shadowguy.character import CORE_STATS, MAX_SKILL_RANK
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
-    MENU_QUIT_BINDINGS,
+    MENU_BACK_BINDINGS,
     PANEL_NAV_BINDINGS,
+    BackScreen,
     CharacterSheet,
     PanelNav,
     _compact_skill_label,
     _replace_items,
 )
-from .corp_map_screen import CorpMapScreen
 
 
-class CharacterCreationScreen(PanelNav, Screen):
-    # PANEL_IDS is set per-instance in __init__, not here: archetypes.ARCHETYPES is
-    # lazily validated on first access (see archetypes.py), and a class body runs at
-    # module import time, so building this tuple here would defeat that laziness the
-    # moment this screen module is imported.
+class CharacterCreationScreen(PanelNav, BackScreen):
+    """The hand-spend build screen. Reached either straight from BuildSelectScreen
+    with both pools full, or from ArchetypeSelectScreen with a preset already
+    applied and nothing left to spend (r resets it back to a blank build).
+
+    A BackScreen since the presets moved off it: escape returns to whichever of
+    those pushed it, so picking the wrong one isn't a dead end. Every route in
+    (both of those, plus app.restart_run/load_state) puts BuildSelectScreen
+    underneath, so there is always somewhere to pop back to. The build is left
+    alone on the way out -- r is what blanks it."""
+
+    PANEL_IDS = (*(f"build_list_{stat}" for stat in CORE_STATS), "begin_row")
+
     BINDINGS = [
-        *MENU_QUIT_BINDINGS,
+        *MENU_BACK_BINDINGS,
         ("r", "reset", "Reset build"),
         ("b", "begin", "Begin run"),
         *PANEL_NAV_BINDINGS,
@@ -35,35 +41,10 @@ class CharacterCreationScreen(PanelNav, Screen):
         padding: 0 1;
     }
 
-    #arch_grid {
-        /* Columns only, no row count: Textual flows as many rows as the preset list
-           needs, so adding an archetype can't push a card off the grid (it was `3 1`
-           when there were exactly three, which left five cards fighting for three
-           slots).
-
-           Neither capped nor scrollable on its own: the grid sits inside #build_scroll
-           with the build columns, so presets and stats scroll together as one region.
-           Capping it here instead was worse -- it left the second row of cards one
-           line deep, painted but too clipped to click. */
-        grid-size: 3;
-        grid-gutter: 0 1;
-        height: auto;
-    }
-
-    .arch_card {
-        height: auto;
-        border: round $accent;
-        padding: 0 1;
-    }
-
-    .arch_card:focus {
-        border: round $secondary;
-    }
-
-    /* Everything between the pools line and the begin row scrolls as one: the preset
-       cards, then the six build columns. Sized 1fr so it takes whatever the fixed
-       chrome leaves, which is what keeps #begin on screen at 80x24 -- the run was
-       unstartable when a second row of preset cards pushed it past the bottom edge. */
+    /* The six build columns scroll as one region between the pools line and the begin
+       row. Sized 1fr so it takes whatever the fixed chrome leaves, which is what keeps
+       #begin on screen at 80x24 -- the run was unstartable back when the preset cards
+       shared this scroller and pushed it past the bottom edge. */
     #build_scroll {
         height: 1fr;
     }
@@ -86,8 +67,8 @@ class CharacterCreationScreen(PanelNav, Screen):
            it visible inside its own container -- so #build_scroll alone could not reach
            the bottom of an 11-skill column. Capped, the list scrolls itself and every
            rank is buyable at any terminal size. Tighter than SkillsScreen's equivalent
-           because this screen also carries the preset grid and the begin row: 8 is what
-           still leaves the last logic row fully on an 80x24 terminal. */
+           because this screen also carries the begin row: 8 is what still leaves the
+           last logic row fully on an 80x24 terminal. */
         height: auto;
         max-height: 8;
     }
@@ -102,29 +83,11 @@ class CharacterCreationScreen(PanelNav, Screen):
     }
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.PANEL_IDS = (
-            *(f"arch_card_{a.id}" for a in archetypes.ARCHETYPES),
-            *(f"build_list_{stat}" for stat in CORE_STATS),
-            "begin_row",
-        )
-
-    def _arch_card(self, archetype) -> ListView:
-        card = ListView(
-            ListItem(Static(archetype.description), id=f"arch_{archetype.id}"),
-            id=f"arch_card_{archetype.id}",
-            classes="arch_card",
-        )
-        card.border_title = archetype.name
-        return card
-
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(id="pools")
         yield ScrollableContainer(
-            Grid(*(self._arch_card(a) for a in archetypes.ARCHETYPES), id="arch_grid"),
             Grid(
                 *(
                     Vertical(
@@ -157,7 +120,7 @@ class CharacterCreationScreen(PanelNav, Screen):
         if self._unspent():
             self.notify("Spend every point before the run starts.", severity="warning")
             return
-        self.app.switch_screen(CorpMapScreen())
+        self.app.begin_run()
 
     def _update_pools(self) -> None:
         character = self.app.character
@@ -195,16 +158,6 @@ class CharacterCreationScreen(PanelNav, Screen):
             return
 
         character = self.app.character
-
-        if item_id.startswith("arch_"):
-            archetype = archetypes.ARCHETYPES_BY_ID[item_id.removeprefix("arch_")]
-            character.reset_build()
-            archetype.apply(character)
-            self.notify(f"{archetype.name} build applied. Press b to begin, r to start over.")
-            self.query_one(CharacterSheet).refresh()
-            await self._refresh()
-            return
-
         index = event.list_view.index or 0
         if item_id.startswith("stat_"):
             stat = item_id.removeprefix("stat_")

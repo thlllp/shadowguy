@@ -32,7 +32,7 @@ from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
-from shadowguy.screens.menu_screens import QuitMenu, TitleMenu
+from shadowguy.screens.menu_screens import BuildSelectScreen, QuitMenu, TitleMenu
 from shadowguy.security import resolve_security_night
 from shadowguy.surveillance import resolve_surveillance_day
 
@@ -327,9 +327,20 @@ class ShadowguyApp(App):
         through here get the home screen directly instead."""
         return CorpMapScreen()
 
+    def begin_run(self) -> None:
+        """Leave character/corp setup for the run proper. Clears the menu screens out
+        from under the home screen rather than replacing just the top one: they are
+        unreachable either way (CorpMapScreen.action_back is a no-op), but a live
+        ArchetypeSelectScreen sitting one pop below home is loaded gun -- selecting a
+        row on it calls reset_build() on the character mid-run."""
+        self._reopen(CorpMapScreen())
+
     def restart_run(self) -> None:
+        # BuildSelectScreen, not CharacterCreationScreen: a restart is a fresh runner,
+        # so it gets the same preset-or-hand-built choice New Game does. Landing on
+        # creation directly would put the presets out of reach for the whole run.
         self._new_run()
-        self._reopen(CharacterCreationScreen())
+        self._reopen(BuildSelectScreen())
 
     def save_run(self) -> SaveSlot:
         state = {
@@ -363,7 +374,12 @@ class ShadowguyApp(App):
         self.corp_only = state["corp_only"]
         unspent = self.character.stat_points + self.character.skill_points
         if unspent:
-            self._reopen(CharacterCreationScreen())
+            # Creation on top of BuildSelectScreen rather than on its own: the save was
+            # taken mid-build, so it reopens on the part-spent build itself, but escape
+            # still has somewhere to go -- back to the preset list, which is otherwise
+            # unreachable from here.
+            self._reopen(BuildSelectScreen())
+            self.push_screen(CharacterCreationScreen())
         else:
             self._reopen(CorpMapScreen())
 

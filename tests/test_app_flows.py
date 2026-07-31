@@ -69,7 +69,13 @@ from shadowguy.tactical import (
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
 from shadowguy.screens.menu_screens import TestMenu as GameTestMenu
-from shadowguy.screens.menu_screens import CorpSelectScreen, ModeSelectScreen, TitleMenu
+from shadowguy.screens.menu_screens import (
+    ArchetypeSelectScreen,
+    BuildSelectScreen,
+    CorpSelectScreen,
+    ModeSelectScreen,
+    TitleMenu,
+)
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.scene import Outcome, TacticalStage
@@ -192,7 +198,7 @@ def test_unhandled_exception_under_test_fails_fast_instead_of_hanging():
         run(asyncio.wait_for(body(), timeout=10))
 
 
-def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
+def test_new_game_premade_archetype_and_begin_reaches_corp_map():
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -202,11 +208,18 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
             assert isinstance(app.screen, ModeSelectScreen)
             await pilot.click("#runner")
             await pilot.pause()
-            assert isinstance(app.screen, CharacterCreationScreen)
-
-            # Applying an archetype spends every point; begin should then succeed.
-            await pilot.click("#arch_enforcer")
+            assert isinstance(app.screen, BuildSelectScreen)
+            await pilot.click("#premade")
             await pilot.pause()
+            assert isinstance(app.screen, ArchetypeSelectScreen)
+
+            # Picking a preset spends every point and lands on the build screen,
+            # where begin should then succeed. _settle, not one pause: creation's
+            # async on_mount repopulates seven ListViews, and #begin is clicked by
+            # coordinate right after (see CLAUDE.md's two-pause note).
+            await pilot.click("#archetype_enforcer")
+            await _settle(pilot)
+            assert isinstance(app.screen, CharacterCreationScreen)
             character = app.character
             assert character.stat_points == 0
             assert character.skill_points == 0
@@ -220,50 +233,13 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
     run(body())
 
 
-def test_every_archetype_card_is_on_screen_and_the_last_one_is_clickable():
-    """The preset grid is built from archetypes.ARCHETYPES, but its column count is
-    CSS -- #arch_grid was `grid-size: 3 1` while there happened to be exactly three
-    presets, so a fourth would have had nowhere to render. Drives the *last* preset in
-    the list, the one a stale row count would drop off the grid."""
+def test_every_archetype_row_is_on_screen_and_the_last_one_is_clickable():
+    """The preset list is built from archetypes.ARCHETYPES, but the height it gets is
+    CSS -- a sixth preset must not render off the dialog. Drives the *last* preset in
+    the list, the one a too-tight cap would drop off the bottom. 80x24 because that is
+    the smallest terminal this has to work at."""
     import shadowguy.archetypes as archetypes
 
-    async def body():
-        app = ShadowguyApp()
-        async with app.run_test(size=(80, 60)) as pilot:
-            await _settle(pilot)
-            await pilot.click("#new_game")
-            await pilot.pause()
-            await pilot.click("#runner")
-            await pilot.pause()
-            assert isinstance(app.screen, CharacterCreationScreen)
-
-            presets = archetypes.ARCHETYPES
-            for preset in presets:
-                card = app.screen.query_one(f"#arch_card_{preset.id}")
-                assert card.region.width > 0 and card.region.height > 0, preset.id
-
-            # Scroll it into view before clicking: the cards share #build_scroll with
-            # the build columns, so on a short screen the last row of presets starts
-            # below the fold and a coordinate click would land on whatever is painted
-            # there instead.
-            last = app.screen.query_one(f"#arch_{presets[-1].id}")
-            last.scroll_visible()
-            await _settle(pilot)
-            await pilot.click(f"#arch_{presets[-1].id}")
-            await pilot.pause()
-            assert app.character.stat_points == 0
-            assert app.character.skill_points == 0
-
-    run(body())
-
-
-def test_creation_screen_keeps_begin_on_screen_on_a_small_terminal():
-    """Adding a fourth and fifth preset put a second row of auto-height cards on the
-    creation screen, and on an 80x24 terminal that pushed #begin past the bottom edge
-    and squeezed the build columns to a single row -- the run was unstartable without
-    a taller window. #arch_grid is capped at a share of the height and scrolls instead.
-    80x24 because that is the classic default terminal, and the smallest this has to
-    work at."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 24)) as pilot:
@@ -271,6 +247,52 @@ def test_creation_screen_keeps_begin_on_screen_on_a_small_terminal():
             await pilot.click("#new_game")
             await pilot.pause()
             await pilot.click("#runner")
+            await pilot.pause()
+            await pilot.click("#premade")
+            await pilot.pause()
+            assert isinstance(app.screen, ArchetypeSelectScreen)
+
+            presets = archetypes.ARCHETYPES
+            for preset in presets:
+                row = app.screen.query_one(f"#archetype_{preset.id}")
+                assert row.region.width > 0 and row.region.height > 0, preset.id
+
+            # The list scrolls itself once the presets outgrow the cap, so scroll the
+            # last row in before clicking it -- a coordinate click on a row below the
+            # fold would land on whatever is painted there instead.
+            last = app.screen.query_one(f"#archetype_{presets[-1].id}")
+            last.scroll_visible()
+            await _settle(pilot)
+            assert last.region.y + last.region.height <= 24, last.region
+
+            await pilot.click(f"#archetype_{presets[-1].id}")
+            await pilot.pause()
+            assert isinstance(app.screen, CharacterCreationScreen)
+            assert app.character.stat_points == 0
+            assert app.character.skill_points == 0
+
+    run(body())
+
+
+def test_creation_screen_keeps_begin_on_screen_on_a_small_terminal():
+    """Adding a fourth and fifth preset once put a second row of auto-height cards on
+    the creation screen, and on an 80x24 terminal that pushed #begin past the bottom
+    edge and squeezed the build columns to a single row -- the run was unstartable
+    without a taller window. The presets have their own screen now, but #begin still
+    has to survive whatever else this screen grows. 80x24 because that is the classic
+    default terminal, and the smallest this has to work at. Comes in by the preset
+    route so the run is actually startable at the end of it."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
+            await pilot.click("#premade")
+            await pilot.pause()
+            await pilot.click("#archetype_enforcer")
             await _settle(pilot)
             assert isinstance(app.screen, CharacterCreationScreen)
 
@@ -279,8 +301,6 @@ def test_creation_screen_keeps_begin_on_screen_on_a_small_terminal():
             # The build columns must keep usable room, not collapse to nothing.
             assert app.screen.query_one("#build_scroll").region.height >= 4
 
-            await pilot.click("#arch_enforcer")
-            await _settle(pilot)
             await pilot.click("#begin")
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
@@ -314,6 +334,8 @@ def test_creation_screen_can_reach_the_last_logic_skill_at_every_size():
                 await pilot.click("#new_game")
                 await pilot.pause()
                 await pilot.click("#runner")
+                await pilot.pause()
+                await pilot.click("#custom")
                 await _settle(pilot)
                 row = await _walk_to_last_row(pilot, "build_list_logic")
                 region = row.region
@@ -353,11 +375,82 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
             await pilot.pause()
             await pilot.click("#runner")
             await pilot.pause()
-            # No archetype applied -- points are still unspent.
+            await pilot.click("#custom")
+            await pilot.pause()
+            # Nothing spent by hand and no preset applied -- points are still unspent.
             assert app.character.stat_points + app.character.skill_points > 0
             await pilot.click("#begin")
             await pilot.pause()
             assert isinstance(app.screen, CharacterCreationScreen)
+
+    run(body())
+
+
+def test_creation_screen_escape_goes_back_to_the_build_choice():
+    """The presets have their own screen now, so a wrong turn into creation must not
+    put them out of reach for the rest of the run: escape pops back to whichever
+    screen pushed it, leaving the build alone (r is what blanks it)."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
+            await pilot.click("#custom")
+            await pilot.pause()
+            assert isinstance(app.screen, CharacterCreationScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, BuildSelectScreen)
+
+            # ...and back out of the preset route too, build still applied.
+            await pilot.click("#premade")
+            await pilot.pause()
+            await pilot.click("#archetype_hacker")
+            await _settle(pilot)
+            assert app.character.skill_rank("cybercombat") == 6
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, ArchetypeSelectScreen)
+            assert app.character.skill_rank("cybercombat") == 6
+
+    run(body())
+
+
+def test_restart_run_reopens_the_build_choice():
+    """restart_run used to reopen CharacterCreationScreen, which carried the presets
+    itself. With them moved off it has to reopen the choice instead, or a restarted
+    run could never take a preset."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            app.restart_run()
+            await _settle(pilot)
+            assert isinstance(app.screen, BuildSelectScreen)
+            assert app.character.stat_points + app.character.skill_points > 0
+
+    run(body())
+
+
+def test_beginning_a_run_clears_the_menu_screens_out_from_under_the_map():
+    """Nothing from setup may stay mounted under the home screen. It is unreachable
+    while CorpMapScreen.action_back is a no-op, but a live ArchetypeSelectScreen one
+    pop below home is a loaded gun: selecting a row on it calls reset_build() on the
+    character mid-run (measured: a booted Enforcer's Body 4 goes back to 1). Both
+    entry points -- runner and corp -- go through app.begin_run()."""
+    async def body():
+        for boot in (_boot_runner_game, _boot_corp_game):
+            app = ShadowguyApp()
+            async with app.run_test(size=(80, 60)) as pilot:
+                await boot(pilot, app)
+                # screen_stack[0] is Textual's own default screen, always there.
+                assert [type(s).__name__ for s in app.screen_stack] == [
+                    "Screen",
+                    "CorpMapScreen",
+                ], boot.__name__
 
     run(body())
 
@@ -2464,8 +2557,8 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
 
 
 def _boot_runner_game(pilot, app):
-    """Title -> Runner -> archetype -> CorpMapScreen (the home screen, which now
-    carries the sidebar natively — no 'm' press needed any more)."""
+    """Title -> Runner -> premade archetype -> CorpMapScreen (the home screen, which
+    now carries the sidebar natively — no 'm' press needed any more)."""
 
     async def go():
         await _settle(pilot)
@@ -2473,8 +2566,12 @@ def _boot_runner_game(pilot, app):
         await pilot.pause()
         await pilot.click("#runner")
         await pilot.pause()
-        await pilot.click("#arch_enforcer")
+        await pilot.click("#premade")
         await pilot.pause()
+        await pilot.click("#archetype_enforcer")
+        # Two pauses: creation's async on_mount rebuilds seven ListViews between this
+        # push and the coordinate click on #begin below.
+        await _settle(pilot)
         await pilot.click("#begin")
         await pilot.pause()
         assert isinstance(app.screen, CorpMapScreen)

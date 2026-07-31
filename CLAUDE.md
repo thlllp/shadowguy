@@ -150,7 +150,8 @@ src/shadowguy/
     __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
                          BackScreen, PanelNav, the tactical/burglary map glyph helpers
     creation_screen.py   CharacterCreationScreen
-    menu_screens.py      TitleMenu (entry point) + ModeSelect + CorpSelect + Test + Quit + Load
+    menu_screens.py      TitleMenu (entry point) + ModeSelect + BuildSelect + ArchetypeSelect
+                         + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen (the abstract_combat surface)
     tactical_screen.py   TacticalScreen + GrenadePickScreen

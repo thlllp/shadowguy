@@ -3,6 +3,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
+import shadowguy.archetypes as archetypes
 from shadowguy.buildings import BuildingKind, generate_building
 from shadowguy.checks import resolve_check
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
@@ -17,7 +18,6 @@ from shadowguy.tactical import TacticalOutcome, generate_map
 
 from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .burglary_screens import EntrancePickScreen
-from .corp_map_screen import CorpMapScreen
 from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
@@ -208,10 +208,10 @@ TitleMenu {
 
 
 class ModeSelectScreen(BackScreen):
-    """New Game's first choice: build a Runner the usual way, or set up as a
-    Corp instead by picking one of the 4 seeded Factions -- Corp mode has no
-    runner to build, so that path skips CharacterCreationScreen entirely and
-    drops straight into CorpMapScreen."""
+    """New Game's first choice: build a Runner (BuildSelectScreen picks preset or
+    hand-built from there), or set up as a Corp instead by picking one of the 4
+    seeded Factions -- Corp mode has no runner to build, so that path skips
+    CharacterCreationScreen entirely and drops straight into CorpMapScreen."""
 
     BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("ModeSelectScreen", "mode_dialog")
@@ -230,15 +230,98 @@ class ModeSelectScreen(BackScreen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "runner":
-            self.app.push_screen(CharacterCreationScreen())
+            self.app.push_screen(BuildSelectScreen())
         elif event.item.id == "corp":
             self.app.push_screen(CorpSelectScreen())
+
+
+class BuildSelectScreen(BackScreen):
+    """The Runner branch's own first choice: take a preset build, or spend the 26
+    points by hand. Both paths end on CharacterCreationScreen -- a preset just
+    arrives there with everything already spent, so it stays editable (r resets it)
+    rather than being a one-way shortcut past the screen."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+    CSS = _menu_css("BuildSelectScreen", "build_select_dialog")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("New Runner"),
+            ListView(
+                ListItem(Static("Premade archetype"), id="premade"),
+                ListItem(Static("Custom character"), id="custom"),
+            ),
+            id="build_select_dialog",
+        )
+        yield Footer()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id == "premade":
+            self.app.push_screen(ArchetypeSelectScreen())
+        elif event.item.id == "custom":
+            self.app.push_screen(CharacterCreationScreen())
+
+
+class ArchetypeSelectScreen(BackScreen):
+    """The presets, which used to be a grid of cards on CharacterCreationScreen
+    itself. Picking one resets the build first -- a preset is the *whole* build,
+    not a top-up -- then opens creation with both pools already at zero.
+
+    archetypes.ARCHETYPES is read in compose(), not in the class body: the table is
+    lazily validated on first access (see archetypes.py), and a class body runs at
+    module import time, which would defeat that."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+    # Not _menu_css: that template's 28-column ListView is sized for one-line rows,
+    # and a preset row carries its description under the name.
+    CSS = """
+ArchetypeSelectScreen {
+    align: center middle;
+}
+
+#archetype_dialog {
+    width: 60;
+    max-width: 100%;
+    height: auto;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#archetype_dialog ListView {
+    /* Capped so five three-line rows still fit an 80x24 terminal -- past the cap
+       the list scrolls itself rather than pushing rows off the screen. */
+    height: auto;
+    max-height: 16;
+}
+"""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(
+            Static("Pick an archetype"),
+            ListView(
+                *(
+                    ListItem(Static(f"{a.name}\n  {a.description}"), id=f"archetype_{a.id}")
+                    for a in archetypes.ARCHETYPES
+                )
+            ),
+            id="archetype_dialog",
+        )
+        yield Footer()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        archetype = archetypes.ARCHETYPES_BY_ID[event.item.id.removeprefix("archetype_")]
+        character = self.app.character
+        character.reset_build()
+        archetype.apply(character)
+        self.app.push_screen(CharacterCreationScreen())
 
 
 class CorpSelectScreen(BackScreen):
     """Pick which Faction to run. Corp mode has no runner to build -- picking
     a Faction assigns app.corp_state, sets app.corp_only so save/load knows to
-    reopen the same screen, and switches straight to CorpMapScreen, skipping
+    reopen the same screen, and calls app.begin_run() to open the map, skipping
     character creation entirely. The stat/skill pools that creation would
     normally spend are zeroed here instead, so there's nothing left unspent to
     (pointlessly) force creation back open on a later save/load."""
@@ -266,7 +349,7 @@ class CorpSelectScreen(BackScreen):
         self.app.corp_only = True
         self.app.character.stat_points = 0
         self.app.character.skill_points = 0
-        self.app.switch_screen(CorpMapScreen())
+        self.app.begin_run()
 
 
 class TestMenu(BackScreen):

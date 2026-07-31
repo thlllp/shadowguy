@@ -62,7 +62,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 |---|---|
 | `__init__.py` | `CharacterSheet`, `BackScreen`, `PanelNav`, map glyph helpers |
 | `creation_screen.py` | `CharacterCreationScreen` |
-| `menu_screens.py` | `TitleMenu`, `ModeSelect`, `CorpSelect`, `Test`, `Quit`, `Load` |
+| `menu_screens.py` | `TitleMenu`, `ModeSelect`, `BuildSelect`, `ArchetypeSelect`, `CorpSelect`, `Test`, `Quit`, `Load` |
 | `scene_screen.py` | `SceneScreen` |
 | `combat_screen.py` | `CombatScreen` |
 | `tactical_screen.py` | `TacticalScreen` + `GrenadePickScreen` |
