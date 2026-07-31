@@ -33,15 +33,15 @@ def test_lazy_init_populates_on_access():
     archetypes._ARCHETYPES_BY_ID = None
     _ = archetypes.ARCHETYPES
     assert archetypes._ARCHETYPES is not None
-    assert len(archetypes._ARCHETYPES) == 3
+    assert len(archetypes._ARCHETYPES) == 5
 
 
 def test_archetypes_count():
-    assert len(archetypes.ARCHETYPES) == 3
+    assert len(archetypes.ARCHETYPES) == 5
 
 
 def test_archetypes_by_id_count():
-    assert len(archetypes.ARCHETYPES_BY_ID) == 3
+    assert len(archetypes.ARCHETYPES_BY_ID) == 5
 
 
 def test_archetypes_by_id_keys_match():
@@ -53,21 +53,69 @@ def test_enforcer():
     a = archetypes.ARCHETYPES_BY_ID["enforcer"]
     assert a.name == "Enforcer"
     assert a.stats == {"body": 3, "strength": 3}
-    assert a.skills == {"grapple": 7, "toughness": 6, "negotiations": 4, "intuition": 2}
+    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 2}
 
 
 def test_hacker():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     assert a.name == "Hacker"
-    assert a.stats == {"logic": 4, "perception": 2}
-    assert a.skills == {"hack": 7, "tinkering": 5, "infer": 4, "pattern_seeking": 4}
+    assert a.stats == {"logic": 6}
+    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 3}
 
 
 def test_infiltrator():
     a = archetypes.ARCHETYPES_BY_ID["infiltrator"]
     assert a.name == "Infiltrator"
     assert a.stats == {"agility": 4, "perception": 2}
-    assert a.skills == {"stealth": 7, "deception": 5, "sight": 4, "intuition": 4}
+    assert a.skills == {"stealth": 7, "deception": 5, "sight": 4, "blades": 4}
+
+
+def test_gunslinger():
+    a = archetypes.ARCHETYPES_BY_ID["gunslinger"]
+    assert a.name == "Gunslinger"
+    assert a.stats == {"agility": 3, "body": 3}
+    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 4}
+
+
+def test_fixer():
+    a = archetypes.ARCHETYPES_BY_ID["fixer"]
+    assert a.name == "Fixer"
+    assert a.stats == {"cool": 4, "logic": 2}
+    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 4}
+
+
+def test_no_preset_raises_a_stat_it_never_rolls():
+    """Every stat a preset buys, not just its primary. Nothing rolls a core stat
+    directly, so a stat raised for skills the preset doesn't own is wasted outright --
+    which is how the Hacker's perception and the Fixer's logic points shipped dead."""
+    from shadowguy.skills import skill_for
+    for a in archetypes.ARCHETYPES:
+        rolled = {skill_for(s).stat for s in a.skills}
+        assert not set(a.stats) - rolled, f"{a.id}: {sorted(set(a.stats) - rolled)} buys nothing"
+
+
+def test_validate_preset_rejects_a_stat_the_skills_never_roll():
+    """The guard itself, on a preset that spends both pools exactly but puts 3 points
+    into a stat none of its skills sit on."""
+    import pytest
+    from shadowguy.archetypes import Archetype
+    idle_stat = Archetype(
+        id="idle", name="Idle", description="",
+        stats={"body": 3, "cool": 3},
+        skills={"toughness": 7, "grapple": 6, "lift": 4, "running": 2},
+    )
+    with pytest.raises(ValueError, match="buys no skill layered on"):
+        archetypes._validate_preset(idle_stat)
+
+
+def test_the_hacker_clears_the_matrix_readiness_bar():
+    """The preset for the matrix must not trip the matrix's own "you aren't ready"
+    warning -- it rolls Cybercombat now, not Hack (see matrix.MIN_READY_CYBERCOMBAT)."""
+    from shadowguy.matrix import ATTACK_SKILL, MIN_READY_CYBERCOMBAT
+    from shadowguy.skills import skill_value
+    c = Character(name="test")
+    archetypes.ARCHETYPES_BY_ID["hacker"].apply(c)
+    assert skill_value(c, ATTACK_SKILL) >= MIN_READY_CYBERCOMBAT
 
 
 def test_apply_spends_all_points():
@@ -90,8 +138,8 @@ def test_apply_sets_correct_skill_ranks():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     c = Character(name="test")
     a.apply(c)
-    assert c.skill_rank("hack") == 7
-    assert c.skill_rank("tinkering") == 5
+    assert c.skill_rank("cybercombat") == 6
+    assert c.skill_rank("hack") == 5
 
 
 def test_bad_preset_raises():

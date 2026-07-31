@@ -13,7 +13,7 @@ uv run shadowguy
 
 ## How it plays
 
-You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 33 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
+You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 39 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator, Gunslinger, Fixer) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
 
 From there you work. **Gigs** are quick single-scene street work, runnable wherever you're standing, owned by a local who'll think better of you for it. They turn up gradually, one location at a time, rather than blanketing the map on day one. **Jobs** come from fixers, are aimed at a real corp's real building on the real map, and have to be run *on site* — so an accepted job is a place you have to travel to, and a scheduled one means being in the right district on the right day. **Legwork** scouts a job beforehand to bank an advantage on its first check. **Security contracts** are the inverse of a heist: a fixer signs you to guard a corp for several nights, and you work them by ending the day on-site — steady pay and free lodging, but they pin you to one district.
 
@@ -64,8 +64,8 @@ src/shadowguy/
                   the clock and fires day-boundary effects); every screen lives under screens/
   character.py    Character dataclass: stats, health, skills, experience, inventory, crew, standing
                   (faction/gang/local/fixer), accepted jobs, security contracts
-  archetypes.py   Enforcer/Hacker/Infiltrator creation presets
-  skills.py       Skill table (33 skills across 6 core stats); leaf module
+  archetypes.py   Enforcer/Hacker/Infiltrator/Gunslinger/Fixer creation presets
+  skills.py       Skill table (39 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
   combat.py       Round-based combat: enemy roster, the five-stat action set, shared resolve_hit
   tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation

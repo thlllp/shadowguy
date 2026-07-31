@@ -9,8 +9,8 @@ from shadowguy.character import CORE_STATS, Character
 from shadowguy.skills import SKILLS, SKILLS_BY_ID, skill_for, skill_value
 
 
-def test_33_skills_total():
-    assert len(SKILLS) == 33
+def test_39_skills_total():
+    assert len(SKILLS) == 39
 
 
 def test_skill_ids_unique():

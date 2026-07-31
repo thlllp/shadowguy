@@ -14,8 +14,10 @@ tactical.py reuses (one hit formula, now three surfaces). What it deliberately d
   the Character the way health does.
 - **The actions are Logic's, not the six-stat spread.** The matrix is the
   Hacker's arena on purpose (unlike meat combat, which spans every stat so no build is
-  locked out of a round): you breach with Hack, harden with Tinkering, analyze with
-  Infer. A non-hacker can still fight here, but bleeds — the deckless/low-Hack warning
+  locked out of a round): you breach with Cybercombat, harden with Tinkering, analyze
+  with Infer, sleaze with Hack and pull files with Computer — five skills, split by
+  what you're doing on the wire, not one skill doing all of it. A non-hacker
+  can still fight here, but bleeds — the deckless/low-Cybercombat warning
   (matrix_readiness) is the honest heads-up, not a lockout.
 
 Like combat.py, this module is a leaf on the scene graph: it imports character, checks,
@@ -90,6 +92,22 @@ ANALYZE_BONUS = 4
 # claws at your integrity every round.
 FREE_ROUND = 1
 
+# Which skill each matrix action rolls. Three of these are the matrix's own — Hack is
+# offensive work (the Sleaze bypass, and getting into a system in the first place),
+# Cybercombat is the fight once you're in, Computer is pulling data and finding things
+# out — and a matrix fight reaches two more that aren't: Harden rolls Tinkering and the
+# in-fight Analyze rolls Infer, so five skills in total, all on logic. Named constants
+# rather than literals at the call sites because a program's *action* is what picks the
+# skill — see Program.action_sleaze/action_extract in shops.py.
+SLEAZE_SKILL = "hack"
+ATTACK_SKILL = "cybercombat"
+EXTRACT_SKILL = "computer"
+# Reading a node from outside a fight (navigation mode's Analyze program) is finding
+# information, not fighting — so it rolls Computer even though the in-fight Analyze
+# action beside it rolls Infer, which is reading your *opponent* mid-fight.
+NODE_ANALYZE_SKILL = "computer"
+
+
 # Sleaze (Program.action_sleaze): try to talk a node's ICE into treating the runner as
 # a valid user instead of fighting it. Deliberately *not* the normal opposed dice pool
 # (checks.resolve_check) — a flat three-way split (success / fail / critical fail) that
@@ -99,7 +117,6 @@ FREE_ROUND = 1
 # fail tails move; the fail third is fixed, so a botched Sleaze is never worse odds than
 # a coin a hacker could've called going in. First-slice numbers, not balance-simulated —
 # see CLAUDE.md's convention for flagging that.
-SLEAZE_SKILL = "hack"
 SLEAZE_MARGIN_FLOOR = 2  # skill_value's own floor — an unspecialized runner against the
 # weakest ICE lands exactly on the neutral 1/3-1/3-1/3 split
 SLEAZE_MARGIN_STEP = 0.04  # per net point of margin above the floor, shift 4% out of the
@@ -128,7 +145,7 @@ SECURITY_HOSTILE_THRESHOLD = 3
 @dataclass(frozen=True)
 class Ice:
     """One security program. The matrix analogue of combat.Enemy: `integrity` is its
-    hit points, `defense` the difficulty your Hack roll must beat, `damage` the integrity
+    hit points, `defense` the difficulty your Cybercombat roll must beat, `damage` the integrity
     it takes off you on a hit, `soak` its own mitigation roll (its hardening).
 
     security_per_round is a second, mutually exclusive way an ICE can "hit" you: 0 (the
@@ -323,7 +340,7 @@ def firewall_defense(character: Character) -> int:
     """FIREWALL_BASE + Infer, minus the equipped deck's own Logic bonus: a
     better deck should make your hacking sharper (player_attack_damage), not your
     firewall too -- left in, the same deck rating was compounding into player_
-    integrity, firewall_defense *and* the Hack roll all at once, which is what made
+    integrity, firewall_defense *and* the attack roll all at once, which is what made
     a decked-out hacker near-unhittable (see DESIGN.md's Data Heist section)."""
     return (
         FIREWALL_BASE
@@ -342,7 +359,7 @@ def firewall_soak(character: Character) -> int:
 
 def player_attack_damage(character: Character) -> int:
     """Base integrity a landed intrusion takes off an ICE, before the roll's margin.
-    Comes from the deck (equipped_deck_rating), not the Hack skill — jack in bare and
+    Comes from the deck (equipped_deck_rating), not a skill — jack in bare and
     you still get BARE_JACK_DAMAGE, the matrix's bare hands. A program's damage_bonus
     still applies bare-handed — it's the software doing the work, not the rig."""
     rating = equipped_deck_rating(character.inventory)
@@ -350,9 +367,11 @@ def player_attack_damage(character: Character) -> int:
     return base + _passive_bonus(character, "damage_bonus")
 
 
-# Below this Hack value, matrix_readiness flags the runner — a fresh runner rolls Hack 2,
-# so this warns anyone who hasn't put real Logic and rank behind it.
-MIN_READY_HACK = 5
+# Below this Cybercombat value, matrix_readiness flags the runner — a fresh runner
+# rolls 2, so this warns anyone who hasn't put real Logic and rank behind it. It reads
+# Cybercombat rather than Hack because what the warning is about is *fighting* ICE:
+# Hack gets a Data Heist's runner into the system either way.
+MIN_READY_CYBERCOMBAT = 5
 
 
 def matrix_readiness(character: Character) -> list[str]:
@@ -362,8 +381,8 @@ def matrix_readiness(character: Character) -> list[str]:
     missing = []
     if equipped_deck_rating(character.inventory) == 0:
         missing.append("a cyberdeck")
-    if skill_value(character, "hack") < MIN_READY_HACK:
-        missing.append("more Hack skill")
+    if skill_value(character, ATTACK_SKILL) < MIN_READY_CYBERCOMBAT:
+        missing.append("more Cybercombat skill")
     return missing
 
 
@@ -409,7 +428,7 @@ def available_matrix_actions(
 ) -> list[MatrixAction]:
     """Everything the runner can do with a round in the matrix. The four base actions are
     fixed, unlike the abstract fight's weapon-derived list — your intrusion is your
-    deck-plus-Hack, not a rack of weapons to pick between. Always includes JACK_OUT — a
+    deck-plus-skills, not a rack of weapons to pick between. Always includes JACK_OUT — a
     matrix fight is never a cage, same law as its flee (abstract_combat.FLEE_DIFFICULTY).
 
     `program_uses` mirrors abstract_combat.available_actions' `cooldowns` param exactly: an
@@ -423,7 +442,7 @@ def available_matrix_actions(
     analyze_node/usable_analyze_program), read outside a fight rather than spent during one."""
     dmg = player_attack_damage(character)
     actions = [
-        MatrixAction(MatrixActionKind.ATTACK, f"Breach the ICE (Hack, {dmg} dmg)", "hack"),
+        MatrixAction(MatrixActionKind.ATTACK, f"Breach the ICE (Cybercombat, {dmg} dmg)", ATTACK_SKILL),
         MatrixAction(MatrixActionKind.HARDEN, "Harden your firewall (Tinkering)", "tinkering"),
         MatrixAction(MatrixActionKind.ANALYZE, "Analyze the ICE (Infer)", "infer"),
         MatrixAction(MatrixActionKind.JACK_OUT, "Jack out (blow the run)", None),
@@ -618,17 +637,23 @@ def _ice_turn(state: MatrixState, fighter: IceFighter, rng: random.Random, harde
         _ice_bite(state, fighter, rng, harden=harden)
 
 
-def _intrude(state: MatrixState, target: IceFighter, rng: random.Random, soak: int) -> tuple[CheckRoll, int]:
-    """The runner's core intrusion roll: Hack to hit, the deck's rating for damage, any
-    banked Analyze bonus consumed on this attempt, plus any installed cyberware's
+def _intrude(
+    state: MatrixState, target: IceFighter, rng: random.Random, soak: int, skill: str
+) -> tuple[CheckRoll, int]:
+    """The runner's core intrusion roll: `skill` to hit, the deck's rating for damage,
+    any banked Analyze bonus consumed on this attempt, plus any installed cyberware's
     matrix_action_bonus (Datajack, today). Shared by the ordinary ATTACK action and
-    Extract (Program.action_extract) — the two differ only in what soak pool opposes
-    the hit (Extract ignores the target's soak entirely; see _extract)."""
+    Extract (Program.action_extract), which differ in two ways — what soak pool opposes
+    the hit (Extract ignores the target's entirely; see _extract) and *which skill rolls
+    it*: attacking ICE is ATTACK_SKILL, pulling a file out from under it is
+    EXTRACT_SKILL. The skill is a parameter rather than a constant here precisely
+    because this one formula is shared by two actions that are no longer the same
+    trade."""
     bonus = state.next_attack_bonus + installed_matrix_action_bonus(state.character.installed_cyberware)
     state.next_attack_bonus = 0
     return resolve_hit(
         rng,
-        skill_value(state.character, "hack"),
+        skill_value(state.character, skill),
         bonus,
         target.ice.defense,
         player_attack_damage(state.character),
@@ -638,7 +663,7 @@ def _intrude(state: MatrixState, target: IceFighter, rng: random.Random, soak: i
 
 def _attack(state: MatrixState, rng: random.Random) -> None:
     target = state.standing[0]
-    roll, damage = _intrude(state, target, rng, target.ice.soak)
+    roll, damage = _intrude(state, target, rng, target.ice.soak, ATTACK_SKILL)
     if not roll.result.passed:
         state.log.append(f"Your intrusion glances off {target.ice.name}.")
         return
@@ -719,7 +744,7 @@ def _extract(state: MatrixState, program: Program, rng: random.Random) -> None:
     if not state.is_extractable:
         state.log.append(f"{program.name} finds nothing here worth extracting.")
         return
-    roll, damage = _intrude(state, target, rng, 0)
+    roll, damage = _intrude(state, target, rng, 0, EXTRACT_SKILL)
     if not roll.result.passed:
         state.security += SECURITY_PER_FAILED_EXTRACT
         state.log.append(
@@ -1105,7 +1130,7 @@ def usable_analyze_program(run: MatrixRunState) -> Program | None:
 def analyze_node(run: MatrixRunState, node_id: str, rng: random.Random | None = None) -> bool:
     """Run the installed Analyze program against a connected-but-unrevealed node to
     read its value (role) remotely, without moving there or risking a fight — the
-    navigation-mode counterpart to Sleaze/Extract, same Hack roll and the same
+    navigation-mode counterpart to Sleaze/Extract, a Computer roll and the same
     ANALYZE_DIFFICULTY the in-fight ANALYZE action reads an ICE's shape with, just
     aimed at a node instead. Refuses (no roll, no charge spent, returns False) if the
     run is over, a guardian is blocking movement, node_id isn't reachable from here,
@@ -1123,7 +1148,7 @@ def analyze_node(run: MatrixRunState, node_id: str, rng: random.Random | None = 
     rng = resolve_rng(rng)
     node = run.network.nodes[node_id]
     roll = resolve_check(
-        stat_value=skill_value(run.character, "hack"),
+        stat_value=skill_value(run.character, NODE_ANALYZE_SKILL),
         difficulty=ANALYZE_DIFFICULTY,
         advantage=installed_matrix_action_bonus(run.character.installed_cyberware),
         rng=rng,

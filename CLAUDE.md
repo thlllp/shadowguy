@@ -104,9 +104,9 @@ Orientation only — each module's own section in `DESIGN.md` carries the detail
 src/shadowguy/
   character.py   the run's whole mutable state: stats, health, stun, fatigue, humanity,
                  skill ranks, experience, every standing, crew, inventory, accepted work
-  archetypes.py  Enforcer/Hacker/Infiltrator creation presets
+  archetypes.py  Enforcer/Hacker/Infiltrator/Gunslinger/Fixer creation presets
   checks.py      resolve_check() — the one place any check resolves
-  skills.py      the 30-skill table, skill_value(), skill_for()
+  skills.py      the 39-skill table, skill_value(), skill_for()
   scene.py       Scene/Stage/Choice/Outcome + the four fight/stage wrappers; apply_outcome()
 
   combat.py      what a fight is made of, shared by all three surfaces: enemy roster,
@@ -228,6 +228,7 @@ Leaf modules, and why each has to stay one:
 | 50 | no new state — `Grid`/`Tile` moved from `tactical.py` to a new `grid.py`, and pickle resolves a class by module path (a `Grid` hangs off `scene.TacticalStage` and every `buildings.Level`) |
 | 51 | the core stat `intelligence` **renamed** to `logic` (`Character` field, `CORE_STATS`, every `_SKILL_ROWS`/`bonuses` key) |
 | 52 | the weapon skills **split by category**: `short_blade`/`long_blade`/`blunt`/`firearms`/`misc` replaced by `pistols`/`automatics`/`longarms`/`clubs`/`blades`/`archery`/`throwing`/`gunnery` (33 skills, up from 30), so a pre-v52 `Character.skill_ranks` is keyed by ids that no longer exist |
+| 53 | six logic skills added — `cybercombat`/`computer`/`armorer`/`chemistry`/`medicine`/`demolitions` (39 total) — and the matrix's rolls split three ways with them: ATTACK moved `hack`→`cybercombat`, Extract and node analysis → `computer` |
 
 ### Verifying changes
 

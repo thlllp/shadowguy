@@ -36,7 +36,16 @@ class CharacterCreationScreen(PanelNav, Screen):
     }
 
     #arch_grid {
-        grid-size: 3 1;
+        /* Columns only, no row count: Textual flows as many rows as the preset list
+           needs, so adding an archetype can't push a card off the grid (it was `3 1`
+           when there were exactly three, which left five cards fighting for three
+           slots).
+
+           Neither capped nor scrollable on its own: the grid sits inside #build_scroll
+           with the build columns, so presets and stats scroll together as one region.
+           Capping it here instead was worse -- it left the second row of cards one
+           line deep, painted but too clipped to click. */
+        grid-size: 3;
         grid-gutter: 0 1;
         height: auto;
     }
@@ -51,6 +60,10 @@ class CharacterCreationScreen(PanelNav, Screen):
         border: round $secondary;
     }
 
+    /* Everything between the pools line and the begin row scrolls as one: the preset
+       cards, then the six build columns. Sized 1fr so it takes whatever the fixed
+       chrome leaves, which is what keeps #begin on screen at 80x24 -- the run was
+       unstartable when a second row of preset cards pushed it past the bottom edge. */
     #build_scroll {
         height: 1fr;
     }
@@ -68,7 +81,15 @@ class CharacterCreationScreen(PanelNav, Screen):
     }
 
     .build_column ListView {
+        /* Bounded for the same reason SkillsScreen's columns are: an auto-height
+           ListView is as tall as its content, and scrolling a row into view only makes
+           it visible inside its own container -- so #build_scroll alone could not reach
+           the bottom of an 11-skill column. Capped, the list scrolls itself and every
+           rank is buyable at any terminal size. Tighter than SkillsScreen's equivalent
+           because this screen also carries the preset grid and the begin row: 8 is what
+           still leaves the last logic row fully on an 80x24 terminal. */
         height: auto;
+        max-height: 8;
     }
 
     .build_column ListView:focus {
@@ -102,8 +123,8 @@ class CharacterCreationScreen(PanelNav, Screen):
         yield Header()
         yield CharacterSheet(self.app.character)
         yield Static(id="pools")
-        yield Grid(*(self._arch_card(a) for a in archetypes.ARCHETYPES), id="arch_grid")
         yield ScrollableContainer(
+            Grid(*(self._arch_card(a) for a in archetypes.ARCHETYPES), id="arch_grid"),
             Grid(
                 *(
                     Vertical(

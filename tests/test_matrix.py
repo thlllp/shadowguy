@@ -15,7 +15,9 @@ from shadowguy.matrix import (
     ICE_BY_ID,
     ICE_TIERS,
     MATRIX_NETWORK_TIERS,
-    MIN_READY_HACK,
+    ATTACK_SKILL,
+    EXTRACT_SKILL,
+    MIN_READY_CYBERCOMBAT,
     SECURITY_HOSTILE_THRESHOLD,
     SECURITY_PER_FAILED_EXTRACT,
     MatrixActionKind,
@@ -26,6 +28,7 @@ from shadowguy.matrix import (
     _analyze,
     _harden,
     _intrude,
+    _sleaze_odds,
     analyze_node,
     available_matrix_actions,
     connected_nodes,
@@ -39,6 +42,7 @@ from shadowguy.matrix import (
     player_attack_damage,
     player_integrity,
     render_matrix_network,
+    SLEAZE_SKILL,
     roll_ice,
     start_matrix,
     start_matrix_run,
@@ -61,10 +65,15 @@ SEEDS = range(150)
 # so this is the real resolution path, not a mock of it.
 
 
-def _char(logic=1, hack_rank=1, deck_id=None, installed_programs=()):
+def _char(logic=1, matrix_rank=1, deck_id=None, installed_programs=()):
+    """A runner built for the wire. `matrix_rank` buys all three matrix skills at once
+    because they split one job three ways -- Hack gets you in and runs Sleaze,
+    Cybercombat fights the ICE, Computer pulls the file (see matrix.py's skill
+    constants) -- so "a good netrunner" means rank in all of them, not just Hack."""
     c = Character(name="T", location_id="start")
     c.logic = logic
-    c.skill_ranks["hack"] = hack_rank
+    for skill_id in ("hack", "cybercombat", "computer"):
+        c.skill_ranks[skill_id] = matrix_rank
     if deck_id is not None:
         c.inventory.append(InventoryItem(deck_id, equipped=True, installed_programs=list(installed_programs)))
     return c
@@ -81,21 +90,21 @@ def test_integrity_scales_off_logic_gear_included():
 
 def test_attack_damage_comes_from_the_deck_not_the_skill():
     # No deck: the bare-jack floor, however much Hack you have.
-    assert player_attack_damage(_char(logic=6, hack_rank=8)) == BARE_JACK_DAMAGE
+    assert player_attack_damage(_char(logic=6, matrix_rank=8)) == BARE_JACK_DAMAGE
     # Deck rating (its Logic bonus) drives it: burner +1, zetatech +3.
     assert player_attack_damage(_char(deck_id="burner_deck")) == 3
     assert player_attack_damage(_char(deck_id="zetatech_rig")) == 5
 
 
 def test_readiness_flags_missing_deck_and_low_hack():
-    assert matrix_readiness(_char()) == ["a cyberdeck", "more Hack skill"]
+    assert matrix_readiness(_char()) == ["a cyberdeck", "more Cybercombat skill"]
     # A deck alone isn't enough if Hack is still weak.
-    assert matrix_readiness(_char(deck_id="burner_deck")) == ["more Hack skill"]
+    assert matrix_readiness(_char(deck_id="burner_deck")) == ["more Cybercombat skill"]
     # Hack skill alone isn't enough without a deck.
-    ready_hack = _char(logic=MIN_READY_HACK)  # skill_value = Logic + rank(1) >= MIN
+    ready_hack = _char(logic=MIN_READY_CYBERCOMBAT)  # skill_value = Logic + rank(1) >= MIN
     assert matrix_readiness(ready_hack) == ["a cyberdeck"]
     # Both: no warning.
-    assert matrix_readiness(_char(logic=6, hack_rank=4, deck_id="zetatech_rig")) == []
+    assert matrix_readiness(_char(logic=6, matrix_rank=4, deck_id="zetatech_rig")) == []
 
 
 def test_actions_always_offer_attack_and_jack_out():
@@ -104,9 +113,51 @@ def test_actions_always_offer_attack_and_jack_out():
     assert MatrixActionKind.ATTACK in kinds
     assert MatrixActionKind.JACK_OUT in kinds
     attack = next(a for a in actions if a.kind is MatrixActionKind.ATTACK)
-    assert attack.skill == "hack"
+    assert attack.skill == ATTACK_SKILL  # the fight rolls Cybercombat, not Hack
     jack = next(a for a in actions if a.kind is MatrixActionKind.JACK_OUT)
     assert jack.skill is None  # the one action that isn't a check
+
+
+# --- the three matrix skills (matrix.ATTACK_SKILL/EXTRACT_SKILL/SLEAZE_SKILL) ---
+
+
+def _skilled(skill_id, rank=9):
+    c = _char(logic=1, deck_id="burner_deck")
+    c.skill_ranks[skill_id] = rank
+    return c
+
+
+def _intrusion_margin(character, skill):
+    """The margin one intrusion roll clears by, with every die pinned: under AlwaysSix
+    both pools roll all successes, so the margin is exactly the skill's pool advantage
+    and nothing random survives."""
+    state = start_matrix(character, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
+    roll, _ = _intrude(state, state.standing[0], AlwaysSix(), 0, skill)
+    return roll.margin
+
+
+def test_the_attack_roll_reads_cybercombat_and_ignores_hack():
+    """One formula (_intrude), two actions, two skills: fighting the ICE is Cybercombat,
+    so rank bought in Hack does nothing for it."""
+    assert _intrusion_margin(_skilled("cybercombat"), ATTACK_SKILL) > _intrusion_margin(
+        _skilled("hack"), ATTACK_SKILL
+    )
+
+
+def test_the_extract_roll_reads_computer_and_ignores_hack():
+    """Pulling the file is Computer -- the data skill -- not the offensive-web one."""
+    assert _intrusion_margin(_skilled("computer"), EXTRACT_SKILL) > _intrusion_margin(
+        _skilled("hack"), EXTRACT_SKILL
+    )
+
+
+def test_sleaze_still_reads_hack():
+    """Talking a node into letting you past is offensive web work, which is what Hack
+    kept when Cybercombat and Computer took the other two."""
+    assert SLEAZE_SKILL == "hack"
+    talked = _sleaze_odds(_skilled("hack"), ICE_BY_ID["watchdog"])[0]
+    unskilled = _sleaze_odds(_skilled("cybercombat"), ICE_BY_ID["watchdog"])[0]
+    assert talked > unskilled
 
 
 # --- Datajack (cybernetics.Cyberware.matrix_action_bonus) ---
@@ -115,12 +166,12 @@ def test_actions_always_offer_attack_and_jack_out():
 def test_intrude_pool_includes_the_datajack_bonus():
     c = _char(deck_id="burner_deck")
     state = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
-    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak, ATTACK_SKILL)
     base_pool = roll.pool
 
     c.installed_cyberware[CyberSlot.NEURALWARE] = "datajack"
     state2 = start_matrix(c, (ICE_BY_ID["watchdog"],), Drop.NONE, random.Random(0))
-    roll2, _ = _intrude(state2, state2.standing[0], random.Random(0), state2.standing[0].ice.soak)
+    roll2, _ = _intrude(state2, state2.standing[0], random.Random(0), state2.standing[0].ice.soak, ATTACK_SKILL)
     assert roll2.pool == base_pool + 1
 
 
@@ -279,10 +330,10 @@ def test_analyze_bonus_only_boosts_the_very_next_intrusion():
     state = start_matrix(c, (ICE_BY_ID["black_ice"],), Drop.NONE, random.Random(0))
     _analyze(state, AlwaysSix())
     assert state.next_attack_bonus == ANALYZE_BONUS
-    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    roll, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak, ATTACK_SKILL)
     assert roll.advantage == ANALYZE_BONUS
     assert state.next_attack_bonus == 0  # spent, not banked for a second attack
-    roll2, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak)
+    roll2, _ = _intrude(state, state.standing[0], random.Random(0), state.standing[0].ice.soak, ATTACK_SKILL)
     assert roll2.advantage == 0
 
 
@@ -330,7 +381,7 @@ def test_sleaze_critical_fail_bites_twice_in_the_same_round():
 def test_sleaze_success_rate_improves_with_hack_skill_against_tougher_ice():
     program = PROGRAMS_BY_ID["sleaze"]
     weak = _char(deck_id="burner_deck", installed_programs=[program.id])
-    strong = _char(logic=6, hack_rank=8, deck_id="burner_deck", installed_programs=[program.id])
+    strong = _char(logic=6, matrix_rank=8, deck_id="burner_deck", installed_programs=[program.id])
 
     def success_rate(character, ice, seeds):
         successes = 0
@@ -523,7 +574,7 @@ def test_the_matrix_belongs_to_the_hacker():
     fluke a win, a hacker *could* in principle whiff a whole fight — neither is the point):
     a decked hacker seizes nearly every tier-2 run on a bare always-attack policy, and a
     deckless Logic-1 runner is ejected from nearly all of them. Ejection, never death."""
-    hacker = _char(logic=6, hack_rank=4, deck_id="zetatech_rig")
+    hacker = _char(logic=6, matrix_rank=4, deck_id="zetatech_rig")
     hacker_seized = sum(_run(hacker, seed, tier=2) is MatrixOutcome.SEIZED for seed in SEEDS)
     weakling_ejected = sum(_run(_char(), seed, tier=2) is MatrixOutcome.EJECTED for seed in SEEDS)
     assert hacker_seized >= 0.95 * len(SEEDS)
@@ -532,7 +583,7 @@ def test_the_matrix_belongs_to_the_hacker():
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_matrix_fight_always_terminates_and_leaves_one_outcome(seed):
-    outcome = _run(_char(logic=3, hack_rank=2, deck_id="cracked_cyberdeck"), seed, tier=1)
+    outcome = _run(_char(logic=3, matrix_rank=2, deck_id="cracked_cyberdeck"), seed, tier=1)
     assert outcome in (MatrixOutcome.SEIZED, MatrixOutcome.EJECTED)
 
 
@@ -655,7 +706,7 @@ def _hand_built_network(data_ice=WEAK_ICE, with_cpu=False, with_cache=False):
 
 
 def _ready_char():
-    return _char(logic=6, hack_rank=6, deck_id="zetatech_rig")
+    return _char(logic=6, matrix_rank=6, deck_id="zetatech_rig")
 
 
 def _clear_node(run, rng, max_rounds=50):
@@ -971,7 +1022,7 @@ def test_render_marks_current_node_and_spine_connectors():
 
 def test_render_reflects_cleared_and_guarded_status():
     program = PROGRAMS_BY_ID["analyze"]
-    c = _char(logic=6, hack_rank=6, deck_id="zetatech_rig", installed_programs=[program.id])
+    c = _char(logic=6, matrix_rank=6, deck_id="zetatech_rig", installed_programs=[program.id])
     run = start_matrix_run(c, _hand_built_network(), Drop.NONE, random.Random(1))
     move_to(run, "slave", random.Random(1))
     move_to(run, "ic", random.Random(1))

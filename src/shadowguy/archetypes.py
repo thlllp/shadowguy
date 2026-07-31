@@ -39,27 +39,80 @@ class Archetype:
 
 
 # id, name, description, stats, skills (id -> target rank)
+#
+# Every row spends exactly STARTING_STAT_POINTS (6) and STARTING_SKILL_POINTS (20) --
+# _validate_preset enforces it, so a row that doesn't add up fails at first access
+# rather than shipping a preset the player couldn't have built. Reaching rank R from
+# STARTING_SKILL_RANK costs 1/2/3/5/7/9/12/15/19 points for R = 2..10 (the running sum
+# of character.SKILL_RANK_COST), which is what makes a rank-7 signature skill cost
+# nearly half the pool.
+#
+# Each preset names *one* thing it is good at and pays for it, rather than hedging --
+# that narrowness is what makes an archetype bleed on job stages it doesn't suit. The
+# Hacker is the deliberate exception: a matrix fight now rolls five different skills
+# (see matrix.py's skill constants), so covering its own arena costs it breadth
+# everywhere else.
 _ARCHETYPE_ROWS = (
     (
         "enforcer",
         "Enforcer",
         "Muscle. Hits hard, soaks hits, and is no good at all at casing a place.",
         {"body": 3, "strength": 3},
-        {"grapple": 7, "toughness": 6, "negotiations": 4, "intuition": 2},
+        # Strength is bought for the damage, not the skill list: it adds to every melee
+        # hit (combat.melee_damage_bonus), so a club in this build swings for its rating
+        # plus 4 before the roll's margin.
+        {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 2},
     ),
     (
         "hacker",
         "Hacker",
         "Breaks systems. Owns the wired half of the board, weak the moment it turns physical.",
-        {"logic": 4, "perception": 2},
-        {"hack": 7, "tinkering": 5, "infer": 4, "pattern_seeking": 4},
+        # Every point on logic: all five skills below sit on it, so the 2 points this
+        # used to put in perception bought nothing the build ever rolled once
+        # pattern_seeking gave way to the matrix skills.
+        {"logic": 6},
+        # One skill per matrix roll: Cybercombat fights the ICE, Hack gets in and runs
+        # Sleaze, Computer pulls the file, Infer is both the Analyze action and the
+        # firewall (matrix.firewall_defense), Tinkering is Harden. Cybercombat leads
+        # because that is what a Data Heist's fights actually roll -- and it clears
+        # MIN_READY_CYBERCOMBAT, so this preset never trips the readiness warning.
+        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 3},
     ),
     (
         "infiltrator",
         "Infiltrator",
         "Gets in unseen and talks their way out. Broad, but tops out lower than a specialist.",
         {"agility": 4, "perception": 2},
-        {"stealth": 7, "deception": 5, "sight": 4, "intuition": 4},
+        # Blades rather than a gun: this build's whole premise is not being heard, and
+        # a blade is the weapon it can carry concealed. Sight stays because Recon --
+        # the Infiltrator's own job archetype -- leads every beat with a perception skill.
+        {"stealth": 7, "deception": 5, "sight": 4, "blades": 4},
+    ),
+    (
+        "gunslinger",
+        "Gunslinger",
+        "Wins the fight at the far end of the room. Lethal at range, ordinary everywhere else.",
+        {"agility": 3, "body": 3},
+        # The counterpart to the Enforcer now that weapons are split by category: the
+        # rifle is the build, Dodge and Toughness are what keep it standing while it
+        # kites. Pistols is the *early game*, not an afterthought -- a runner starts on
+        # STARTING_CASH (100) with an empty inventory, and the cheapest longarm is the
+        # 650eb Pump Shotgun, so this build spends its first job or two shooting a
+        # 250eb Pipe Pistol before its signature skill has a weapon to roll at all.
+        {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 4},
+    ),
+    (
+        "fixer",
+        "Fixer",
+        "Runs people, not jobs. Hires cheap, deals well, and loses any fight they can't talk out of.",
+        {"cool": 4, "logic": 2},
+        # The one preset built on cool, which no other archetype touches. Leadership is
+        # the unusual buy: it is *read* rather than rolled (runners.recruit_wage/
+        # recruit_cut), so it discounts every hire's wage and job cut for the whole run
+        # -- this build fields a crew the others can't afford. Computer is what those 2
+        # logic points are for: digging up information is the other half of the job, and
+        # a stat this preset buys should be a stat it actually rolls.
+        {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 4},
     ),
 )
 
@@ -70,6 +123,7 @@ _ARCHETYPES_BY_ID: dict[str, Archetype] | None = None
 
 def _validate_preset(archetype: Archetype) -> None:
     from shadowguy.character import Character
+    from shadowguy.skills import skill_for
     character = Character(name="_check")
     archetype.apply(character)
     if character.stat_points or character.skill_points:
@@ -78,6 +132,18 @@ def _validate_preset(archetype: Archetype) -> None:
             f"{archetype.id}: leaves {character.stat_points} stat / "
             f"{character.skill_points} skill points unspent; presets must spend "
             f"all {STARTING_STAT_POINTS} and {STARTING_SKILL_POINTS}"
+        )
+    # Spending the pools isn't enough: the two halves have to describe the same build.
+    # A stat raised for skills the preset doesn't buy is silently wasted -- nothing
+    # rolls a core stat directly (see skills.skill_value), so those points do nothing
+    # at all. Both the Hacker (perception, after pattern_seeking gave way to the matrix
+    # skills) and the Fixer (logic) shipped that way before this check existed.
+    rolled_stats = {skill_for(skill_id).stat for skill_id in archetype.skills}
+    idle = sorted(set(archetype.stats) - rolled_stats)
+    if idle:
+        raise ValueError(
+            f"{archetype.id}: raises {', '.join(idle)} but buys no skill layered on "
+            f"{'it' if len(idle) == 1 else 'them'}; those points can never be rolled"
         )
 
 
