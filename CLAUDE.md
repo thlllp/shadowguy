@@ -119,7 +119,7 @@ src/shadowguy/
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
   fixer.py       the Fixer roster holding job and security offers
-  runners.py     the hireable-runner roster
+  runners.py     the hireable-runner roster + the remote-support programs a hire runs
 
   factions.py    corp Factions + the HQ officer ladder
   gangs.py       street Gangs + GANG_RANKS
@@ -154,7 +154,8 @@ src/shadowguy/
                          + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen (the abstract_combat surface)
-    tactical_screen.py   TacticalScreen + GrenadePickScreen
+    tactical_screen.py   TacticalScreen + GrenadePickScreen + HackerPickScreen (the
+                         remote-support menu)
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a

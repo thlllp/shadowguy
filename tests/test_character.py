@@ -397,11 +397,26 @@ def test_crew_on_site_leaves_remote_support_off_the_map():
     the job (crew_working) and still take a cut; they're just not standing there."""
     c = Character(name="t")
     c.accepted_jobs.append(_job("job_1", max_on_site=2, max_support=1))
-    assert c.hire_for_job("runner_a", "job_1", on_site=True)
-    assert c.hire_for_job("runner_b", "job_1", on_site=False)
+    # Real roster ids: support is role-gated (only a Netrunner can work it), so a test
+    # double can't fill the support slot any more.
+    assert c.hire_for_job("runner_juncture", "job_1", on_site=True)  # Solo
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)  # Netrunner
 
-    assert {h.runner_id for h in c.crew_working("job_1")} == {"runner_a", "runner_b"}
-    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_a"]
+    assert {h.runner_id for h in c.crew_working("job_1")} == {"runner_juncture", "runner_specter"}
+    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_juncture"]
+    assert [h.runner_id for h in c.crew_support("job_1")] == ["runner_specter"]
+
+
+def test_only_a_support_capable_archetype_can_take_the_support_slot():
+    """Support is a role, not just a placement -- a solo standing across the street
+    contributes nothing, so the posture is refused rather than sold. On-site is
+    unaffected: everyone can stand in a room."""
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=3, max_support=2))
+    assert not c.hire_for_job("runner_juncture", "job_1", on_site=False)  # Solo
+    assert not c.hire_for_job("runner_mireille", "job_1", on_site=False)  # Infiltrator
+    assert c.hire_for_job("runner_juncture", "job_1", on_site=True)
+    assert c.crew_support("job_1") == []
 
 
 def test_crew_on_site_keeps_retained_hires_who_default_to_being_there():
@@ -495,7 +510,8 @@ def test_hire_for_job_uncapped_when_job_unknown_or_archetype_has_no_cap():
     assert c.hire_for_job("runner_a", "job_1")
     c.accepted_jobs.append(_job("job_2"))  # max_on_site/max_support both None
     assert c.hire_for_job("runner_b", "job_2", on_site=True)
-    assert c.hire_for_job("runner_c", "job_2", on_site=False)
+    # Real Netrunner id: the support posture is role-gated even where the cap isn't.
+    assert c.hire_for_job("runner_specter", "job_2", on_site=False)
 
 
 def test_hire_for_job_respects_burglary_style_cap_one_on_site_one_support():
@@ -504,11 +520,12 @@ def test_hire_for_job_respects_burglary_style_cap_one_on_site_one_support():
     # max_on_site=1 counts the player, so no additional on-site hire fits.
     assert not c.hire_for_job("runner_a", "job_1", on_site=True)
     assert not c.on_crew("runner_a")
-    # One support hire fits; a second does not.
-    assert c.hire_for_job("runner_b", "job_1", on_site=False)
-    assert not c.hire_for_job("runner_c", "job_1", on_site=False)
-    assert c.on_crew("runner_b")
-    assert not c.on_crew("runner_c")
+    # One support hire fits; a second does not. Both are Netrunners, so what stops the
+    # second is the cap rather than the role gate.
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_null", "job_1", on_site=False)
+    assert c.on_crew("runner_specter")
+    assert not c.on_crew("runner_null")
 
 
 def test_hire_for_job_respects_data_heist_style_cap_solo_no_crew_at_all():
@@ -528,6 +545,7 @@ def test_hire_for_job_respects_wetwork_style_cap_three_on_site_one_support():
     assert c.hire_for_job("runner_a", "job_1", on_site=True)
     assert c.hire_for_job("runner_b", "job_1", on_site=True)
     assert not c.hire_for_job("runner_c", "job_1", on_site=True)
-    assert c.hire_for_job("runner_d", "job_1", on_site=False)
-    assert not c.hire_for_job("runner_e", "job_1", on_site=False)
-    assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_d"}
+    # Netrunner ids for the support slot -- see the role gate in hire_for_job.
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_null", "job_1", on_site=False)
+    assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_specter"}

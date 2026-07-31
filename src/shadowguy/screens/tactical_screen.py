@@ -10,6 +10,7 @@ from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.tactical import (
     GRENADE_RADIUS,
+    TRACE_CAP,
     AimKind,
     CrewFate,
     Side,
@@ -32,7 +33,9 @@ from shadowguy.tactical import (
     stabilize_ally,
     stairs_here,
     start_burglary,
+    run_support_task,
     start_tactical,
+    support_tasks,
     take_stairs,
     throw_grenade,
     weapon_for_target,
@@ -94,6 +97,49 @@ class GrenadePickScreen(ModalScreen):
         self.dismiss(self._grenades[picked][0])
 
 
+class HackerPickScreen(ModalScreen):
+    """What to tell the remote hacker to do, when there's more than one thing they could.
+
+    Same dismiss-a-value shape as GrenadePickScreen above, and skipped the same way when
+    there's only one option -- no need to ask when there's nothing to ask. Dismisses the
+    chosen runners.SupportProgram, or None if cancelled.
+
+    Only tasks with something to point at are ever in the list (tactical.support_tasks),
+    so every row here is one the player can actually pick.
+    """
+
+    BINDINGS = [("escape", "cancel", "Back")]
+    CSS = _menu_css("HackerPickScreen", "hacker_dialog")
+
+    def __init__(self, name: str, programs, trace: int) -> None:
+        super().__init__()
+        self._name = name
+        self._programs = programs
+        self._trace = trace
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(f"{self._name} is on the line — trace {self._trace}/{TRACE_CAP}."),
+            ListView(
+                *(
+                    ListItem(
+                        Static(f"{program.name} — {program.description} (trace +{program.trace_on_failure} if it misses)"),
+                        id=f"support_{i}",
+                    )
+                    for i, program in enumerate(self._programs)
+                ),
+            ),
+            id="hacker_dialog",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        picked = int(event.item.id.removeprefix("support_"))
+        self.dismiss(self._programs[picked])
+
+
 class TacticalScreen(Screen):
     BINDINGS = [
         ("up", "move('up')", "Move"),
@@ -123,6 +169,7 @@ class TacticalScreen(Screen):
         ],
         ("f", "fire", "Aim attack"),
         ("g", "throw_grenade", "Grenade"),
+        ("h", "direct_hacker", "Hacker"),
         # Priority so the aim cursor's target-cycling wins over Screen's own default
         # tab -> focus_next binding, which would otherwise eat the key.
         Binding("tab", "next_target", "Next target", priority=True),
@@ -160,7 +207,7 @@ class TacticalScreen(Screen):
     }
     """
 
-    def __init__(self, stage, allies=(), spawn=None) -> None:
+    def __init__(self, stage, allies=(), spawn=None, support=None) -> None:
         super().__init__()
         self.stage = stage
         # Set for a burglary (scene.BurglaryStage): which (level, cell) the entrance the
@@ -171,6 +218,9 @@ class TacticalScreen(Screen):
         # supplied by whoever opened the fight — the crew is the Character's, not the
         # stage's, so a hire made after the job was generated still shows up.
         self.allies = list(allies)
+        # tactical.Support for the remote hacker backing this job, or None if nobody is.
+        # Same "read off the Character when the fight opens" rule as allies.
+        self.support = support
         self.state = None
 
     def compose(self) -> ComposeResult:
@@ -186,6 +236,7 @@ class TacticalScreen(Screen):
             Static(id="tac_box_leave", classes="tac_box"),
             Static(id="tac_box_enemies", classes="tac_box"),
             Static(id="tac_box_crew", classes="tac_box"),
+            Static(id="tac_box_hacker", classes="tac_box"),
             Static(id="tac_box_level", classes="tac_box"),
             id="tac_status",
         )
@@ -198,7 +249,8 @@ class TacticalScreen(Screen):
         # start, so it plays here rather than in a stripped-down walk of its own.
         if self.spawn is not None:
             self.state = start_burglary(
-                self.app.character, self.stage.building, self.spawn, self.stage.guard, self.allies
+                self.app.character, self.stage.building, self.spawn, self.stage.guard,
+                self.allies, support=self.support,
             )
         else:
             self.state = start_tactical(
@@ -257,6 +309,42 @@ class TacticalScreen(Screen):
             self._refresh()
             return
         self.app.push_screen(GrenadePickScreen(grenades), self._on_grenade_picked)
+
+    def action_direct_hacker(self) -> None:
+        """Tell the hacker to do something. Costs the player nothing -- no move, no
+        action -- because it's their turn being spent, not yours (see tactical.Support).
+        What it can cost is the trace, and only on a miss."""
+        state = self.state
+        if state.is_over or state.aim_cursor is not None:
+            return
+        support = state.support
+        if support is None:
+            self.notify("Nobody's backing this one.")
+            return
+        if support.offline:
+            self.notify(f"{support.name} was traced and is off the line.")
+            return
+        if support.acted:
+            self.notify(f"{support.name} is already working on something.")
+            return
+        tasks = support_tasks(state)
+        if not tasks:
+            self.notify(f"{support.name} has nothing to reach from here.")
+            return
+        if len(tasks) == 1:
+            self._run_support(tasks[0])
+            return
+        self.app.push_screen(
+            HackerPickScreen(support.name, tasks, support.trace), self._on_support_picked
+        )
+
+    def _on_support_picked(self, program) -> None:
+        if program is not None:
+            self._run_support(program)
+
+    def _run_support(self, program) -> None:
+        run_support_task(self.state, program)
+        self._refresh()
 
     def _on_grenade_picked(self, consumable_index: int | None) -> None:
         if consumable_index is not None:
@@ -557,6 +645,21 @@ class TacticalScreen(Screen):
         crew_box.display = bool(crew)
         if crew_box.display:
             crew_box.update(_boxed_text("Crew (s to stabilize)", ", ".join(map(self._crew_line, crew))))
+        # Hacker tile, same rule as the crew tile: only there when somebody is. Shows the
+        # trace rather than the task list -- the list is a keypress away and changes every
+        # time the player moves, but how hot the link is getting is what they steer on.
+        support = state.support
+        hacker_box = self.query_one("#tac_box_hacker", Static)
+        hacker_box.display = support is not None
+        if hacker_box.display:
+            if support.offline:
+                detail = "traced — off the line"
+            elif support.acted:
+                detail = f"working — trace {support.trace}/{TRACE_CAP}"
+            else:
+                ready = len(support_tasks(state))
+                detail = f"{ready} task(s) — trace {support.trace}/{TRACE_CAP}"
+            hacker_box.update(_boxed_text(f"{support.name} (h)", detail))
 
     @staticmethod
     def _crew_line(unit) -> str:

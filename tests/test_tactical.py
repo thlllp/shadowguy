@@ -10,6 +10,7 @@ import pytest
 from shadowguy.buildings import BuildingKind, Lock, generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
+from shadowguy.character import CrewHire
 from shadowguy.combat import (
     FIREARM_RANGE,
     MELEE_RANGE,
@@ -35,12 +36,15 @@ from shadowguy.tactical import (
     GRENADE_RADIUS,
     GRENADE_RANGE,
     HALF_COVER,
+    CYBERWARE_STUN_ROUNDS,
     LOCK_FAILURE_ALARM_CHANCE,
+    TRACE_CAP,
     TAC_MAP_HEIGHT,
     TAC_MAP_WIDTH,
     AimKind,
     CrewFate,
     Side,
+    Support,
     TacticalOutcome,
     Unit,
     aim_is_legal,
@@ -78,12 +82,22 @@ from shadowguy.tactical import (
     stabilize_ally,
     stairs_here,
     start_burglary,
+    _nearest_guard,
+    run_support_task,
     stabilize_targets,
     start_tactical,
+    support_for,
+    support_tasks,
     take_stairs,
     targets_for,
     throw_grenade,
     weapon_for_target,
+)
+from shadowguy.runners import (
+    RUNNERS_BY_ID,
+    SUPPORT_PROGRAMS,
+    RivalRunner,
+    support_programs_for,
 )
 
 from helpers import AlwaysOne, AlwaysSix, ForcedChance, crew_stats_for
@@ -1122,9 +1136,10 @@ def test_generated_map_border_ring_stays_solid_wall(seed):
 # --- burglary: levels, standing a post, and what actually ends one ---
 
 
-def _burglary(seed=7, guard_id="thug", entrances=2):
+def _burglary(seed=7, guard_id="thug", entrances=2, kind=None):
     """A real generated house with a live infiltration on its entry level."""
-    building = generate_building(random.Random(seed), entrance_count=entrances)
+    extra = {} if kind is None else {"kind": kind}
+    building = generate_building(random.Random(seed), entrance_count=entrances, **extra)
     character = Character(name="t", inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)])
     state = start_burglary(character, building, building.entrance_spawns[0], ENEMIES_BY_ID[guard_id])
     return building, state
@@ -1372,3 +1387,156 @@ def test_attempt_lock_is_what_move_player_dispatches_to():
     attempt_lock(state, dest, lock, AlwaysSix())
     assert state.player.coord == dest
     assert lock_at(state, dest) is None
+
+
+# --- remote support: the hacker who never sets foot in the building ---
+
+
+def _supported_burglary(seed=7, rating=8, kind=None):
+    """A burglary with a netrunner on the far end of the link. `kind` matters for the
+    camera tasks -- a home has no monitored camera system (BUILDING_PROFILES), so a test
+    about blinding one has to break into an office."""
+    building, state = _burglary(seed=seed, kind=kind)
+    runner = next(r for r in RUNNERS_BY_ID.values() if r.archetype == "Netrunner")
+    state.support = Support(
+        name=runner.name, rating=rating, programs=support_programs_for(runner)
+    )
+    return building, state
+
+
+def test_support_for_picks_the_best_netrunner_and_ignores_anyone_who_cant_work_support():
+    """A solo across the street contributes nothing, so they can't be the pick even if
+    they're the only hire holding a support slot."""
+    solo = CrewHire(runner_id="runner_juncture", job_id="j", on_site=False)
+    assert support_for([solo]) is None
+
+    netrunners = [
+        CrewHire(runner_id=r.id, job_id="j", on_site=False)
+        for r in RUNNERS_BY_ID.values()
+        if r.archetype == "Netrunner"
+    ]
+    best = max(RUNNERS_BY_ID[h.runner_id].rating for h in netrunners)
+    support = support_for([solo, *netrunners])
+    assert support is not None and support.rating == best
+
+
+def test_a_hire_only_carries_the_programs_their_rating_can_run():
+    """min_rating is what makes a better netrunner worth paying for beyond the roll."""
+    low = support_programs_for(RivalRunner("x", "X", "Netrunner", "", 0, 0, 0.0))
+    high = support_programs_for(RivalRunner("y", "Y", "Netrunner", "", 10, 0, 0.0))
+    assert [p.id for p in low] == ["probe"]
+    assert len(high) == len(SUPPORT_PROGRAMS)
+
+
+def test_directing_the_hacker_costs_the_player_no_move_and_no_action():
+    """The whole reason to pay for a second person: their turn, not yours."""
+    _, state = _supported_burglary()
+    moves, acted = state.moves_left, state.acted
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysSix())
+    assert state.moves_left == moves
+    assert state.acted is acted is False
+
+
+def test_the_hacker_gets_one_task_per_turn_refreshed_with_yours():
+    _, state = _supported_burglary()
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysSix())
+    assert state.support.acted
+    assert support_tasks(state) == []  # nothing more this turn
+
+    end_turn(state, rng=random.Random(0))
+    assert not state.support.acted
+    assert support_tasks(state)
+
+
+def test_a_failed_task_climbs_the_trace_and_a_clean_one_never_does():
+    """Nothing costs trace on a success: getting in and out clean is the whole skill."""
+    _, state = _supported_burglary()
+    program = next(p for p in support_tasks(state) if p.id == "probe")
+    run_support_task(state, program, rng=AlwaysSix())
+    assert state.support.trace == 0
+
+    state.support.acted = False
+    run_support_task(state, program, rng=AlwaysOne())
+    assert state.support.trace == program.trace_on_failure
+
+
+def test_reaching_the_trace_cap_burns_the_hacker_and_brings_the_alarm():
+    _, state = _supported_burglary()
+    state.support.trace = TRACE_CAP - 1
+    assert not state.alarm
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysOne())
+    assert state.support.offline
+    assert state.alarm  # the trace runs both ways
+    assert support_tasks(state) == []  # terminal -- a new turn doesn't bring them back
+    end_turn(state, rng=random.Random(0))
+    assert support_tasks(state) == []
+
+
+def test_scouting_reveals_a_room_the_player_has_not_seen():
+    _, state = _supported_burglary()
+    probe = next(p for p in support_tasks(state) if p.id == "probe")
+    before = len(state.explored.get(state.level_index, set()))
+    run_support_task(state, probe, rng=AlwaysSix())
+    assert len(state.explored[state.level_index]) > before
+
+
+def test_hacking_a_device_opens_a_lock_or_blinds_a_camera():
+    """One task rather than two: from the far end of a link they're the same job."""
+    for seed in range(30):
+        building, state = _supported_burglary(seed=seed)
+        wrench = next((p for p in support_tasks(state) if p.id == "wrench"), None)
+        if wrench is None:
+            continue  # nothing electronic on this level to reach
+        locks_before = len(building.locks)
+        blinded_before = len(state.support.blinded_cameras)
+        run_support_task(state, wrench, rng=AlwaysSix())
+        assert (len(building.locks) < locks_before) or (
+            len(state.support.blinded_cameras) > blinded_before
+        )
+        return
+    raise AssertionError("no seed in range produced a reachable device")
+
+
+def test_a_blinded_camera_stops_catching_the_player():
+    """check_detection has to honour it, or blinding one buys nothing. Swept over seeds
+    rather than skipped: not every generated house puts a camera on the entry level, and
+    a test that quietly skips verifies nothing."""
+    for seed in range(40):
+        building, state = _supported_burglary(seed=seed, kind=BuildingKind.OFFICE)
+        spot = next(((lv, c) for lv, c in building.cameras if lv == state.level_index), None)
+        if spot is None:
+            continue
+        level, coord = spot
+        state.player.coord = coord  # standing right under it
+        assert check_detection(state)
+
+        _, fresh = _supported_burglary(seed=seed, kind=BuildingKind.OFFICE)
+        fresh.player.coord = coord
+        fresh.support.blinded_cameras.add((level, coord))
+        assert not check_detection(fresh)
+        return
+    raise AssertionError("no seed in range produced a camera on the entry level")
+
+
+def test_burning_a_guards_cyberware_puts_them_out_of_the_fight_for_a_few_rounds():
+    for seed in range(40):
+        _, state = _supported_burglary(seed=seed)
+        ripper = next((p for p in support_tasks(state) if p.id == "ripper"), None)
+        if ripper is None:
+            continue  # nobody on the entry level to reach through
+        guard = _nearest_guard(state)
+        assert guard.stunned_rounds == 0
+        run_support_task(state, ripper, rng=AlwaysSix())
+        assert guard.stunned_rounds == CYBERWARE_STUN_ROUNDS
+        return
+    raise AssertionError("no seed in range put a guard on the entry level")
+
+
+def test_a_fight_nobody_is_backing_has_no_hacker_at_all():
+    """None is the ordinary case -- an ordinary shootout, a solo burglary, a test fight."""
+    _, state = _burglary()
+    assert state.support is None
+    assert support_tasks(state) == []
+    # And directing one is a no-op rather than a crash.
+    run_support_task(state, SUPPORT_PROGRAMS[0], rng=AlwaysSix())
+    assert not state.log or "Probe" not in state.log[-1]

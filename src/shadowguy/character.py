@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
-from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
+from shadowguy.runners import RUNNERS_BY_ID, can_work_support, recruit_wage
 from shadowguy.shops import InventoryItem
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
@@ -307,9 +307,17 @@ class Character:
 
     def hire_for_job(self, runner_id: str, job_id: str, on_site: bool = True) -> bool:
         """Sign a runner on for a single job, on-site or as support. Returns whether the
-        hire actually went through -- False if already on the crew or that job's roster
-        (Scene.max_on_site/max_support) has no room left for that posture."""
+        hire actually went through -- False if already on the crew, if that job's roster
+        (Scene.max_on_site/max_support) has no room left for that posture, or if they
+        can't work support at all and that's the posture asked for.
+
+        Support is a *role*, not merely a placement: a solo across the street does
+        nothing, so runners.can_work_support gates it (Netrunners today, Riggers when
+        they exist) rather than letting the player pay a cut for an empty comm link."""
         if self.on_crew(runner_id) or not self.job_roster_has_room(job_id, on_site):
+            return False
+        runner = RUNNERS_BY_ID.get(runner_id)
+        if not on_site and not (runner and can_work_support(runner)):
             return False
         self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id, on_site=on_site))
         return True
@@ -388,6 +396,12 @@ class Character:
         march them into the firefight.
         """
         return [hire for hire in self.crew_working(job_id) if hire.on_site]
+
+    def crew_support(self, job_id: str) -> list[CrewHire]:
+        """Of crew_working, the ones working it from somewhere else — the complement of
+        crew_on_site. What they actually do is tactical.Support: the player directs them
+        at the building from a side menu, on the hacker's own turn rather than theirs."""
+        return [hire for hire in self.crew_working(job_id) if not hire.on_site]
 
     def pay_crew_wages(self) -> list[str]:
         """Charge each indefinitely-kept crew member their daily wage on a day turnover.

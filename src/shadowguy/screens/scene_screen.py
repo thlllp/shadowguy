@@ -13,7 +13,7 @@ from shadowguy.matrix import MatrixOutcome
 from shadowguy.runners import RUNNERS_BY_ID, recruit_cut
 from shadowguy.skills import skill_value
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
-from shadowguy.tactical import TacticalOutcome
+from shadowguy.tactical import TacticalOutcome, support_for
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 from .burglary_screens import EntrancePickScreen
@@ -108,6 +108,13 @@ class SceneScreen(Screen):
         self.stage_id = stage.id
         self.app.push_screen(TacticalScreen(stage.tactical, allies=self._crew_units()), self._on_tactical_end)
 
+    def _support(self):
+        """The remote hacker backing this job, if one was hired as support. Same read-it-
+        when-the-fight-opens rule as _crew_units, and None for anything that isn't a job."""
+        if self.scene.kind is not SceneKind.JOB:
+            return None
+        return support_for(self.app.character.crew_support(self.scene.id))
+
     def _crew_units(self) -> list:
         """The hired runners who fight this stage beside the player, as stat blocks. Read
         off the Character at the moment the fight opens rather than baked into the stage
@@ -192,7 +199,12 @@ class SceneScreen(Screen):
         self._pending_next_stage = outcome.next_stage
         self._pending_result = result
         self.app.push_screen(
-            TacticalScreen(stage.burglary, allies=self._crew_units(), spawn=entrance.spawn),
+            TacticalScreen(
+                stage.burglary,
+                allies=self._crew_units(),
+                spawn=entrance.spawn,
+                support=self._support(),
+            ),
             self._on_burglary_end,
         )
 

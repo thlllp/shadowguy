@@ -214,3 +214,94 @@ RUNNER_INTRO_COST_MULT = 2
 
 def intro_cost(runner: RivalRunner) -> int:
     return runner.daily_cost * RUNNER_INTRO_COST_MULT
+
+
+# --- remote support: what a hire does from the far end of a comm link ---
+#
+# A support hire is a *role*, not merely a posture. `CrewHire.on_site` says where they
+# are; this says whether "not there" is a job they can actually do. A solo standing
+# across the street contributes nothing, so hiring one as support is refused
+# (Character.hire_for_job) rather than silently paying for nothing.
+#
+# Riggers are the other half of this and don't exist yet -- when they do, they're one
+# entry here and one archetype row, not a new system: a drone on overwatch is the same
+# "somebody else acts on their own turn" shape as a netrunner in the building's system.
+SUPPORT_ARCHETYPES = frozenset({"Netrunner"})
+
+
+@dataclass(frozen=True)
+class SupportProgram:
+    """One thing a remote hacker can be told to do, and how well their software does it.
+
+    Hand-built and not for sale, the same way combat.NPC_WEAPONS is: shops.Program is
+    written entirely in matrix-fight terms (ICE damage, sleaze, extract) and has no field
+    that could mean "scout that room". These are a different surface, so they get a
+    different table rather than four ICE fields pressed into service.
+
+    `min_rating` gates the task on the hire being good enough to run the software at all,
+    which is what makes a better netrunner worth paying for beyond the roll itself: a
+    rating-4 hire can only probe, a rating-8 hire can burn a guard's chrome.
+
+    `difficulty` is checks.resolve_check's ordinary scale. `trace_on_failure` is what a
+    miss costs -- see tactical.TRACE_CAP. Nothing costs trace on a success: getting in
+    and out clean is the whole skill.
+    """
+
+    id: str
+    name: str
+    task: str  # tactical.SupportTaskKind's value -- the effect this program grants
+    min_rating: int
+    difficulty: int
+    trace_on_failure: int
+    description: str
+
+
+# Ordered easiest-first, which is also the order the side menu lists them in.
+SUPPORT_PROGRAMS = (
+    SupportProgram(
+        id="probe",
+        name="Probe",
+        task="scout",
+        min_rating=0,
+        difficulty=11,
+        trace_on_failure=1,
+        description="Read the building's own sensors back at it and map a room you haven't seen.",
+    ),
+    SupportProgram(
+        id="wrench",
+        name="Wrench",
+        task="device",
+        min_rating=5,
+        difficulty=14,
+        trace_on_failure=2,
+        description="Talk a lock or a camera into believing you belong on the other side of it.",
+    ),
+    SupportProgram(
+        id="ripper",
+        name="Ripper",
+        task="cyberware",
+        min_rating=7,
+        difficulty=17,
+        trace_on_failure=3,
+        description="Reach through a guard's own chrome and put them on the floor with it.",
+    ),
+)
+
+SUPPORT_PROGRAMS_BY_ID = {program.id: program for program in SUPPORT_PROGRAMS}
+
+if len(SUPPORT_PROGRAMS_BY_ID) != len(SUPPORT_PROGRAMS):
+    raise ValueError("SUPPORT_PROGRAMS has a duplicate program id")
+
+
+def can_work_support(runner: RivalRunner) -> bool:
+    """Whether this runner can fill a support slot at all. A solo standing across the
+    street contributes nothing, so the posture is refused rather than sold."""
+    return runner.archetype in SUPPORT_ARCHETYPES
+
+
+def support_programs_for(runner: RivalRunner) -> tuple[SupportProgram, ...]:
+    """The software this hire can actually run, by their rating. Empty for anyone whose
+    archetype can't work support at all, so one call answers both questions."""
+    if runner.archetype not in SUPPORT_ARCHETYPES:
+        return ()
+    return tuple(p for p in SUPPORT_PROGRAMS if runner.rating >= p.min_rating)

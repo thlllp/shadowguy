@@ -16,7 +16,7 @@ import pytest
 
 from shadowguy.app import ShadowguyApp
 from shadowguy.buildings import BuildingKind, Lock
-from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, InventoryItem
+from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character, InventoryItem
 from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
@@ -55,9 +55,10 @@ from shadowguy.screens.corp_screen import CorpScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 
 from shadowguy.screens.matrix_screen import MatrixScreen
-from shadowguy.screens.tactical_screen import TacticalScreen
+from shadowguy.screens.tactical_screen import HackerPickScreen, TacticalScreen
 from shadowguy.grid import Tile, parse_grid, step_neighbors, visible_tiles
 from shadowguy.tactical import (
+    TRACE_CAP,
     AimKind,
     CrewFate,
     Side,
@@ -78,7 +79,7 @@ from shadowguy.screens.menu_screens import (
 )
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.scene import Outcome, TacticalStage
+from shadowguy.scene import BurglaryStage, Outcome, TacticalStage
 from shadowguy.screens.info_screens import (
     AlarmClockScreen,
     ContactsScreen,
@@ -3122,5 +3123,83 @@ def test_hq_takeover_buys_the_corp_and_charges_for_it():
             assert character.cash == 500  # charged exactly the stake
             # The offer is gone once taken -- you can't run two corps.
             assert len(app.screen.query("#takeover")) == 0
+
+    run(body())
+
+
+# --- directing the remote hacker from the tactical screen ---
+
+
+def _supported_burglary_stage(seed=3):
+    """A burglary stage plus the Support a netrunner hire produces for it."""
+    from shadowguy.buildings import BuildingKind, generate_building
+    from shadowguy.combat import ENEMIES_BY_ID
+    from shadowguy.tactical import support_for
+
+    building = generate_building(random.Random(seed), entrance_count=2, kind=BuildingKind.OFFICE)
+    character = Character(name="t")
+    character.hire_for_job("runner_specter", "j1", on_site=False)
+    stage = BurglaryStage(
+        prompt="Get in.",
+        entrances=(),
+        building=building,
+        bailed=Outcome(text="bailed"),
+        guard=ENEMIES_BY_ID["corp_sec"],
+    )
+    return stage, building.entrance_spawns[0], support_for(character.crew_support("j1"))
+
+
+def test_the_hacker_tile_only_appears_when_somebody_is_backing_the_job():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await _settle(pilot)
+            app.push_screen(TacticalScreen(_open_field_stage()))
+            await _settle(pilot)
+            assert not app.screen.query_one("#tac_box_hacker", Static).display
+
+    run(body())
+
+
+def test_h_directs_the_hacker_without_spending_the_players_turn():
+    """The whole economy of remote support: their action, not yours. Pressing h resolves
+    a task (or opens the picker when there's more than one) and leaves moves/acted alone."""
+
+    async def body():
+        stage, spawn, support = _supported_burglary_stage()
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await _settle(pilot)
+            app.push_screen(TacticalScreen(stage, spawn=spawn, support=support))
+            await _settle(pilot)
+            state = app.screen.state
+            assert app.screen.query_one("#tac_box_hacker", Static).display
+            moves, acted = state.moves_left, state.acted
+
+            await pilot.press("h")
+            await _settle(pilot)
+            if isinstance(app.screen, HackerPickScreen):
+                await pilot.press("enter")  # more than one task offered; take the first
+                await _settle(pilot)
+
+            assert state.support.acted  # the hacker spent their own turn
+            assert state.moves_left == moves and state.acted == acted  # yours is untouched
+
+    run(body())
+
+
+def test_a_traced_hacker_drops_off_the_line_and_the_tile_says_so():
+    async def body():
+        stage, spawn, support = _supported_burglary_stage()
+        support.trace = TRACE_CAP
+        support.offline = True
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await _settle(pilot)
+            app.push_screen(TacticalScreen(stage, spawn=spawn, support=support))
+            await _settle(pilot)
+            tile = app.screen.query_one("#tac_box_hacker", Static)
+            assert tile.display
+            assert "traced" in str(tile.content)
 
     run(body())
