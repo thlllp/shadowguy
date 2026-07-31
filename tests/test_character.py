@@ -2,9 +2,11 @@
 
 import pytest
 
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
+    GEAR_EB_PER_POINT,
     FATIGUE_GRACE_HOURS,
     FATIGUE_STAT_PENALTY_CAP,
     HEALTH_PER_BODY,
@@ -390,6 +392,43 @@ def test_crew_working_takes_this_job_s_hires_plus_everyone_on_retainer():
     assert [h.runner_id for h in c.crew_for_job("job_1")] == ["runner_a"]
 
 
+def test_crew_on_site_leaves_remote_support_off_the_map():
+    """`on_site` was write-only until crew_on_site existed: set at hire time, capped per
+    archetype, saved -- and then ignored when the fight opened, so a hire taken on as
+    remote support turned up at the location as a body holding a gun. They're still on
+    the job (crew_working) and still take a cut; they're just not standing there."""
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=2, max_support=1))
+    # Real roster ids: support is role-gated (only a Netrunner can work it), so a test
+    # double can't fill the support slot any more.
+    assert c.hire_for_job("runner_juncture", "job_1", on_site=True)  # Solo
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)  # Netrunner
+
+    assert {h.runner_id for h in c.crew_working("job_1")} == {"runner_juncture", "runner_specter"}
+    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_juncture"]
+    assert [h.runner_id for h in c.crew_support("job_1")] == ["runner_specter"]
+
+
+def test_only_a_support_capable_archetype_can_take_the_support_slot():
+    """Support is a role, not just a placement -- a solo standing across the street
+    contributes nothing, so the posture is refused rather than sold. On-site is
+    unaffected: everyone can stand in a room."""
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=3, max_support=2))
+    assert not c.hire_for_job("runner_juncture", "job_1", on_site=False)  # Solo
+    assert not c.hire_for_job("runner_mireille", "job_1", on_site=False)  # Infiltrator
+    assert c.hire_for_job("runner_juncture", "job_1", on_site=True)
+    assert c.crew_support("job_1") == []
+
+
+def test_crew_on_site_keeps_retained_hires_who_default_to_being_there():
+    """An indefinite hire is on retainer with on_site defaulting True, so the new filter
+    must not quietly empty the map for anyone who never chose a posture."""
+    c = Character(name="t")
+    c.hire_indefinite("runner_c")
+    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_c"]
+
+
 def test_record_runner_killed_takes_them_off_the_crew_and_the_roster_for_good():
     c = Character(name="t")
     c.hire_indefinite("runner_x")
@@ -473,7 +512,8 @@ def test_hire_for_job_uncapped_when_job_unknown_or_archetype_has_no_cap():
     assert c.hire_for_job("runner_a", "job_1")
     c.accepted_jobs.append(_job("job_2"))  # max_on_site/max_support both None
     assert c.hire_for_job("runner_b", "job_2", on_site=True)
-    assert c.hire_for_job("runner_c", "job_2", on_site=False)
+    # Real Netrunner id: the support posture is role-gated even where the cap isn't.
+    assert c.hire_for_job("runner_specter", "job_2", on_site=False)
 
 
 def test_hire_for_job_respects_burglary_style_cap_one_on_site_one_support():
@@ -482,11 +522,12 @@ def test_hire_for_job_respects_burglary_style_cap_one_on_site_one_support():
     # max_on_site=1 counts the player, so no additional on-site hire fits.
     assert not c.hire_for_job("runner_a", "job_1", on_site=True)
     assert not c.on_crew("runner_a")
-    # One support hire fits; a second does not.
-    assert c.hire_for_job("runner_b", "job_1", on_site=False)
-    assert not c.hire_for_job("runner_c", "job_1", on_site=False)
-    assert c.on_crew("runner_b")
-    assert not c.on_crew("runner_c")
+    # One support hire fits; a second does not. Both are Netrunners, so what stops the
+    # second is the cap rather than the role gate.
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_null", "job_1", on_site=False)
+    assert c.on_crew("runner_specter")
+    assert not c.on_crew("runner_null")
 
 
 def test_hire_for_job_respects_data_heist_style_cap_solo_no_crew_at_all():
@@ -506,6 +547,91 @@ def test_hire_for_job_respects_wetwork_style_cap_three_on_site_one_support():
     assert c.hire_for_job("runner_a", "job_1", on_site=True)
     assert c.hire_for_job("runner_b", "job_1", on_site=True)
     assert not c.hire_for_job("runner_c", "job_1", on_site=True)
-    assert c.hire_for_job("runner_d", "job_1", on_site=False)
-    assert not c.hire_for_job("runner_e", "job_1", on_site=False)
-    assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_d"}
+    # Netrunner ids for the support slot -- see the role gate in hire_for_job.
+    assert c.hire_for_job("runner_specter", "job_1", on_site=False)
+    assert not c.hire_for_job("runner_null", "job_1", on_site=False)
+    assert {h.runner_id for h in c.crew_for_job("job_1")} == {"runner_a", "runner_b", "runner_specter"}
+
+
+# --- creation gear: skill points traded for the kit you walk in with ---
+
+
+def test_converting_a_skill_point_buys_gear_budget_not_cash():
+    c = Character(name="t")
+    cash, points = c.cash, c.skill_points
+    assert c.convert_skill_point_to_gear()
+    assert c.skill_points == points - 1
+    assert c.gear_budget == GEAR_EB_PER_POINT
+    assert c.cash == cash  # budget is not, and never becomes, money
+
+
+def test_the_whole_skill_pool_can_go_to_gear_and_then_nothing_is_left_to_convert():
+    """Deliberately uncapped -- the trade caps itself, since gear with no ranks behind it
+    swings at skill_value 2 and misses nearly everything."""
+    c = Character(name="t")
+    converted = 0
+    while c.convert_skill_point_to_gear():
+        converted += 1
+    assert converted == STARTING_SKILL_POINTS
+    assert c.gear_budget == STARTING_SKILL_POINTS * GEAR_EB_PER_POINT
+    assert not c.convert_skill_point_to_gear()
+
+
+def test_unspent_gear_budget_is_written_off_rather_than_banked_as_cash():
+    """The rule that makes this a gear purchase instead of a way to print starting money."""
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    cash = c.cash
+    assert c.discard_gear_budget() == GEAR_EB_PER_POINT
+    assert c.gear_budget == 0
+    assert c.cash == cash
+    assert c.discard_gear_budget() == 0  # idempotent
+
+
+def test_buying_creation_gear_spends_budget_and_equips_what_fits():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    vest = ITEMS_BY_ID["kevlar_vest"]
+    assert c.buy_creation_gear(vest)
+    assert c.gear_budget == GEAR_EB_PER_POINT - vest.price
+    assert c.creation_gear == ["kevlar_vest"]
+    assert [e.item_id for e in c.inventory] == ["kevlar_vest"]
+    assert c.inventory[0].equipped  # the torso slot was free
+
+
+def test_creation_gear_refuses_what_the_budget_cannot_cover_or_standing_gates():
+    c = Character(name="t")
+    assert not c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])  # no budget at all yet
+    c.convert_skill_point_to_gear()
+    gated = next(i for i in ITEMS_BY_ID.values() if i.min_standing)
+    assert not c.buy_creation_gear(gated)  # nobody to have standing with pre-run
+    assert c.creation_gear == []
+
+
+def test_refunding_creation_gear_returns_the_full_price():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])
+    assert c.refund_creation_gear("kevlar_vest")
+    assert c.gear_budget == GEAR_EB_PER_POINT
+    assert c.creation_gear == [] and c.inventory == []
+    assert not c.refund_creation_gear("kevlar_vest")  # nothing left to give back
+
+
+def test_refund_only_reaches_gear_bought_at_creation():
+    """It must never become a way to sell starting kit at full price mid-run."""
+    c = Character(name="t")
+    c.inventory.append(InventoryItem("kevlar_vest"))
+    assert not c.refund_creation_gear("kevlar_vest")
+    assert len(c.inventory) == 1
+
+
+def test_reset_build_takes_back_creation_gear_and_the_points_that_paid_for_it():
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    c.buy_creation_gear(ITEMS_BY_ID["kevlar_vest"])
+    c.reset_build()
+    assert c.skill_points == STARTING_SKILL_POINTS
+    assert c.gear_budget == 0
+    assert c.creation_gear == []
+    assert c.inventory == []

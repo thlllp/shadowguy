@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING
 
 from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
-from shadowguy.runners import RUNNERS_BY_ID, recruit_wage
-from shadowguy.shops import InventoryItem
+from shadowguy.runners import RUNNERS_BY_ID, can_work_support, recruit_wage
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
@@ -51,6 +51,15 @@ STARTING_STAT = 1
 STARTING_SKILL_RANK = 1
 STARTING_STAT_POINTS = 6
 STARTING_SKILL_POINTS = 20
+# What one creation skill point is worth as gear, via convert_skill_point_to_gear. A
+# build's third spend: ranks, stats, or walking in already equipped. The catalog runs
+# 80-1600 an item, so one point is roughly *one thing* -- a weapon or a torso piece, not
+# a whole kit. Deliberately that granular: at a coarser rate a single point covered a
+# runner head to toe and the choice stopped being a choice, and the leftover (which is
+# burned, not banked -- see discard_gear_budget) was large enough to feel like a penalty
+# for not min-maxing the shopping list.
+GEAR_EB_PER_POINT = 1000
+
 # A little walking-around money so the first nights' lodging (corpmap.lodging_cost)
 # don't strand a fresh runner before their first payday. Not part of the build — the
 # creation screen spends points, not cash — so reset_build() leaves it alone.
@@ -213,6 +222,14 @@ class Character:
     # nothing puts them back.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
+    # Creation-only eb, bought with skill points (convert_skill_point_to_gear) and
+    # spendable only on gear. Never cash: whatever is left over when the run starts is
+    # burned (discard_gear_budget), so this can't be used to print starting money.
+    gear_budget: int = 0
+    # Item ids bought with that budget, so reset_build can take them back out of the
+    # inventory again -- a point spent on a vest is a point spent, and undoing the build
+    # has to undo it. Item ids rather than InventoryItem so a duplicate buy is two entries.
+    creation_gear: list[str] = field(default_factory=list)
     # Earned through play (currently: completed jobs only, see jobs.JOB_XP_BASE and
     # Outcome.experience_delta) and spent post-creation via spend_experience_on_stat/
     # spend_experience_on_skill — a single pool that buys either, the player's choice
@@ -307,9 +324,17 @@ class Character:
 
     def hire_for_job(self, runner_id: str, job_id: str, on_site: bool = True) -> bool:
         """Sign a runner on for a single job, on-site or as support. Returns whether the
-        hire actually went through -- False if already on the crew or that job's roster
-        (Scene.max_on_site/max_support) has no room left for that posture."""
+        hire actually went through -- False if already on the crew, if that job's roster
+        (Scene.max_on_site/max_support) has no room left for that posture, or if they
+        can't work support at all and that's the posture asked for.
+
+        Support is a *role*, not merely a placement: a solo across the street does
+        nothing, so runners.can_work_support gates it (Netrunners today, Riggers when
+        they exist) rather than letting the player pay a cut for an empty comm link."""
         if self.on_crew(runner_id) or not self.job_roster_has_room(job_id, on_site):
+            return False
+        runner = RUNNERS_BY_ID.get(runner_id)
+        if not on_site and not (runner and can_work_support(runner)):
             return False
         self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id, on_site=on_site))
         return True
@@ -367,10 +392,33 @@ class Character:
         return True
 
     def crew_working(self, job_id: str) -> list[CrewHire]:
-        """Who actually walks into this job with you: the hires signed for it, plus every
-        indefinite hire (they're on retainer — they come to all of it). Wider than
-        crew_for_job, which is specifically "who takes a cut of *this* payout"."""
+        """Who is on this job at all: the hires signed for it, plus every indefinite hire
+        (they're on retainer — they come to all of it). Wider than crew_for_job, which is
+        specifically "who takes a cut of *this* payout", and wider than crew_on_site,
+        which is who is physically there."""
         return [hire for hire in self.crew if hire.job_id in (None, job_id)]
+
+    def crew_on_site(self, job_id: str) -> list[CrewHire]:
+        """Of crew_working, the ones actually standing at the location — the only ones a
+        fight can field as bodies.
+
+        `on_site` was write-only until this existed: it's set at hire time, capped per
+        job archetype (Scene.max_on_site/max_support) and saved (v49), but the fight
+        opened with crew_working and put *everyone* on the map. So a netrunner hired
+        explicitly as remote support turned up at the building holding a pistol, which is
+        the one thing hiring them as support says they don't do.
+
+        A support hire contributes nothing mechanically yet — they still take a cut
+        (crew_for_job) and grant no remote effect. That's a gap to fill, not a reason to
+        march them into the firefight.
+        """
+        return [hire for hire in self.crew_working(job_id) if hire.on_site]
+
+    def crew_support(self, job_id: str) -> list[CrewHire]:
+        """Of crew_working, the ones working it from somewhere else — the complement of
+        crew_on_site. What they actually do is tactical.Support: the player directs them
+        at the building from a side menu, on the hacker's own turn rather than theirs."""
+        return [hire for hire in self.crew_working(job_id) if not hire.on_site]
 
     def pay_crew_wages(self) -> list[str]:
         """Charge each indefinitely-kept crew member their daily wage on a day turnover.
@@ -482,6 +530,71 @@ class Character:
         self._raise_stat(name)
         return True
 
+    def convert_skill_point_to_gear(self) -> bool:
+        """Trade one creation skill point for GEAR_EB_PER_POINT of gear budget.
+
+        The third thing a build can spend its 20 points on, beside ranks: walk in with a
+        weapon and a vest instead of knowing how to use them. Deliberately *not* capped —
+        a runner may pour all 20 in — because the trade caps itself twice over. Ranks are
+        the to-hit half of every fight ("weapons are the damage, skills are the hit"), so
+        a runner who bought a katana and no Blades swings at skill_value 2 and misses
+        nearly everything; and armor can't simply be stacked, since shops.SLOT_CAPACITY
+        limits what can be worn at once. Gear with no ranks behind it is a bad build, not
+        a strong one, which is what makes the exchange rate safe without a ceiling.
+
+        `gear_budget` is not cash and never becomes cash — see discard_gear_budget.
+        """
+        if self.skill_points <= 0:
+            return False
+        self.skill_points -= 1
+        self.gear_budget += GEAR_EB_PER_POINT
+        return True
+
+    def discard_gear_budget(self) -> int:
+        """Drop whatever gear budget went unspent, at the moment the run begins.
+
+        The rule that makes the conversion a *gear* purchase rather than a way to print
+        starting money: leftover eb is burned, not banked. Without this a build could
+        convert all 20 points and walk in with 50,000 cash, which is a different (and much
+        worse) game than walking in with 50,000 of kit they can't shoot straight with.
+        Returns what was lost, so the creation screen can say so out loud.
+        """
+        lost, self.gear_budget = self.gear_budget, 0
+        return lost
+
+    def buy_creation_gear(self, item: "Item") -> bool:
+        """Spend gear budget (never cash) on one catalog item at creation.
+
+        Mirrors shops.buy_item's auto-equip rule -- equipped if the slot has room, stowed
+        otherwise -- so a runner who buys three torso pieces gets the same behaviour they
+        would at a shop. Standing gates don't apply: there's nobody to have standing with
+        before the run starts, so a min_standing item simply isn't offered.
+        """
+        if item.min_standing or item.price > self.gear_budget:
+            return False
+        self.gear_budget -= item.price
+        self.inventory.append(InventoryItem(item.id, equipped=fits_in_slot(self.inventory, item)))
+        self.creation_gear.append(item.id)
+        return True
+
+    def refund_creation_gear(self, item_id: str) -> bool:
+        """Put one creation purchase back, at full price -- nothing has happened to it yet.
+
+        Only reverses a *creation* buy (creation_gear), so it can never be used to sell
+        off starting kit an archetype granted after the run has begun: the creation screen
+        is the only thing that calls it, and discard_gear_budget zeroes the budget the
+        moment the run starts.
+        """
+        if item_id not in self.creation_gear:
+            return False
+        entry = next((e for e in reversed(self.inventory) if e.item_id == item_id), None)
+        if entry is None:
+            return False
+        self.inventory.remove(entry)
+        self.creation_gear.remove(item_id)
+        self.gear_budget += ITEMS_BY_ID[item_id].price
+        return True
+
     def spend_experience_on_skill(self, skill_id: str) -> bool:
         """Post-creation counterpart to spend_skill_point: same cost curve
         (next_rank_cost), paid out of `experience` instead of the one-shot
@@ -518,6 +631,11 @@ class Character:
         self.skill_ranks = {skill.id: STARTING_SKILL_RANK for skill in SKILLS}
         self.stat_points = STARTING_STAT_POINTS
         self.skill_points = STARTING_SKILL_POINTS
+        # Gear bought at creation goes back with the points that paid for it -- a reset
+        # is "undo every point spent", and a point spent on a vest is one of them.
+        self.gear_budget = 0
+        self.inventory = [entry for entry in self.inventory if entry.item_id not in self.creation_gear]
+        self.creation_gear = []
         self.health = self.max_health
 
     def accept_job(self, offer: "JobOffer") -> None:

@@ -193,7 +193,28 @@ SAVE_SUFFIX = ".save"
 # analysis to `computer`. Character.skill_ranks tolerates the missing keys (skill_rank
 # defaults), but a pre-v53 runner's Hack rank silently stops applying to matrix fights
 # -- a live character would be markedly worse at the thing they built for.
-SAVE_VERSION = 53
+# v54 rewrote combat.Enemy onto the player's own stat sheet. It was seven hand-tuned
+# fields (health/attack/defense/damage/toughness/reach/stun_damage); it is now the six
+# CORE_STATS plus `ranks`/`weapon`/`armor`, with all seven of those derived as
+# properties through the same skill_value/melee_damage_bonus/DEFENSE_BASE the player
+# goes through. A pre-v54 pickled Enemy -- reachable from an accepted job's
+# scene.Encounter/TacticalStage and from scene.BurglaryStage.guard -- carries the old
+# fields as *instance attributes that now shadow the properties*, so it would keep
+# fighting on its old numbers with no stats behind it and no error to say so. The
+# roster also grew from 5 to 11 and ENEMY_TIERS was re-pooled, so a pre-v54 run's
+# accepted jobs hold squads the current generator would never roll.
+# v55 gave runners.RivalRunner a `deck_id` and moved the remote-support gate onto it:
+# whether a hire can work support is now "do they own a cyberdeck", not "is their
+# archetype Netrunner", and the deck's program_slots caps how many support programs they
+# carry. RivalRunner instances are pickled directly (ShadowguyApp.runners, save v43), so
+# a pre-v55 roster has objects with no `deck_id` attribute at all -- every support
+# lookup on one would raise rather than read as "no deck".
+# v56 added creation gear: Character gained `gear_budget` and `creation_gear`
+# (convert_skill_point_to_gear trades a creation skill point for GEAR_EB_PER_POINT of
+# gear-only eb, and archetypes.Archetype gained a `gear` loadout spent the same way). A
+# pre-v56 pickled Character lacks both fields, so reset_build would raise on the first
+# one it touches -- and every preset's rank list changed to free the point its kit costs.
+SAVE_VERSION = 56
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

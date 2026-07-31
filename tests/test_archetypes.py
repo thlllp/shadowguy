@@ -53,35 +53,35 @@ def test_enforcer():
     a = archetypes.ARCHETYPES_BY_ID["enforcer"]
     assert a.name == "Enforcer"
     assert a.stats == {"body": 3, "strength": 3}
-    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 2}
+    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1}
 
 
 def test_hacker():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     assert a.name == "Hacker"
     assert a.stats == {"logic": 6}
-    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 3}
+    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2}
 
 
 def test_infiltrator():
     a = archetypes.ARCHETYPES_BY_ID["infiltrator"]
     assert a.name == "Infiltrator"
     assert a.stats == {"agility": 4, "perception": 2}
-    assert a.skills == {"stealth": 7, "deception": 5, "sight": 4, "blades": 4}
+    assert a.skills == {"stealth": 7, "deception": 5, "sight": 3, "blades": 3}
 
 
 def test_gunslinger():
     a = archetypes.ARCHETYPES_BY_ID["gunslinger"]
     assert a.name == "Gunslinger"
     assert a.stats == {"agility": 3, "body": 3}
-    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 4}
+    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}
 
 
 def test_fixer():
     a = archetypes.ARCHETYPES_BY_ID["fixer"]
     assert a.name == "Fixer"
     assert a.stats == {"cool": 4, "logic": 2}
-    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 4}
+    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3}
 
 
 def test_no_preset_raises_a_stat_it_never_rolls():
@@ -153,3 +153,45 @@ def test_bad_preset_raises():
     import pytest
     with pytest.raises(ValueError, match="ran out of stat points"):
         bad.apply(c)
+
+
+# --- creation gear (character.convert_skill_point_to_gear) ---
+
+
+def test_every_preset_ships_a_loadout_it_can_actually_afford():
+    """A preset is the whole build, gear included -- the rank lists leave exactly the
+    points the kit costs, and apply() converts and buys them."""
+    from shadowguy.character import GEAR_EB_PER_POINT, Character
+
+    for a in archetypes.ARCHETYPES:
+        assert a.gear, f"{a.id}: ships no gear"
+        character = Character(name="_gear")
+        a.apply(character)
+        assert [e.item_id for e in character.inventory] == list(a.gear)
+        assert character.creation_gear == list(a.gear)
+        # Written against the rate rather than a fixed point count, so changing
+        # GEAR_EB_PER_POINT doesn't need this test edited -- only the rank lists, which
+        # is exactly what should have to move. The leftover must be under a point: a
+        # preset burning a whole one on nothing would be paying for air.
+        assert character.gear_budget < GEAR_EB_PER_POINT
+
+
+def test_no_preset_ships_gear_a_fresh_runner_could_not_buy():
+    """Standing-gated gear is unreachable before the run starts -- there is nobody to
+    have standing with -- so a preset naming one would be a build the player can't make."""
+    from shadowguy.shops import ITEMS_BY_ID
+
+    for a in archetypes.ARCHETYPES:
+        for item_id in a.gear:
+            assert item_id in ITEMS_BY_ID, f"{a.id}: unknown item {item_id}"
+            assert not ITEMS_BY_ID[item_id].min_standing, f"{a.id}: {item_id} is gated"
+
+
+def test_every_preset_still_spends_both_pools_to_zero_with_gear_in_the_mix():
+    from shadowguy.character import Character
+
+    for a in archetypes.ARCHETYPES:
+        character = Character(name="_pools")
+        a.apply(character)
+        assert character.stat_points == 0, a.id
+        assert character.skill_points == 0, a.id

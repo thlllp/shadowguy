@@ -10,7 +10,16 @@ import pytest
 from shadowguy.buildings import BuildingKind, Lock, generate_building
 from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
-from shadowguy.combat import ENEMIES_BY_ID, attack_verbs, player_defense
+from shadowguy.character import CrewHire
+from shadowguy.combat import (
+    FIREARM_RANGE,
+    MELEE_RANGE,
+    THROWN_RANGE,
+    ENEMIES_BY_ID,
+    attack_verbs,
+    player_defense,
+    weapon_range,
+)
 from shadowguy.grid import (
     Tile,
     chebyshev,
@@ -23,19 +32,19 @@ from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, InventoryItem
 from shadowguy.tactical import (
     ARREST_DAYS,
     ENEMY_SPEED,
-    FIREARM_RANGE,
     FULL_COVER,
     GRENADE_RADIUS,
     GRENADE_RANGE,
     HALF_COVER,
+    CYBERWARE_STUN_ROUNDS,
     LOCK_FAILURE_ALARM_CHANCE,
-    MELEE_RANGE,
+    TRACE_CAP,
     TAC_MAP_HEIGHT,
     TAC_MAP_WIDTH,
-    THROWN_RANGE,
     AimKind,
     CrewFate,
     Side,
+    Support,
     TacticalOutcome,
     Unit,
     aim_is_legal,
@@ -73,13 +82,23 @@ from shadowguy.tactical import (
     stabilize_ally,
     stairs_here,
     start_burglary,
+    _nearest_guard,
+    run_support_task,
     stabilize_targets,
     start_tactical,
+    support_for,
+    support_tasks,
     take_stairs,
     targets_for,
     throw_grenade,
     weapon_for_target,
-    weapon_range,
+)
+from shadowguy.runners import (
+    RUNNERS_BY_ID,
+    SUPPORT_PROGRAMS,
+    RivalRunner,
+    can_work_support,
+    support_programs_for,
 )
 
 from helpers import AlwaysOne, AlwaysSix, ForcedChance, crew_stats_for
@@ -476,9 +495,13 @@ def test_targets_for_includes_an_in_range_in_los_enemy():
 # --- player_attack ---
 
 
-def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0)):
+def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0), strength=1):
+    """`strength` is the bare-hands attack pool: UNARMED rolls Grapple, which is the one
+    weapon skill sitting on Strength rather than Agility. A fresh Character (all stats 1)
+    rolls 2 dice there, and the thug's dodge pool is now 2 as well — enough of a tie that
+    a test needing a *guaranteed* hit under AlwaysSix has to buy some."""
     grid = parse_grid(["......", "......", "......"])
-    character = Character(name="t")
+    character = Character(name="t", strength=strength)
     enemy = ENEMIES_BY_ID[enemy_id]
     return start_tactical(
         character, grid, player_start=(0, 0), enemy_placements=[(enemy, enemy_coord)], exits=frozenset({(0, 0)})
@@ -486,9 +509,9 @@ def _adjacent_state(enemy_id="thug", enemy_coord=(1, 0)):
 
 
 def test_player_attack_guaranteed_miss_leaves_the_enemy_untouched():
-    """thug's defense (9) converts to a 0-dice opposing pool (checks.pool_for_
-    difficulty), so under AlwaysOne the attacker rolls 0 successes against an
-    opposition that also rolls 0 -- margin 0 is a miss regardless of build."""
+    """Under AlwaysOne nobody rolls a single success, on either side -- so the margin is
+    0 whatever the two pool sizes are, and margin 0 is a miss. Holds regardless of build
+    or of what the thug's defense converts to."""
     state = _adjacent_state()
     weapon = player_weapons(state)[0]
     health_before = state.enemies[0].health
@@ -499,21 +522,26 @@ def test_player_attack_guaranteed_miss_leaves_the_enemy_untouched():
 
 
 def test_player_attack_guaranteed_hit_deals_the_exact_margin_damage():
-    """Same 0-dice opposing pool as above, but under AlwaysSix every die the attacker
-    rolls succeeds too, so margin == the attacker's whole pool (bare-hands grapple
-    skill_value 2 for a fresh Character). Soak (thug toughness 1) is also fully
-    saturated under AlwaysSix. Every term is pinned, which is the point -- an exact,
-    non-random number instead of only asserting "some damage happened":
+    """Under AlwaysSix every die succeeds on both sides, so each pool contributes its own
+    size and margin == attacker pool - dodge pool. Every term is pinned, which is the
+    point -- an exact, non-random number instead of only asserting "some damage happened":
 
-        UNARMED.damage (0) + Strength (1, a fresh Character -- combat.melee_damage_bonus
-        applies to bare hands) + margin (2) - soak (1) = 2
+        attack pool  = Grapple skill_value = Strength (3) + rank (1)      = 4
+        dodge pool   = pool_for_difficulty(thug defense 13)               = 2
+        margin       = 4 - 2                                              = 2
+        base damage  = UNARMED.damage (0) + Strength (3, melee_damage_bonus
+                       applies to bare hands)                             = 3
+        soak         = thug toughness (body 1 + armor 0)                  = 1
+
+        (3 + 2) - 1 = 4
     """
-    state = _adjacent_state()
+    state = _adjacent_state(strength=3)
     weapon = player_weapons(state)[0]
-    assert state.character.stat("strength") == 1
+    assert state.character.stat("strength") == 3
+    assert ENEMIES_BY_ID["thug"].toughness == 1
     health_before = state.enemies[0].health
     player_attack(state, state.enemies[0], weapon, rng=AlwaysSix())
-    assert state.enemies[0].health == health_before - 2
+    assert state.enemies[0].health == health_before - 4
     assert state.acted
     # The log line reads off the weapon's own verb (combat.attack_verbs), so assert
     # against the table rather than a literal -- bare hands "wrestle", they don't "hit".
@@ -542,7 +570,7 @@ def test_player_attack_is_a_noop_once_already_acted():
 
 
 def test_player_attack_kills_the_last_enemy_and_ends_the_fight_in_victory():
-    state = _adjacent_state()
+    state = _adjacent_state(strength=3)
     state.enemies[0].health = 1  # one guaranteed hit (see the exact-damage test) is lethal
     weapon = player_weapons(state)[0]
     player_attack(state, state.enemies[0], weapon, rng=AlwaysSix())
@@ -651,12 +679,16 @@ def test_enemy_attack_lethal_damage_ends_the_fight_dead():
 # --- attack targeting (begin_attack_aim / snap / confirm, weapon_for_target) ---
 
 
-def _armed_state(enemy_coords, player_start=(0, 0), rows=None, weapons=("pipe_pistol", "combat_knife")):
+def _armed_state(enemy_coords, player_start=(0, 0), rows=None, weapons=("pipe_pistol", "combat_knife"),
+                 agility=1):
     """A fight where the player carries a gun and a knife, so weapon_for_target has an
-    actual choice to make at each range."""
+    actual choice to make at each range. `agility` is the attack pool for both (every
+    weapon skill but Grapple is Agility's) — raise it in a test that needs a forced hit
+    under AlwaysSix to actually land, since the thug now dodges with 2 dice of its own."""
     grid = parse_grid(rows or ["." * 12 for _ in range(3)])
     character = Character(
-        name="t", inventory=[InventoryItem(item_id=wid, equipped=True) for wid in weapons]
+        name="t", agility=agility,
+        inventory=[InventoryItem(item_id=wid, equipped=True) for wid in weapons],
     )
     thug = ENEMIES_BY_ID["thug"]
     return start_tactical(
@@ -765,7 +797,7 @@ def test_confirm_attack_aim_refuses_an_empty_tile_and_keeps_aiming():
 
 def test_confirm_attack_aim_hits_the_aimed_enemy_not_the_nearest():
     """The whole point of aiming: the player's pick beats best_shot's default."""
-    state = _armed_state([(1, 0), (5, 0)])
+    state = _armed_state([(1, 0), (5, 0)], agility=4)
     near, far = state.enemies
     begin_attack_aim(state)
     assert state.aim_cursor == near.coord
@@ -1105,9 +1137,10 @@ def test_generated_map_border_ring_stays_solid_wall(seed):
 # --- burglary: levels, standing a post, and what actually ends one ---
 
 
-def _burglary(seed=7, guard_id="thug", entrances=2):
+def _burglary(seed=7, guard_id="thug", entrances=2, kind=None):
     """A real generated house with a live infiltration on its entry level."""
-    building = generate_building(random.Random(seed), entrance_count=entrances)
+    extra = {} if kind is None else {"kind": kind}
+    building = generate_building(random.Random(seed), entrance_count=entrances, **extra)
     character = Character(name="t", inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)])
     state = start_burglary(character, building, building.entrance_spawns[0], ENEMIES_BY_ID[guard_id])
     return building, state
@@ -1355,3 +1388,173 @@ def test_attempt_lock_is_what_move_player_dispatches_to():
     attempt_lock(state, dest, lock, AlwaysSix())
     assert state.player.coord == dest
     assert lock_at(state, dest) is None
+
+
+# --- remote support: the hacker who never sets foot in the building ---
+
+
+def _supported_burglary(seed=7, rating=8, kind=None):
+    """A burglary with a netrunner on the far end of the link. `kind` matters for the
+    camera tasks -- a home has no monitored camera system (BUILDING_PROFILES), so a test
+    about blinding one has to break into an office."""
+    building, state = _burglary(seed=seed, kind=kind)
+    runner = next(r for r in RUNNERS_BY_ID.values() if r.deck_id and r.rating >= 7)
+    state.support = Support(
+        name=runner.name, rating=rating, programs=support_programs_for(runner)
+    )
+    return building, state
+
+
+def test_support_for_picks_the_best_netrunner_and_ignores_anyone_who_cant_work_support():
+    """A solo across the street contributes nothing, so they can't be the pick even if
+    they're the only hire holding a support slot."""
+    solo = CrewHire(runner_id="runner_juncture", job_id="j", on_site=False)
+    assert support_for([solo]) is None
+
+    netrunners = [
+        CrewHire(runner_id=r.id, job_id="j", on_site=False)
+        for r in RUNNERS_BY_ID.values()
+        if r.deck_id
+    ]
+    best = max(RUNNERS_BY_ID[h.runner_id].rating for h in netrunners)
+    support = support_for([solo, *netrunners])
+    assert support is not None and support.rating == best
+
+
+def test_a_hire_only_carries_the_programs_their_rating_and_deck_allow():
+    """Two gates, and the deck is one of them: min_rating says whether they're good
+    enough to run a program at all, program_slots says how many they can hold."""
+    rig = "zetatech_rig"  # the roomiest deck in the catalog
+    low = support_programs_for(RivalRunner("x", "X", "Netrunner", "", 0, 0, 0.0, rig))
+    high = support_programs_for(RivalRunner("y", "Y", "Netrunner", "", 10, 0, 0.0, rig))
+    assert [p.id for p in low] == ["probe"]  # rating-gated
+    assert len(high) == len(SUPPORT_PROGRAMS)
+
+    # Same top rating, a one-slot deck: the deck is now what limits them.
+    burner = support_programs_for(RivalRunner("z", "Z", "Netrunner", "", 10, 0, 0.0, "burner_deck"))
+    assert len(burner) == 1
+
+
+def test_owning_a_deck_is_the_support_gate_not_the_archetype_label():
+    """An archetype is a label; a deck is the thing that does the work. A netrunner who
+    owns nothing can't work support, and a solo holding a deck can."""
+    deckless_hacker = RivalRunner("a", "A", "Netrunner", "", 9, 0, 0.0, None)
+    equipped_solo = RivalRunner("b", "B", "Solo", "", 3, 0, 0.0, "burner_deck")
+    assert not can_work_support(deckless_hacker)
+    assert support_programs_for(deckless_hacker) == ()
+    assert can_work_support(equipped_solo)
+    assert support_programs_for(equipped_solo)
+
+
+def test_directing_the_hacker_costs_the_player_no_move_and_no_action():
+    """The whole reason to pay for a second person: their turn, not yours."""
+    _, state = _supported_burglary()
+    moves, acted = state.moves_left, state.acted
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysSix())
+    assert state.moves_left == moves
+    assert state.acted is acted is False
+
+
+def test_the_hacker_gets_one_task_per_turn_refreshed_with_yours():
+    _, state = _supported_burglary()
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysSix())
+    assert state.support.acted
+    assert support_tasks(state) == []  # nothing more this turn
+
+    end_turn(state, rng=random.Random(0))
+    assert not state.support.acted
+    assert support_tasks(state)
+
+
+def test_a_failed_task_climbs_the_trace_and_a_clean_one_never_does():
+    """Nothing costs trace on a success: getting in and out clean is the whole skill."""
+    _, state = _supported_burglary()
+    program = next(p for p in support_tasks(state) if p.id == "probe")
+    run_support_task(state, program, rng=AlwaysSix())
+    assert state.support.trace == 0
+
+    state.support.acted = False
+    run_support_task(state, program, rng=AlwaysOne())
+    assert state.support.trace == program.trace_on_failure
+
+
+def test_reaching_the_trace_cap_burns_the_hacker_and_brings_the_alarm():
+    _, state = _supported_burglary()
+    state.support.trace = TRACE_CAP - 1
+    assert not state.alarm
+    run_support_task(state, support_tasks(state)[0], rng=AlwaysOne())
+    assert state.support.offline
+    assert state.alarm  # the trace runs both ways
+    assert support_tasks(state) == []  # terminal -- a new turn doesn't bring them back
+    end_turn(state, rng=random.Random(0))
+    assert support_tasks(state) == []
+
+
+def test_scouting_reveals_a_room_the_player_has_not_seen():
+    _, state = _supported_burglary()
+    probe = next(p for p in support_tasks(state) if p.id == "probe")
+    before = len(state.explored.get(state.level_index, set()))
+    run_support_task(state, probe, rng=AlwaysSix())
+    assert len(state.explored[state.level_index]) > before
+
+
+def test_hacking_a_device_opens_a_lock_or_blinds_a_camera():
+    """One task rather than two: from the far end of a link they're the same job."""
+    for seed in range(30):
+        building, state = _supported_burglary(seed=seed)
+        wrench = next((p for p in support_tasks(state) if p.id == "wrench"), None)
+        if wrench is None:
+            continue  # nothing electronic on this level to reach
+        locks_before = len(building.locks)
+        blinded_before = len(state.support.blinded_cameras)
+        run_support_task(state, wrench, rng=AlwaysSix())
+        assert (len(building.locks) < locks_before) or (
+            len(state.support.blinded_cameras) > blinded_before
+        )
+        return
+    raise AssertionError("no seed in range produced a reachable device")
+
+
+def test_a_blinded_camera_stops_catching_the_player():
+    """check_detection has to honour it, or blinding one buys nothing. Swept over seeds
+    rather than skipped: not every generated house puts a camera on the entry level, and
+    a test that quietly skips verifies nothing."""
+    for seed in range(40):
+        building, state = _supported_burglary(seed=seed, kind=BuildingKind.OFFICE)
+        spot = next(((lv, c) for lv, c in building.cameras if lv == state.level_index), None)
+        if spot is None:
+            continue
+        level, coord = spot
+        state.player.coord = coord  # standing right under it
+        assert check_detection(state)
+
+        _, fresh = _supported_burglary(seed=seed, kind=BuildingKind.OFFICE)
+        fresh.player.coord = coord
+        fresh.support.blinded_cameras.add((level, coord))
+        assert not check_detection(fresh)
+        return
+    raise AssertionError("no seed in range produced a camera on the entry level")
+
+
+def test_burning_a_guards_cyberware_puts_them_out_of_the_fight_for_a_few_rounds():
+    for seed in range(40):
+        _, state = _supported_burglary(seed=seed)
+        ripper = next((p for p in support_tasks(state) if p.id == "ripper"), None)
+        if ripper is None:
+            continue  # nobody on the entry level to reach through
+        guard = _nearest_guard(state)
+        assert guard.stunned_rounds == 0
+        run_support_task(state, ripper, rng=AlwaysSix())
+        assert guard.stunned_rounds == CYBERWARE_STUN_ROUNDS
+        return
+    raise AssertionError("no seed in range put a guard on the entry level")
+
+
+def test_a_fight_nobody_is_backing_has_no_hacker_at_all():
+    """None is the ordinary case -- an ordinary shootout, a solo burglary, a test fight."""
+    _, state = _burglary()
+    assert state.support is None
+    assert support_tasks(state) == []
+    # And directing one is a no-op rather than a crash.
+    run_support_task(state, SUPPORT_PROGRAMS[0], rng=AlwaysSix())
+    assert not state.log or "Probe" not in state.log[-1]

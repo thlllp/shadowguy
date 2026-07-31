@@ -28,6 +28,8 @@ resolve by id lookup regardless of whether this run happened to roll that runner
 import random
 from dataclasses import dataclass
 
+from shadowguy.shops import ITEMS_BY_ID
+
 
 @dataclass
 class RivalRunner:
@@ -38,6 +40,12 @@ class RivalRunner:
     rating: int  # effective skill_value at their specialty (for the run-time crew effect)
     daily_cost: int  # per-day wage when kept on indefinitely (charged each rest)
     job_cut: float  # fraction of a single job's payout they take when hired for that job
+    # The cyberdeck they own (shops.ITEMS_BY_ID, an item with program_slots), or None for
+    # a runner who doesn't have one. **This, not `archetype`, is what makes someone
+    # able to work remote support** -- see can_work_support. Gating on the gear rather
+    # than the label means a solo who somehow ends up with a deck can work it, and a
+    # netrunner who doesn't own one can't, which is the honest reading of both.
+    deck_id: str | None = None
 
 
 RIVAL_RUNNERS = [
@@ -49,6 +57,7 @@ RIVAL_RUNNERS = [
         rating=8,
         daily_cost=60,
         job_cut=0.25,
+        deck_id="zetatech_rig",
     ),
     RivalRunner(
         id="runner_juncture",
@@ -83,6 +92,7 @@ RUNNER_POOL = [
         rating=5,
         daily_cost=30,
         job_cut=0.10,
+        deck_id="burner_deck",
     ),
     RivalRunner(
         id="runner_convoy",
@@ -110,6 +120,7 @@ RUNNER_POOL = [
         rating=6,
         daily_cost=40,
         job_cut=0.15,
+        deck_id="cracked_cyberdeck",
     ),
     RivalRunner(
         id="runner_riptide",
@@ -137,6 +148,7 @@ RUNNER_POOL = [
         rating=9,
         daily_cost=70,
         job_cut=0.28,
+        deck_id="zetatech_rig",
     ),
     RivalRunner(
         id="runner_switchback",
@@ -164,6 +176,17 @@ if len(RUNNER_POOL) < RANDOM_RUNNER_COUNT:
     raise ValueError("RUNNER_POOL must hold at least RANDOM_RUNNER_COUNT candidates")
 
 RUNNERS_BY_ID = {runner.id: runner for runner in RIVAL_RUNNERS + RUNNER_POOL}
+
+# A deck_id has to name a real cyberdeck, or the support gate reads as "owns no deck"
+# for a runner the roster meant to be a hacker -- a typo that fails silently by making
+# somebody quietly unhireable. program_slots > 0 is what *makes* an item a deck (see
+# shops.Item), so it's the same check as "is this actually a deck".
+for _runner in RUNNERS_BY_ID.values():
+    if _runner.deck_id is None:
+        continue
+    _deck = ITEMS_BY_ID.get(_runner.deck_id)
+    if _deck is None or not _deck.program_slots:
+        raise ValueError(f"{_runner.id}: deck_id must name a shops item with program_slots")
 if len(RUNNERS_BY_ID) != len(RIVAL_RUNNERS) + len(RUNNER_POOL):
     raise ValueError("RivalRunner ids must be unique across RIVAL_RUNNERS and RUNNER_POOL")
 
@@ -214,3 +237,113 @@ RUNNER_INTRO_COST_MULT = 2
 
 def intro_cost(runner: RivalRunner) -> int:
     return runner.daily_cost * RUNNER_INTRO_COST_MULT
+
+
+# --- remote support: what a hire does from the far end of a comm link ---
+#
+# A support hire is a *role*, not merely a posture. `CrewHire.on_site` says where they
+# are; whether "not there" is a job they can actually do comes down to one thing: do
+# they own a cyberdeck (RivalRunner.deck_id). A runner with no deck has nothing to work
+# the building's system *with*, so hiring them as support is refused
+# (Character.hire_for_job) rather than silently paying for nothing.
+#
+# **Gated on the gear, not on the archetype.** An archetype is a label; a deck is the
+# thing that actually does the work. Reading the label would mean a netrunner who owns
+# nothing still counts and a solo holding a deck still doesn't, and neither is true.
+#
+# Riggers are the other half of this and don't exist yet -- when they land they gate the
+# same way, on owning drones rather than on being called a rigger.
+
+
+@dataclass(frozen=True)
+class SupportProgram:
+    """One thing a remote hacker can be told to do, and how well their software does it.
+
+    Hand-built and not for sale, the same way combat.NPC_WEAPONS is: shops.Program is
+    written entirely in matrix-fight terms (ICE damage, sleaze, extract) and has no field
+    that could mean "scout that room". These are a different surface, so they get a
+    different table rather than four ICE fields pressed into service.
+
+    `min_rating` gates the task on the hire being good enough to run the software at all,
+    which is what makes a better netrunner worth paying for beyond the roll itself: a
+    rating-4 hire can only probe, a rating-8 hire can burn a guard's chrome.
+
+    `difficulty` is checks.resolve_check's ordinary scale. `trace_on_failure` is what a
+    miss costs -- see tactical.TRACE_CAP. Nothing costs trace on a success: getting in
+    and out clean is the whole skill.
+    """
+
+    id: str
+    name: str
+    task: str  # tactical.SupportTaskKind's value -- the effect this program grants
+    min_rating: int
+    difficulty: int
+    trace_on_failure: int
+    description: str
+
+
+# Ordered easiest-first, which is also the order the side menu lists them in.
+SUPPORT_PROGRAMS = (
+    SupportProgram(
+        id="probe",
+        name="Probe",
+        task="scout",
+        min_rating=0,
+        difficulty=11,
+        trace_on_failure=1,
+        description="Read the building's own sensors back at it and map a room you haven't seen.",
+    ),
+    SupportProgram(
+        id="wrench",
+        name="Wrench",
+        task="device",
+        min_rating=5,
+        difficulty=14,
+        trace_on_failure=2,
+        description="Talk a lock or a camera into believing you belong on the other side of it.",
+    ),
+    SupportProgram(
+        id="ripper",
+        name="Ripper",
+        task="cyberware",
+        min_rating=7,
+        difficulty=17,
+        trace_on_failure=3,
+        description="Reach through a guard's own chrome and put them on the floor with it.",
+    ),
+)
+
+SUPPORT_PROGRAMS_BY_ID = {program.id: program for program in SUPPORT_PROGRAMS}
+
+if len(SUPPORT_PROGRAMS_BY_ID) != len(SUPPORT_PROGRAMS):
+    raise ValueError("SUPPORT_PROGRAMS has a duplicate program id")
+
+
+def can_work_support(runner: RivalRunner) -> bool:
+    """Whether this runner can fill a support slot at all: do they own a deck. Someone
+    with nothing to hack the building with contributes nothing from across the street,
+    so the posture is refused rather than sold."""
+    return runner.deck_id is not None
+
+
+def support_deck(runner: RivalRunner):
+    """The shops.Item this runner works from, or None if they own no deck."""
+    return ITEMS_BY_ID[runner.deck_id] if runner.deck_id else None
+
+
+def support_programs_for(runner: RivalRunner) -> tuple[SupportProgram, ...]:
+    """The software this hire can actually run.
+
+    Two gates, and the deck is both of them plus the skill. `min_rating` says whether
+    they're good enough to run a program at all; the deck's `program_slots` says how many
+    they can hold at once, cheapest-first -- so a Burner Deck runs one thing however good
+    its owner is, and the rig is what lets a top netrunner bring everything.
+
+    Empty for anyone with no deck, so one call answers "can they work support" and "what
+    with" together.
+    """
+    deck = support_deck(runner)
+    if deck is None:
+        return ()
+    affordable = tuple(p for p in SUPPORT_PROGRAMS if runner.rating >= p.min_rating)
+    return affordable[: deck.program_slots]

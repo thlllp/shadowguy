@@ -119,7 +119,7 @@ src/shadowguy/
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
   fixer.py       the Fixer roster holding job and security offers
-  runners.py     the hireable-runner roster
+  runners.py     the hireable-runner roster + the remote-support programs a hire runs
 
   factions.py    corp Factions + the HQ officer ladder
   gangs.py       street Gangs + GANG_RANKS
@@ -149,12 +149,13 @@ src/shadowguy/
   screens/
     __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
                          BackScreen, PanelNav, the tactical/burglary map glyph helpers
-    creation_screen.py   CharacterCreationScreen
+    creation_screen.py   CharacterCreationScreen + GearScreen (creation gear)
     menu_screens.py      TitleMenu (entry point) + ModeSelect + BuildSelect + ArchetypeSelect
                          + CorpSelect + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen (the abstract_combat surface)
-    tactical_screen.py   TacticalScreen + GrenadePickScreen
+    tactical_screen.py   TacticalScreen + GrenadePickScreen + HackerPickScreen (the
+                         remote-support menu)
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a
@@ -230,6 +231,9 @@ Leaf modules, and why each has to stay one:
 | 51 | the core stat `intelligence` **renamed** to `logic` (`Character` field, `CORE_STATS`, every `_SKILL_ROWS`/`bonuses` key) |
 | 52 | the weapon skills **split by category**: `short_blade`/`long_blade`/`blunt`/`firearms`/`misc` replaced by `pistols`/`automatics`/`longarms`/`clubs`/`blades`/`archery`/`throwing`/`gunnery` (33 skills, up from 30), so a pre-v52 `Character.skill_ranks` is keyed by ids that no longer exist |
 | 53 | six logic skills added — `cybercombat`/`computer`/`armorer`/`chemistry`/`medicine`/`demolitions` (39 total) — and the matrix's rolls split three ways with them: ATTACK moved `hack`→`cybercombat`, Extract and node analysis → `computer` |
+| 56 | `Character.gear_budget`/`creation_gear` — creation skill points convert to gear-only eb (`GEAR_EB_PER_POINT`), `archetypes.Archetype.gear` ships a loadout, and every preset's rank list changed to free the point it costs |
+| 55 | `runners.RivalRunner.deck_id` — remote support is gated on **owning a cyberdeck**, not on the `Netrunner` archetype, and the deck's `program_slots` caps how many support programs a hire carries. `RivalRunner` instances are pickled directly (`ShadowguyApp.runners`), so a pre-v55 roster lacks the attribute entirely |
+| 54 | `combat.Enemy` rewritten onto the player's stat sheet: the six `CORE_STATS` + `ranks`/`weapon`/`armor` **replacing** the hand-set `health`/`attack`/`defense`/`damage`/`toughness`/`reach`/`stun_damage`, which are now derived properties. A pre-v54 pickled `Enemy` (reachable from an accepted job's `Encounter`/`TacticalStage` and from `BurglaryStage.guard`) carries the old fields as instance attributes that **shadow the properties**. Roster also grew 5 → 11 and `ENEMY_TIERS` was re-pooled |
 
 ### Verifying changes
 

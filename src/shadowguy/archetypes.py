@@ -26,8 +26,19 @@ class Archetype:
     description: str
     stats: dict[str, int]
     skills: dict[str, int]
+    # shops item ids this build walks in carrying, bought with the skill points the rank
+    # list deliberately leaves unspent (character.convert_skill_point_to_gear -- two
+    # points, at today's GEAR_EB_PER_POINT). A preset is the *whole* build, so it picks
+    # the kit too rather than leaving the player at a shop screen with a pool they may
+    # not know they have. Change the rate and these rank lists have to move with it:
+    # _validate_preset fails the moment a loadout costs more points than its ranks left
+    # over, which is the guard that keeps the two in step.
+    gear: tuple[str, ...] = ()
 
     def apply(self, character: "Character") -> None:
+        from shadowguy.character import GEAR_EB_PER_POINT
+        from shadowguy.shops import ITEMS_BY_ID
+
         for stat, points in self.stats.items():
             for _ in range(points):
                 if not character.spend_stat_point(stat):
@@ -36,6 +47,19 @@ class Archetype:
             while character.skill_rank(skill_id) < target_rank:
                 if not character.spend_skill_point(skill_id):
                     raise ValueError(f"{self.id}: cannot afford {skill_id} rank {target_rank}")
+        # Gear last: the rank list above leaves exactly the points this needs, so
+        # converting first would starve it. Buy in the order written -- a preset that
+        # can't afford its own list is a bad row, and _validate_preset says so.
+        bill = sum(ITEMS_BY_ID[item_id].price for item_id in self.gear)
+        while character.gear_budget < bill:
+            if not character.convert_skill_point_to_gear():
+                raise ValueError(
+                    f"{self.id}: needs {bill}eb of gear but ran out of skill points to "
+                    f"convert (one point is {GEAR_EB_PER_POINT}eb)"
+                )
+        for item_id in self.gear:
+            if not character.buy_creation_gear(ITEMS_BY_ID[item_id]):
+                raise ValueError(f"{self.id}: cannot buy {item_id}")
 
 
 # id, name, description, stats, skills (id -> target rank)
@@ -61,7 +85,10 @@ _ARCHETYPE_ROWS = (
         # Strength is bought for the damage, not the skill list: it adds to every melee
         # hit (combat.melee_damage_bonus), so a club in this build swings for its rating
         # plus 4 before the roll's margin.
-        {"clubs": 7, "toughness": 6, "grapple": 4, "intimidation": 2},
+        {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1},
+        # Walks in wearing the heaviest armor the ungated catalog sells: this build wins
+        # by still standing, and Body already feeds the soak roll the Hardsuit adds to.
+        ("brass_knuckles", "combat_knife", "hardsuit", "reinforced_helmet", "steel_toe_boots"),
     ),
     (
         "hacker",
@@ -76,7 +103,11 @@ _ARCHETYPE_ROWS = (
         # firewall (matrix.firewall_defense), Tinkering is Harden. Cybercombat leads
         # because that is what a Data Heist's fights actually roll -- and it clears
         # MIN_READY_CYBERCOMBAT, so this preset never trips the readiness warning.
-        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 4, "tinkering": 3},
+        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2},
+        # The deck *is* the build -- a hacker with no cyberdeck cannot enter the matrix
+        # at all, and the Zetatech Rig's 3 program slots are the most the ungated catalog
+        # offers. The pistol and jacket are so the walk to the job isn't fatal.
+        ("zetatech_rig", "pipe_pistol", "leather_jacket", "kevlar_helmet"),
     ),
     (
         "infiltrator",
@@ -86,7 +117,11 @@ _ARCHETYPE_ROWS = (
         # Blades rather than a gun: this build's whole premise is not being heard, and
         # a blade is the weapon it can carry concealed. Sight stays because Recon --
         # the Infiltrator's own job archetype -- leads every beat with a perception skill.
-        {"stealth": 7, "deception": 5, "sight": 4, "blades": 4},
+        {"stealth": 7, "deception": 5, "sight": 3, "blades": 3},
+        # Blades and nothing that bangs: Slippers carry a Stealth bonus of their own
+        # (shops.Item.skill_bonuses), and light armor because being seen is the failure
+        # state, not being shot.
+        ("monoblade", "combat_knife", "leather_jacket", "slippers"),
     ),
     (
         "gunslinger",
@@ -97,9 +132,12 @@ _ARCHETYPE_ROWS = (
         # rifle is the build, Dodge and Toughness are what keep it standing while it
         # kites. Pistols is the *early game*, not an afterthought -- a runner starts on
         # STARTING_CASH (100) with an empty inventory, and the cheapest longarm is the
-        # 650eb Pump Shotgun, so this build spends its first job or two shooting a
-        # 250eb Pipe Pistol before its signature skill has a weapon to roll at all.
-        {"longarms": 7, "dodge": 5, "toughness": 4, "pistols": 4},
+        # 650eb Pump Shotgun. Gear points are the fix: this preset now spends one of
+        # them on the shotgun, so its signature skill has a weapon to roll from day one
+        # rather than after a job or two of shooting a Pipe Pistol. Pistols stays as the
+        # sidearm the second weapon slot carries.
+        {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3},
+        ("pump_shotgun", "pipe_pistol", "kevlar_vest", "reinforced_helmet", "steel_toe_boots"),
     ),
     (
         "fixer",
@@ -112,7 +150,11 @@ _ARCHETYPE_ROWS = (
         # -- this build fields a crew the others can't afford. Computer is what those 2
         # logic points are for: digging up information is the other half of the job, and
         # a stat this preset buys should be a stat it actually rolls.
-        {"negotiations": 7, "leadership": 5, "deception": 4, "computer": 4},
+        {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3},
+        # The car is the buy nobody else makes: a Slot.VEHICLE item cuts TRAVEL_HOURS_COST
+        # on every hop (shops.Item.travel_reduction), and this is the build that spends
+        # its run moving between people rather than shooting them.
+        ("armored_towncar", "pipe_pistol", "leather_jacket", "pawned_charm"),
     ),
 )
 
@@ -152,8 +194,10 @@ def _init() -> None:
         return
     import sys
     archetypes_list = [
-        Archetype(id=id_, name=name, description=description, stats=stats, skills=skills)
-        for id_, name, description, stats, skills in _ARCHETYPE_ROWS
+        Archetype(
+            id=id_, name=name, description=description, stats=stats, skills=skills, gear=gear
+        )
+        for id_, name, description, stats, skills, gear in _ARCHETYPE_ROWS
     ]
     for archetype in archetypes_list:
         _validate_preset(archetype)

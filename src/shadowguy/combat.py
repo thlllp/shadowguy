@@ -39,10 +39,10 @@ roles swapped.
 """
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-from shadowguy.character import Character
+from shadowguy.character import CORE_STATS, HEALTH_PER_BODY, Character
 from shadowguy.checks import (
     CheckResult,
     CheckRoll,
@@ -65,7 +65,7 @@ from shadowguy.shops import (
     Item,
     Slot,
 )
-from shadowguy.skills import skill_value
+from shadowguy.skills import skill_for, skill_value
 
 # What an enemy's attack pool has to beat to land a hit on you. Defense is built
 # from Dodge (skill_value, so gear and rank both count), which is what stops
@@ -80,6 +80,27 @@ DEFENSE_BASE = 12
 # "only with this weapon").
 SMARTLINK_ATTACK_BONUS = 2
 
+# How far a weapon reaches, in tiles, derived from its skill rather than a new Item
+# field: the shooting skills (shops.RANGED_SKILLS -- the three gun categories, gunnery
+# and archery) reach across the map, throwing gets a middle band of its own, everything
+# else is arm's length. Three bands rather than two because the weapon categories made
+# "ranged or not" too coarse: a thrown knife shouldn't cover the same ground as a rifle.
+#
+# Lives here rather than in tactical.py (which is where it used to, and which imports
+# these back under their old names) because reach is now read by both sides of a fight:
+# Enemy.reach is weapon_range of whatever that enemy is holding, exactly as the player's
+# is. A hand-set enemy reach that disagreed with the gun in its hands is precisely the
+# second source of truth this module exists to prevent.
+MELEE_RANGE = 1
+THROWN_RANGE = 4
+FIREARM_RANGE = 8
+
+
+def weapon_range(weapon: Item) -> int:
+    if weapon.skill in RANGED_SKILLS:
+        return FIREARM_RANGE
+    return THROWN_RANGE if weapon.skill == "throwing" else MELEE_RANGE
+
 
 def smartlink_bonus(character: Character, weapon: Item) -> int:
     if not weapon.smartlinked or not has_smartlink(character.installed_cyberware):
@@ -87,28 +108,30 @@ def smartlink_bonus(character: Character, weapon: Item) -> int:
     return SMARTLINK_ATTACK_BONUS
 
 
-def melee_damage_bonus(character: Character, weapon: Item) -> int:
+def melee_damage_bonus(combatant: "Character | Enemy", weapon: Item) -> int:
     """Strength added to the damage of a hit you put your body behind — full stat, 1:1,
     uncapped. Blades, clubs, bare hands and a thrown knife qualify; a gun or a bow does
     not (pulling a trigger or a string isn't muscle), which is exactly "not a
     shops.RANGED_SKILLS weapon" and so needs no second list to keep in step.
 
-    Weapon-conditional like smartlink_bonus, and threaded in the same way — the two
-    player attack sites pass it into resolve_hit's base_damage, rather than it living
-    inside resolve_hit, because resolve_hit is the *shared* formula: an Enemy has no
-    strength (combat.Enemy is health/attack/defense/damage/toughness and nothing else),
-    so folding this in there would mean inventing one for every NPC. Consequence worth
-    naming: this is a player-only bonus. A hired runner swinging a blade beside you
-    resolves through the same resolve_hit with their Enemy stat block and gets nothing.
+    Weapon-conditional like smartlink_bonus, and threaded in the same way — the player's
+    two attack sites pass it into resolve_hit's base_damage rather than it living inside
+    resolve_hit, because resolve_hit takes final numbers and knows nothing about who is
+    swinging.
 
-    Deliberately large. Enemy health tops out at 11 (ENEMY_TIERS' Chromed Enforcer) and
-    a melee weapon already does 4-7 before the roll's margin, so a Strength 6 runner
-    with a katana one-shots anything in the roster and Strength alone out-damages the
-    whole weapon catalog at the top end. That is the intent -- Strength carries only two
-    skills (see DESIGN.md's Stats and skills) and this is what it buys instead. **Not
-    balance-simulated.**
+    Takes anything with a `.stat()`, which is now both sides: an Enemy carries the same
+    six CORE_STATS the player does, so `Enemy.damage` folds this in the same way and a
+    thug's pipe gets its owner's Strength exactly as the player's does. That symmetry is
+    the point — this used to be a player-only bonus, and a hired runner swinging a blade
+    beside you got nothing from it.
+
+    Deliberately large on the player's side. A melee weapon does 4-7 before the roll's
+    margin, so a Strength 6 runner with a katana one-shots most of the roster and
+    Strength alone out-damages the whole weapon catalog at the top end. That is the
+    intent -- Strength carries only two skills (see DESIGN.md's Stats and skills) and
+    this is what it buys instead. **Not balance-simulated.**
     """
-    return 0 if weapon.skill in RANGED_SKILLS else character.stat("strength")
+    return 0 if weapon.skill in RANGED_SKILLS else combatant.stat("strength")
 
 # Empty-handed. A real weapon is strictly better, but there is always *an* attack:
 # a runner who sold their last knife can still fight, badly. Built by hand rather
@@ -130,6 +153,71 @@ if not (MIN_WEAPON_CONCEALMENT <= UNARMED.concealment <= MAX_WEAPON_CONCEALMENT)
     MIN_STUN_DAMAGE <= UNARMED.stun_damage <= MAX_STUN_DAMAGE
 ):
     raise ValueError("UNARMED must satisfy the same weapon-profile bounds as shops.CATALOG")
+
+
+# What the NPCs are holding. Built by hand outside shops.CATALOG for the same reason
+# UNARMED is: nothing here is for sale, so the catalog's import-time guard never sees it
+# — and, the reason this table *can't* live in the catalog, most of it sits under
+# shops.MIN_WEAPON_DAMAGE (4, the floor for a weapon a player can buy). Street gear is
+# meant to be worse than anything on a shelf, and that headroom is what keeps the
+# roster's damage where it was tuned: an enemy's damage is now weapon + Strength like
+# everyone else's, so arming a thug out of the player's catalog would have doubled it.
+# The three long guns at the top do reach catalog-grade damage — they're what the
+# corporate tier and a hired Solo carry, and they are still not for sale.
+#
+# id, name, skill, damage, stun_damage, concealment, two_handed.
+#
+# Deliberately no recharge_rounds anywhere in here: weapon cooldowns are tracked on the
+# player's CombatState/TacticalState only, so an NPC weapon that declared one would have
+# it silently ignored by both fight surfaces. Give NPCs a cooldown weapon only alongside
+# the AI bookkeeping to honour it.
+_NPC_WEAPON_ROWS = (
+    ("scrap_pipe", "Scrap Pipe", "clubs", 1, 0, 1, False),
+    ("switchblade", "Switchblade", "blades", 1, 0, 5, False),
+    ("machete", "Machete", "blades", 2, 0, 2, False),
+    ("chrome_fist", "Chrome Fist", "clubs", 2, 0, 5, False),
+    # Stun 1, not 2. Stun is the harshest number in the table for its size: it bypasses
+    # the soak roll entirely, it persists between fights (Character.stun), and the KO
+    # threshold is `stun >= current health` — so the bar falls to meet the total as the
+    # target is hurt, rather than the total having to climb to a fixed bar. At 2 this put
+    # a Hacker down 72% of the time it turned up in a pair, at half health, *without the
+    # flee threshold ever tripping* — a loss the escape valve doesn't watch for is close
+    # to the cage abstract_combat's flee rules exist to prevent. See tools/combat_sim.py.
+    ("stun_baton", "Stun Baton", "clubs", 1, 1, 2, False),
+    ("holdout_pistol", "Holdout Pistol", "pistols", 3, 0, 5, False),
+    ("guard_smg", "Guard SMG", "automatics", 3, 0, 2, False),
+    ("riot_shotgun", "Riot Shotgun", "longarms", 4, 0, 1, True),
+    ("combat_rifle", "Combat Rifle", "automatics", 5, 0, 1, True),
+    ("marksman_rifle", "Marksman Rifle", "longarms", 4, 0, 1, True),
+)
+
+NPC_WEAPONS = {
+    row[0]: Item(
+        id=row[0],
+        name=row[1],
+        price=0,
+        bonuses={},
+        slot=Slot.WEAPON,
+        skill=row[2],
+        damage=row[3],
+        stun_damage=row[4],
+        concealment=row[5],
+        two_handed=row[6],
+    )
+    for row in _NPC_WEAPON_ROWS
+}
+
+# The bounds shops.py applies at import to everything in CATALOG, re-applied here to the
+# NPC gear it never sees — minus the damage floor these rows exist to sit under. Same
+# guard-at-its-bound reasoning as UNARMED above: a bad edit fails at import, not
+# mid-fight.
+for _weapon in NPC_WEAPONS.values():
+    if not (MIN_WEAPON_CONCEALMENT <= _weapon.concealment <= MAX_WEAPON_CONCEALMENT):
+        raise ValueError(f"{_weapon.id}: NPC weapon concealment out of bounds")
+    if _weapon.stun_damage and not (MIN_STUN_DAMAGE <= _weapon.stun_damage <= MAX_STUN_DAMAGE):
+        raise ValueError(f"{_weapon.id}: NPC weapon stun_damage out of bounds")
+    if not (_weapon.damage or _weapon.stun_damage):
+        raise ValueError(f"{_weapon.id}: an NPC weapon must do damage or stun")
 
 
 class Drop(StrEnum):
@@ -172,49 +260,209 @@ def drop_for_result(result: CheckResult | None) -> Drop:
 
 @dataclass(frozen=True)
 class Enemy:
-    """One hostile. `defense` is the difficulty your attack rolls against (their
-    dodge); `toughness` is their soak-roll bonus (their body + armor, collapsed
-    into one number since an enemy carries no separate stats or gear)."""
+    """One combatant who isn't the player, written on the same sheet the player is.
+
+    Six CORE_STATS, invested skill ranks, a weapon in hand and worn armor — and every
+    number a fight actually consumes (`attack`/`defense`/`damage`/`toughness`/`health`/
+    `reach`/`stun_damage`) derived from those through the *same functions the player
+    goes through*. Those seven were hand-tuned fields until now, which meant a Corp Sec's
+    accuracy and a runner's accuracy were two unrelated numbers that happened to be
+    compared against each other.
+
+    The derivation is literal, not parallel: `skills.skill_value` takes anything with
+    `.stat()`/`.skill_rank()`/`.skill_gear_bonus()` (it imports Character only under
+    TYPE_CHECKING), so the three methods below are all it takes to run an enemy through
+    the player's own skill maths. `defense` is `player_defense`'s formula, `toughness` is
+    `player_soak`'s, `damage` folds in `melee_damage_bonus`. Add a stat, a skill or a
+    gear effect to the player and an enemy holding the relevant thing gets it too.
+
+    Still "a combatant who isn't the player", so a *friendly* hire is also one of these
+    (see crew_stats) — `tactical.Unit.side` is what says which way a unit is pointing.
+
+    Two places the symmetry stops, both deliberate:
+
+    - `health` is `body * HEALTH_PER_BODY` **without** character.BASE_HEALTH. That flat
+      +10 is the protagonist's alone; handing it to every mook would triple the roster's
+      health and make a tier-0 thug outlast a Chromed Enforcer does today.
+    - No cyberware and no `skill_gear_bonus` — an enemy's gear is its weapon and its
+      armor rating, nothing finer. `armor` is a plain number rather than worn Items
+      because nothing drops or loots it yet; make it an inventory the day it does.
+
+    `ranks` being a dict costs two things worth knowing: an Enemy is **no longer
+    hashable** (it was, when every field was a scalar), so it can't go in a set or key a
+    dict — use `.id`, which is what ENEMIES_BY_ID does — and `frozen=True` no longer
+    protects it all the way down, since the dict itself is still mutable. Nothing does
+    either today.
+    """
 
     id: str
     name: str
-    health: int
-    attack: int  # the enemy's attack pool (dice rolled against your defense)
-    defense: int  # what your attack roll must beat
-    damage: int  # base health off you on a hit, before the attack roll's margin
-    toughness: int  # added to the soak roll that mitigates a landed hit
-    # How many tiles away it can attack, in tactical combat only (tactical._enemy_phase).
-    # 1 is arm's length; a gun reaches across the room. Abstract combat has no positions,
-    # so it ignores this — like a positional counterpart to stun_damage.
-    reach: int = 1
-    stun_damage: int = 0  # non-lethal stun damage dealt per hit (0 = none)
+    body: int
+    strength: int
+    agility: int
+    perception: int
+    logic: int
+    cool: int
+    weapon: Item
+    # skill id (skills.SKILLS_BY_ID) -> invested rank. Absent means rank 0, which is
+    # *below* a player's character.STARTING_SKILL_RANK of 1: an untrained thug swinging
+    # a pipe is worse at it than any runner who ever picked one up.
+    ranks: dict[str, int] = field(default_factory=dict)
+    # Worn protection, the enemy-side counterpart of inventory.equipped_defense — added
+    # to the soak pool by `toughness` exactly as armor is for the player.
+    armor: int = 0
+
+    # --- the Character-shaped surface skills.skill_value duck-types against ---
+
+    def stat(self, name: str) -> int:
+        if name not in CORE_STATS:
+            raise ValueError(f"unknown stat: {name!r}")
+        return getattr(self, name)
+
+    def skill_rank(self, skill_id: str) -> int:
+        return self.ranks.get(skill_id, 0)
+
+    def skill_gear_bonus(self, skill_id: str) -> int:
+        return 0  # no skill-targeted gear on an NPC — see the class docstring
+
+    # --- what a fight reads, all derived from the sheet above ---
+
+    @property
+    def health(self) -> int:
+        return self.body * HEALTH_PER_BODY
+
+    @property
+    def attack(self) -> int:
+        """The attack pool: dice rolled against your defense — skill_value of whatever
+        they're holding, the same call the player's own attack makes."""
+        return skill_value(self, self.weapon.skill)
+
+    @property
+    def defense(self) -> int:
+        """What your attack roll must beat — player_defense's formula, same base."""
+        return DEFENSE_BASE + skill_value(self, "dodge")
+
+    @property
+    def damage(self) -> int:
+        """Base health off the target on a hit, before the attack roll's margin."""
+        return self.weapon.damage + melee_damage_bonus(self, self.weapon)
+
+    @property
+    def toughness(self) -> int:
+        """Added to the soak roll that mitigates a landed hit — player_soak's formula,
+        minus the cyberware term an NPC has no room for."""
+        return self.body + self.armor
+
+    @property
+    def stun_damage(self) -> int:
+        """Non-lethal stun dealt per hit (0 = none), off the weapon like the player's."""
+        return self.weapon.stun_damage
+
+    @property
+    def reach(self) -> int:
+        """How many tiles away it can attack, in tactical combat only
+        (tactical._enemy_phase). Abstract combat has no positions, so it ignores this."""
+        return weapon_range(self.weapon)
 
 
-# id, name, health, attack, defense, damage, toughness, reach.
-# The ladder the tiers draw from: a thug is a nuisance, a chromed enforcer is a
-# death sentence to a runner who brought the wrong build. Tuned against a runner's
-# 15-30 health and DAMAGE_FOR_DELTA in jobs.py — see the balance sim before touching.
-# The armed guards (corp_sec, sec_heavy) shoot; the street muscle and the chromed
-# bruiser close to melee, so a fight still has both something to kite and something
-# that punishes standing still.
-_ENEMY_ROWS = (
-    ("thug", "Street Thug", 4, 1, 9, 2, 1, 1),
-    ("ganger", "Ganger", 5, 2, 10, 2, 2, 1),
-    ("corp_sec", "Corp Sec", 7, 2, 11, 3, 2, 6),
-    ("sec_heavy", "Sec Heavy", 9, 3, 12, 3, 3, 6),
-    ("enforcer", "Chromed Enforcer", 11, 4, 13, 4, 4, 1),
+def _enemy(
+    id: str,
+    name: str,
+    stats: tuple[int, int, int, int, int, int],
+    weapon_id: str,
+    ranks: dict[str, int] | None = None,
+    armor: int = 0,
+) -> Enemy:
+    """Row -> Enemy, with the six stats positional in CORE_STATS order."""
+    body, strength, agility, perception, logic, cool = stats
+    return Enemy(
+        id=id,
+        name=name,
+        body=body,
+        strength=strength,
+        agility=agility,
+        perception=perception,
+        logic=logic,
+        cool=cool,
+        weapon=NPC_WEAPONS[weapon_id],
+        ranks=ranks or {},
+        armor=armor,
+    )
+
+
+# The ladder the tiers draw from: a thug is a nuisance, a chromed enforcer is a death
+# sentence to a runner who brought the wrong build.
+#
+# Stats are (body, strength, agility, perception, logic, cool) — CORE_STATS order.
+#
+# **The five originals are calibrated, not re-tuned.** thug/ganger/corp_sec/sec_heavy/
+# enforcer keep their previously tuned attack, damage and toughness *exactly*, and their
+# health within 2, because those were fit against a balance sim (see DESIGN.md) and the
+# sim isn't in this repo to re-run. What could not be held is `defense`: it was 9-13 on
+# the old hand-set scale, and DEFENSE_BASE alone is 12, so deriving it puts the floor at
+# 13. Every enemy is correspondingly ~1.4 dodge dice harder to hit than before; the
+# health numbers absorb most of that back. Anything you change here, re-measure.
+#
+# Note nearly every weapon skill sits on *agility*, the same stat as Dodge (see
+# skills.py), so an enemy's accuracy and its evasiveness move together — that coupling
+# is the main thing constraining a row, and it's why the two shapes that break out of it
+# (Bulwark, armor instead of agility; Razorgirl, agility instead of armor) sit at
+# opposite ends of the roster.
+#
+# The roster's spread is deliberately *shape*, not power. Within a tier the entries
+# differ by what they punish: something to kite, something that punishes standing still,
+# something that has to be killed before it shoots twice, something that soaks.
+_ENEMY_ROWS: tuple[Enemy, ...] = (
+    # --- tier 0: the street ---
+    # The baseline nuisance: no training, no armor, a length of pipe.
+    _enemy("thug", "Street Thug", (1, 1, 1, 1, 1, 1), "scrap_pipe"),
+    # Trained where the thug isn't, and wearing something.
+    _enemy("ganger", "Ganger", (1, 1, 1, 1, 1, 1), "switchblade", {"blades": 1}, armor=1),
+    # A gun at tier 0 — can't hit much, but reaches the whole map and doesn't have to
+    # close. The first thing on the ladder that punishes standing in the open.
+    _enemy("lookout", "Street Lookout", (1, 1, 1, 2, 1, 1), "holdout_pistol"),
+    # --- tier 1: organized ---
+    _enemy("corp_sec", "Corp Sec", (1, 1, 2, 1, 1, 1), "holdout_pistol", armor=1),
+    # Glass cannon: combat drugs instead of training. Hits harder than anything else at
+    # this tier and folds to one solid answer. Strength, not skill — it swings wildly
+    # (attack 2) and it is the Strength term that makes the hit hurt.
+    _enemy("juicer", "Juicer", (1, 2, 2, 1, 1, 1), "machete"),
+    # Non-lethal: threatens a knockout rather than a death, via the stun meter that
+    # carries between fights (Character.stun). Nothing else in the roster does this.
+    _enemy(
+        "shock_trooper", "Shock Trooper", (2, 1, 2, 1, 1, 1), "stun_baton", armor=1
+    ),
+    # --- tier 2: corporate ---
+    # Speed instead of armor: the hardest thing in the game to land a hit on, and it
+    # dies to the first one that lands.
+    _enemy("razorgirl", "Razorgirl", (1, 2, 3, 1, 1, 1), "machete", {"dodge": 1}),
+    _enemy(
+        "sec_heavy", "Sec Heavy", (2, 2, 2, 1, 1, 1), "guard_smg", {"automatics": 1}, armor=1
+    ),
+    _enemy(
+        "enforcer", "Chromed Enforcer", (2, 2, 2, 1, 1, 2), "chrome_fist", {"clubs": 2}, armor=2
+    ),
+    # Reaches across the map and hits for more than anything else, on the least health in
+    # the tier. A priority target that punishes ignoring it.
+    _enemy("marksman", "Marksman", (1, 1, 3, 2, 1, 1), "marksman_rifle"),
+    # The opposite trade: the most health and soak on the board, barely able to hit
+    # anything. A wall to be worked around rather than a threat to be raced.
+    _enemy("bulwark", "Bulwark", (2, 2, 1, 1, 1, 2), "riot_shotgun", armor=3),
 )
 
-ENEMIES = [Enemy(*row) for row in _ENEMY_ROWS]
+ENEMIES = list(_ENEMY_ROWS)
 ENEMIES_BY_ID = {enemy.id: enemy for enemy in ENEMIES}
+
+if len(ENEMIES_BY_ID) != len(ENEMIES):
+    raise ValueError("_ENEMY_ROWS has a duplicate enemy id")
 
 # Day tier (checks.day_tier) -> who turns up, and how many. The count is the real
 # difficulty lever, not the stats: two gangers is a far worse round than one Corp Sec,
 # because every one of them swings at you every round.
 ENEMY_TIERS: dict[int, tuple[list[str], tuple[int, int]]] = {
-    0: (["thug", "ganger"], (1, 2)),
-    1: (["ganger", "corp_sec"], (2, 2)),
-    2: (["corp_sec", "sec_heavy", "enforcer"], (2, 3)),
+    0: (["thug", "ganger", "lookout"], (1, 2)),
+    1: (["ganger", "corp_sec", "shock_trooper", "juicer"], (2, 2)),
+    2: (["corp_sec", "sec_heavy", "enforcer", "razorgirl", "marksman", "bulwark"], (2, 3)),
 }
 
 if any(enemy_id not in ENEMIES_BY_ID for ids, _ in ENEMY_TIERS.values() for enemy_id in ids):
@@ -228,23 +476,26 @@ def roll_enemies(tier: int, rng: random.Random) -> tuple[Enemy, ...]:
 
 
 # What a hired runner brings to a fight, by their runners.RivalRunner.archetype:
-# (health, damage, toughness, reach). A Solo is the one you hire to shoot people; the
-# Netrunner is along for the deck and bleeds if you make them fight; the Infiltrator
-# works up close. Reach matches the enemy guns' 6 rather than the player's
-# FIREARM_RANGE of 8 — a hire is backup, not a better version of you.
+# (stats, weapon, armor, combat_gap) on the same sheet every other Enemy is written on.
+# A Solo is the one you hire to shoot people; the Netrunner is along for the deck and
+# bleeds if you make them fight; the Infiltrator works up close.
+#
+# **combat_gap is how much of `rating` is *not* gun skill.** RivalRunner.rating is a
+# runner's general standing on the street, not their marksmanship, and without this the
+# two were the same number: every archetype bought weapon rank straight up to `rating`,
+# so a Netrunner shot exactly as well as a Solo of equal rating. A netrunner is hired for
+# the deck. What their rating buys is what they're good at, and for three of the four
+# archetypes that isn't shooting.
 #
 # First-slice numbers, deliberately NOT balance-simulated: the sim in DESIGN.md's
 # tactical Balance note assumes a lone runner, and an ally shifts every one of its
 # figures. Re-run it before treating these as tuned.
-_CREW_PROFILES: dict[str, tuple[int, int, int, int]] = {
-    "Solo": (14, 5, 3, 6),
-    "Infiltrator": (11, 4, 2, 1),
-    "Netrunner": (10, 3, 1, 6),
+_CREW_PROFILES: dict[str, tuple[tuple[int, int, int, int, int, int], str, int, int]] = {
+    "Solo": ((3, 2, 3, 2, 1, 2), "combat_rifle", 0, 0),
+    "Infiltrator": ((2, 2, 3, 2, 1, 1), "machete", 0, 1),
+    "Netrunner": ((2, 1, 2, 1, 3, 1), "holdout_pistol", 0, 3),
 }
-_CREW_DEFAULT_PROFILE = (10, 3, 1, 1)
-# Their rating (runners.RivalRunner.rating, 7-8 today) is the attack pool directly, and
-# half of it over this base is what an enemy's attack roll has to beat.
-CREW_DEFENSE_BASE = 8
+_CREW_DEFAULT_PROFILE = ((2, 1, 2, 1, 1, 1), "holdout_pistol", 0, 2)
 
 
 def crew_stats(runner: RivalRunner) -> Enemy:
@@ -252,22 +503,34 @@ def crew_stats(runner: RivalRunner) -> Enemy:
     numbers out.
 
     Returns an `Enemy` for a *friendly*, which reads oddly until you notice `Enemy` is
-    already "a combatant who isn't the player": six numbers with no gear, inventory or
-    skill sheet behind them, which is exactly what a hire is on the grid too. Building a
-    second identical dataclass would only mean resolving attacks twice, once per side —
-    the thing `resolve_hit` exists to prevent. `tactical.Unit.stats` is typed on this for
-    the same reason, and `Unit.side` is what says which way they're pointing.
+    already "a combatant who isn't the player": a stat sheet with no Character behind it,
+    which is exactly what a hire is on the grid too. Building a second identical
+    dataclass would only mean resolving attacks twice, once per side — the thing
+    `resolve_hit` exists to prevent. `tactical.Unit.stats` is typed on this for the same
+    reason, and `Unit.side` is what says which way they're pointing.
+
+    Their `rating` (runners.RivalRunner.rating, 7-8 today) reaches the attack pool by
+    *buying rank* in their weapon's skill rather than being assigned to `attack` directly
+    — so a better-rated hire is a better-trained one, and the number means the same thing
+    it means everywhere else. It lands at `rating - combat_gap` rather than at `rating`:
+    see _CREW_PROFILES for why a netrunner's standing is not their marksmanship.
     """
-    health, damage, toughness, reach = _CREW_PROFILES.get(runner.archetype, _CREW_DEFAULT_PROFILE)
-    return Enemy(
-        id=runner.id,
-        name=runner.name,
-        health=health,
-        attack=runner.rating,
-        defense=CREW_DEFENSE_BASE + runner.rating // 2,
-        damage=damage,
-        toughness=toughness,
-        reach=reach,
+    stats, weapon_id, armor, combat_gap = _CREW_PROFILES.get(
+        runner.archetype, _CREW_DEFAULT_PROFILE
+    )
+    weapon = NPC_WEAPONS[weapon_id]
+    skill = weapon.skill
+    # rank = the gun half of rating, less the skill's own stat, so skill_value comes out
+    # at rating - combat_gap on the nose.
+    stat_name = skill_for(skill).stat
+    stat_value = stats[CORE_STATS.index(stat_name)]
+    return _enemy(
+        runner.id,
+        runner.name,
+        stats,
+        weapon_id,
+        {skill: max(0, runner.rating - combat_gap - stat_value)},
+        armor=armor,
     )
 
 

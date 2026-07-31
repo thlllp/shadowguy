@@ -5,8 +5,9 @@ Character/roster builders several suites want."""
 import random
 
 from shadowguy.character import Character
-from shadowguy.combat import crew_stats
+from shadowguy.combat import Enemy, crew_stats
 from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.shops import Item, Slot
 
 
 class AlwaysSix(random.Random):
@@ -40,6 +41,41 @@ def character_with_skill_value(skill_id: str, value: int) -> Character:
     character.perception = value
     character.logic = value
     return character
+
+
+def npc_weapon(skill: str, damage: int = 0, stun_damage: int = 0) -> Item:
+    """A one-off weapon for a synthetic Enemy. Built by hand rather than pulled from
+    shops.CATALOG because a test usually wants a damage figure the catalog's
+    MIN_WEAPON_DAMAGE floor forbids -- the same reason combat.NPC_WEAPONS is hand-built.
+    """
+    return Item(
+        id=f"test_{skill}_{damage}_{stun_damage}",
+        name="Test Weapon",
+        price=0,
+        bonuses={},
+        slot=Slot.WEAPON,
+        skill=skill,
+        damage=damage,
+        stun_damage=stun_damage,
+        concealment=1,
+    )
+
+
+def synthetic_enemy(weapon: Item, *, body: int = 1, agility: int = 1, strength: int = 1,
+                    ranks: dict[str, int] | None = None, armor: int = 0,
+                    id: str = "test_enemy", name: str = "Test Enemy") -> Enemy:
+    """An Enemy built for one test's arithmetic rather than picked off the roster.
+
+    Everything a fight reads is derived (see combat.Enemy), so a test pins a *derived*
+    number by choosing the stat behind it: `health` is body*HEALTH_PER_BODY, `toughness`
+    is body+armor (so the two move together -- there is no zero-soak punching bag any
+    more), `defense` is DEFENSE_BASE+agility+dodge rank, and `attack` is the weapon
+    skill's stat plus its rank.
+    """
+    return Enemy(
+        id=id, name=name, body=body, strength=strength, agility=agility,
+        perception=1, logic=1, cool=1, weapon=weapon, ranks=ranks or {}, armor=armor,
+    )
 
 
 def crew_stats_for(archetype: str = "Solo"):
