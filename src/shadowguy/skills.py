@@ -69,11 +69,23 @@ _SKILL_ROWS: dict[str, list[tuple[str, str, str]]] = {
         ("intuition", "Intuition", "Reading a face and a room: expressions, body language, social undercurrents"),
     ],
     "logic": [
-        ("hack", "Hack", "Breaking into networks and systems"),
+        # The matrix's own three skills are split by what you're *doing* on the wire, and
+        # each owns specific cyberdeck programs and actions (see matrix.py): Hack is
+        # offensive work — the Sleaze bypass and getting into a system at all;
+        # Cybercombat is a fight once you're in, the Attack roll against ICE; Computer
+        # is pulling data and finding things out, the Extract program and reading a
+        # node from outside. One deck loadout can lean on all three.
+        ("hack", "Hack", "Offensive work on the web: breaking into networks and systems"),
+        ("cybercombat", "Cybercombat", "Fighting ICE and other runners in the matrix"),
+        ("computer", "Computer", "Extracting data and finding information on the web"),
         ("recon", "Recon", "Gathering intel and casing a target"),
         ("infer", "Infer", "Understanding new systems and interfaces"),
         ("tactics", "Tactics", "Planning and reading a fight"),
         ("tinkering", "Tinkering", "Repairing and modifying hardware"),
+        ("armorer", "Armorer", "Maintaining, modifying and building weapons"),
+        ("chemistry", "Chemistry", "Drugs, toxins and what they do to a body"),
+        ("medicine", "Medicine", "Treating wounds and keeping someone breathing"),
+        ("demolitions", "Demolitions", "Explosives: placing them, defusing them, judging a blast"),
     ],
     "cool": [
         ("forgery", "Forgery", "Faking documents and IDs"),

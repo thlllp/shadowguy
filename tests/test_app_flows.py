@@ -220,6 +220,130 @@ def test_new_game_creation_screen_apply_archetype_and_begin_reaches_corp_map():
     run(body())
 
 
+def test_every_archetype_card_is_on_screen_and_the_last_one_is_clickable():
+    """The preset grid is built from archetypes.ARCHETYPES, but its column count is
+    CSS -- #arch_grid was `grid-size: 3 1` while there happened to be exactly three
+    presets, so a fourth would have had nowhere to render. Drives the *last* preset in
+    the list, the one a stale row count would drop off the grid."""
+    import shadowguy.archetypes as archetypes
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
+            assert isinstance(app.screen, CharacterCreationScreen)
+
+            presets = archetypes.ARCHETYPES
+            for preset in presets:
+                card = app.screen.query_one(f"#arch_card_{preset.id}")
+                assert card.region.width > 0 and card.region.height > 0, preset.id
+
+            # Scroll it into view before clicking: the cards share #build_scroll with
+            # the build columns, so on a short screen the last row of presets starts
+            # below the fold and a coordinate click would land on whatever is painted
+            # there instead.
+            last = app.screen.query_one(f"#arch_{presets[-1].id}")
+            last.scroll_visible()
+            await _settle(pilot)
+            await pilot.click(f"#arch_{presets[-1].id}")
+            await pilot.pause()
+            assert app.character.stat_points == 0
+            assert app.character.skill_points == 0
+
+    run(body())
+
+
+def test_creation_screen_keeps_begin_on_screen_on_a_small_terminal():
+    """Adding a fourth and fifth preset put a second row of auto-height cards on the
+    creation screen, and on an 80x24 terminal that pushed #begin past the bottom edge
+    and squeezed the build columns to a single row -- the run was unstartable without
+    a taller window. #arch_grid is capped at a share of the height and scrolls instead.
+    80x24 because that is the classic default terminal, and the smallest this has to
+    work at."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await _settle(pilot)
+            assert isinstance(app.screen, CharacterCreationScreen)
+
+            begin = app.screen.query_one("#begin")
+            assert begin.region.y + begin.region.height <= 24, begin.region
+            # The build columns must keep usable room, not collapse to nothing.
+            assert app.screen.query_one("#build_scroll").region.height >= 4
+
+            await pilot.click("#arch_enforcer")
+            await _settle(pilot)
+            await pilot.click("#begin")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+
+    run(body())
+
+
+async def _walk_to_last_row(pilot, list_id):
+    """Focus a skill column and arrow down to its final row, the way a player reaching
+    for the bottom of a stat would. Returns that row's widget."""
+    listview = pilot.app.screen.query_one(f"#{list_id}", ListView)
+    listview.focus()
+    await _settle(pilot)
+    for _ in range(len(listview.children)):
+        await pilot.press("down")
+    await _settle(pilot)
+    return listview.children[-1]
+
+
+def test_creation_screen_can_reach_the_last_logic_skill_at_every_size():
+    """Logic carries 11 skills now. A .build_column ListView is height:auto, so it is
+    as tall as its content and scrolling a row "into view" only makes it visible inside
+    that overlong list -- #build_scroll alone could not reach the bottom, and the last
+    rows were painted below the terminal with nothing able to scroll to them. The player
+    could still arrow onto them and spend points on rows they could not see."""
+    async def body():
+        for width, height in ((80, 24), (100, 40)):
+            app = ShadowguyApp()
+            async with app.run_test(size=(width, height)) as pilot:
+                await _settle(pilot)
+                await pilot.click("#new_game")
+                await pilot.pause()
+                await pilot.click("#runner")
+                await _settle(pilot)
+                row = await _walk_to_last_row(pilot, "build_list_logic")
+                region = row.region
+                assert region.y >= 0 and region.y + region.height <= height, (
+                    f"{width}x{height}: {row.id} at {region} is off a {height}-row screen"
+                )
+
+    run(body())
+
+
+def test_skills_screen_can_reach_the_last_logic_skill_at_every_size():
+    """Same failure on the XP-spending side, where it also had no scroller at all:
+    #skills_grid sat straight on the Screen, so nothing in the chain could scroll and
+    Tinkering through Demolitions were simply never drawn."""
+    async def body():
+        for width, height in ((80, 24), (100, 40)):
+            app = ShadowguyApp()
+            async with app.run_test(size=(width, height)) as pilot:
+                await _settle(pilot)
+                app.push_screen(SkillsScreen())
+                await _settle(pilot)
+                row = await _walk_to_last_row(pilot, "skill_list_logic")
+                region = row.region
+                assert region.y >= 0 and region.y + region.height <= height, (
+                    f"{width}x{height}: {row.id} at {region} is off a {height}-row screen"
+                )
+
+    run(body())
+
+
 def test_creation_screen_refuses_to_begin_with_unspent_points():
     async def body():
         app = ShadowguyApp()

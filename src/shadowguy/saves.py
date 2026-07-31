@@ -187,7 +187,13 @@ SAVE_SUFFIX = ".save"
 # gunnery (33 skills, up from 30). A pre-v52 pickled Character's skill_ranks is keyed
 # by the old ids -- every new skill would read as missing, and the ranks bought for the
 # old ones would be unspendable.
-SAVE_VERSION = 52
+# v53 added six logic skills (cybercombat, computer, armorer, chemistry, medicine,
+# demolitions -- 39 total) and, with the first two, split what the matrix rolls three
+# ways: the Attack roll moved off `hack` to `cybercombat`, Extract and remote node
+# analysis to `computer`. Character.skill_ranks tolerates the missing keys (skill_rank
+# defaults), but a pre-v53 runner's Hack rank silently stops applying to matrix fights
+# -- a live character would be markedly worse at the thing they built for.
+SAVE_VERSION = 53
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -1,5 +1,5 @@
 from textual.app import ComposeResult
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Character
@@ -555,9 +555,20 @@ class SkillsScreen(PanelNav, BackScreen):
     BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
     CSS = """
+    /* The grid has to live inside a scroller, the same way CharacterCreationScreen's
+       build columns do: a .skill_column ListView is height:auto, so it sizes to its
+       content and clips inside the grid cell rather than scrolling itself. Logic
+       carries 11 skills now, and without this the rows past Tactics were painted
+       below the viewport on any ordinary terminal -- unreachable, not just off-screen,
+       because nothing in the chain had anywhere to scroll to. */
+    #skills_scroll {
+        height: 1fr;
+    }
+
     #skills_grid {
         grid-size: 3 2;
         grid-gutter: 1 2;
+        height: auto;
     }
 
     .skill_column {
@@ -567,23 +578,32 @@ class SkillsScreen(PanelNav, BackScreen):
     }
 
     .skill_column ListView {
+        /* Bounded, not auto: a column taller than the viewport can't be brought into
+           view by the outer scroller alone -- scrolling a widget into view only makes
+           it visible inside *its* container, and an auto-height ListView's container
+           is as tall as its content. Capping it means the list scrolls itself, so the
+           highlighted row is always reachable no matter how many skills a stat carries. */
         height: auto;
+        max-height: 12;
     }
     """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Grid(
-            *(
-                Vertical(
-                    Static(id=f"skill_head_{stat}"),
-                    ListView(id=f"skill_list_{stat}"),
-                    classes="skill_column",
-                )
-                for stat in CORE_STATS
+        yield ScrollableContainer(
+            Grid(
+                *(
+                    Vertical(
+                        Static(id=f"skill_head_{stat}"),
+                        ListView(id=f"skill_list_{stat}"),
+                        classes="skill_column",
+                    )
+                    for stat in CORE_STATS
+                ),
+                id="skills_grid",
             ),
-            id="skills_grid",
+            id="skills_scroll",
         )
         yield Footer()
 
