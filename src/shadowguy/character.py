@@ -367,10 +367,27 @@ class Character:
         return True
 
     def crew_working(self, job_id: str) -> list[CrewHire]:
-        """Who actually walks into this job with you: the hires signed for it, plus every
-        indefinite hire (they're on retainer — they come to all of it). Wider than
-        crew_for_job, which is specifically "who takes a cut of *this* payout"."""
+        """Who is on this job at all: the hires signed for it, plus every indefinite hire
+        (they're on retainer — they come to all of it). Wider than crew_for_job, which is
+        specifically "who takes a cut of *this* payout", and wider than crew_on_site,
+        which is who is physically there."""
         return [hire for hire in self.crew if hire.job_id in (None, job_id)]
+
+    def crew_on_site(self, job_id: str) -> list[CrewHire]:
+        """Of crew_working, the ones actually standing at the location — the only ones a
+        fight can field as bodies.
+
+        `on_site` was write-only until this existed: it's set at hire time, capped per
+        job archetype (Scene.max_on_site/max_support) and saved (v49), but the fight
+        opened with crew_working and put *everyone* on the map. So a netrunner hired
+        explicitly as remote support turned up at the building holding a pistol, which is
+        the one thing hiring them as support says they don't do.
+
+        A support hire contributes nothing mechanically yet — they still take a cut
+        (crew_for_job) and grant no remote effect. That's a gap to fill, not a reason to
+        march them into the firefight.
+        """
+        return [hire for hire in self.crew_working(job_id) if hire.on_site]
 
     def pay_crew_wages(self) -> list[str]:
         """Charge each indefinitely-kept crew member their daily wage on a day turnover.

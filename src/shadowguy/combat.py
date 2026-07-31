@@ -476,19 +476,26 @@ def roll_enemies(tier: int, rng: random.Random) -> tuple[Enemy, ...]:
 
 
 # What a hired runner brings to a fight, by their runners.RivalRunner.archetype:
-# (stats, weapon, armor) on the same sheet every other Enemy is written on. A Solo is
-# the one you hire to shoot people; the Netrunner is along for the deck and bleeds if
-# you make them fight; the Infiltrator works up close.
+# (stats, weapon, armor, combat_gap) on the same sheet every other Enemy is written on.
+# A Solo is the one you hire to shoot people; the Netrunner is along for the deck and
+# bleeds if you make them fight; the Infiltrator works up close.
+#
+# **combat_gap is how much of `rating` is *not* gun skill.** RivalRunner.rating is a
+# runner's general standing on the street, not their marksmanship, and without this the
+# two were the same number: every archetype bought weapon rank straight up to `rating`,
+# so a Netrunner shot exactly as well as a Solo of equal rating. A netrunner is hired for
+# the deck. What their rating buys is what they're good at, and for three of the four
+# archetypes that isn't shooting.
 #
 # First-slice numbers, deliberately NOT balance-simulated: the sim in DESIGN.md's
 # tactical Balance note assumes a lone runner, and an ally shifts every one of its
 # figures. Re-run it before treating these as tuned.
-_CREW_PROFILES: dict[str, tuple[tuple[int, int, int, int, int, int], str, int]] = {
-    "Solo": ((3, 2, 3, 2, 1, 2), "combat_rifle", 0),
-    "Infiltrator": ((2, 2, 3, 2, 1, 1), "machete", 0),
-    "Netrunner": ((2, 1, 2, 1, 3, 1), "holdout_pistol", 0),
+_CREW_PROFILES: dict[str, tuple[tuple[int, int, int, int, int, int], str, int, int]] = {
+    "Solo": ((3, 2, 3, 2, 1, 2), "combat_rifle", 0, 0),
+    "Infiltrator": ((2, 2, 3, 2, 1, 1), "machete", 0, 1),
+    "Netrunner": ((2, 1, 2, 1, 3, 1), "holdout_pistol", 0, 3),
 }
-_CREW_DEFAULT_PROFILE = ((2, 1, 2, 1, 1, 1), "holdout_pistol", 0)
+_CREW_DEFAULT_PROFILE = ((2, 1, 2, 1, 1, 1), "holdout_pistol", 0, 2)
 
 
 def crew_stats(runner: RivalRunner) -> Enemy:
@@ -502,15 +509,19 @@ def crew_stats(runner: RivalRunner) -> Enemy:
     `resolve_hit` exists to prevent. `tactical.Unit.stats` is typed on this for the same
     reason, and `Unit.side` is what says which way they're pointing.
 
-    Their `rating` (runners.RivalRunner.rating, 7-8 today) still lands as the attack pool
-    exactly, but now by *buying rank* in their weapon's skill up to it rather than being
-    assigned to `attack` directly — so a better-rated hire is a better-trained one, and
-    the number means the same thing it means everywhere else.
+    Their `rating` (runners.RivalRunner.rating, 7-8 today) reaches the attack pool by
+    *buying rank* in their weapon's skill rather than being assigned to `attack` directly
+    — so a better-rated hire is a better-trained one, and the number means the same thing
+    it means everywhere else. It lands at `rating - combat_gap` rather than at `rating`:
+    see _CREW_PROFILES for why a netrunner's standing is not their marksmanship.
     """
-    stats, weapon_id, armor = _CREW_PROFILES.get(runner.archetype, _CREW_DEFAULT_PROFILE)
+    stats, weapon_id, armor, combat_gap = _CREW_PROFILES.get(
+        runner.archetype, _CREW_DEFAULT_PROFILE
+    )
     weapon = NPC_WEAPONS[weapon_id]
     skill = weapon.skill
-    # rank = rating - the skill's stat, so skill_value comes out at rating on the nose.
+    # rank = the gun half of rating, less the skill's own stat, so skill_value comes out
+    # at rating - combat_gap on the nose.
     stat_name = skill_for(skill).stat
     stat_value = stats[CORE_STATS.index(stat_name)]
     return _enemy(
@@ -518,7 +529,7 @@ def crew_stats(runner: RivalRunner) -> Enemy:
         runner.name,
         stats,
         weapon_id,
-        {skill: max(0, runner.rating - stat_value)},
+        {skill: max(0, runner.rating - combat_gap - stat_value)},
         armor=armor,
     )
 

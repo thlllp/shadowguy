@@ -390,6 +390,28 @@ def test_crew_working_takes_this_job_s_hires_plus_everyone_on_retainer():
     assert [h.runner_id for h in c.crew_for_job("job_1")] == ["runner_a"]
 
 
+def test_crew_on_site_leaves_remote_support_off_the_map():
+    """`on_site` was write-only until crew_on_site existed: set at hire time, capped per
+    archetype, saved -- and then ignored when the fight opened, so a hire taken on as
+    remote support turned up at the location as a body holding a gun. They're still on
+    the job (crew_working) and still take a cut; they're just not standing there."""
+    c = Character(name="t")
+    c.accepted_jobs.append(_job("job_1", max_on_site=2, max_support=1))
+    assert c.hire_for_job("runner_a", "job_1", on_site=True)
+    assert c.hire_for_job("runner_b", "job_1", on_site=False)
+
+    assert {h.runner_id for h in c.crew_working("job_1")} == {"runner_a", "runner_b"}
+    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_a"]
+
+
+def test_crew_on_site_keeps_retained_hires_who_default_to_being_there():
+    """An indefinite hire is on retainer with on_site defaulting True, so the new filter
+    must not quietly empty the map for anyone who never chose a posture."""
+    c = Character(name="t")
+    c.hire_indefinite("runner_c")
+    assert [h.runner_id for h in c.crew_on_site("job_1")] == ["runner_c"]
+
+
 def test_record_runner_killed_takes_them_off_the_crew_and_the_roster_for_good():
     c = Character(name="t")
     c.hire_indefinite("runner_x")

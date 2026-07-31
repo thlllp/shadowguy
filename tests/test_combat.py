@@ -304,11 +304,33 @@ def test_the_roster_spreads_shape_not_just_power():
 
 
 @pytest.mark.parametrize("runner", RIVAL_RUNNERS, ids=lambda r: r.id)
-def test_crew_stats_lands_the_runners_rating_as_their_attack_pool(runner):
+def test_crew_stats_builds_a_usable_combatant_for_every_runner(runner):
     """rating is no longer assigned to `attack` — it's bought as rank in their weapon's
-    skill, so a better-rated hire is a better-trained one. It still has to come out at
-    the rating on the nose."""
+    skill, so a better-rated hire is a better-trained one. Whatever the archetype, a hire
+    has to come out able to act."""
     stats = crew_stats(runner)
-    assert stats.attack == runner.rating
     assert stats.id == runner.id and stats.name == runner.name
-    assert stats.health > 0 and stats.damage > 0
+    assert stats.attack > 0 and stats.health > 0 and stats.damage > 0
+    assert stats.attack <= runner.rating  # rating is a ceiling on the gun half, not a floor
+
+
+def test_a_netrunner_shoots_worse_than_a_solo_of_the_same_rating():
+    """RivalRunner.rating is a runner's standing on the street, not their marksmanship.
+    Without _CREW_PROFILES' combat_gap the two were the same number, and a netrunner
+    hired for their deck put rounds downrange exactly as well as the hire you pay to
+    shoot people."""
+    solo = next(r for r in RIVAL_RUNNERS if r.archetype == "Solo")
+    netrunner = next(r for r in RIVAL_RUNNERS if r.archetype == "Netrunner")
+    assert solo.rating == netrunner.rating, "fixture assumption: equal rating"
+    assert crew_stats(netrunner).attack < crew_stats(solo).attack
+
+
+def test_only_the_solo_converts_its_whole_rating_into_the_gun():
+    """The Solo is the one you hire to shoot people, so it's the one archetype whose
+    rating is entirely marksmanship. Everyone else gives some of it up."""
+    for runner in RIVAL_RUNNERS:
+        attack = crew_stats(runner).attack
+        if runner.archetype == "Solo":
+            assert attack == runner.rating
+        else:
+            assert attack < runner.rating

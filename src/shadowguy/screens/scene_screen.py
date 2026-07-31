@@ -113,11 +113,14 @@ class SceneScreen(Screen):
         off the Character at the moment the fight opens rather than baked into the stage
         at generation, so hiring someone between accepting a job and walking it counts.
         Only jobs have a crew (a gig is solo work), and only the grid fields them —
-        combat.py's abstract fight has no positions to put a second body in."""
+        combat.py's abstract fight has no positions to put a second body in.
+
+        `crew_on_site`, not `crew_working`: a hire taken on as remote support isn't at
+        the location and doesn't get a body on the map."""
         if self.scene.kind is not SceneKind.JOB:
             return []
         character = self.app.character
-        return [crew_stats(RUNNERS_BY_ID[hire.runner_id]) for hire in character.crew_working(self.scene.id)]
+        return [crew_stats(RUNNERS_BY_ID[hire.runner_id]) for hire in character.crew_on_site(self.scene.id)]
 
     async def _on_tactical_end(self, result: TacticalOutcome) -> None:
         character = self.app.character
