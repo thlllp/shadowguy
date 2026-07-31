@@ -97,6 +97,7 @@ from shadowguy.runners import (
     RUNNERS_BY_ID,
     SUPPORT_PROGRAMS,
     RivalRunner,
+    can_work_support,
     support_programs_for,
 )
 
@@ -1397,7 +1398,7 @@ def _supported_burglary(seed=7, rating=8, kind=None):
     camera tasks -- a home has no monitored camera system (BUILDING_PROFILES), so a test
     about blinding one has to break into an office."""
     building, state = _burglary(seed=seed, kind=kind)
-    runner = next(r for r in RUNNERS_BY_ID.values() if r.archetype == "Netrunner")
+    runner = next(r for r in RUNNERS_BY_ID.values() if r.deck_id and r.rating >= 7)
     state.support = Support(
         name=runner.name, rating=rating, programs=support_programs_for(runner)
     )
@@ -1413,19 +1414,36 @@ def test_support_for_picks_the_best_netrunner_and_ignores_anyone_who_cant_work_s
     netrunners = [
         CrewHire(runner_id=r.id, job_id="j", on_site=False)
         for r in RUNNERS_BY_ID.values()
-        if r.archetype == "Netrunner"
+        if r.deck_id
     ]
     best = max(RUNNERS_BY_ID[h.runner_id].rating for h in netrunners)
     support = support_for([solo, *netrunners])
     assert support is not None and support.rating == best
 
 
-def test_a_hire_only_carries_the_programs_their_rating_can_run():
-    """min_rating is what makes a better netrunner worth paying for beyond the roll."""
-    low = support_programs_for(RivalRunner("x", "X", "Netrunner", "", 0, 0, 0.0))
-    high = support_programs_for(RivalRunner("y", "Y", "Netrunner", "", 10, 0, 0.0))
-    assert [p.id for p in low] == ["probe"]
+def test_a_hire_only_carries_the_programs_their_rating_and_deck_allow():
+    """Two gates, and the deck is one of them: min_rating says whether they're good
+    enough to run a program at all, program_slots says how many they can hold."""
+    rig = "zetatech_rig"  # the roomiest deck in the catalog
+    low = support_programs_for(RivalRunner("x", "X", "Netrunner", "", 0, 0, 0.0, rig))
+    high = support_programs_for(RivalRunner("y", "Y", "Netrunner", "", 10, 0, 0.0, rig))
+    assert [p.id for p in low] == ["probe"]  # rating-gated
     assert len(high) == len(SUPPORT_PROGRAMS)
+
+    # Same top rating, a one-slot deck: the deck is now what limits them.
+    burner = support_programs_for(RivalRunner("z", "Z", "Netrunner", "", 10, 0, 0.0, "burner_deck"))
+    assert len(burner) == 1
+
+
+def test_owning_a_deck_is_the_support_gate_not_the_archetype_label():
+    """An archetype is a label; a deck is the thing that does the work. A netrunner who
+    owns nothing can't work support, and a solo holding a deck can."""
+    deckless_hacker = RivalRunner("a", "A", "Netrunner", "", 9, 0, 0.0, None)
+    equipped_solo = RivalRunner("b", "B", "Solo", "", 3, 0, 0.0, "burner_deck")
+    assert not can_work_support(deckless_hacker)
+    assert support_programs_for(deckless_hacker) == ()
+    assert can_work_support(equipped_solo)
+    assert support_programs_for(equipped_solo)
 
 
 def test_directing_the_hacker_costs_the_player_no_move_and_no_action():

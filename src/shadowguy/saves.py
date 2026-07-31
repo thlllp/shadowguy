@@ -203,7 +203,13 @@ SAVE_SUFFIX = ".save"
 # fighting on its old numbers with no stats behind it and no error to say so. The
 # roster also grew from 5 to 11 and ENEMY_TIERS was re-pooled, so a pre-v54 run's
 # accepted jobs hold squads the current generator would never roll.
-SAVE_VERSION = 54
+# v55 gave runners.RivalRunner a `deck_id` and moved the remote-support gate onto it:
+# whether a hire can work support is now "do they own a cyberdeck", not "is their
+# archetype Netrunner", and the deck's program_slots caps how many support programs they
+# carry. RivalRunner instances are pickled directly (ShadowguyApp.runners, save v43), so
+# a pre-v55 roster has objects with no `deck_id` attribute at all -- every support
+# lookup on one would raise rather than read as "no deck".
+SAVE_VERSION = 55
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

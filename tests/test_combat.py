@@ -320,7 +320,7 @@ def test_a_netrunner_shoots_worse_than_a_solo_of_the_same_rating():
     hired for their deck put rounds downrange exactly as well as the hire you pay to
     shoot people."""
     solo = next(r for r in RIVAL_RUNNERS if r.archetype == "Solo")
-    netrunner = next(r for r in RIVAL_RUNNERS if r.archetype == "Netrunner")
+    netrunner = next(r for r in RIVAL_RUNNERS if r.deck_id)
     assert solo.rating == netrunner.rating, "fixture assumption: equal rating"
     assert crew_stats(netrunner).attack < crew_stats(solo).attack
 

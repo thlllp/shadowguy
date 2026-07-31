@@ -28,6 +28,8 @@ resolve by id lookup regardless of whether this run happened to roll that runner
 import random
 from dataclasses import dataclass
 
+from shadowguy.shops import ITEMS_BY_ID
+
 
 @dataclass
 class RivalRunner:
@@ -38,6 +40,12 @@ class RivalRunner:
     rating: int  # effective skill_value at their specialty (for the run-time crew effect)
     daily_cost: int  # per-day wage when kept on indefinitely (charged each rest)
     job_cut: float  # fraction of a single job's payout they take when hired for that job
+    # The cyberdeck they own (shops.ITEMS_BY_ID, an item with program_slots), or None for
+    # a runner who doesn't have one. **This, not `archetype`, is what makes someone
+    # able to work remote support** -- see can_work_support. Gating on the gear rather
+    # than the label means a solo who somehow ends up with a deck can work it, and a
+    # netrunner who doesn't own one can't, which is the honest reading of both.
+    deck_id: str | None = None
 
 
 RIVAL_RUNNERS = [
@@ -49,6 +57,7 @@ RIVAL_RUNNERS = [
         rating=8,
         daily_cost=60,
         job_cut=0.25,
+        deck_id="zetatech_rig",
     ),
     RivalRunner(
         id="runner_juncture",
@@ -83,6 +92,7 @@ RUNNER_POOL = [
         rating=5,
         daily_cost=30,
         job_cut=0.10,
+        deck_id="burner_deck",
     ),
     RivalRunner(
         id="runner_convoy",
@@ -110,6 +120,7 @@ RUNNER_POOL = [
         rating=6,
         daily_cost=40,
         job_cut=0.15,
+        deck_id="cracked_cyberdeck",
     ),
     RivalRunner(
         id="runner_riptide",
@@ -137,6 +148,7 @@ RUNNER_POOL = [
         rating=9,
         daily_cost=70,
         job_cut=0.28,
+        deck_id="zetatech_rig",
     ),
     RivalRunner(
         id="runner_switchback",
@@ -164,6 +176,17 @@ if len(RUNNER_POOL) < RANDOM_RUNNER_COUNT:
     raise ValueError("RUNNER_POOL must hold at least RANDOM_RUNNER_COUNT candidates")
 
 RUNNERS_BY_ID = {runner.id: runner for runner in RIVAL_RUNNERS + RUNNER_POOL}
+
+# A deck_id has to name a real cyberdeck, or the support gate reads as "owns no deck"
+# for a runner the roster meant to be a hacker -- a typo that fails silently by making
+# somebody quietly unhireable. program_slots > 0 is what *makes* an item a deck (see
+# shops.Item), so it's the same check as "is this actually a deck".
+for _runner in RUNNERS_BY_ID.values():
+    if _runner.deck_id is None:
+        continue
+    _deck = ITEMS_BY_ID.get(_runner.deck_id)
+    if _deck is None or not _deck.program_slots:
+        raise ValueError(f"{_runner.id}: deck_id must name a shops item with program_slots")
 if len(RUNNERS_BY_ID) != len(RIVAL_RUNNERS) + len(RUNNER_POOL):
     raise ValueError("RivalRunner ids must be unique across RIVAL_RUNNERS and RUNNER_POOL")
 
@@ -219,14 +242,17 @@ def intro_cost(runner: RivalRunner) -> int:
 # --- remote support: what a hire does from the far end of a comm link ---
 #
 # A support hire is a *role*, not merely a posture. `CrewHire.on_site` says where they
-# are; this says whether "not there" is a job they can actually do. A solo standing
-# across the street contributes nothing, so hiring one as support is refused
+# are; whether "not there" is a job they can actually do comes down to one thing: do
+# they own a cyberdeck (RivalRunner.deck_id). A runner with no deck has nothing to work
+# the building's system *with*, so hiring them as support is refused
 # (Character.hire_for_job) rather than silently paying for nothing.
 #
-# Riggers are the other half of this and don't exist yet -- when they do, they're one
-# entry here and one archetype row, not a new system: a drone on overwatch is the same
-# "somebody else acts on their own turn" shape as a netrunner in the building's system.
-SUPPORT_ARCHETYPES = frozenset({"Netrunner"})
+# **Gated on the gear, not on the archetype.** An archetype is a label; a deck is the
+# thing that actually does the work. Reading the label would mean a netrunner who owns
+# nothing still counts and a solo holding a deck still doesn't, and neither is true.
+#
+# Riggers are the other half of this and don't exist yet -- when they land they gate the
+# same way, on owning drones rather than on being called a rigger.
 
 
 @dataclass(frozen=True)
@@ -294,14 +320,30 @@ if len(SUPPORT_PROGRAMS_BY_ID) != len(SUPPORT_PROGRAMS):
 
 
 def can_work_support(runner: RivalRunner) -> bool:
-    """Whether this runner can fill a support slot at all. A solo standing across the
-    street contributes nothing, so the posture is refused rather than sold."""
-    return runner.archetype in SUPPORT_ARCHETYPES
+    """Whether this runner can fill a support slot at all: do they own a deck. Someone
+    with nothing to hack the building with contributes nothing from across the street,
+    so the posture is refused rather than sold."""
+    return runner.deck_id is not None
+
+
+def support_deck(runner: RivalRunner):
+    """The shops.Item this runner works from, or None if they own no deck."""
+    return ITEMS_BY_ID[runner.deck_id] if runner.deck_id else None
 
 
 def support_programs_for(runner: RivalRunner) -> tuple[SupportProgram, ...]:
-    """The software this hire can actually run, by their rating. Empty for anyone whose
-    archetype can't work support at all, so one call answers both questions."""
-    if runner.archetype not in SUPPORT_ARCHETYPES:
+    """The software this hire can actually run.
+
+    Two gates, and the deck is both of them plus the skill. `min_rating` says whether
+    they're good enough to run a program at all; the deck's `program_slots` says how many
+    they can hold at once, cheapest-first -- so a Burner Deck runs one thing however good
+    its owner is, and the rig is what lets a top netrunner bring everything.
+
+    Empty for anyone with no deck, so one call answers "can they work support" and "what
+    with" together.
+    """
+    deck = support_deck(runner)
+    if deck is None:
         return ()
-    return tuple(p for p in SUPPORT_PROGRAMS if runner.rating >= p.min_rating)
+    affordable = tuple(p for p in SUPPORT_PROGRAMS if runner.rating >= p.min_rating)
+    return affordable[: deck.program_slots]
