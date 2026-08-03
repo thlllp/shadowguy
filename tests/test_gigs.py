@@ -11,7 +11,6 @@ from shadowguy.gigs import (
     GIG_CRIT_MULT,
     GIG_FAIL_REP_HIT,
     GIG_FAIL_STANDING_HIT,
-    GIG_MAX_APPROACHES,
     GIG_STANDING_GAIN,
     generate_gig,
     refresh_gigs,
@@ -38,12 +37,12 @@ def _a_location_with_characters(corp_map):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_gig_offers_between_one_and_max_approaches(corp_map, seed):
+def test_gig_offers_exactly_two_approaches(corp_map, seed):
     territory, location = _a_location_with_characters(corp_map)
     character = location.characters[0]
     scene = generate_gig(day=1, location=location, character=character, territory=territory, rng=random.Random(seed))
     approaches = scene.stages["start"].choices
-    assert 1 <= len(approaches) <= GIG_MAX_APPROACHES
+    assert len(approaches) == 2
 
 
 @pytest.mark.parametrize("seed", SEEDS)

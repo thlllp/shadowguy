@@ -8,10 +8,10 @@ Location's LocalCharacters, and its reward includes standing with that character
 trial is how the ripperdoc comes to know you.
 
 Content is generated from per-kind templates below rather than hand-authored per gig:
-a DATA hub's gigs read as netrunning, a bar's as social hustle. Each gig offers a
-subset of its kind's approaches, so which skills a given gig happens to want is part of
-the draw — the same "every build has a way through, but not always the same way" spirit
-as jobs, though gigs (being optional) aren't held to the cross-stat rule stages are.
+a DATA hub's gigs read as netrunning, a bar's as social hustle. Each kind offers exactly
+two approaches and a gig presents both, so which skills a gig wants is fixed by where it
+spawns — the same "every build has a way through, but not always the same way" spirit as
+jobs, though gigs (being optional) aren't held to the cross-stat rule stages are.
 
 Gigs are stored on the App as dict[location_id, Scene] (see app.ShadowguyApp), not on the
 Location: corpmap is a leaf that must not import scene, and gigs live alongside the map
@@ -57,8 +57,6 @@ GIG_FAIL_STANDING_HIT = -1
 GIG_FAIL_REP_HIT = -1
 GIG_CRIT_FAIL_DAMAGE = -3
 GIG_CRIT_FAIL_REP_HIT = -2
-# The most approaches one gig can offer; the real count is 1..this, drawn per gig.
-GIG_MAX_APPROACHES = 3
 # Per empty eligible location, the odds it spawns a gig on any given day tick (run-start
 # counts as one) -- so the map doesn't saturate with a gig at every location on day one,
 # and a completed gig's slot trickles back rather than refilling the very next day.
@@ -97,7 +95,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("hack", "Crack it open", "You're through the ICE clean and out again.", "The node bites back and you pull out with nothing."),
             _GigApproach("pattern_seeking", "Read the traffic", "The pattern gives it up before you even touch the system.", "The noise never resolves into anything you can use."),
-            _GigApproach("deception", "Social-engineer a login", "One convincing call and the door's open.", "The mark hangs up halfway through and flags the account."),
         ),
     ),
     LocationKind.LAB: _GigTemplate(
@@ -109,7 +106,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("fortitude", "Take the full dose", "Your liver files a complaint. Paid in full.", "You come out shaking and get docked for the mess."),
             _GigApproach("tinkering", "Calibrate the rig instead", "You fix their dosing gear and they pay for the save.", "You fry a sensor and eat the cost of it."),
-            _GigApproach("intuition", "Watch for the tell", "You clock the bad batch before it hits you.", "You miss the warning and wear the reaction."),
         ),
     ),
     LocationKind.DEPOT: _GigTemplate(
@@ -120,8 +116,7 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         ),
         approaches=(
             _GigApproach("lift", "Haul it yourself", "Dead weight, moved. {who} counts out the fee.", "You blow out something in your back doing it."),
-            _GigApproach("stealth", "Slip it past the cams", "Gone before the next camera sweep.", "A sweep catches you and you drop the crate running."),
-            _GigApproach("negotiations", "Talk the dockhands quiet", "A cut buys their blindness. Clean.", "They hold out for more and it turns ugly."),
+            _GigApproach("sturdy", "Shoulder it and keep your feet", "You ride the load down the gantry without a wobble and set it down clean. {who} counts out the fee.", "Your footing goes on the ramp and the crate goes over with you."),
         ),
     ),
     LocationKind.BAR: _GigTemplate(
@@ -131,7 +126,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "There's a read to be made across the bar at {place}, and {who} is buying the intel.",
         ),
         approaches=(
-            _GigApproach("intuition", "Read them cold", "You know their whole hand before they fold it.", "You misread the room and they clam up."),
             _GigApproach("deception", "Run a story on them", "They buy every word and pay for the privilege.", "The story falls apart and so does the tip."),
             _GigApproach("sleight_of_hand", "Lift what they won't miss", "In and out, they never feel it.", "A hand closes on your wrist mid-lift."),
         ),
@@ -143,7 +137,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A lot came into {place} hot, and {who} wants it valued quiet.",
         ),
         approaches=(
-            _GigApproach("negotiations", "Haggle the seller down", "You shave the price to nothing and take a cut.", "They walk, and {who} isn't pleased."),
             _GigApproach("intuition", "Spot the fake", "You call the forgery on sight.", "You vouch for a fake and it costs you."),
             _GigApproach("infer", "Trace the serials", "The numbers tell you exactly what it's worth.", "The trail goes cold before you can price it."),
         ),
@@ -157,7 +150,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("longarms", "Run it on the range", "Tight groups all day. {who} marks it sold.", "It jams on you and the test's a wash."),
             _GigApproach("tinkering", "Strip and inspect it", "You find the flaw they'd have missed.", "You reassemble it wrong and eat the part."),
-            _GigApproach("intimidation", "Lean on the supplier", "One look and they knock the price down.", "They call your bluff and it sours."),
         ),
     ),
     LocationKind.AUTO_DEALER: _GigTemplate(
@@ -168,7 +160,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         ),
         approaches=(
             _GigApproach("tinkering", "Get under the hood", "You sort the fault and {who} pays for the save.", "You miss the fault and it seizes on the lot."),
-            _GigApproach("deception", "Move it as clean", "The buyer never asks the right question.", "The buyer asks the right question."),
             _GigApproach("negotiations", "Close the sale", "You talk them into the upsell.", "They walk before the ink dries."),
         ),
     ),
@@ -179,9 +170,8 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A customer at {place} is faking a script and {who} wants them made.",
         ),
         approaches=(
-            _GigApproach("fortitude", "Test it on yourself", "Your blood eats it and {who} pays for the proof.", "You run a fever for two days over it."),
             _GigApproach("infer", "Read the chem tags", "The labels give the bad lot up.", "The tags don't add up and you guess wrong."),
-            _GigApproach("deception", "Draw out the faker", "You get the fake script in hand.", "They spook and bolt before you're sure."),
+            _GigApproach("running", "Run the faker down", "They bolt and you put them on the ground before the block ends. Script in hand.", "They hit the crowd and you lose them for good."),
         ),
     ),
     LocationKind.COMPUTER_STORE: _GigTemplate(
@@ -193,7 +183,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("hack", "Recover the drive", "You pull the data back from the dead.", "The drive stays dead and takes the fee with it."),
             _GigApproach("tinkering", "Reflow the board", "Clean solder, and it boots first try.", "You cook a trace and make it worse."),
-            _GigApproach("tinkering", "Swap the failed part", "Quick hands, part swapped, done.", "You strip the socket doing it."),
         ),
     ),
     LocationKind.HOSPITAL: _GigTemplate(
@@ -205,7 +194,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("forgery", "Fake the discharge papers", "Clean paperwork, and they're a ghost by morning.", "A clerk flags the forgery and it lands on you."),
             _GigApproach("infer", "Read the chart for the tell", "The chart tells you exactly what they're hiding.", "You misread the labs and vouch for the wrong thing."),
-            _GigApproach("negotiations", "Grease the admissions desk", "A quiet envelope and the record never existed.", "They take the money and talk anyway."),
         ),
     ),
     LocationKind.REAL_ESTATE: _GigTemplate(
@@ -217,7 +205,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
         approaches=(
             _GigApproach("intuition", "Read what they really want", "You find the angle and close it clean.", "You misjudge them and the deal walks."),
             _GigApproach("intimidation", "Make staying sound expensive", "One quiet word and the unit's empty by morning.", "They dig in and lawyer up on you."),
-            _GigApproach("deception", "Stage the place to lie", "Fresh paint over the damp and they never look twice.", "The buyer spots the cover-up and bolts."),
         ),
     ),
     LocationKind.CYBER_CLINIC: _GigTemplate(
@@ -227,7 +214,6 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
             "A shipment of grey-market chrome came into {place} hot, and {who} needs it checked before it's grafted into anyone.",
         ),
         approaches=(
-            _GigApproach("infer", "Read the diagnostics", "The rig's telling you exactly what's wrong with it.", "The readout lies to you and you guess wrong."),
             _GigApproach("tinkering", "Rework the install by hand", "Steady hands, clean seat, done.", "You nick a nerve line and the client feels it."),
             _GigApproach("fortitude", "Ride out the rejection yourself", "Your body burns through it and {who} pays for the test.", "You spend the next day sweating it out."),
         ),
@@ -237,8 +223,8 @@ _GIG_TEMPLATES: dict[LocationKind, _GigTemplate] = {
 if set(_GIG_TEMPLATES) != set(GENERATED_KINDS):
     raise ValueError("_GIG_TEMPLATES must have exactly one entry per generated LocationKind")
 for _template in _GIG_TEMPLATES.values():
-    if not _template.approaches:
-        raise ValueError("a gig template has no approaches")
+    if len(_template.approaches) != 2:
+        raise ValueError("each gig template must offer exactly two approaches")
     for _approach in _template.approaches:
         skill_for(_approach.skill)  # unknown skill id: fail at import, not mid-gig
 
@@ -286,8 +272,8 @@ def generate_gig(
     rng: random.Random | None = None,
 ) -> Scene:
     """A single-stage gig at `location`, owned by `character`, whose reward moves that
-    character's standing. Offers a random 1..GIG_MAX_APPROACHES subset of the kind's
-    approaches, so two gigs of the same kind rarely want the same skill."""
+    character's standing. Offers both of the kind's two approaches, so which skills a gig
+    wants is fixed by its location kind."""
     rng = resolve_rng(rng)
     template = _GIG_TEMPLATES[location.kind]
     tier = _gig_tier(day)
@@ -298,8 +284,6 @@ def generate_gig(
     prompt = rng.choice(template.prompts).format(
         who=character.name, role=character.role, place=location.name
     )
-    count = rng.randint(1, min(GIG_MAX_APPROACHES, len(template.approaches)))
-    approaches = rng.sample(template.approaches, count)
     # Approach flavor can name the character ({who}); the prompt already did the
     # placeholders, but a success/failure line might reference them too.
     choices = [
@@ -313,7 +297,7 @@ def generate_gig(
             difficulty,
             cash,
         )
-        for a in approaches
+        for a in template.approaches
     ]
 
     return Scene(
