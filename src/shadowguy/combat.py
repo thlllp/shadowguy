@@ -64,6 +64,7 @@ from shadowguy.shops import (
     Consumable,
     Item,
     Slot,
+    effective_item,
 )
 from shadowguy.skills import skill_for, skill_value
 
@@ -609,7 +610,7 @@ def equipped_weapons(character: Character) -> list[Item]:
     attacks you get to choose between.
     """
     weapons = [
-        ITEMS_BY_ID[entry.item_id]
+        effective_item(entry)
         for entry in character.inventory
         if entry.equipped and ITEMS_BY_ID[entry.item_id].slot is Slot.WEAPON
     ]

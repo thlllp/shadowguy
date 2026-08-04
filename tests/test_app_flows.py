@@ -26,6 +26,7 @@ from shadowguy.character import (
 from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
+    WORKSHOP_BUILD_COST,
     Location,
     LocationKind,
     TerritoryModifier,
@@ -91,6 +92,7 @@ from shadowguy.screens.info_screens import (
     ContactsScreen,
     CorpWebsiteScreen,
     CyberdeckScreen,
+    InventoryScreen,
     MessagesScreen,
     PhoneScreen,
     SkillsScreen,
@@ -103,14 +105,25 @@ from shadowguy.screens.shop_screens import (
     GangDenScreen,
     HospitalScreen,
     JunkyardScreen,
+    SafehouseScreen,
     ShopScreen,
 )
-from shadowguy.shops import HOSPITAL_STAY_COST, SCAVENGE_HOURS_COST, SCAVENGE_MATERIALS
+from shadowguy.shops import (
+    CATALOG,
+    CRAFT_RECIPES,
+    HOSPITAL_STAY_COST,
+    ITEMS_BY_ID,
+    MOD_CATALOG,
+    SCAVENGE_HOURS_COST,
+    SCAVENGE_MATERIALS,
+    Slot,
+    buy_item,
+)
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.geometry import Offset
-from textual.widgets import Collapsible, ListView, Static
+from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from helpers import ForcedChance, crew_stats_for
 
@@ -1695,6 +1708,118 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
             assert app.character.elapsed_hours == hours_before + SCAVENGE_HOURS_COST
             assert app.character.inventory
             assert all(entry.item_id in SCAVENGE_MATERIALS for entry in app.character.inventory)
+
+    run(body())
+
+
+def test_workshop_builds_installs_a_mod_and_crafts_a_consumable():
+    """SafehouseScreen end to end: build a workshop, install a Mod on an owned weapon
+    (rolls Armorer), and craft a Consumable from scavenged materials (rolls Chemistry)
+    -- exercising shops.effective_item through the real UI, not just its unit math."""
+
+    class AlwaysSix(random.Random):
+        def randint(self, a, b):
+            return 6
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            app.rng = AlwaysSix()
+            character = app.character
+            character.logic = 20
+            character.cash = 10_000
+            weapon = next(item for items in CATALOG.values() for item in items if item.slot is Slot.WEAPON)
+            buy_item(character, weapon)
+            weapon_mod = next(m for m in MOD_CATALOG if m.applies_to == frozenset({Slot.WEAPON}))
+            craftable_id = next(iter(CRAFT_RECIPES))
+            for materials in (weapon_mod.materials, CRAFT_RECIPES[craftable_id]):
+                for material_id, count in materials.items():
+                    for _ in range(count):
+                        character.inventory.append(InventoryItem(material_id, equipped=False))
+            cash_before_workshop = character.cash
+
+            location = Location(
+                id="test_safehouse", name="Test Safehouse", kind=LocationKind.SAFEHOUSE, workshop_built=False
+            )
+            app.push_screen(SafehouseScreen(location))
+            await pilot.pause()
+            await pilot.click("#build_workshop")
+            await pilot.pause()
+            assert location.workshop_built is True
+            assert character.cash == cash_before_workshop - WORKSHOP_BUILD_COST
+
+            actions = app.screen.query_one("#workshop_actions", ListView)
+            mod_item_id = next(item.id for item in actions.children if item.id and item.id.startswith("mod_"))
+            await pilot.click(f"#{mod_item_id}")
+            await pilot.pause()
+            assert character.inventory[0].mods == [weapon_mod.id]
+
+            await pilot.click(f"#craft_{craftable_id}")
+            await pilot.pause()
+            assert craftable_id in character.consumables
+
+    run(body())
+
+
+def test_workshop_declined_mod_install_spends_no_time():
+    """A precondition failure (here: no materials on hand) must not cost the player
+    WORKSHOP_HOURS_COST -- the row is still listed and clickable (SafehouseScreen only
+    filters slot mismatch/duplicate/full-slots, not missing materials), so clicking it
+    is a real path a player can hit, not just a theoretical one."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            character = app.character
+            character.cash = 10_000
+            weapon = next(item for items in CATALOG.values() for item in items if item.slot is Slot.WEAPON)
+            buy_item(character, weapon)  # no materials granted
+
+            location = Location(
+                id="test_safehouse", name="Test Safehouse", kind=LocationKind.SAFEHOUSE, workshop_built=True
+            )
+            app.push_screen(SafehouseScreen(location))
+            await pilot.pause()
+
+            actions = app.screen.query_one("#workshop_actions", ListView)
+            mod_item_id = next(item.id for item in actions.children if item.id and item.id.startswith("mod_"))
+            hours_before = character.elapsed_hours
+            await pilot.click(f"#{mod_item_id}")
+            await pilot.pause()
+
+            assert character.inventory[0].mods == []
+            assert character.elapsed_hours == hours_before
+
+    run(body())
+
+
+def test_inventory_screen_shows_a_mods_damage_bonus():
+    """The workshop's whole point, seen from the Inventory screen: a mod attached at
+    the bench must change what the player sees they're carrying, not just what
+    combat actually rolls."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            character = app.character
+            character.cash = 10_000
+            weapon = ITEMS_BY_ID["combat_knife"]
+            buy_item(character, weapon)
+            weapon_mod = next(m for m in MOD_CATALOG if m.applies_to == frozenset({Slot.WEAPON}))
+            character.inventory[0].mods = [weapon_mod.id]
+
+            app.push_screen(InventoryScreen())
+            await pilot.pause()
+
+            row = app.screen.query_one("#toggle_0", ListItem)
+            label = row.query_one(Static).content
+            assert f"{weapon.damage + weapon_mod.damage} dmg" in label
 
     run(body())
 

@@ -4,9 +4,11 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 
 from shadowguy.character import HOURS_PER_DAY, Character
 from shadowguy.corpmap import (
+    WORKSHOP_BUILD_COST,
     Location,
     LocationKind,
     add_safehouse,
+    build_workshop,
     has_home,
     safehouse_price,
 )
@@ -33,16 +35,24 @@ from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
+    CRAFT_RECIPES,
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
+    MOD_CATALOG,
+    MOD_SLOTS_PER_ITEM,
+    MODS_BY_ID,
     PROGRAM_CATALOG,
     SCAVENGE_HOURS_COST,
+    WORKSHOP_HOURS_COST,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
     buy_program,
+    craft_consumable,
     hospital_stay,
+    install_mod,
+    remove_mod,
     scavenge,
     sell_item,
     sell_price,
@@ -430,6 +440,13 @@ class BarScreen(BackScreen):
 
 
 class SafehouseScreen(BackScreen):
+    """The runner's own apartment or a bought safehouse (corpmap.PLAYER_OWNED_KINDS).
+    Nothing to do here until it has a workshop (Location.workshop_built) — the
+    apartment starts with one, a safehouse is built here for WORKSHOP_BUILD_COST.
+    Once built: install/remove a Mod on an owned weapon or wearable (shops.MOD_CATALOG,
+    rolls Armorer), or craft a Consumable from scavenged materials (shops.CRAFT_RECIPES,
+    rolls Chemistry)."""
+
     BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
@@ -439,9 +456,81 @@ class SafehouseScreen(BackScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Static(self.location.name)
-        yield Static("Your place. Nothing to do here yet.")
+        yield Static(self.location.name, id="workshop_info")
+        yield ListView(id="workshop_actions")
         yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        items: list[ListItem] = []
+        if not self.location.workshop_built:
+            label = f"Build a Workshop — {WORKSHOP_BUILD_COST}eb"
+            if character.cash < WORKSHOP_BUILD_COST:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id="build_workshop"))
+            await _replace_items(self.query_one("#workshop_actions", ListView), items)
+            return
+
+        for index, entry in enumerate(character.inventory):
+            item = ITEMS_BY_ID[entry.item_id]
+            for mod in MOD_CATALOG:
+                if item.slot not in mod.applies_to or mod.id in entry.mods:
+                    continue
+                if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
+                    continue
+                label = f"Install {mod.name} on {item.name} — {mod.price}eb"
+                if character.cash < mod.price:
+                    label += " — can't afford"
+                items.append(ListItem(Static(label), id=f"mod_{index}_{mod.id}"))
+            for mod_id in entry.mods:
+                label = f"Remove {MODS_BY_ID[mod_id].name} from {item.name}"
+                items.append(ListItem(Static(label), id=f"unmod_{index}_{mod_id}"))
+        for consumable_id in CRAFT_RECIPES:
+            consumable = CONSUMABLES_BY_ID[consumable_id]
+            price = round(consumable.price * 0.5)
+            label = f"Craft {consumable.name} — {price}eb"
+            if character.cash < price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"craft_{consumable_id}"))
+        if not items:
+            items.append(ListItem(Static("Nothing to work on."), id="none"))
+        await _replace_items(self.query_one("#workshop_actions", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        character = self.app.character
+        if item_id == "build_workshop":
+            if character.cash < WORKSHOP_BUILD_COST:
+                return
+            character.cash -= WORKSHOP_BUILD_COST
+            build_workshop(self.location)
+            self.notify("Workshop built.")
+        elif item_id.startswith("mod_"):
+            _, index, mod_id = item_id.split("_", 2)
+            attempted, message = install_mod(character, int(index), mod_id, self.app.rng)
+            if attempted:
+                self.app.spend_time(WORKSHOP_HOURS_COST)
+            self.notify(message)
+        elif item_id.startswith("unmod_"):
+            _, index, mod_id = item_id.split("_", 2)
+            message = remove_mod(character, int(index), mod_id)
+            self.notify(message)
+        elif item_id.startswith("craft_"):
+            consumable_id = item_id.removeprefix("craft_")
+            attempted, message = craft_consumable(character, consumable_id, self.app.rng)
+            if attempted:
+                self.app.spend_time(WORKSHOP_HOURS_COST)
+            self.notify(message)
+        else:
+            return
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()
 
 
 class RealEstateScreen(BackScreen):

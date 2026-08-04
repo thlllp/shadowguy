@@ -4,7 +4,10 @@ from shadowguy.character import Character
 from shadowguy.checks import CRITICAL_MARGIN, pool_for_difficulty
 from shadowguy.shops import (
     CATALOG,
+    CRAFT_RECIPES,
     ITEMS_BY_ID,
+    MOD_CATALOG,
+    MOD_SLOTS_PER_ITEM,
     PAWN_SELL_FRACTION,
     PROGRAMS_BY_ID,
     SCAVENGE_CRITICAL_FINDS,
@@ -13,12 +16,19 @@ from shadowguy.shops import (
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
     STOLEN_DATASHARD_ID,
+    WORKSHOP_ARMORER_DIFFICULTY,
+    WORKSHOP_CHEMISTRY_DIFFICULTY,
+    InventoryItem,
     Slot,
     bonus_text,
     buy_consumable,
     buy_item,
     buy_price,
     buy_program,
+    craft_consumable,
+    effective_item,
+    install_mod,
+    remove_mod,
     scavenge,
     sell_item,
     sell_price,
@@ -239,3 +249,195 @@ def test_scavenge_on_critical_success_adds_distinct_materials():
 
 def test_scavenge_never_grants_the_matrix_only_datashard():
     assert STOLEN_DATASHARD_ID not in SCAVENGE_MATERIALS
+
+
+# --- Mods / effective_item / install_mod / remove_mod / craft_consumable ---
+
+
+def test_mod_catalog_weapon_mods_carry_no_defense_and_wearable_mods_carry_no_damage():
+    for mod in MOD_CATALOG:
+        if mod.applies_to == frozenset({Slot.WEAPON}):
+            assert mod.defense == 0
+        else:
+            assert mod.damage == 0
+
+
+WEAPON_MOD = next(m for m in MOD_CATALOG if m.applies_to == frozenset({Slot.WEAPON}))
+WEARABLE_MOD = next(m for m in MOD_CATALOG if m.applies_to != frozenset({Slot.WEAPON}))
+
+
+def _weapon_item():
+    return next(item for items in CATALOG.values() for item in items if item.slot is Slot.WEAPON)
+
+
+def _wearable_item():
+    return next(item for items in CATALOG.values() for item in items if item.slot is Slot.TORSO)
+
+
+def _grant_materials(character: Character, materials: dict[str, int]) -> None:
+    for material_id, count in materials.items():
+        for _ in range(count):
+            character.inventory.append(InventoryItem(material_id, equipped=False))
+
+
+def _char_with_weapon(cash: int = 100_000) -> Character:
+    c = Character(name="t", cash=cash)
+    weapon = _weapon_item()
+    buy_item(c, weapon)
+    return c
+
+
+def test_effective_item_returns_the_base_item_unchanged_when_no_mods():
+    entry = InventoryItem("combat_knife")
+    assert effective_item(entry) is ITEMS_BY_ID["combat_knife"]
+
+
+def test_effective_item_folds_a_weapon_mods_damage():
+    entry = InventoryItem("combat_knife", mods=[WEAPON_MOD.id])
+    base = ITEMS_BY_ID["combat_knife"]
+    assert effective_item(entry).damage == base.damage + WEAPON_MOD.damage
+
+
+def test_effective_item_folds_a_wearable_mods_defense():
+    entry = InventoryItem("leather_jacket", mods=[WEARABLE_MOD.id])
+    base = ITEMS_BY_ID["leather_jacket"]
+    assert effective_item(entry).defense == base.defense + WEARABLE_MOD.defense
+
+
+def test_install_mod_refuses_when_slot_does_not_match():
+    c = Character(name="t", cash=100_000)
+    buy_item(c, _wearable_item())
+    _grant_materials(c, WEAPON_MOD.materials)
+    before_cash = c.cash
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
+    assert attempted is False
+    assert "doesn't fit" in message
+    assert c.inventory[0].mods == []
+    assert c.cash == before_cash
+
+
+def test_install_mod_refuses_without_enough_materials():
+    c = _char_with_weapon()
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
+    assert attempted is False
+    assert "materials" in message.lower()
+    assert c.inventory[0].mods == []
+
+
+def test_install_mod_on_failed_check_spends_nothing():
+    c = _char_with_weapon()
+    _grant_materials(c, WEAPON_MOD.materials)
+    before_cash = c.cash
+    before_materials = len(c.inventory)
+    c.skill_ranks["armorer"] = 0
+    c.logic = 0
+    c.perception = 0
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysOne())
+    assert attempted is True
+    assert c.inventory[0].mods == []
+    assert c.cash == before_cash
+    assert len(c.inventory) == before_materials
+    assert "nothing spent" in message
+
+
+def test_install_mod_on_success_spends_cash_and_materials_and_attaches_mod():
+    c = _char_with_weapon()
+    _grant_materials(c, WEAPON_MOD.materials)
+    opposing_pool = pool_for_difficulty(WORKSHOP_ARMORER_DIFFICULTY)
+    c.skill_ranks["armorer"] = 0
+    c.logic = opposing_pool + 1
+    c.perception = opposing_pool + 1
+    before_cash = c.cash
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
+    assert attempted is True
+    assert c.inventory[0].mods == [WEAPON_MOD.id]
+    assert c.cash == before_cash - WEAPON_MOD.price
+    assert len(c.inventory) == 1  # the weapon only -- materials consumed
+    assert WEAPON_MOD.name in message
+
+
+def test_install_mod_refuses_a_duplicate():
+    c = _char_with_weapon()
+    c.inventory[0].mods = [WEAPON_MOD.id]
+    _grant_materials(c, WEAPON_MOD.materials)
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
+    assert attempted is False
+    assert "already has" in message
+    assert c.inventory[0].mods == [WEAPON_MOD.id]
+
+
+def test_install_mod_refuses_when_no_free_slots():
+    c = _char_with_weapon()
+    c.inventory[0].mods = ["placeholder"] * MOD_SLOTS_PER_ITEM
+    _grant_materials(c, WEAPON_MOD.materials)
+    attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
+    assert attempted is False
+    assert "no free mod slots" in message
+
+
+def test_remove_mod_is_free_and_detaches_it():
+    c = _char_with_weapon()
+    c.inventory[0].mods = [WEAPON_MOD.id]
+    before_cash = c.cash
+    message = remove_mod(c, 0, WEAPON_MOD.id)
+    assert c.inventory[0].mods == []
+    assert c.cash == before_cash
+    assert WEAPON_MOD.name in message
+
+
+def test_remove_mod_refuses_when_not_installed():
+    c = _char_with_weapon()
+    message = remove_mod(c, 0, WEAPON_MOD.id)
+    assert "not installed" in message.lower()
+
+
+CRAFTABLE_ID = next(iter(CRAFT_RECIPES))
+
+
+def test_craft_consumable_refuses_an_unknown_recipe():
+    c = Character(name="t", cash=100_000)
+    attempted, message = craft_consumable(c, "health_kit", rng=AlwaysSix())
+    assert attempted is False
+    assert "can't craft" in message.lower()
+    assert c.consumables == []
+
+
+def test_craft_consumable_refuses_without_enough_materials():
+    c = Character(name="t", cash=100_000)
+    attempted, message = craft_consumable(c, CRAFTABLE_ID, rng=AlwaysSix())
+    assert attempted is False
+    assert "materials" in message.lower()
+    assert c.consumables == []
+
+
+def test_craft_consumable_on_failed_check_spends_nothing():
+    c = Character(name="t", cash=100_000)
+    _grant_materials(c, CRAFT_RECIPES[CRAFTABLE_ID])
+    c.skill_ranks["chemistry"] = 0
+    c.logic = 0
+    c.perception = 0
+    before_cash = c.cash
+    before_materials = len(c.inventory)
+    attempted, message = craft_consumable(c, CRAFTABLE_ID, rng=AlwaysOne())
+    assert attempted is True
+    assert c.consumables == []
+    assert c.cash == before_cash
+    assert len(c.inventory) == before_materials
+    assert "nothing spent" in message
+
+
+def test_craft_consumable_on_success_spends_cash_and_materials_and_appends_it():
+    c = Character(name="t", cash=100_000)
+    _grant_materials(c, CRAFT_RECIPES[CRAFTABLE_ID])
+    opposing_pool = pool_for_difficulty(WORKSHOP_CHEMISTRY_DIFFICULTY)
+    c.skill_ranks["chemistry"] = 0
+    c.logic = opposing_pool + 1
+    c.perception = opposing_pool + 1
+    before_cash = c.cash
+    attempted, message = craft_consumable(c, CRAFTABLE_ID, rng=AlwaysSix())
+    assert attempted is True
+    assert c.consumables == [CRAFTABLE_ID]
+    assert c.cash < before_cash
+    materials_left = sum(1 for e in c.inventory if e.item_id in CRAFT_RECIPES[CRAFTABLE_ID])
+    assert materials_left == 0
+    assert CONSUMABLES_BY_ID[CRAFTABLE_ID].name in message

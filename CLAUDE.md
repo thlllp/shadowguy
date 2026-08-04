@@ -234,6 +234,7 @@ Leaf modules, and why each has to stay one:
 | 56 | `Character.gear_budget`/`creation_gear` — creation skill points convert to gear-only eb (`GEAR_EB_PER_POINT`), `archetypes.Archetype.gear` ships a loadout, and every preset's rank list changed to free the point it costs |
 | 55 | `runners.RivalRunner.deck_id` — remote support is gated on **owning a cyberdeck**, not on the `Netrunner` archetype, and the deck's `program_slots` caps how many support programs a hire carries. `RivalRunner` instances are pickled directly (`ShadowguyApp.runners`), so a pre-v55 roster lacks the attribute entirely |
 | 54 | `combat.Enemy` rewritten onto the player's stat sheet: the six `CORE_STATS` + `ranks`/`weapon`/`armor` **replacing** the hand-set `health`/`attack`/`defense`/`damage`/`toughness`/`reach`/`stun_damage`, which are now derived properties. A pre-v54 pickled `Enemy` (reachable from an accepted job's `Encounter`/`TacticalStage` and from `BurglaryStage.guard`) carries the old fields as instance attributes that **shadow the properties**. Roster also grew 5 → 11 and `ENEMY_TIERS` was re-pooled |
+| 57 | the workshop system: `corpmap.Location.workshop_built` (free on the injected apartment, built at a safehouse for `WORKSHOP_BUILD_COST`) and `shops.InventoryItem.mods` (per-instance mod ids, folded into combat/inventory stats by `shops.effective_item`) |
 
 ### Verifying changes
 

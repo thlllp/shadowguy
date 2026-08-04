@@ -17,7 +17,7 @@ from shadowguy.inventory import (
 )
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
 from shadowguy.runners import RivalRunner
-from shadowguy.shops import CONSUMABLES_BY_ID, ITEMS_BY_ID, PROGRAMS_BY_ID, bonus_text
+from shadowguy.shops import CONSUMABLES_BY_ID, ITEMS_BY_ID, PROGRAMS_BY_ID, bonus_text, effective_item
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
@@ -56,7 +56,7 @@ class InventoryScreen(BackScreen):
     async def _refresh(self) -> None:
         items = []
         for index, entry in enumerate(self.app.character.inventory):
-            item = ITEMS_BY_ID[entry.item_id]
+            item = effective_item(entry)
             state = "Equipped" if entry.equipped else "Stowed"
             parts = [p for p in (bonus_text(item), item.slot.value if item.slot else None) if p]
             label = f"{state} — {item.name}" + (f" ({', '.join(parts)})" if parts else "")

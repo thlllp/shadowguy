@@ -127,6 +127,14 @@ def test_player_start_has_apartment(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
+def test_player_start_apartment_has_a_workshop_already_built(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    start = corp_map.territories[corp_map.player_start_id]
+    apartment = next(loc for loc in start.locations if loc.kind == LocationKind.APARTMENT)
+    assert apartment.workshop_built is True
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_each_gang_has_exactly_one_den_on_its_own_turf(seed):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
     dens = {}

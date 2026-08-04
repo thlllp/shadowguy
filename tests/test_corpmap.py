@@ -6,7 +6,30 @@ test_corpmap_gen.py.
 
 import random
 
-from shadowguy.corpmap import MODIFIER_MAX, Territory, TerritoryModifier, claim_territory
+from shadowguy.corpmap import (
+    MODIFIER_MAX,
+    LocationKind,
+    Territory,
+    TerritoryModifier,
+    add_safehouse,
+    build_workshop,
+    claim_territory,
+)
+
+
+def test_add_safehouse_starts_without_a_workshop():
+    territory = Territory(id="t1", name="Testville", x=0, y=0)
+    add_safehouse(territory)
+    safehouse = next(loc for loc in territory.locations if loc.kind == LocationKind.SAFEHOUSE)
+    assert safehouse.workshop_built is False
+
+
+def test_build_workshop_sets_the_flag():
+    territory = Territory(id="t1", name="Testville", x=0, y=0)
+    add_safehouse(territory)
+    safehouse = next(loc for loc in territory.locations if loc.kind == LocationKind.SAFEHOUSE)
+    build_workshop(safehouse)
+    assert safehouse.workshop_built is True
 
 
 def test_claim_territory_flips_owner_and_reseeds_modifiers():
