@@ -210,6 +210,12 @@ class Location:
     # (see corp_turn.build_efficiency_upgrade) — each one adds +1 RP/day to every
     # scientist working this facility. Starts at 0.
     efficiency_upgrades: int | None = None
+    # PLAYER_OWNED_KINDS only (APARTMENT/SAFEHOUSE): whether this place has a
+    # workshop (see shops.install_mod/craft_consumable, screens.SafehouseScreen).
+    # None everywhere else, same convention as research_tier. The apartment is
+    # injected already True (corpmap_gen.py); add_safehouse below starts a new
+    # safehouse at False, built later via build_workshop.
+    workshop_built: bool | None = None
 
 
 @dataclass
@@ -300,8 +306,26 @@ def add_safehouse(territory: Territory) -> None:
     apartment (no owner NPC, never generated). Idempotent guard on the caller: a
     district that already has_home is never offered for sale, so this appends once."""
     territory.locations.append(
-        Location(id=f"{territory.id}_safehouse", name="Your Safehouse", kind=LocationKind.SAFEHOUSE)
+        Location(
+            id=f"{territory.id}_safehouse",
+            name="Your Safehouse",
+            kind=LocationKind.SAFEHOUSE,
+            workshop_built=False,
+        )
     )
+
+
+# One-time cash cost to build a workshop at a safehouse — flat, unlike the safehouse's
+# own price, since a workshop doesn't get more useful in a nicer district. The apartment
+# starts with one already built (corpmap_gen.py); this is what SafehouseScreen spends on
+# a safehouse that doesn't have one yet.
+WORKSHOP_BUILD_COST = 400
+
+
+def build_workshop(location: Location) -> None:
+    """Flip on a safehouse's workshop. Caller (SafehouseScreen) is the cash gate,
+    same division of labor as add_safehouse/RealEstateScreen."""
+    location.workshop_built = True
 
 
 def claim_territory(territory: Territory, faction_id: str, rng: random.Random) -> None:

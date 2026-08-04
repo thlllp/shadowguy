@@ -19,6 +19,7 @@ from shadowguy.combat import (
     attack_verbs,
     crew_stats,
     drop_for_result,
+    equipped_weapons,
     player_defense,
     player_soak,
     resolve_hit,
@@ -29,7 +30,7 @@ from shadowguy.combat import (
 )
 from shadowguy.cybernetics import CyberSlot, install_cyberware
 from shadowguy.runners import RIVAL_RUNNERS
-from shadowguy.shops import ITEMS_BY_ID, MIN_WEAPON_DAMAGE, Slot
+from shadowguy.shops import ITEMS_BY_ID, MIN_WEAPON_DAMAGE, MOD_CATALOG, Slot, buy_item
 from shadowguy.skills import skill_value
 
 import pytest
@@ -66,6 +67,26 @@ def test_attack_verbs_cover_every_weapon_skill_in_the_catalog():
     weapons = [item for item in ITEMS_BY_ID.values() if item.slot is Slot.WEAPON]
     for weapon in (*weapons, UNARMED):
         assert attack_verbs(weapon) is not _DEFAULT_ATTACK_VERBS, weapon.skill
+
+
+# --- equipped_weapons ---
+
+
+def test_equipped_weapons_falls_back_to_unarmed():
+    assert equipped_weapons(Character(name="t")) == [UNARMED]
+
+
+def test_equipped_weapons_reflects_an_installed_mods_damage():
+    """The workshop's whole point: a mod attached to a specific InventoryItem must
+    change what combat actually rolls, not just what the item sheet shows."""
+    weapon_mod = next(m for m in MOD_CATALOG if m.applies_to == frozenset({Slot.WEAPON}))
+    weapon = ITEMS_BY_ID["combat_knife"]
+    character = Character(name="t", cash=100_000)
+    buy_item(character, weapon)
+    character.inventory[0].mods = [weapon_mod.id]
+    equipped = equipped_weapons(character)
+    assert len(equipped) == 1
+    assert equipped[0].damage == weapon.damage + weapon_mod.damage
 
 
 def test_attack_verbs_read_differently_for_every_weapon_category():

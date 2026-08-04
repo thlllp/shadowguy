@@ -674,7 +674,15 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         )
 
     start = territories[start_id]
-    start.locations.insert(0, Location(id=f"{start.id}_apartment", name="Your Apartment", kind=LocationKind.APARTMENT))
+    start.locations.insert(
+        0,
+        Location(
+            id=f"{start.id}_apartment",
+            name="Your Apartment",
+            kind=LocationKind.APARTMENT,
+            workshop_built=True,
+        ),
+    )
 
     for tid in plan.hospital_ids:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))

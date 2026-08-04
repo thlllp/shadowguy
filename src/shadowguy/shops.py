@@ -15,7 +15,7 @@ every SHOP_KINDS member to cover that.
 
 import random
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -186,6 +186,10 @@ class InventoryItem:
     # when the item is a deck — see Item.program_slots). A player can own
     # several decks; each carries its own loadout.
     installed_programs: list[str] = field(default_factory=list)
+    # Mod ids (MODS_BY_ID) installed on this specific weapon/wearable instance —
+    # same per-instance shape as installed_programs above, capped at
+    # MOD_SLOTS_PER_ITEM. See install_mod/remove_mod and effective_item.
+    mods: list[str] = field(default_factory=list)
 
 
 def bonus_text(item: Item) -> str:
@@ -452,6 +456,80 @@ SCAVENGE_MATERIALS = tuple(row[0] for row in _SCAVENGE_ROWS)
 
 ITEMS_BY_ID = {item.id: item for items in (*CATALOG.values(), LOOT_ITEMS) for item in items}
 
+
+@dataclass(frozen=True)
+class Mod:
+    """A workshop upgrade for one already-owned weapon or wearable — installed onto a
+    specific InventoryItem (InventoryItem.mods), not bought into the general catalog.
+    Unlike Item, a Mod is never itself equipped; effective_item folds its deltas into
+    the base Item it's attached to. damage is only meaningful when applies_to is
+    {Slot.WEAPON}; defense only when applies_to is WEARABLE_SLOTS — Item enforces that
+    same split, so Mod does too rather than allowing a nonsensical combination."""
+
+    id: str
+    name: str
+    price: int
+    # Scavenged material id (SCAVENGE_MATERIALS) -> how many the workshop consumes.
+    materials: dict[str, int]
+    applies_to: frozenset[Slot]
+    damage: int = 0
+    defense: int = 0
+
+
+# How many mods a single weapon or wearable can carry at once, regardless of tier —
+# a flat cap (like SLOT_CAPACITY) rather than a per-item field, since nothing yet
+# needs a weapon that takes more mods than another.
+MOD_SLOTS_PER_ITEM = 2
+
+MOD_CATALOG: list[Mod] = [
+    Mod("sharpened_edge", "Sharpened Edge", 60, {"screws": 1}, frozenset({Slot.WEAPON}), damage=1),
+    Mod(
+        "hollow_points",
+        "Hollow Points",
+        120,
+        {"wire": 1, "screws": 1},
+        frozenset({Slot.WEAPON}),
+        damage=2,
+    ),
+    Mod("scrap_plating", "Scrap Plating", 80, {"armor_plating": 1}, WEARABLE_SLOTS, defense=1),
+    Mod(
+        "padded_lining",
+        "Padded Lining",
+        150,
+        {"armor_plating": 1, "rubber": 1},
+        WEARABLE_SLOTS,
+        defense=2,
+    ),
+]
+MODS_BY_ID = {mod.id: mod for mod in MOD_CATALOG}
+
+for _mod in MODS_BY_ID.values():
+    if _mod.applies_to == frozenset({Slot.WEAPON}) and _mod.defense:
+        raise ValueError(f"{_mod.id}: a weapon mod can't carry defense")
+    if _mod.applies_to == WEARABLE_SLOTS and _mod.damage:
+        raise ValueError(f"{_mod.id}: a wearable mod can't carry damage")
+    for _material_id in _mod.materials:
+        if _material_id not in SCAVENGE_MATERIALS:
+            raise ValueError(f"{_mod.id}: {_material_id!r} is not a scavenged material")
+
+
+def effective_item(entry: InventoryItem) -> Item:
+    """The Item entry.item_id resolves to, with any installed mods folded in — the one
+    place a mod's damage/defense actually takes effect, so every existing consumer of
+    equipped_items (inventory.py's bonus aggregation, combat.equipped_weapons) sees a
+    modded weapon/wearable's real stats without needing to know mods exist."""
+    item = ITEMS_BY_ID[entry.item_id]
+    if not entry.mods:
+        return item
+    damage = item.damage
+    defense = item.defense
+    for mod_id in entry.mods:
+        mod = MODS_BY_ID[mod_id]
+        damage += mod.damage
+        defense += mod.defense
+    return replace(item, damage=damage, defense=defense)
+
+
 # Weapon-profile bounds. Shared with combat.py (via import) so the hand-built UNARMED
 # stays in sync with the catalog — any edit to these constants updates both sides.
 MIN_WEAPON_CONCEALMENT = 1
@@ -703,8 +781,10 @@ def buy_program(character: "Character", program_id: str, standing: int = 0) -> s
 def equipped_items(inventory: list[InventoryItem]) -> Iterator[Item]:
     """Every Item currently equipped -- the single resolution path from an
     InventoryItem's bare item_id to the real catalog object, shared by shops.py's
-    own slot-capacity check and inventory.py's equip-state functions."""
-    return (ITEMS_BY_ID[entry.item_id] for entry in inventory if entry.equipped)
+    own slot-capacity check and inventory.py's equip-state functions. Goes through
+    effective_item (not a bare ITEMS_BY_ID lookup) so an installed mod's damage/
+    defense bonus is already folded in wherever this is read."""
+    return (effective_item(entry) for entry in inventory if entry.equipped)
 
 
 def _slot_cost(item: Item) -> int:
@@ -785,6 +865,135 @@ def scavenge(character: "Character", rng: random.Random | None = None) -> str:
         character.inventory.append(InventoryItem(item_id, equipped=False))
     names = ", ".join(ITEMS_BY_ID[item_id].name for item_id in found)
     return f"You scavenge up: {names}."
+
+
+def _material_count(character: "Character", material_id: str) -> int:
+    return sum(1 for entry in character.inventory if entry.item_id == material_id)
+
+
+def _has_materials(character: "Character", materials: dict[str, int]) -> bool:
+    return all(
+        _material_count(character, material_id) >= count for material_id, count in materials.items()
+    )
+
+
+def _consume_materials(character: "Character", materials: dict[str, int]) -> None:
+    for material_id, count in materials.items():
+        removed = 0
+        for index in range(len(character.inventory) - 1, -1, -1):
+            if removed >= count:
+                break
+            if character.inventory[index].item_id == material_id:
+                character.inventory.pop(index)
+                removed += 1
+
+
+# A workshop's two actions (see corpmap.Location.workshop_built, screens.SafehouseScreen)
+# both roll a logic skill DESIGN.md flags as otherwise unrolled, at the same difficulty
+# tier legwork/scavenging use for a "working with what's in front of you" check. A failed
+# roll spends nothing — same "costs nothing but the trip" shape as scavenge() — so a
+# botched attempt doesn't also burn the materials it took to get here.
+WORKSHOP_ARMORER_DIFFICULTY = 11
+WORKSHOP_CHEMISTRY_DIFFICULTY = 11
+# Time SafehouseScreen spends on a workshop action, made or missed — same shape as
+# SCAVENGE_HOURS_COST (the caller spends it regardless of outcome). Hand-set shorter
+# than a Junkyard trip: this is bench work at home, not a trip across town.
+WORKSHOP_HOURS_COST = 2
+
+
+def install_mod(
+    character: "Character", inventory_index: int, mod_id: str, rng: random.Random | None = None
+) -> tuple[bool, str]:
+    """Attach a Mod to the weapon/wearable at character.inventory[inventory_index].
+    Caller (SafehouseScreen) gates this on the location's workshop_built.
+
+    Returns (attempted, message): attempted is False on a precondition the caller
+    should treat as never having happened (wrong slot, already installed, no free
+    slots, can't afford, missing materials) — no time should be spent on those, the
+    same way HospitalScreen only spends time when hospital_stay doesn't return None.
+    It's True once a roll is actually made, whether the roll passes or not."""
+    entry = character.inventory[inventory_index]
+    item = ITEMS_BY_ID[entry.item_id]
+    mod = MODS_BY_ID[mod_id]
+    if item.slot not in mod.applies_to:
+        return False, f"{mod.name} doesn't fit {item.name}."
+    if mod_id in entry.mods:
+        return False, f"{item.name} already has {mod.name}."
+    if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
+        return False, f"{item.name} has no free mod slots."
+    if character.cash < mod.price:
+        return False, f"Can't afford {mod.name} ({mod.price}eb)."
+    if not _has_materials(character, mod.materials):
+        return False, f"Not enough materials for {mod.name}."
+    roll = resolve_check(
+        stat_value=skill_value(character, "armorer"),
+        difficulty=WORKSHOP_ARMORER_DIFFICULTY,
+        rng=resolve_rng(rng),
+    )
+    if not roll.result.passed:
+        return True, f"The {mod.name} install doesn't take — nothing spent, try again."
+    character.cash -= mod.price
+    _consume_materials(character, mod.materials)
+    entry.mods.append(mod_id)
+    return True, f"Installed {mod.name} on {item.name}."
+
+
+def remove_mod(character: "Character", inventory_index: int, mod_id: str) -> str:
+    """Pull a Mod off character.inventory[inventory_index]. Free either way — same as
+    uninstall_program — it's just labor, no skill check and nothing to lose."""
+    entry = character.inventory[inventory_index]
+    if mod_id not in entry.mods:
+        return "Not installed there."
+    entry.mods.remove(mod_id)
+    item = ITEMS_BY_ID[entry.item_id]
+    return f"Removed {MODS_BY_ID[mod_id].name} from {item.name}."
+
+
+# Which Consumables a workshop can craft, and the scavenged materials each one costs on
+# top of a cash price (WORKSHOP_CRAFT_PRICE_FRACTION of retail — cheaper than buying, the
+# materials make up the difference). Deliberately narrow to the chem-flavored
+# TEMP_STAT_BOOST rows: health kits and grenades are the hooks DESIGN.md earmarks for
+# Medicine's and Demolitions' own future checks, not this one.
+CRAFT_RECIPES: dict[str, dict[str, int]] = {
+    "chem_x": {"salvaged_optics": 1},
+    "chem_y": {"wire": 1},
+    "chem_x2": {"salvaged_optics": 1, "wire": 1},
+}
+WORKSHOP_CRAFT_PRICE_FRACTION = 0.5
+
+for _recipe_id, _recipe_materials in CRAFT_RECIPES.items():
+    for _material_id in _recipe_materials:
+        if _material_id not in SCAVENGE_MATERIALS:
+            raise ValueError(f"{_recipe_id}: {_material_id!r} is not a scavenged material")
+
+
+def craft_consumable(
+    character: "Character", consumable_id: str, rng: random.Random | None = None
+) -> tuple[bool, str]:
+    """Craft an already-owned-the-recipe-for Consumable from CRAFT_RECIPES. Caller
+    (SafehouseScreen) gates this on the location's workshop_built.
+
+    Returns (attempted, message) — see install_mod's docstring for the split."""
+    if consumable_id not in CRAFT_RECIPES:
+        return False, "Can't craft that here."
+    consumable = CONSUMABLES_BY_ID[consumable_id]
+    materials = CRAFT_RECIPES[consumable_id]
+    price = round(consumable.price * WORKSHOP_CRAFT_PRICE_FRACTION)
+    if character.cash < price:
+        return False, f"Can't afford {consumable.name} ({price}eb)."
+    if not _has_materials(character, materials):
+        return False, f"Not enough materials for {consumable.name}."
+    roll = resolve_check(
+        stat_value=skill_value(character, "chemistry"),
+        difficulty=WORKSHOP_CHEMISTRY_DIFFICULTY,
+        rng=resolve_rng(rng),
+    )
+    if not roll.result.passed:
+        return True, "The batch doesn't come together — nothing spent, try again."
+    character.cash -= price
+    _consume_materials(character, materials)
+    character.consumables.append(consumable_id)
+    return True, f"Crafted {consumable.name} for {price}eb."
 
 
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:
