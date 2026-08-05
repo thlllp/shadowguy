@@ -2,7 +2,7 @@
 
 A text-based cyberpunk roguelite TUI. Python 3.14, built on [Textual](https://textual.textualize.io/) and [tcod](https://python-tcod.readthedocs.io/).
 
-Two coupled game modes — **Runner mode** (RPG-scale: one character, scene-based jobs, permadeath) and **Corp mode** (4X-scale: area control against rival corps). Corp mode now has a first-slice turn loop: take over one of the 4 rival corps and play a turn alongside your runner — territory income, one directed move a day (expand onto neutral ground, or train up scientists and operatives at your Academy), plus a Research Facility generating research points. Corp-vs-corp conflict is still to come.
+Two coupled game modes — **Runner mode** (RPG-scale: one character, scene-based jobs, permadeath) and **Corp mode** (4X-scale: area control against rival corps). Corp mode now has a first-slice turn loop: take over one of the 4 rival corps and play a turn alongside your runner — territory income, one directed move a day (expand onto neutral ground, attack a bordering rival, deploy operatives, or train up scientists and operatives at your Academy), plus a Research Facility generating research points. Losing your last district ends the run.
 
 ## Quick start
 
@@ -38,7 +38,8 @@ Death is permanent. No meta-progression between runs.
 | **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
 | **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
 | **Gangs** | Four street gangs hold scattered turf (no contiguous territory, unlike the corps). Walk onto ground held by one you've crossed and you can be tolled or jumped outright, depending how badly. |
-| **Corp mode** | Take over one of the four rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, or train scientists/operatives at your Academy. A Research Facility generates research points, spent on a two-chain technology tree (territory income, research rate) plus direct Security/Development bumps on held ground. |
+| **Corp mode** | Take over one of the four rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, attack a bordering rival, deploy operatives, train scientists/operatives at your Academy, or build a lab/upgrade. A Research Facility generates research points, spent on a two-chain technology tree (territory income, research rate) plus direct Security/Development bumps on held ground. Losing your last district ends the run. |
+| **Cyberware** | Bought and installed at a Ripperdoc's Cyber Clinic, one piece per slot, always active. Every install or removal costs Humanity — a shrinking ceiling, not a refillable stat — and hitting 0 free Humanity ends the run in cyberpsychosis. Pulling a piece out returns its cost, so removal is the way back from the edge. |
 
 ## Controls
 
@@ -88,7 +89,8 @@ src/shadowguy/
   surveillance.py Daily chance a corp spots the player or a rival runner on its own territory
   corpmap.py      Procedural territory map (65 nodes), ASCII renderer, locations, property/lodging
   shops.py        Item and consumable catalogs, buy/sell/equip, standing pricing, hospital care
-  cybernetics.py  Cyberware catalog and install/remove; load-bearing but not yet acquirable in a run
+  cybernetics.py  Cyberware catalog and install/remove, bought at a Ripperdoc's Cyber Clinic; Humanity
+                  erosion is the cost -- 0 free capacity ends the run (cyberpsychosis)
   saves.py        Pickle-based save/load
 ```
 
