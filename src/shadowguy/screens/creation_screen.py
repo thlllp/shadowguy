@@ -3,7 +3,7 @@ from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, MAX_SKILL_RANK
-from shadowguy.shops import ITEMS_BY_ID, bonus_text
+from shadowguy.shops import ITEMS_BY_ID, Slot, bonus_text
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
@@ -233,7 +233,13 @@ class GearScreen(PanelNav, BackScreen):
         yield Static(id="gear_head")
         yield Grid(
             Vertical(Static("For sale"), ListView(id="gear_buy"), classes="gear_col"),
-            Vertical(Static("Carrying"), ListView(id="gear_owned"), classes="gear_col"),
+            Vertical(
+                Static("Slots"),
+                Static(id="gear_slots"),
+                Static("Inventory"),
+                ListView(id="gear_owned"),
+                classes="gear_col",
+            ),
             id="gear_cols",
         )
         yield Footer()
@@ -266,6 +272,14 @@ class GearScreen(PanelNav, BackScreen):
             for item in self._catalog()
         ]
         await _replace_items(self.query_one("#gear_buy", ListView), rows, buy_index)
+
+        equipped = [ITEMS_BY_ID[e.item_id] for e in character.inventory if e.equipped]
+        slot_lines = [
+            f"{slot.value.capitalize()}: "
+            + (", ".join(item.name for item in equipped if item.slot is slot) or "empty")
+            for slot in Slot
+        ]
+        self.query_one("#gear_slots", Static).update("\n".join(slot_lines))
 
         owned = [
             ListItem(Static(f"{ITEMS_BY_ID[i].name}  —  refund {ITEMS_BY_ID[i].price}eb"), id=f"gear_sell_{n}")
