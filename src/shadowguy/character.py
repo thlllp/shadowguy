@@ -111,11 +111,25 @@ if any(skill.stat not in CORE_STATS for skill in SKILLS):
 
 # Same reasoning as the guard above, applied to cybernetics.Cyberware.humanity_cost:
 # cybernetics.py can't check its catalog against HUMANITY_BASELINE without importing
-# this module back (a cycle), so the check that every CyberSlot has at least one
-# piece a baseline-Humanity runner can actually afford lives here instead.
+# this module back (a cycle), so the check lives here instead.
+#
+# Two things are checked, and the first is stricter than it used to be. It once only
+# asked that every CyberSlot hold *some* affordable piece, which let a single
+# unaffordable row hide in a slot that had other options -- exactly what happened to
+# adamantium_bones_t4 (Tier 4's 1.6x on a humanity_cost of 4 put it at 6.4, past the
+# baseline, so nobody could ever install it). That was invisible while nothing sold
+# cyberware; now RipperdocScreen puts every row on a shelf, where an uninstallable
+# one is a permanent dead line reading "not enough humanity left". So: every row
+# must be installable on its own by a baseline-Humanity runner.
+for _cyberware in CYBERWARE_CATALOG:
+    if _cyberware.humanity_cost > HUMANITY_BASELINE:
+        raise ValueError(
+            f"{_cyberware.id}: humanity_cost {_cyberware.humanity_cost} exceeds "
+            f"HUMANITY_BASELINE ({HUMANITY_BASELINE}) -- it could never be installed"
+        )
 for _slot in CyberSlot:
-    if not any(c.slot is _slot and c.humanity_cost <= HUMANITY_BASELINE for c in CYBERWARE_CATALOG):
-        raise ValueError(f"no cyberware in {_slot} fits within HUMANITY_BASELINE")
+    if not any(c.slot is _slot for c in CYBERWARE_CATALOG):
+        raise ValueError(f"no cyberware in {_slot}")
 
 
 @dataclass
