@@ -17,11 +17,12 @@ from shadowguy.corp_turn import (
     advance_training,
     collect_income,
     collect_research,
+    corp_defeated,
     employee_plural,
 )
 from shadowguy.corpmap import lodging_cost
 from shadowguy.corpmap_gen import generate_corp_map
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refresh_security_offers
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
@@ -220,6 +221,30 @@ class ShadowguyApp(App):
         character.mark_rested()
         character.adjust_health(1)
 
+    def _report_corp_attacks(self, actions: list) -> list[str]:
+        """One line per rival attack that landed on the player's own corp last
+        night — captures and repelled pushes alike, since a raid that cost you
+        half a garrison is news even when the block held.
+
+        Reads the RivalActions resolve_rival_day already returned rather than
+        re-deriving anything: rivals.py attacks the player's ground through the
+        ordinary attack_candidates path with no special case, so this is the only
+        place that has to know it was the player who got hit."""
+        if self.corp_state is None:
+            return []
+        lines = []
+        for action in actions:
+            attack = action.attack
+            if attack is None or attack.defender_id != self.corp_state.faction_id:
+                continue
+            name = self.corp_map.territories[attack.territory_id].name
+            attacker = FACTIONS_BY_ID[action.actor_id].name
+            if attack.captured:
+                lines.append(f"{attacker} has taken {name} from you.")
+            else:
+                lines.append(f"{attacker} hit {name} and was driven off.")
+        return lines
+
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that used to fire from a deliberate "End the day" click —
         now fired once per day boundary crossed, by whatever action crossed it."""
@@ -265,6 +290,15 @@ class ShadowguyApp(App):
         if taken:
             self.notify(f"Word on the street: {', '.join(taken)}.")
         if self.corp_state:
+            # Reported before anything else the corp does today, because the rivals
+            # have already moved above: a district lost overnight is news the player
+            # needs whether or not it was the last one.
+            for lost in self._report_corp_attacks(today_actions):
+                self.notify(lost, severity="error")
+            if corp_defeated(self.corp_state, self.corp_map):
+                faction = FACTIONS_BY_ID[self.corp_state.faction_id]
+                self.exit(message=f"{faction.name} has been broken up. Game over.")
+                return
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
             self.corp_state.daily_action_used = False

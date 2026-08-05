@@ -11,15 +11,18 @@ from collections import Counter, deque
 
 import pytest
 
-from shadowguy.corpmap import LocationKind, has_home
+from shadowguy.corpmap import (
+    STARTING_ACADEMY_TIER,
+    STARTING_RESEARCH_TIER,
+    LocationKind,
+    has_home,
+)
 from shadowguy.corpmap_gen import (
     FACTION_VALUE_SPREAD,
     GANG_TURF_MAX,
     GANG_TURF_MIN,
     JUNKYARD_ROLE,
     MIN_START_DEGREE,
-    STARTING_ACADEMY_TIER,
-    STARTING_RESEARCH_TIER,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
     TILES_PER_JUNKYARD,

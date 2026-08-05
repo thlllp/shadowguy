@@ -563,7 +563,7 @@ Today only a *completed* job moves standing (`jobs.JOB_STANDING_HIT` = -2, on th
 
 `Scene.__post_init__` rejects a `standing_delta` on a scene with no `target_faction_id` — a gig can't anger a corp it was never aimed at.
 
-**Room left for territory effects:** `Scene.target_territory_id` records *where* a job hit; nothing consumes it beyond flavor yet. A future territory-control effect belongs as a new `Outcome` field applied in `apply_outcome`, keyed off `target_territory_id` — don't invent a second effect pipeline.
+**`Scene.target_territory_id` is consumed now**, by `Outcome.security_delta` in `apply_outcome` — see Corp conflict. That was the shape this section reserved ("a new `Outcome` field applied in `apply_outcome`, keyed off `target_territory_id`"), and it remains the shape any *further* territory effect should take: a new `Outcome` field, applied in the same place. Don't invent a second effect pipeline.
 
 **`screens.CharacterSheet` lists standing with every `FACTIONS` entry one per line** (a "Standing:" column), not the old single inline row — the always-visible panel every runner-mode screen carries (see below) is meant to be read as a status board, not squeezed onto one line.
 
@@ -573,9 +573,19 @@ Today only a *completed* job moves standing (`jobs.JOB_STANDING_HIT` = -2, on th
 
 The world's other actors getting a turn of their own (Faction standing above is the player's actions moving the corps). A parallel resolution module like `security.py`/`encounters.py`, not a `Scene`: `resolve_rival_day` is called once per day from `_apply_day_tick`, returns a `RivalAction` (`kind`, `actor_id`, `day`, `territory_id`) per acting actor.
 
-**Factions do something real: territory pressure.** Each day every `FACTIONS` corp gets one roll (`EXPANSION_CHANCE`, first-slice) at claiming one *neutral* territory bordering its own ground (`_expansion_candidates`). Scoped to neutral ground only — taking a rival's territory is bigger future work. Two permanent exclusions: gang turf (`Territory.gang_id`) and the player's start territory — the same reservation `_grow_blocs` honors at generation.
+**A faction gets three separate rolls a day, not one choice between them**: expansion onto neutral ground, reinforcement of its own thinnest district, and an attack on a bordering rival. They're independent — a corp can expand *and* attack on the same day.
 
-Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
+**Territory pressure (expansion).** `EXPANSION_CHANCE` (0.2, first-slice) at claiming one *neutral* territory bordering its own ground (`expansion_candidates`). Two permanent exclusions: gang turf (`Territory.gang_id`) and the player's start territory — the same reservation `_grow_blocs` honors at generation.
+
+Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`, zeroes `garrison`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
+
+**Reinforcement (`_reinforce`).** `AI_GARRISON_CHANCE` (0.35) at adding one operative to whichever held district is currently *thinnest*, capped per district at `AI_GARRISON_CAP` (4). Thinnest-first rather than random so a faction shores up its weak flank instead of stacking one fortress — otherwise the player finds a permanently free way in and the conflict layer never bites.
+
+**An AI faction keeps no operative pool.** Its attack force is *derived* from holdings (`_attack_force`: one per `AI_TERRITORIES_PER_ATTACKER` districts, floored at `MIN_AI_ATTACK_FORCE`), and its garrison cap is per-district. Giving every faction a shadow `CorpState` purely so the player never sees it would be state for its own sake; force scaling with holdings is the only property of a pool that's observable from outside anyway. Consequence worth knowing: a runaway leader presses its advantage rather than stalling.
+
+**Attacks are the conflict layer** — see Corp conflict below for the contest itself. `ATTACK_CHANCE` (0.12) is deliberately well under `EXPANSION_CHANCE`: free ground is always the cheaper move, so corps mostly grow outward early and turn on each other once the neutral ground runs out. That ordering is what gives a run its shape.
+
+**Target choice is what finally reads `relations.py`.** `_pick_attack_target` weights each candidate by `max(1, RELATION_TARGET_BIAS - relation(...))`, so a corp moves on whoever it already gets on worst, and an ally is picked mainly when there's nobody else to hit. The floor of 1 keeps a well-liked rival possible — a bias, not a rule. Falls back to a flat `rng.choice` when the map carries no `relations` at all (hand-built test fixtures omit them). Before this, `relations.py` was seeded at generation and consumed by nothing.
 
 **Independent runners take a real turn.** Every entry in the run's `app.runners` roster (see Runners & crew) gets a `RivalAction` too, except while on the player's crew. Each picks one `RunnerActivity` per day (`rivals._runner_turn`), and **the activity is the movement rule** — there's no separate "do they move" roll any more:
 
@@ -599,7 +609,64 @@ State lives in `ShadowguyApp.rival_runner_states` (`dict[runner_id, RunnerState]
 
 **`rivals.py` stays leaf-ish.** `Fixer`/`JobOffer` are a `TYPE_CHECKING`-only import (the trick `fixer.py` itself uses for `Character`) — a runner only reads an offer's timing and marks it taken, so nothing here needs `fixer`/`scene` at runtime.
 
-**Once the player takes over a Faction, it drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, skips that faction and records no `RivalAction` for it. Default `None` keeps every pre-existing call site unchanged.
+**Once the player takes over a Faction, it drops out of this loop entirely.** `resolve_rival_day` takes an optional `player_faction_id`, skips that faction and records no `RivalAction` for it. Default `None` keeps every pre-existing call site unchanged. **The exclusion is only on *acting*** — the player's territory is ordinary `attack_candidates` ground for every other corp, through the same code path with no special case. That is what makes the loss condition reachable, and `app._report_corp_attacks` is the only place that has to know it was the player who got hit.
+
+## Corp conflict (`corp_turn.attack_territory`/`resolve_attack`, `corpmap.capture_territory`)
+
+The mechanic that takes ground off another corp. One system switched on four things that had been built ahead of their drivers: `EmployeeCategory.OPERATIVE` (trained, priced, consumed by nothing), `TerritoryModifier.SECURITY` (seeded and rendered, read only as a *gate*), `relations.py` (seeded, read by nothing), and `Outcome`'s `target_territory_id` (recorded, flavor-only).
+
+**Defense is `garrison + Security`** (`defense_strength`). The two halves are deliberately asymmetric: Security is bought once and defends forever, a garrison is *spent* by the fight that uses it. So a well-policed district is the durable half of a defense and troops are the half you keep replacing.
+
+`Territory.garrison` lives on the Territory, not on `CorpState`, so the AI factions — which have no `CorpState` — defend by exactly the number the player does. Always 0 on neutral ground (`claim_territory`/`capture_territory` both reset it).
+
+**The contest** (`resolve_attack`, taking no corp state on either side, so the AI and the player roll identical dice):
+
+```
+attack_power  = committed + d6        defense_power = defense_strength + d6
+captured      = attack_power > defense_power        # ties hold the ground
+```
+
+`CONTEST_DIE` is 6, so a 2-point edge is a strong favorite and a 6-point edge is a certainty. Losses:
+
+| | Attacker | Defender |
+|---|---|---|
+| Captured | `min(committed, defense)` — one per point ground through | the whole garrison |
+| Repelled | same | `min(garrison, committed)` |
+
+**Survivors of a capture become the new garrison**; survivors of a repel go back in the pool. Taking a district and leaving it empty would just invite it straight back, so holding what you took is automatic rather than a second action.
+
+**`capture_territory` is not `claim_territory`'s twin.** Claiming reseeds modifiers because neutral ground's profile (flat Unrest, no Security) stops describing the place once a corp moves in. Capturing keeps modifiers *and every Location standing on the district* — that inheritance is the point of taking ground off a rival rather than off nobody, up to and including their `RESEARCH_FACILITY`.
+
+**A captured facility can be rebuilt elsewhere.** `build_research_facility` (cost `RESEARCH_FACILITY_REBUILD_COST` 3000, on the daily move) stands a new one up on a district the corp holds — but `rebuild_facility_targets` is **empty while it still holds a facility anywhere**, so this is a way back from zero, not a way to run two. Capturing a rival's remains the only route to a second.
+
+Without it, losing the labs ended research for the rest of the run, which made the conflict layer's first successful attack on the player permanently un-recoverable rather than a setback. The rebuild starts **bare** (`STARTING_RESEARCH_TIER`, no labs, no efficiency upgrades), so everything built into the captured one is genuinely lost and has to be paid for again — 3000 is the entry fee, not the bill. *Where* is a real decision: a facility is captured along with the district under it, so rebuilding on the border invites the same loss twice.
+
+`corpmap.add_research_facility(territory)` is the shared constructor, moved out of `corpmap_gen` (alongside `STARTING_RESEARCH_TIER`) now that it has two callers — the generator at layout time, and this at runtime, same shape as `add_safehouse`. It names itself off `territory.owner` via `owner_label`, which is what lets `corp_turn.py` build one while still importing `corpmap` and nothing else. The `{territory}_research` id can't collide because a corp holding a facility is never offered another.
+
+**The Academy has the same rebuild**, `build_academy` / `rebuild_academy_targets`, identical shape — and it matters more. A corp with no research facility stops *advancing*; a corp with no Academy stops producing operatives, and since operatives are the only way to attack **or** garrison, it has no counterplay left against the loss condition at all. `corpmap.add_academy` moved out of `corpmap_gen` alongside `add_research_facility` for the same two-caller reason.
+
+`ACADEMY_REBUILD_COST` (2000) is deliberately **cheaper** than the facility's 3000 despite being the worse loss: nothing has ever raised `academy_tier`, so there are no upgrade tracks inside an Academy and one payment restores the whole building. The facility's 3000 buys back a bare shell whose labs and efficiency upgrades cost another 17,000 on top. Pricing them equal would make the Academy the strictly worse deal for restoring strictly more.
+
+Kept as two explicit function pairs rather than one generic `rebuild(kind, cost)` — the same call `raise_surveillance`/`raise_development` already make.
+
+**Which is why `owned_research_facilities` is plural now.** This is the case flagged in advance under Corp mode turn loop ("if corps ever hold more than one facility, revisit `collect_research`'s fill order") — that fill order is restored: facilities sort best-first (`research_rate`, then assistant seats, then id) and `collect_research` seats every scientist at the highest-rate facility with a free seat before any of them sits at a worse one. `owned_research_facility` (singular) is now "the corp's *primary* facility" — the best one — and it's where `build_lab`/`build_efficiency_upgrade` land. That's principled rather than arbitrary: `collect_research` fills that same facility first, so concentrating capacity and efficiency on it is exactly what maximizes output.
+
+**The player's two moves** both spend the day's one directed action (`daily_action_used`, the same slot as `expand_into`):
+
+- **`deploy_operatives`** — station operatives from the pool onto a district you hold. **One-way, no recall**, which is what stops one stack shuttling around the map defending everything in turn.
+- **`attack_territory`** — throw operatives at a bordering rival district. Costs no *cash*: operatives are the cost, and they were paid for at the Academy.
+
+`CorpScreen`'s Operations panel asks *where*; `ForcePickScreen` asks *how many* (quartiles of the pool plus 1 — a token force to probe a garrison is a real move, and quartiles of a small pool would skip it). Splitting the questions is deliberate: hold everything back and you never take ground, commit everything and one bad roll leaves every district undefended.
+
+**Runner work softens ground.** `Outcome.security_delta` is applied by `apply_outcome` to the scene's `target_territory_id`, clamped 0..`MODIFIER_MAX`. A completed job carries `JOB_SECURITY_HIT` (-1) on its final stage only — the same "when it's *finished*" rule the cash/rep/standing payouts follow. Flat rather than scaled by `_payout`'s multiplier: Security runs 0–5, so -1 is already a fifth of a district's standing defense and a critical success shouldn't strip two. This is what makes runner and corp mode feed each other rather than sit side by side — a job is how a district gets prepared for an attack, yours or anyone's.
+
+`apply_outcome`/`resolve_choice`/`resolve_entrance` therefore take a `CorpMap` now. `scene.py → corpmap.py` is a legal new edge (corpmap's closure is `factions`/`gangs`/`relations`/`skills`, all leaves, and corpmap still never imports `scene`).
+
+**Losing is real, and it's the only loss condition Corp mode has.** `corp_defeated` is simply "holds no territory"; `_apply_day_tick` checks it after the rivals have moved and calls `app.exit`. Territory rather than cash or headcount because every other corp system — income, research, training, attacking — is downstream of holding ground, so a corp with none of it has no move left to make. **This ends the run in a hybrid runner+corp game too**, not just `corp_only`: buying a corp is a real risk, not a free upside on top of a runner.
+
+**A capture is logged as its own `FactionEvent` kind, `"seizure"`** (carrying `from_faction_id`), rendered on the corp's public website as "Acquired X from Y in a hostile takeover." Both expansion and seizure grow a corp's holdings, but only one of them took the ground off somebody. The losing corp's site doesn't report it at all, which is the joke.
+
+**Not balance-simulated.** `CONTEST_DIE`, the loss formulas, `ATTACK_CHANCE`, `AI_GARRISON_CHANCE`/`AI_GARRISON_CAP`, `AI_TERRITORIES_PER_ATTACKER`/`MIN_AI_ATTACK_FORCE`, `RELATION_TARGET_BIAS` and `JOB_SECURITY_HIT` are all first-slice. The most likely to need tuning is `ATTACK_CHANCE` against `EXPANSION_CHANCE` — that ratio is what decides how long a run stays peaceful.
 
 ## Surveillance detection (`shadowguy/surveillance.py`)
 
@@ -647,9 +714,11 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 **A turn is one real decision, shared by four mutually-exclusive moves** gated on `CorpState.daily_action_used`. All fail closed (no charge/mutation) if already moved or unaffordable:
 
 - **`expand_into`** a bordering neutral territory — the same move `rivals.py`'s AI makes. Cost `EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * value`.
+- **`attack_territory`** a bordering *rival-held* one, and **`deploy_operatives`** onto one you hold — the conflict layer, see Corp conflict.
 - **`train_employees`** at the Academy — `ACADEMY_TRAINING_COST[category]` for that many employees (Academy tier, currently always 1) in a chosen `EmployeeCategory`. Priced per category (200/200/100 for Scientist/Operative/Research Assistant) rather than flat: a flat cost made Research Assistants a strictly worse pick than Scientists over any long enough run (same price, a third of the training time, but half the RP/day, so a Scientist trained back-to-back overtakes an Assistant by ~day 15 and never gives it back — the Academy's single training slot is the real scarce resource, not cash). Pricing Research Assistant training at half a Scientist's, matching `RESEARCH_PER_ASSISTANT`/`RESEARCH_PER_SCIENTIST`'s ratio, keeps cash-per-RP even across the two. Operative has no rate to peg to yet (no consumer wired up), so it keeps the original flat price.
 - **`build_lab`** at the Research Facility — raises scientist capacity.
 - **`build_efficiency_upgrade`** at the same facility — raises per-scientist output.
+- **`build_research_facility`** / **`build_academy`** — only when the corp holds none of that building at all, after a rival captured its last one. See Corp conflict.
 
 **Employees come in three categories** (`EmployeeCategory.SCIENTIST`/`.OPERATIVE`/`.RESEARCH_ASSISTANT`), separate `CorpState` fields since they don't do the same thing. `CorpScreen` offers one training row per category, same cost/slot.
 
@@ -659,7 +728,7 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 
 `collect_research` returns a **float** (`RESEARCH_PER_ASSISTANT`'s 0.5, Brains 2's 1.25/0.75); `CorpState.research_points` is annotated float but defaults to int `0` (renders `0rp` until an assistant contributes — don't "tidy" that default without noticing the display change).
 
-**If corps ever hold more than one facility**, revisit `collect_research`'s old highest-rate-first fill order (collapsed once nothing could produce a second facility) — bring it back alongside whatever eventually lets corps take each other's territory (the conflict layer `rivals.py` explicitly defers).
+**Corps can hold more than one facility now** — capturing a rival's district takes its labs with it — so `collect_research`'s highest-rate-first fill order is back and `owned_research_facilities` is plural. See Corp conflict.
 
 **Technology is what finally spends research points** (`corp_turn.TECHNOLOGIES`, six entries, two independent three-deep chains gated by `Technology.prereqs`). Only Worker Surveillance and Brains 2 are researchable from day one. A tech's effect isn't a field on it — read wherever it applies, keyed by id. `CorpState.researched` is a set of ids; research is permanent. Descriptions are `.format`ed from the effect constants at construction. `technology_tree_layout()` derives (column, row) from prereq depth for `ResearchTreeScreen` (`t` from `CorpScreen`/`CorpMapScreen`). A box is never hard-disabled — selecting always attempts `research_technology`, reporting the shortfall or lock reason on the box itself.
 
@@ -675,7 +744,7 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 
 `CorpScreen` renders four stacked sections (territory actions + Academy/Research Facility/Surveillance Log — Technology moved to its own screen), overflowing a single 80×24 viewport (it scrolls; click-position UI tests should drive a taller size, since the map's unseeded rng varies row counts).
 
-**Scientists and operatives still buy nothing directly** beyond feeding research (research assistants) — operatives remain a mechanism ahead of its driver.
+**Operatives now have their driver**: they are the corp's field force, deployed as a district's garrison or committed to an attack (see Corp conflict). Scientists still buy nothing directly beyond feeding research.
 
 ## Corp websites (`corp_turn.FactionEvent`, `shadowguy/rivals.py`, `screens/info_screens.py`'s `CorpWebsiteScreen`)
 

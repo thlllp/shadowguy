@@ -24,8 +24,10 @@ from shadowguy.corpmap import (
     render_ascii_map,
 )
 from shadowguy.corp_turn import (
+    ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
+    RESEARCH_FACILITY_REBUILD_COST,
     SURVEILLANCE_BUMP_COST,
     TRAINING_DAYS,
     EmployeeCategory,
@@ -33,7 +35,9 @@ from shadowguy.corp_turn import (
     assistant_capacity,
     assistant_rate,
     build_efficiency_upgrade,
+    build_academy,
     build_lab,
+    build_research_facility,
     development_targets,
     employee_plural,
     expand_into,
@@ -46,6 +50,8 @@ from shadowguy.corp_turn import (
     owned_research_facility,
     raise_development,
     raise_surveillance,
+    rebuild_academy_targets,
+    rebuild_facility_targets,
     research_rate,
     surveillance_targets,
     train_employees,
@@ -70,7 +76,7 @@ from . import (
     matrix_warning,
 )
 from .combat_screen import CombatScreen
-from .corp_screen import CorpScreen, ResearchTreeScreen
+from .corp_screen import CorpScreen, OperationsMixin, ResearchTreeScreen, operations_rows
 from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
 from .scene_screen import SceneScreen
 from .shop_screens import (
@@ -123,7 +129,7 @@ def _sighting_label(sighting, corp_map) -> str:
     return f"Day {sighting.day} — {who} spotted in {territory_name}"
 
 
-class CorpMapScreen(BackScreen):
+class CorpMapScreen(OperationsMixin, BackScreen):
     """The home screen for both a runner and a corp-only run, with a left-side
     category sidebar (hidden on the _FULL_WIDTH_CATEGORIES tabs, which take the whole
     width). The main content area shows the map by default;
@@ -463,6 +469,10 @@ class CorpMapScreen(BackScreen):
             self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
             return
 
+        if item_id.startswith("deploy_") or item_id.startswith("attack_"):
+            await self._commit_operatives(item_id)
+            return
+
         if item_id.startswith("expand_"):
             corp_state = self.app.corp_state
             territory_id = item_id.removeprefix("expand_")
@@ -518,6 +528,32 @@ class CorpMapScreen(BackScreen):
             else:
                 self.notify("Can't afford it.", severity="warning")
             await self._refresh_activities()
+            return
+
+        if item_id.startswith("newacademy_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("newacademy_")
+            territory = self.app.corp_map.territories[territory_id]
+            if build_academy(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"New Academy standing in {territory.name}.")
+            elif corp_state.daily_action_used:
+                self.notify("Already made your move today.", severity="warning")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
+            return
+
+        if item_id.startswith("rebuild_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("rebuild_")
+            territory = self.app.corp_map.territories[territory_id]
+            if build_research_facility(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"New Research Facility standing in {territory.name}.")
+            elif corp_state.daily_action_used:
+                self.notify("Already made your move today.", severity="warning")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
             return
 
         if item_id == "build_lab":
@@ -1094,12 +1130,27 @@ class CorpMapScreen(BackScreen):
                 label += " (can't afford)"
             items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
 
+        # The corp's operative moves, folded into the same flat list — a corp_only
+        # run never opens CorpScreen, so this is where its Operations rows live.
+        items.extend(operations_rows(corp_state, corp_map))
+
         items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(activities, items)
 
         academy_items = []
+        rebuild_sites = rebuild_academy_targets(corp_state, corp_map)
         pending = corp_state.pending_recruit
-        if pending is not None:
+        if rebuild_sites:
+            # No Academy at all: it was captured with the district under it, so the only
+            # move left here is standing a new one up. Nothing trains until one does.
+            for territory in rebuild_sites:
+                label = f"Build an Academy in {territory.name} — {ACADEMY_REBUILD_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif ACADEMY_REBUILD_COST > corp_state.cash:
+                    label += " (can't afford)"
+                academy_items.append(ListItem(Static(label), id=f"newacademy_{territory.id}"))
+        elif pending is not None:
             days_left = pending.ready_day - self.app.character.day
             academy_items.append(
                 ListItem(
@@ -1122,7 +1173,17 @@ class CorpMapScreen(BackScreen):
         await _replace_items(academy_list, academy_items)
 
         research_items = []
-        if facility is not None:
+        if facility is None:
+            # Nothing to upgrade: the corp's labs were captured with the district under
+            # them, so the only research move left is standing a new one up.
+            for territory in rebuild_facility_targets(corp_state, corp_map):
+                label = f"Build a Research Facility in {territory.name} — {RESEARCH_FACILITY_REBUILD_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif RESEARCH_FACILITY_REBUILD_COST > corp_state.cash:
+                    label += " (can't afford)"
+                research_items.append(ListItem(Static(label), id=f"rebuild_{territory.id}"))
+        else:
             cost = next_lab_cost(facility)
             if cost is None:
                 research_items.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))

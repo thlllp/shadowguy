@@ -4,13 +4,20 @@ import random
 
 import pytest
 
-from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, territory_distance
+from shadowguy.character import Character
+from shadowguy.corpmap import (
+    GENERATED_KINDS,
+    PLAYER_OWNED_KINDS,
+    TerritoryModifier,
+    territory_distance,
+)
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.gangs import GANGS
 from shadowguy.jobs import (
     AMBUSH_LABEL,
     ARCHETYPES,
     DAMAGE_FOR_DELTA,
+    JOB_SECURITY_HIT,
     JOB_STANDING_HIT,
     JOB_XP_BASE,
     LEGWORK_FIGHT_STAGE,
@@ -26,6 +33,7 @@ from shadowguy.jobs import (
     generate_legwork_for_job,
     generate_smuggling_job,
 )
+from shadowguy.scene import Outcome, Scene, Stage, apply_outcome
 from shadowguy.skills import skill_for
 
 SEEDS = range(150)
@@ -345,3 +353,71 @@ def test_generate_smuggling_job_deadline_scales_with_distance(corp_map, seed):
 def test_generate_smuggling_job_carries_the_gang_that_gave_it(corp_map):
     job = generate_smuggling_job(GANGS[0].id, corp_map.player_start_id, corp_map, day=1, rng=random.Random(0))
     assert job.gang_id == GANGS[0].id
+
+
+# --- Outcome.security_delta -------------------------------------------------
+# The corp-mode consequence of runner work: a completed job knocks Security off the
+# district it hit, which is half of corp_turn.defense_strength.
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_only_the_final_stage_of_a_job_carries_a_security_hit(corp_map, seed):
+    """Same rule the cash/rep/standing payouts follow — a job softens a district
+    when it's *finished*, not once per stage walked through."""
+    scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    terminal = [
+        outcome
+        for stage in scene.stages.values()
+        for choice in stage.choices
+        for outcome in (choice.success, choice.critical_success)
+        if outcome is not None and outcome.next_stage is None
+    ]
+    non_terminal = [
+        outcome
+        for stage in scene.stages.values()
+        for choice in stage.choices
+        for outcome in (choice.success, choice.critical_success)
+        if outcome is not None and outcome.next_stage is not None
+    ]
+    assert all(o.security_delta == JOB_SECURITY_HIT for o in terminal)
+    assert all(o.security_delta == 0 for o in non_terminal)
+
+
+def test_apply_outcome_lowers_security_on_the_target_district(corp_map):
+    territory = corp_map.territories[corp_map.player_start_id]
+    territory.modifiers[TerritoryModifier.SECURITY] = 3
+    scene = Scene(
+        id="s",
+        title="t",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        target_territory_id=territory.id,
+    )
+    apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
+    assert territory.modifiers[TerritoryModifier.SECURITY] == 2
+
+
+def test_apply_outcome_clamps_security_at_zero(corp_map):
+    """Grinding the same block forever bottoms out rather than going negative —
+    defense_strength reads this number directly."""
+    territory = corp_map.territories[corp_map.player_start_id]
+    territory.modifiers[TerritoryModifier.SECURITY] = 0
+    scene = Scene(
+        id="s",
+        title="t",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        target_territory_id=territory.id,
+    )
+    apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
+    assert territory.modifiers[TerritoryModifier.SECURITY] == 0
+
+
+def test_apply_outcome_ignores_a_security_delta_with_no_target_territory(corp_map):
+    """A gig, or a job on ground that isn't on this map: nothing to soften, and no
+    raise for the missing key."""
+    scene = Scene(
+        id="s",
+        title="t",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        target_territory_id=None,
+    )
+    apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)

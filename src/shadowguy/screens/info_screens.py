@@ -5,7 +5,7 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Character
 from shadowguy.corp_turn import TECHNOLOGIES_BY_ID, FactionEvent
 from shadowguy.corpmap import LocationKind
-from shadowguy.factions import FACTIONS, Faction
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
 from shadowguy.inventory import (
     active_deck_entry,
     free_program_slots,
@@ -382,6 +382,10 @@ class CorpWebsiteScreen(BackScreen):
         if event.kind == "territory":
             name = self.app.corp_map.territories[event.territory_id].name
             return f"Day {event.day} — Expanded operations into {name}."
+        if event.kind == "seizure":
+            name = self.app.corp_map.territories[event.territory_id].name
+            rival = FACTIONS_BY_ID[event.from_faction_id].name
+            return f"Day {event.day} — Acquired {name} from {rival} in a hostile takeover."
         technology = TECHNOLOGIES_BY_ID[event.technology_id]
         return f"Day {event.day} — Unveiled new technology: {technology.name}."
 

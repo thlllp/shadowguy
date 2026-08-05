@@ -5,9 +5,10 @@ Character.gang_standing (player-vs-gang): this is how the Factions and Gangs fee
 about *each other*. Symmetric, one value per unordered pair (Ironclad<->Ghostwire
 is a single number, not two) — the same shape factions.standing_shift and
 gang_standing already use, no per-side asymmetry modeled anywhere else in the
-codebase. Data only for now: nothing reads or moves these values yet, the same
-"mechanism built ahead of its driver" pattern gang_standing and
-CorpState.research_points started as. Leaf module, like factions.py/gangs.py:
+codebase. Read by rivals._pick_attack_target: which bordering rival a faction moves on is
+weighted by how badly the two already get on, so a corp hits whoever it likes
+least first. Nothing *moves* these values yet — they're seeded once per run and
+stay put. Leaf module, like factions.py/gangs.py:
 imports only those two, nothing from the rest of the package.
 """
 
