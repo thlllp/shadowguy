@@ -1,7 +1,13 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from shadowguy.cybernetics import CYBERWARE_CATALOG, CyberSlot, installed_bonus, installed_skill_bonus
+from shadowguy.cybernetics import (
+    CYBERWARE_CATALOG,
+    CyberSlot,
+    free_humanity,
+    installed_bonus,
+    installed_skill_bonus,
+)
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, can_work_support, recruit_wage
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot
@@ -87,12 +93,49 @@ if set(SKILL_RANK_COST) != set(range(STARTING_SKILL_RANK + 1, MAX_SKILL_RANK + 1
 # The stats a skill can be layered on, and what gear/chem bonuses apply to. Checks
 # roll a *skill* (skills.skill_value), never one of these on its own.
 CORE_STATS = ("body", "strength", "agility", "perception", "logic", "cool")
-# Every runner's starting (and, for now, only ever) Humanity. Unlike the core stats
-# it has no skills, no gear/temp bonus, and nothing in the game raises or lowers it
-# yet — a fixed baseline, laid down ahead of whatever eventually costs it (cyberware
-# is the obvious future spender; see cybernetics.py's own note on Humanity being
-# unwired).
+# Every runner's starting Humanity *ceiling*. Unlike the core stats it has no skills
+# and no gear/temp bonus. It is no longer fixed: every operation at a ripperdoc
+# permanently shaves SURGERY_SCARRING off it (cybernetics.install_cyberware /
+# remove_cyberware), so a runner who churns their loadout ends the run with less room
+# than they started with.
+#
+# Read `Character.humanity` for the ceiling and `cybernetics.free_humanity` for what's
+# actually left of the person -- ceiling minus everything currently installed. That
+# second number is the one that matters: it drives humanity_penalty below, and hitting
+# 0 is cyberpsychosis (the run ends, see screens/shop_screens.py's RipperdocScreen).
 HUMANITY_BASELINE = 6
+
+# Permanent Humanity lost per trip under the knife -- charged on install *and* on
+# removal, since both are surgery. Small on purpose relative to any single implant's
+# humanity_cost (the cheapest is 0.5), which is what makes pulling chrome back out a
+# real net *rebound* rather than a second punishment: you get the implant's whole cost
+# back and pay only the scar. What it does mean is that swapping loadouts repeatedly
+# grinds you down with nothing to show for it.
+#
+# 0.1 is sized so a full four-slot loadout still fits with room to breathe: the cheapest
+# piece in every slot costs 4.0, four installs scar 0.4, so a fully chromed runner sits
+# at 1.6 of a ceiling of 5.6 -- one penalty step, not the cap. Fully chromed should read
+# as diminished, not as impossible. Not balance-simulated.
+SURGERY_SCARRING = 0.1
+
+# Lower bound of free Humanity for each stat penalty step: at or above the first entry
+# there's no penalty, below the last the penalty caps. Mirrors FATIGUE_STAT_PENALTY_CAP's
+# shape -- a felt penalty that stops getting worse -- except this one bottoms out in a
+# run-ending threshold rather than merely a cap, since 0 free Humanity is nobody left.
+#
+# The band placement is load-bearing, not decorative: cyberware's whole point is that it
+# makes a runner better, so a *first* implant must not cost more than it gives. An
+# earlier (4.0, 3.0, 2.0) put a single 3-cost implant straight into -2, which turned a
+# +1 Agility piece into a net -1 to Agility and -2 to everything else -- chrome as a
+# strict downgrade. Starting the first band at 2.0 leaves the whole shallow end of the
+# catalog free of penalty and reserves the drain for a runner who is genuinely most
+# machine: the cheapest piece in every slot (4.0 total, plus 0.4 of scarring) lands at
+# -1, and only a deep loadout reaches the cap. Not balance-simulated.
+HUMANITY_PENALTY_THRESHOLDS = (2.0, 1.0, 0.5)
+if list(HUMANITY_PENALTY_THRESHOLDS) != sorted(HUMANITY_PENALTY_THRESHOLDS, reverse=True):
+    raise ValueError("HUMANITY_PENALTY_THRESHOLDS must descend")
+if HUMANITY_PENALTY_THRESHOLDS[-1] <= 0:
+    raise ValueError("HUMANITY_PENALTY_THRESHOLDS must stay above 0 -- 0 ends the run")
 STAT_NAMES = frozenset(CORE_STATS) | {"cash", "rep", "humanity"}
 
 # Unlike health (floored at 0 — there's no such thing as negative health), rep can go
@@ -122,10 +165,16 @@ if any(skill.stat not in CORE_STATS for skill in SKILLS):
 # one is a permanent dead line reading "not enough humanity left". So: every row
 # must be installable on its own by a baseline-Humanity runner.
 for _cyberware in CYBERWARE_CATALOG:
-    if _cyberware.humanity_cost > HUMANITY_BASELINE:
+    # Note the + SURGERY_SCARRING: the operation that fits a piece also scars, so a
+    # row costing anything from (HUMANITY_BASELINE - SURGERY_SCARRING) upward passes
+    # the naive "does it fit" test and then takes a fresh runner's last 0.1 on the
+    # way in -- a shelf row that is instant game over rather than an implant. The
+    # bound is >= because landing free Humanity on exactly 0 is already death.
+    if _cyberware.humanity_cost + SURGERY_SCARRING >= HUMANITY_BASELINE:
         raise ValueError(
-            f"{_cyberware.id}: humanity_cost {_cyberware.humanity_cost} exceeds "
-            f"HUMANITY_BASELINE ({HUMANITY_BASELINE}) -- it could never be installed"
+            f"{_cyberware.id}: humanity_cost {_cyberware.humanity_cost} leaves nothing "
+            f"after SURGERY_SCARRING against HUMANITY_BASELINE ({HUMANITY_BASELINE}) -- "
+            f"installing it would end the run outright"
         )
 for _slot in CyberSlot:
     if not any(c.slot is _slot for c in CYBERWARE_CATALOG):
@@ -158,7 +207,10 @@ class Character:
     cool: int = STARTING_STAT
     cash: int = STARTING_CASH
     rep: int = 0
-    humanity: int = HUMANITY_BASELINE
+    # The Humanity *ceiling*, worn down permanently by surgery (SURGERY_SCARRING).
+    # Float rather than int since a scar is 0.1. Read cybernetics.free_humanity for
+    # what's actually left of the runner -- this minus everything installed.
+    humanity: float = HUMANITY_BASELINE
     health: int | None = None
     # Accumulated non-lethal stun damage (combat.py's weapon-side stun_damage lands
     # here via _stun_player). Persists across fights and screens, unlike the old
@@ -215,8 +267,10 @@ class Character:
     inventory: list[InventoryItem] = field(default_factory=list)
     # CyberSlot -> installed cyberware id (cybernetics.CYBERWARE_BY_ID), one piece per
     # slot. Unlike inventory there's no equipped flag -- cyberware is surgically
-    # installed, not worn, so whatever's here is always active. Empty until
-    # cybernetics.install_cyberware is called (no shop wired to it yet).
+    # installed, not worn, so whatever's here is always active. Filled by
+    # cybernetics.install_cyberware, sold by screens.RipperdocScreen's clinic. What's
+    # in here is subtracted from the Humanity ceiling above to give free_humanity --
+    # so this dict is also, directly, how much of the runner is left.
     installed_cyberware: dict[CyberSlot, str] = field(default_factory=dict)
     # Owned consumables, ids from shops.CONSUMABLES_BY_ID. Duplicates allowed.
     # Removed (via inventory.use_consumable) once used, unlike persistent gear.
@@ -728,6 +782,24 @@ class Character:
         `stat()` and `screens.CharacterSheet` both read it rather than re-deriving it."""
         return min(FATIGUE_STAT_PENALTY_CAP, self.fatigue)
 
+    @property
+    def humanity_penalty(self) -> int:
+        """The felt penalty from how little of the runner is left -- one step per
+        HUMANITY_PENALTY_THRESHOLDS entry crossed on the way down.
+
+        Reads *free* Humanity (ceiling minus everything installed), not the ceiling:
+        chrome you are carrying is the part of you that's gone. So this rises as you
+        install and falls back as you pull pieces out, which is the whole point of the
+        rebound -- a runner can climb back out of the spiral by going under the knife
+        again, paying only SURGERY_SCARRING for the trip.
+
+        The one place this is computed; `stat()` and `screens.CharacterSheet` both read
+        it. Deliberately does not raise at 0 free Humanity: that's cyberpsychosis and
+        it ends the run, but ending it is the caller's job (RipperdocScreen), not a
+        property's."""
+        free = free_humanity(self)
+        return sum(1 for threshold in HUMANITY_PENALTY_THRESHOLDS if free < threshold)
+
     def mark_rested(self) -> None:
         """Record a completed rest -- called by app.rest() and a hospital stay alike.
         Halves fatigue rather than clearing it (see `fatigue`'s field comment), but
@@ -746,4 +818,5 @@ class Character:
             value += installed_bonus(self.installed_cyberware, name)
             value += self.temp_bonuses.get(name, 0)
             value -= self.fatigue_penalty
+            value -= self.humanity_penalty
         return value

@@ -18,6 +18,7 @@ from shadowguy.app import ShadowguyApp
 from shadowguy.buildings import BuildingKind, Lock
 from shadowguy.character import (
     GEAR_EB_PER_POINT,
+    SURGERY_SCARRING,
     HOURS_PER_DAY,
     REST_HOURS_COST,
     Character,
@@ -65,7 +66,13 @@ from shadowguy.corp_turn import (
     has_technology,
     owned_research_facility,
 )
-from shadowguy.cybernetics import CYBERWARE_CATALOG, free_humanity
+from shadowguy.cybernetics import (
+    CYBERWARE_BY_ID,
+    CYBERWARE_CATALOG,
+    CyberSlot,
+    free_humanity,
+    install_cyberware,
+)
 from shadowguy.screens.corp_screen import CorpScreen, ForcePickScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen, GearScreen
 
@@ -3725,9 +3732,10 @@ def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
             await pilot.click("#ripper_installed ListItem")
             await pilot.pause()
             assert app.character.installed_cyberware == {}
-            # No refund: taking it out gives the humanity back but not the cash.
+            # No cash refund, and the rebound isn't a clean undo: the implant's whole
+            # humanity_cost comes back, but both operations left a permanent scar.
             assert app.character.cash < before_cash
-            assert free_humanity(app.character) == before_humanity
+            assert free_humanity(app.character) == before_humanity - 2 * SURGERY_SCARRING
 
     run(body())
 
@@ -3756,5 +3764,75 @@ def test_ripperdoc_hides_stock_above_the_players_standing():
             gated = {c.id for c in CYBERWARE_CATALOG if c.min_standing > 0}
             assert shown & gated == set()
             assert {c.id for c in CYBERWARE_CATALOG if c.tier == 1} <= shown
+
+    run(body())
+
+
+def test_ripperdoc_install_that_takes_the_last_of_you_ends_the_run():
+    """Cyberpsychosis. install_cyberware only refuses a piece that doesn't *fit*, so
+    one costing exactly what's left goes in — and the operation's own scar takes free
+    Humanity under 0. The shelf warns first; the player is allowed to do it anyway."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            clinic = next(
+                loc
+                for t in app.corp_map.territories.values()
+                for loc in t.locations
+                if loc.kind == LocationKind.CYBER_CLINIC
+            )
+            character = app.character
+            character.cash = 1_000_000
+            piece = CYBERWARE_BY_ID["reflex_coprocessor"]
+            character.humanity = piece.humanity_cost  # nothing to spare
+
+            app.push_screen(RipperdocScreen(clinic))
+            await _settle(pilot)
+
+            # The row says so before it's clicked.
+            row = app.screen.query_one(f"#install_{piece.id}", ListItem)
+            assert "LAST OF YOU" in row.query_one(Static).content
+
+            await pilot.click(f"#install_{piece.id}")
+            await pilot.pause()
+            assert free_humanity(character) < 0
+            assert "nothing left to wake up" in (
+                app._exit_renderables[0] if app._exit_renderables else ""
+            )
+
+    run(body())
+
+
+def test_ripperdoc_removal_rebounds_humanity_and_lifts_the_penalty():
+    """The way back out of the spiral: pulling chrome returns its whole cost and
+    charges only the scar."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            clinic = next(
+                loc
+                for t in app.corp_map.territories.values()
+                for loc in t.locations
+                if loc.kind == LocationKind.CYBER_CLINIC
+            )
+            character = app.character
+            character.cash = 1_000_000
+            for piece in ("reflex_coprocessor", "hydraulic_cyberarm"):
+                install_cyberware(character, piece)
+            assert character.humanity_penalty > 0
+            sunk = free_humanity(character)
+
+            app.push_screen(RipperdocScreen(clinic))
+            await _settle(pilot)
+            await pilot.click("#remove_arms")
+            await pilot.pause()
+
+            assert free_humanity(character) > sunk
+            assert character.humanity_penalty == 0
+            assert CyberSlot.ARMS not in character.installed_cyberware
 
     run(body())

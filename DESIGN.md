@@ -21,7 +21,7 @@ That leaves the spread lopsided on purpose: agility **13**, logic **11**, cool 5
 
 **`Rep` is floored at `REP_FLOOR` (-10), not 0** — unlike health, it's allowed into the red. A blown job or gig costs a point of it (`Character.adjust_rep`, called from `scene.apply_outcome` and, for the knockout path that bypasses `Outcome`s, directly from `screens.scene_screen.SceneScreen._on_combat_end`): the last stage's plain failure or fleeing any of a job's fights costs `jobs.JOB_FAILURE_REP_HIT` (-1) alongside `JOB_FAILURE_TRUST_HIT` (-1) with the sending fixer; either kind of gig failure costs `gigs.GIG_FAIL_REP_HIT` (-1) alongside `GIG_FAIL_STANDING_HIT` (-1) with the gig's owner. A mid-job stage failure that isn't the last one doesn't trigger this (the job carries on — see Fixers & job generation). Live consequence: `factions.CORP_OFFICER_TIERS`' reception gate is `min_rep = 0`, so a runner whose rep has gone negative gets turned away even from the public lobby (see Corporate HQs & officers).
 
-**`Humanity` is a fixed baseline (`HUMANITY_BASELINE`, 6), not a meter that moves.** Nothing in the game raises or lowers `Character.humanity` today — it's a ceiling, not a draining pool. What it caps is real: it's the runner's total budget for cyberware, spent as `cybernetics.Cyberware.humanity_cost` per installed piece (see Cyberware) rather than an abstract cyberpsychosis tally.
+**`Humanity` is a ceiling that erodes, and what's left of you under it.** `Character.humanity` starts at `HUMANITY_BASELINE` (6) and is permanently worn down by `SURGERY_SCARRING` on every cyberware operation; `cybernetics.free_humanity` is that ceiling minus everything installed. The second number is the one that moves and the one that matters — it grades a stat penalty through `Character.stat()`, and reaching 0 ends the run. Full treatment in Cyberware.
 
 ## Character creation (`screens/creation_screen.py`)
 
@@ -903,7 +903,26 @@ Persistent body modifications, distinct from `shops.Item`: cyberware is **instal
 
 **Load-bearing today, not inert.** `Character.stat()` folds `cybernetics.installed_bonus` in alongside `inventory.equipped_bonus`; `skill_gear_bonus()` does the same for `installed_skill_bonus`. `install_cyberware`/`remove_cyberware` are real: installing charges cash **and** Humanity capacity, fails closed on an occupied slot/unaffordable/insufficient Humanity; removing frees both, no refund.
 
-**Humanity is capacity, not a drain.** Every `Cyberware` carries a `humanity_cost` (float — Smartlink costs 0.5), the sum across everything installed can never exceed `Character.humanity` (`HUMANITY_BASELINE`, 6). `installed_humanity_cost`/`free_humanity` mirror `inventory.free_program_slots`'s shape. Nothing lowers `Character.humanity` itself yet — purely a loadout budget today.
+**Humanity is a ceiling that erodes, and what's left of you underneath it.** Two numbers, and the second is the one that matters:
+
+```
+Character.humanity   the ceiling  -- HUMANITY_BASELINE (6), permanently worn down by surgery
+free_humanity(c)     what's left  -- the ceiling minus everything currently installed
+```
+
+`free_humanity` is *the* Humanity number: it's what `CharacterSheet` shows, what `Character.humanity_penalty` reads, and hitting **0 ends the run** (cyberpsychosis). The ceiling on its own only says how much room a runner was born with and has since given up.
+
+**Every operation scars, install and removal alike** (`SURGERY_SCARRING`, 0.1, charged by `install_cyberware`/`remove_cyberware`). Both are surgery. A no-op removal on an empty slot doesn't scar — nobody opened anyone up.
+
+**Removal rebounds.** Pulling a piece returns its whole `humanity_cost` and costs only the scar, so it's always a clear net gain (the cheapest implant is 0.5 against a 0.1 scar) — that's the way back out of a spiral, and it's why there's no therapy screen. What it isn't is a clean undo: **churning a loadout grinds the ceiling down with nothing to show for it**, which is the ratchet that stops surgery being free.
+
+**The penalty is graded, and read through `Character.stat()`** — the same chokepoint gear, cyberware and `fatigue_penalty` already pass through, so every check, combat roll and skill value feels it without further wiring. `HUMANITY_PENALTY_THRESHOLDS` (2.0 / 1.0 / 0.5) is the band table.
+
+**Where those bands sit is load-bearing, not decoration.** Cyberware's whole point is that it makes a runner better, so a *first* implant must not cost more than it gives. An earlier (4.0, 3.0, 2.0) put a single 3-cost implant straight into -2 — turning a +1 Agility piece into a net **-1** Agility and -2 to everything else, i.e. chrome as a strict downgrade. Starting the first band at 2.0 leaves the shallow end of the catalog penalty-free and reserves the drain for a runner who is genuinely most machine: the cheapest piece in every slot (4.0 of chrome + 0.4 of scarring) lands at -1, and only a deep loadout reaches the cap.
+
+**The fail state is a cliff you can see and still choose to walk off.** `install_cyberware` refuses only a piece that doesn't *fit*, so one costing exactly what's left is legal — and then the operation's own scar tips `free_humanity` below 0. `RipperdocScreen` marks such a row `— WOULD BE THE LAST OF YOU` and leaves it selectable; taking it exits the run via the same path as death. Never by surprise, but never blocked either.
+
+All first-slice, not balance-simulated.
 
 **Smartlink** (`CyberSlot.OPTICS`) is conditional, not flat: installed alone it does nothing, only granting `combat.smartlink_bonus`'s extra dice (`SMARTLINK_ATTACK_BONUS`, 2) when the equipped weapon is itself `Item.smartlinked` (the pipe pistol and the tier-2 assault rifle — guarded at import to only ever be valid on a gun — `skill in shops.FIREARM_SKILLS`, which is the three gun categories plus `gunnery`, never a bow or a blade). Threaded through `resolve_hit`'s `advantage` param (not folded into `skill_gear_bonus`, which can't express a weapon-conditional bonus). Gate: `cybernetics.has_smartlink`, checking `Cyberware.grants_smartlink` (a flag, not an id match).
 
@@ -923,4 +942,4 @@ A clinic is deliberately **not** in `SHOP_KINDS`: that tuple routes to `ShopScre
 
 **Every catalog row must be installable within `HUMANITY_BASELINE`**, guarded at import in `character.py` (the module that sees both the constant and the catalog). The tier multipliers make this easy to break from the Tier 1 side: `adamantium_bones` at a `humanity_cost` of 4 put its Tier 4 knockoff at 6.4, past the baseline of 6, so that row could never be installed by anyone — invisible while nothing sold cyberware, a permanent dead shelf line once something did. Its base cost is 3.5 for exactly that reason. The guard used to only ask that each `CyberSlot` held *some* affordable piece, which is how one bad row hid in a slot that had others.
 
-**Still missing: cyberpsychosis.** Humanity is spent as install-time capacity and nothing reads what's left over. `RipperdocScreen` surfaces `free_humanity` in its header, which makes the budget visible for the first time, but it's still a loadout constraint rather than a resource that depletes over a run.
+`RipperdocScreen` surfaces `free_humanity` in its header, so the budget is visible where it's spent.
