@@ -16,6 +16,10 @@ lightweight-fixture style), not a full generate_corp_map — none of this cares
 about the rest of a real map's generated content.
 """
 
+import random
+
+import pytest
+
 from shadowguy.character import Character
 from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent
 from shadowguy.corpmap import CorpMap, Location, LocationKind, Territory
@@ -23,11 +27,17 @@ from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, JobOffer, expire_offers
 from shadowguy.jobs import JobTiming
 from shadowguy.rivals import (
+    AI_GARRISON_CAP,
+    AI_TERRITORIES_PER_ATTACKER,
     EXPANSION_CHANCE,
+    MIN_AI_ATTACK_FORCE,
     RECOVERY_DAYS,
     RIVAL_RESEARCH_CHANCE,
     RunnerActivity,
     RunnerState,
+    _attack_force,
+    _pick_attack_target,
+    _reinforce,
     resolve_rival_day,
 )
 from shadowguy.runners import RIVAL_RUNNERS
@@ -420,3 +430,162 @@ def test_a_job_posted_today_cannot_be_stolen_before_the_player_sees_it():
         Character(name="t"), _map(), day=2, rng=HIT, rival_runner_states={}, fixers=[fixer]
     )
     assert offer.taken_by == RIVAL_RUNNERS[0].id
+
+
+# --- Conflict ---------------------------------------------------------------
+
+
+class ForcedAttack(ForcedChance):
+    """random() fixed (so every daily chance fires or misses on demand) *and*
+    randint() pinned to 6 — both contest dice come off the same rng, so matching
+    them collapses a capture to the deterministic `committed > defense`."""
+
+    def randint(self, a, b):
+        return 6
+
+
+ATTACK_HIT = ForcedAttack(0.0)
+ATTACK_MISS = ForcedAttack(0.99)
+
+
+def _contested_map():
+    """iron_home -- ghost_home, so IRONCLAD and GHOSTWIRE border each other.
+    iron_home also holds iron_second, so neither side is one loss from wiped."""
+    return CorpMap(
+        territories={
+            "start": _territory("start", connections=["iron_home"]),
+            "iron_home": _territory(
+                "iron_home", owner=IRONCLAD, connections=["start", "iron_second", "ghost_home"]
+            ),
+            "iron_second": _territory("iron_second", owner=IRONCLAD, connections=["iron_home"]),
+            "ghost_home": _territory(
+                "ghost_home", owner=GHOSTWIRE, connections=["iron_home", "ghost_second"]
+            ),
+            "ghost_second": _territory("ghost_second", owner=GHOSTWIRE, connections=["ghost_home"]),
+        },
+        player_start_id="start",
+    )
+
+
+def test_faction_attacks_a_bordering_rival():
+    corp_map = _contested_map()
+    actions = resolve_rival_day(Character(name="t"), corp_map, day=5, rng=ATTACK_HIT)
+    attack = _faction_action(actions, IRONCLAD).attack
+    assert attack is not None
+    assert attack.territory_id in ("ghost_home",)
+    assert attack.defender_id == GHOSTWIRE
+
+
+def test_faction_does_not_attack_without_a_bordering_rival():
+    """_map()'s factions are isolated from each other — only neutral ground borders
+    IRONCLAD, so there is nothing to attack however the dice fall."""
+    actions = resolve_rival_day(Character(name="t"), _map(), day=5, rng=ATTACK_HIT)
+    assert _faction_action(actions, IRONCLAD).attack is None
+
+
+def test_no_attack_on_a_miss():
+    corp_map = _contested_map()
+    actions = resolve_rival_day(Character(name="t"), corp_map, day=5, rng=ATTACK_MISS)
+    assert _faction_action(actions, IRONCLAD).attack is None
+    assert corp_map.territories["ghost_home"].owner == GHOSTWIRE
+
+
+def test_a_capture_is_logged_as_a_seizure_event():
+    corp_map = _contested_map()
+    events = {}
+    resolve_rival_day(
+        Character(name="t"), corp_map, day=5, rng=ATTACK_HIT, faction_events=events
+    )
+    seizures = [e for e in events.get(IRONCLAD, []) if e.kind == "seizure"]
+    assert len(seizures) == 1
+    assert seizures[0].territory_id == "ghost_home"
+    assert seizures[0].from_faction_id == GHOSTWIRE
+    assert seizures[0].day == 5
+
+
+def test_reinforce_adds_to_the_thinnest_district():
+    corp_map = _contested_map()
+    corp_map.territories["iron_home"].garrison = 2
+    corp_map.territories["iron_second"].garrison = 0
+    _reinforce(corp_map, IRONCLAD, HIT)
+    assert corp_map.territories["iron_second"].garrison == 1
+    assert corp_map.territories["iron_home"].garrison == 2
+
+
+def test_reinforce_stops_at_the_cap():
+    corp_map = _contested_map()
+    for territory_id in ("iron_home", "iron_second"):
+        corp_map.territories[territory_id].garrison = AI_GARRISON_CAP
+    _reinforce(corp_map, IRONCLAD, HIT)
+    assert corp_map.territories["iron_home"].garrison == AI_GARRISON_CAP
+    assert corp_map.territories["iron_second"].garrison == AI_GARRISON_CAP
+
+
+def test_reinforce_does_nothing_on_a_miss():
+    corp_map = _contested_map()
+    _reinforce(corp_map, IRONCLAD, MISS)
+    assert corp_map.territories["iron_home"].garrison == 0
+
+
+def test_attack_force_scales_with_holdings():
+    corp_map = _contested_map()
+    # Two districts -> MIN_AI_ATTACK_FORCE floors it.
+    assert _attack_force(corp_map, IRONCLAD) == MIN_AI_ATTACK_FORCE
+    for i in range(8):
+        corp_map.territories[f"extra_{i}"] = _territory(f"extra_{i}", owner=IRONCLAD)
+    assert _attack_force(corp_map, IRONCLAD) == 10 // AI_TERRITORIES_PER_ATTACKER
+
+
+def test_relations_bias_which_rival_a_faction_moves_on():
+    """The first thing to read relations.py at all: a corp hits whoever it already
+    gets on worst with. Statistical rather than exact — the weighting is a bias,
+    not a rule — but pinned to a seed, so it's deterministic."""
+    corp_map = _contested_map()
+    corp_map.territories["merid_edge"] = _territory("merid_edge", owner=MERIDIAN)
+    relations = {
+        frozenset((IRONCLAD, GHOSTWIRE)): -2,  # hated -> weight 5
+        frozenset((IRONCLAD, MERIDIAN)): 2,  # liked -> weight 1
+    }
+    rng = random.Random(0)
+    picks = [
+        _pick_attack_target(corp_map, IRONCLAD, ["ghost_home", "merid_edge"], relations, rng)
+        for _ in range(1000)
+    ]
+    assert picks.count("ghost_home") > picks.count("merid_edge") * 3
+
+
+def test_pick_attack_target_falls_back_without_relations():
+    """Hand-built fixtures omit CorpMap.relations, so target choice has to survive
+    having none rather than raising on a missing pair."""
+    corp_map = _contested_map()
+    assert _pick_attack_target(corp_map, IRONCLAD, ["ghost_home"], None, random.Random(0)) == "ghost_home"
+
+
+def test_the_players_faction_takes_no_turn_but_is_still_attackable():
+    """The loss condition depends on this: resolve_rival_day skips the player's
+    faction as an *actor*, but its ground is ordinary attack_candidates ground for
+    everyone else, with no special case anywhere."""
+    corp_map = _contested_map()
+    actions = resolve_rival_day(
+        Character(name="t"), corp_map, day=5, rng=ATTACK_HIT, player_faction_id=IRONCLAD
+    )
+    assert not [a for a in actions if a.kind == "faction" and a.actor_id == IRONCLAD]
+    ghost_attack = _faction_action(actions, GHOSTWIRE).attack
+    assert ghost_attack is not None
+    assert ghost_attack.defender_id == IRONCLAD
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_a_rival_day_never_leaves_a_negative_garrison_or_orphan_owner(seed):
+    """Seed sweep over the whole daily pipeline: whatever the dice do, garrisons
+    stay non-negative and every district is held by a real faction or nobody."""
+    corp_map = _contested_map()
+    rng = random.Random(seed)
+    valid = {f.id for f in FACTIONS} | {"neutral"}
+    for day in range(1, 20):
+        resolve_rival_day(Character(name="t"), corp_map, day=day, rng=rng)
+        for territory in corp_map.territories.values():
+            assert territory.garrison >= 0
+            assert territory.owner in valid
+            if territory.owner == "neutral":
+                assert territory.garrison == 0

@@ -73,7 +73,7 @@ class SceneScreen(Screen):
         choice = stage.choices[index]
 
         character = self.app.character
-        result, outcome = resolve_choice(character, self.scene, choice)
+        result, outcome = resolve_choice(character, self.scene, choice, self.app.corp_map)
         self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
 
@@ -168,7 +168,7 @@ class SceneScreen(Screen):
         stage = self._current_stage()
         entrance = stage.burglary.entrances[chosen_index]
         character = self.app.character
-        result, outcome = resolve_entrance(character, self.scene, entrance)
+        result, outcome = resolve_entrance(character, self.scene, entrance, self.app.corp_map)
         self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
 
@@ -261,7 +261,7 @@ class SceneScreen(Screen):
 
     async def _finish_stage_outcome(self, outcome, result: CheckResult | None = None) -> None:
         character = self.app.character
-        apply_outcome(character, outcome, self.scene)
+        apply_outcome(character, outcome, self.scene, self.app.corp_map)
         if not character.is_alive:
             self.app.exit(message=f"{character.name} has died. Game over.")
             return

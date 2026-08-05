@@ -6,15 +6,33 @@ Called once per day from ShadowguyApp's day tick (app._apply_day_tick, fired by
 app.spend_time whenever elapsed time crosses midnight), the same tick that pays
 crew wages and refreshes gigs/offers.
 
-Factions do something real: a faction can push onto neutral ground bordering
-its own territory (see claim_territory / corpmap.expansion_candidates) — the
-4X-style area-control mechanic CLAUDE.md flags as still missing. Deliberately
-scoped to neutral ground only: taking a rival faction's own territory is a
-bigger mechanic (contest resolution, standing/rep fallout) left for later.
+A faction gets three separate rolls a day, not one choice between them:
+  - expansion onto neutral ground bordering its own (claim_territory /
+    corpmap.expansion_candidates),
+  - reinforcement of its thinnest district (_reinforce), and
+  - an attack on a bordering rival (_faction_attack), settled through
+    corp_turn.resolve_attack — the same dice the player's own attack_territory
+    rolls, so the AI is never fighting a different war than the player is.
+
+That last one is the conflict layer this module used to defer ("taking a rival
+faction's own territory is a bigger mechanic, left for later"). It is what makes
+the map genuinely contested rather than a race to fill empty space, and it is how
+a player-run corp can *lose* ground — the AI attacks the player's districts
+through exactly the same path it attacks each other's, with no special case.
+
+Target choice is where relations.py finally does something: a faction weights its
+candidates by how badly it already gets on with each one's owner
+(_pick_attack_target), so the seeded corp-vs-corp standing that had been pure
+data now decides who moves on whom.
+
+An AI faction keeps no operative pool — its attack force and garrison cap are
+derived from its holdings (_attack_force / AI_GARRISON_CAP) rather than tracked,
+so there is no shadow CorpState per faction.
 
 Once the player takes over a Faction (corp_turn.py), that faction is excluded
 from this AI loop via player_faction_id — its daily move becomes the player's
-own decision instead.
+own decision instead. Note the exclusion is only on *acting*: the player's
+territory is still ordinary attack_candidates ground for everyone else.
 
 RivalRunners now make a real choice each day rather than only drifting. An
 independent (not-hired) runner picks one RunnerActivity per turn, and the
@@ -52,9 +70,22 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 from shadowguy.character import Character
-from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent, log_faction_event
-from shadowguy.corpmap import CorpMap, LocationKind, claim_territory, expansion_candidates
+from shadowguy.corp_turn import (
+    TECHNOLOGIES,
+    AttackResult,
+    FactionEvent,
+    log_faction_event,
+    resolve_attack,
+)
+from shadowguy.corpmap import (
+    CorpMap,
+    LocationKind,
+    attack_candidates,
+    claim_territory,
+    expansion_candidates,
+)
 from shadowguy.factions import FACTIONS
+from shadowguy.relations import Relations, relation
 from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
 
 if TYPE_CHECKING:
@@ -63,6 +94,35 @@ if TYPE_CHECKING:
 # Per faction, per day; only rolled when the faction has an eligible neutral
 # neighbor at all. First-slice number, not balance-simulated.
 EXPANSION_CHANCE = 0.2
+
+# --- Conflict ---------------------------------------------------------------
+# An AI faction keeps no operative pool the way CorpState does — modelling one
+# would mean giving every faction a shadow CorpState purely so the player never
+# sees it. Instead a faction's force is *derived* from what it holds: bigger corps
+# field bigger attacks and garrison harder, which is the only property of a pool
+# the player can actually observe from outside.
+#
+# Per faction, per day: the odds it reinforces one of its own districts by 1,
+# rolled only where something is under AI_GARRISON_CAP. The cap is per district,
+# so a faction's total standing force still scales with its holdings.
+AI_GARRISON_CHANCE = 0.35
+AI_GARRISON_CAP = 4
+# Per faction, per day: the odds it attacks a bordering rival, rolled only when it
+# has a candidate at all. Deliberately well under EXPANSION_CHANCE — free ground
+# is always the cheaper move, so corps mostly grow outward and turn on each other
+# once the neutral ground runs out, which is what gives a run its shape.
+ATTACK_CHANCE = 0.12
+# What a faction commits to an attack: one operative per this many districts held,
+# floored at MIN_AI_ATTACK_FORCE. A four-district corp throws 2, a ten-district
+# corp throws 5 — so a runaway leader presses its advantage rather than stalling.
+AI_TERRITORIES_PER_ATTACKER = 2
+MIN_AI_ATTACK_FORCE = 2
+# How much relations.py's seeded corp-vs-corp standing sways target choice. Each
+# candidate is weighted by (RELATION_TARGET_BIAS - relation), so the corp a faction
+# already dislikes is the one it moves on first, and an ally is picked only when
+# there's nobody else to hit. This is the first thing to read relations at all —
+# it was seeded at generation and consumed by nothing.
+RELATION_TARGET_BIAS = 3
 
 # Per faction, per day; only rolled when a Technology is available to it (prereqs
 # met, not already "researched" — see rival_researched below). Deliberately not
@@ -155,10 +215,76 @@ class RivalAction:
     activity: RunnerActivity | None = None
     job_title: str | None = None
     fixer_id: str | None = None
+    # Faction only: the attack this faction made on a rival today, if it made one.
+    # Independent of territory_id (which stays the *neutral* ground it expanded
+    # onto) because expanding and attacking are separate rolls, not one choice —
+    # a faction can do both on the same day.
+    attack: AttackResult | None = None
 
 
 def _has_bar(corp_map: CorpMap, territory_id: str) -> bool:
     return any(loc.kind is LocationKind.BAR for loc in corp_map.territories[territory_id].locations)
+
+
+def _faction_territories(corp_map: CorpMap, faction_id: str) -> list:
+    """Sorted by id, so a garrison roll picks the same district for the same seed."""
+    return sorted(
+        (t for t in corp_map.territories.values() if t.owner == faction_id), key=lambda t: t.id
+    )
+
+
+def _reinforce(corp_map: CorpMap, faction_id: str, rng: random.Random) -> None:
+    """One AI faction's standing-force upkeep: with AI_GARRISON_CHANCE, add a
+    single operative to whichever of its districts is currently thinnest (ties
+    broken by id). Thinnest-first rather than random so a faction shores up its
+    weak flank instead of stacking one fortress, which is what stops the player
+    from finding a permanently free way in."""
+    holdings = [t for t in _faction_territories(corp_map, faction_id) if t.garrison < AI_GARRISON_CAP]
+    if not holdings or rng.random() >= AI_GARRISON_CHANCE:
+        return
+    min(holdings, key=lambda t: t.garrison).garrison += 1
+
+
+def _attack_force(corp_map: CorpMap, faction_id: str) -> int:
+    """How many operatives this faction throws at a rival, derived from its
+    holdings (see AI_TERRITORIES_PER_ATTACKER) rather than drawn from a pool it
+    doesn't have."""
+    held = len(_faction_territories(corp_map, faction_id))
+    return max(MIN_AI_ATTACK_FORCE, held // AI_TERRITORIES_PER_ATTACKER)
+
+
+def _pick_attack_target(
+    corp_map: CorpMap, faction_id: str, candidates: list[str], relations: Relations | None, rng: random.Random
+) -> str:
+    """Which bordering rival district a faction moves on. Weighted by how badly it
+    already gets on with each district's owner (relations.relation, seeded per run
+    by relations.generate_relations): a corp hits the rival it likes least first.
+
+    Weights are (RELATION_TARGET_BIAS - relation), floored at 1 so even a
+    well-liked rival stays possible — a corp with one hostile neighbor should
+    usually, not always, go for that one. Falls back to a flat pick when the map
+    carries no relations at all (hand-built test fixtures omit them)."""
+    if relations is None:
+        return rng.choice(candidates)
+    weights = [
+        max(1, RELATION_TARGET_BIAS - relation(relations, faction_id, corp_map.territories[t].owner))
+        for t in candidates
+    ]
+    return rng.choices(candidates, weights=weights)[0]
+
+
+def _faction_attack(
+    corp_map: CorpMap, faction_id: str, relations: Relations | None, rng: random.Random
+) -> AttackResult | None:
+    """One AI faction's shot at taking ground off a rival. Rolls ATTACK_CHANCE
+    only when it actually borders one, picks a target by relations, and settles it
+    through corp_turn.resolve_attack — the same dice the player's own
+    attack_territory rolls, so the AI can't be fighting a different war."""
+    candidates = attack_candidates(corp_map, faction_id)
+    if not candidates or rng.random() >= ATTACK_CHANCE:
+        return None
+    target_id = _pick_attack_target(corp_map, faction_id, candidates, relations, rng)
+    return resolve_attack(corp_map.territories[target_id], faction_id, _attack_force(corp_map, faction_id), rng)
 
 
 def _takeable_offers(fixers: list["Fixer"], day: int) -> list["JobOffer"]:
@@ -307,7 +433,24 @@ def resolve_rival_day(
                 log_faction_event(
                     faction_events, faction.id, FactionEvent(kind="territory", day=day, territory_id=target_id)
                 )
-        actions.append(RivalAction(kind="faction", actor_id=faction.id, day=day, territory_id=target_id))
+        _reinforce(corp_map, faction.id, rng)
+        attack = _faction_attack(corp_map, faction.id, corp_map.relations or None, rng)
+        if attack is not None and attack.captured and faction_events is not None:
+            log_faction_event(
+                faction_events,
+                faction.id,
+                FactionEvent(
+                    kind="seizure",
+                    day=day,
+                    territory_id=attack.territory_id,
+                    from_faction_id=attack.defender_id,
+                ),
+            )
+        actions.append(
+            RivalAction(
+                kind="faction", actor_id=faction.id, day=day, territory_id=target_id, attack=attack
+            )
+        )
 
         researched = rival_researched.setdefault(faction.id, set())
         available = [

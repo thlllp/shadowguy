@@ -29,7 +29,10 @@ from shadowguy.corpmap import (
     WORKSHOP_BUILD_COST,
     Location,
     LocationKind,
+    STARTING_RESEARCH_TIER,
     TerritoryModifier,
+    attack_candidates,
+    capture_territory,
     expansion_candidates,
     has_home,
     lodging_cost,
@@ -49,6 +52,8 @@ from shadowguy.screens.burglary_screens import EntrancePickScreen
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.corp_turn import (
+    ACADEMY_REBUILD_COST,
+    RESEARCH_FACILITY_REBUILD_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     CorpState,
@@ -56,9 +61,11 @@ from shadowguy.corp_turn import (
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     collect_income,
+    collect_research,
     has_technology,
+    owned_research_facility,
 )
-from shadowguy.screens.corp_screen import CorpScreen, ResearchTreeScreen
+from shadowguy.screens.corp_screen import CorpScreen, ForcePickScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen, GearScreen
 
 from shadowguy.screens.matrix_screen import MatrixScreen
@@ -125,7 +132,7 @@ from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.geometry import Offset
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
-from helpers import ForcedChance, crew_stats_for
+from helpers import AlwaysSix, ForcedChance, crew_stats_for
 
 
 def _stage_gang_turf(app, standing: int) -> str:
@@ -1543,7 +1550,13 @@ def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
             app.spend_time(HOURS_PER_DAY * 2 + 3)
 
             assert app.character.day == 3
-            assert app.corp_state.cash == cash_before + 2 * one_day_income
+            # Bounded, not exact: since the conflict layer landed, a rival can capture
+            # one of the player's districts on either tick, and income is per-territory.
+            # The corp can only *lose* ground here (resolve_rival_day skips the player's
+            # own faction as an actor), so two ticks credit strictly more than zero and
+            # at most two full days' worth. The rival_actions count below is what proves
+            # the loop iterated twice; this just proves income was collected in it.
+            assert cash_before < app.corp_state.cash <= cash_before + 2 * one_day_income
             # rival_actions must accumulate across both boundaries crossed in this one
             # spend, not just keep the last day's -- one action per non-player faction
             # plus one per not-on-crew rival runner, per day ticked.
@@ -3396,5 +3409,263 @@ def test_beginning_the_run_writes_off_unspent_gear_budget_instead_of_banking_it(
             await _settle(pilot)
             assert character.gear_budget == 0
             assert character.cash == cash  # written off, never banked
+
+    run(body())
+
+
+def test_corp_defeat_ends_the_run_on_the_day_tick():
+    """The one loss condition Corp mode has: hold nothing at the day boundary and
+    the run is over. Driven through the real tick rather than calling corp_defeated
+    directly, so the wiring in _apply_day_tick is what's under test."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+            assert app.corp_state is not None
+
+            # Everything the corp held is taken off it overnight.
+            ours = app.corp_state.faction_id
+            other = next(f.id for f in FACTIONS if f.id != ours)
+            for territory in app.corp_map.territories.values():
+                if territory.owner == ours:
+                    territory.owner = other
+            app.spend_time(HOURS_PER_DAY)
+            await pilot.pause()
+            assert app.return_value is None
+            assert "broken up" in (app._exit_renderables[0] if app._exit_renderables else "")
+
+    run(body())
+
+
+def test_corp_screen_operations_panel_lists_reinforce_and_attack_rows():
+    """The Operations panel offers a row per district held (reinforce) and per
+    bordering rival district (attack). Asserted on ids rather than prose."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+            assert isinstance(screen, CorpScreen)
+
+            ours = app.corp_state.faction_id
+            held = {t.id for t in app.corp_map.territories.values() if t.owner == ours}
+            rows = [item.id for item in screen.query_one("#operations_list", ListView).children]
+            for territory_id in held:
+                assert f"deploy_{territory_id}" in rows
+            # A seeded map always puts at least one rival bloc against another.
+            assert [r for r in rows if r.startswith("attack_")] == [
+                f"attack_{t}" for t in attack_candidates(app.corp_map, ours)
+            ]
+
+    run(body())
+
+
+def test_corp_screen_reinforce_flow_moves_operatives_onto_the_district():
+    """Full UI path: pick a district, pick a force size on ForcePickScreen, and the
+    operatives land on Territory.garrison."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+
+            app.corp_state.operatives = 4
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+
+            ours = app.corp_state.faction_id
+            target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
+            await pilot.click(f"#deploy_{target}")
+            await _settle(pilot)
+            assert isinstance(app.screen, ForcePickScreen)
+
+            await pilot.click("#force_4")
+            await _settle(pilot)
+            assert app.corp_map.territories[target].garrison == 4
+            assert app.corp_state.operatives == 0
+            assert app.corp_state.daily_action_used is True
+
+    run(body())
+
+
+def test_corp_screen_attack_flow_resolves_against_a_rival():
+    """The other half of the Operations panel, end to end. Force is pinned high and
+    the rng to sixes, so both contest dice match and the capture is deterministic."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+
+            ours = app.corp_state.faction_id
+            defender = next(f.id for f in FACTIONS if f.id != ours)
+            # A generated map doesn't guarantee the player's corp borders a rival, so
+            # hand a neighbouring district to one rather than skipping the test on the
+            # maps where it doesn't.
+            # Search the whole bloc, not just its first district — an interior one can
+            # be surrounded entirely by our own ground.
+            target = next(
+                c
+                for t in app.corp_map.territories.values()
+                if t.owner == ours
+                for c in t.connections
+                if app.corp_map.territories[c].owner != ours
+            )
+            territory = app.corp_map.territories[target]
+            territory.owner = defender
+            territory.garrison = 0
+            territory.modifiers[TerritoryModifier.SECURITY] = 1
+            app.corp_state.operatives = 4
+            app.rng = AlwaysSix()
+
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+
+            await pilot.click(f"#attack_{target}")
+            await _settle(pilot)
+            assert isinstance(app.screen, ForcePickScreen)
+            await pilot.click("#force_4")
+            await _settle(pilot)
+
+            # 4 committed vs defense 1: taken, one lost grinding through Security,
+            # three survivors left holding it.
+            assert app.corp_map.territories[target].owner == ours
+            assert app.corp_map.territories[target].garrison == 3
+            assert app.corp_state.operatives == 0
+            assert app.corp_state.daily_action_used is True
+            # The capture shows up on the corp's own public website.
+            seizures = [e for e in app.faction_events[ours] if e.kind == "seizure"]
+            assert seizures[0].territory_id == target
+            assert seizures[0].from_faction_id == defender
+
+    run(body())
+
+
+def test_corp_screen_offers_a_rebuild_once_the_facility_is_captured():
+    """Losing the labs to a rival swaps the Research Facility panel's upgrade rows for
+    rebuild rows — one per district held — and building one restores research."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+
+            ours = app.corp_state.faction_id
+            rival = next(f.id for f in FACTIONS if f.id != ours)
+            # A rival takes the district the labs stand on.
+            lab_territory = next(
+                t
+                for t in app.corp_map.territories.values()
+                if t.owner == ours
+                and any(loc.kind is LocationKind.RESEARCH_FACILITY for loc in t.locations)
+            )
+            capture_territory(lab_territory, rival)
+            app.corp_state.cash = RESEARCH_FACILITY_REBUILD_COST
+
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+
+            rows = [item.id for item in screen.query_one("#research_list", ListView).children]
+            assert rows and all(r.startswith("rebuild_") for r in rows)
+            assert "build_lab" not in rows
+
+            target = rows[0].removeprefix("rebuild_")
+            await pilot.click(f"#rebuild_{target}")
+            await _settle(pilot)
+
+            facility = owned_research_facility(app.corp_state, app.corp_map)
+            assert facility is not None
+            assert facility.research_tier == STARTING_RESEARCH_TIER
+            assert app.corp_state.cash == 0
+            assert collect_research(app.corp_state, app.corp_map) > 0
+            # Back to ordinary upgrade rows now that a facility stands again.
+            rows = [item.id for item in screen.query_one("#research_list", ListView).children]
+            assert "build_lab" in rows
+
+    run(body())
+
+
+def test_corp_screen_offers_an_academy_rebuild_once_it_is_captured():
+    """The Academy's mirror of the facility rebuild. Losing it is the harsher trap —
+    no training means no operatives, so no attacking and no garrisoning."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+
+            ours = app.corp_state.faction_id
+            rival = next(f.id for f in FACTIONS if f.id != ours)
+            academy_territory = next(
+                t
+                for t in app.corp_map.territories.values()
+                if t.owner == ours and any(loc.kind is LocationKind.ACADEMY for loc in t.locations)
+            )
+            capture_territory(academy_territory, rival)
+            app.corp_state.cash = ACADEMY_REBUILD_COST
+
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+
+            rows = [item.id for item in screen.query_one("#academy_list", ListView).children]
+            assert rows and all(r.startswith("newacademy_") for r in rows)
+            assert not any(r.startswith("train_") for r in rows)
+
+            target = rows[0].removeprefix("newacademy_")
+            await pilot.click(f"#newacademy_{target}")
+            await _settle(pilot)
+
+            assert app.corp_state.cash == 0
+            assert app.corp_state.daily_action_used is True
+            # Training rows are back now that an Academy stands again.
+            app.corp_state.daily_action_used = False
+            await screen._refresh()
+            await _settle(pilot)
+            rows = [item.id for item in screen.query_one("#academy_list", ListView).children]
+            assert any(r.startswith("train_") for r in rows)
 
     run(body())

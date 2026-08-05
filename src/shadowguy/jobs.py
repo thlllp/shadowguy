@@ -81,6 +81,18 @@ FULL_POOL_CHANCE = 0.35
 # Standing lost with the corp you just robbed, on a completed job.
 JOB_STANDING_HIT = -2
 
+# Security knocked off the district a completed job hit (scene.Outcome.security_delta,
+# applied to Scene.target_territory_id). The third thing a finished job moves, alongside
+# standing and fixer trust, and the first with a *corp-mode* consequence: Security is
+# half of corp_turn.defense_strength, so working a district is how it gets softened
+# before an attack goes in — your own corp's, or whoever else is circling it.
+#
+# Flat rather than scaled by _payout's multiplier: Security runs 0..MODIFIER_MAX (5), so
+# -1 is already a fifth of a district's standing defense and a critical success shouldn't
+# strip two. Clamped at 0 by apply_outcome, so grinding the same block forever bottoms
+# out rather than going negative.
+JOB_SECURITY_HIT = -1
+
 # Trust gained with the fixer who sent you, on a completed job — the other half of
 # JOB_STANDING_HIT: the corp you hit likes you less, the fixer who profits off it
 # likes you more. Same trigger (the final stage's success/critical-success) as standing.
@@ -1058,6 +1070,7 @@ def generate_job(
                 rep_delta=rep if last else 0,
                 standing_delta=JOB_STANDING_HIT if last else 0,
                 fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
+                security_delta=JOB_SECURITY_HIT if last else 0,
             )
 
         if archetype.vigilance and rng.random() >= VIGILANCE_THREAT_CHANCE:

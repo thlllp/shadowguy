@@ -10,6 +10,7 @@ import random
 import pytest
 
 from shadowguy.corp_turn import (
+    ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     BASE_LAB_CAPACITY,
     BRAINS_2_ID,
@@ -25,6 +26,7 @@ from shadowguy.corp_turn import (
     MAX_EFFICIENCY_UPGRADES,
     MAX_LABS_BUILT,
     RESEARCH_ASSISTANTS_PER_LAB,
+    RESEARCH_FACILITY_REBUILD_COST,
     RESEARCH_PER_ASSISTANT,
     RESEARCH_PER_SCIENTIST,
     STARTING_CASH,
@@ -40,10 +42,16 @@ from shadowguy.corp_turn import (
     advance_training,
     assistant_capacity,
     assistant_rate,
+    attack_territory,
+    build_academy,
     build_efficiency_upgrade,
     build_lab,
+    build_research_facility,
     collect_income,
     collect_research,
+    corp_defeated,
+    defense_strength,
+    deploy_operatives,
     development_targets,
     expand_into,
     expansion_cost,
@@ -51,9 +59,12 @@ from shadowguy.corp_turn import (
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
+    owned_research_facilities,
     owned_research_facility,
     raise_development,
     raise_surveillance,
+    rebuild_academy_targets,
+    rebuild_facility_targets,
     research_rate,
     research_technology,
     scientist_base_rate,
@@ -62,15 +73,19 @@ from shadowguy.corp_turn import (
 )
 from shadowguy.corpmap import (
     MODIFIER_MAX,
+    STARTING_ACADEMY_TIER,
+    STARTING_RESEARCH_TIER,
     CorpMap,
     Location,
     LocationKind,
     Territory,
     TerritoryModifier,
+    capture_territory,
     expansion_candidates,
 )
 from shadowguy.corpmap_gen import generate_corp_map
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from helpers import AlwaysOne, AlwaysSix
 
 IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
 
@@ -854,6 +869,17 @@ def test_surveillance_unlocks_development_on_a_poorly_seeded_district():
 # --- Technology: Brains 2 -----------------------------------------------------
 
 
+def _academy(corp_map, territory_id="iron_home"):
+    location = Location(
+        id=f"{territory_id}_academy",
+        name="Academy",
+        kind=LocationKind.ACADEMY,
+        academy_tier=STARTING_ACADEMY_TIER,
+    )
+    corp_map.territories[territory_id].locations.append(location)
+    return location
+
+
 def _facility(corp_map, territory_id="iron_home", **kwargs):
     location = Location(
         id="rf", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=0, **kwargs
@@ -924,3 +950,380 @@ def test_both_technologies_are_researchable_from_the_start():
         assert research_technology(corp_state, second) is True
         assert corp_state.research_points == 0
         assert corp_state.researched == {first, second}
+
+
+# --- Conflict ---------------------------------------------------------------
+# Both contest rolls come off the same rng, so AlwaysSix/AlwaysOne fix them to the
+# same face and the outcome collapses to the deterministic `committed > defense`.
+# That's what makes every case below exact rather than statistical.
+
+
+def _contested_map():
+    """iron_home(IRONCLAD) -- ghost_home(GHOSTWIRE, Security 2), plus a neutral.
+    iron_home also owns iron_second, so IRONCLAD survives losing one district."""
+    corp_map = _map()
+    corp_map.territories["ghost_home"] = _territory(
+        "ghost_home", owner=GHOSTWIRE, value=1, connections=["iron_home"]
+    )
+    corp_map.territories["ghost_home"].modifiers = {TerritoryModifier.SECURITY: 2}
+    corp_map.territories["iron_home"].connections.append("ghost_home")
+    return corp_map
+
+
+def test_defense_strength_sums_garrison_and_security():
+    territory = _territory("t", owner=IRONCLAD)
+    territory.garrison = 3
+    territory.modifiers = {TerritoryModifier.SECURITY: 2}
+    assert defense_strength(territory) == 5
+
+
+def test_defense_strength_of_an_unpoliced_empty_district_is_zero():
+    assert defense_strength(_territory("t", owner=IRONCLAD)) == 0
+
+
+def test_deploy_operatives_moves_them_from_the_pool_onto_the_district():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=5)
+    assert deploy_operatives(corp_state, corp_map, "iron_home", 3) is True
+    assert corp_state.operatives == 2
+    assert corp_map.territories["iron_home"].garrison == 3
+    assert corp_state.daily_action_used is True
+
+
+def test_deploy_operatives_fails_closed_on_every_gate():
+    corp_map = _map()
+    # More than the pool holds.
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=2)
+    assert deploy_operatives(corp_state, corp_map, "iron_home", 3) is False
+    # Not a district this corp holds.
+    assert deploy_operatives(corp_state, corp_map, "neutral_a", 1) is False
+    # Not a positive count.
+    assert deploy_operatives(corp_state, corp_map, "iron_home", 0) is False
+    assert corp_state.operatives == 2
+    assert corp_map.territories["iron_home"].garrison == 0
+    assert corp_state.daily_action_used is False
+    # Already moved today.
+    corp_state.daily_action_used = True
+    assert deploy_operatives(corp_state, corp_map, "iron_home", 1) is False
+    assert corp_state.operatives == 2
+
+
+def test_attack_captures_when_the_force_beats_the_defense():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=5)
+    # ghost_home defends at 2 (Security), so 3 committed takes it.
+    result = attack_territory(corp_state, corp_map, "ghost_home", 3, AlwaysSix())
+    assert result.captured is True
+    assert corp_map.territories["ghost_home"].owner == IRONCLAD
+    assert result.attacker_losses == 2  # one per point of defense ground through
+    # Survivors hold the ground they took rather than returning to the pool.
+    assert corp_map.territories["ghost_home"].garrison == 1
+    assert corp_state.operatives == 2
+    assert corp_state.daily_action_used is True
+
+
+def test_attack_is_repelled_when_the_defense_holds_and_survivors_come_home():
+    corp_map = _contested_map()
+    corp_map.territories["ghost_home"].garrison = 3  # defense 5 now
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=8)
+    result = attack_territory(corp_state, corp_map, "ghost_home", 4, AlwaysSix())
+    assert result.captured is False
+    assert corp_map.territories["ghost_home"].owner == GHOSTWIRE
+    assert result.attacker_losses == 4  # capped at what was committed
+    assert result.defender_losses == 3  # min(garrison, committed)
+    assert corp_map.territories["ghost_home"].garrison == 0
+    assert corp_state.operatives == 4  # 8 - 4 committed, none survived to return
+
+
+def test_a_repelled_attack_returns_its_survivors_to_the_pool():
+    corp_map = _contested_map()
+    corp_map.territories["ghost_home"].modifiers = {TerritoryModifier.SECURITY: 1}
+    corp_map.territories["ghost_home"].garrison = 0  # defense 1
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=6)
+    # Tie goes to the defender: 1 committed vs defense 1 is repelled, and the
+    # single attacker is the one loss, so nobody comes home from this one.
+    result = attack_territory(corp_state, corp_map, "ghost_home", 1, AlwaysSix())
+    assert result.captured is False
+    assert corp_state.operatives == 5
+
+
+def test_attack_ties_go_to_the_defender():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=5)
+    # committed == defense == 2: attack_power must strictly exceed.
+    result = attack_territory(corp_state, corp_map, "ghost_home", 2, AlwaysOne())
+    assert result.captured is False
+
+
+def test_attack_fails_closed_on_every_gate():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=2)
+    # More than the pool holds.
+    assert attack_territory(corp_state, corp_map, "ghost_home", 3, AlwaysSix()) is None
+    # Neutral ground is expand_into's business, not an attack's.
+    assert attack_territory(corp_state, corp_map, "neutral_a", 1, AlwaysSix()) is None
+    # Your own ground.
+    assert attack_territory(corp_state, corp_map, "iron_second", 1, AlwaysSix()) is None
+    assert corp_state.operatives == 2
+    assert corp_state.daily_action_used is False
+    corp_state.daily_action_used = True
+    assert attack_territory(corp_state, corp_map, "ghost_home", 1, AlwaysSix()) is None
+
+
+def test_capturing_a_rivals_facility_makes_a_corp_hold_two():
+    """The case DESIGN.md flagged in advance: capture_territory carries Locations
+    over, so collect_research has to fill more than one facility."""
+    corp_map = _contested_map()
+    _facility(corp_map)  # IRONCLAD's own, on iron_home
+    corp_map.territories["ghost_home"].locations.append(
+        Location(id="ghost_lab", name="Ghost Lab", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=5)
+    assert len(owned_research_facilities(corp_state, corp_map)) == 1
+    attack_territory(corp_state, corp_map, "ghost_home", 5, AlwaysSix())
+    assert len(owned_research_facilities(corp_state, corp_map)) == 2
+
+
+def test_collect_research_fills_the_best_facility_first():
+    """Two facilities, one upgraded: a lone scientist sits at the better one, so
+    total RP reflects the higher rate rather than an arbitrary pick."""
+    corp_map = _contested_map()
+    good = _facility(corp_map)
+    good.efficiency_upgrades = 2
+    weak = Location(id="weak", name="Weak", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
+    weak.labs_built = 0
+    weak.efficiency_upgrades = 0
+    corp_map.territories["iron_second"].locations.append(weak)
+    corp_state = CorpState(faction_id=IRONCLAD, scientists=1)
+    facilities = owned_research_facilities(corp_state, corp_map)
+    assert facilities[0] is good
+    # _facility() seeds tier 0 and the hand-built one tier 1, so tiers contribute 1 --
+    # plus the one scientist, who must be sitting at the *good* facility's rate.
+    assert collect_research(corp_state, corp_map) == 1 + research_rate(corp_state, good)
+
+
+def test_collect_research_spills_into_a_second_facility_once_the_first_is_full():
+    corp_map = _contested_map()
+    first = _facility(corp_map)
+    second = Location(id="second", name="Second", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
+    second.labs_built = 0
+    second.efficiency_upgrades = 0
+    corp_map.territories["iron_second"].locations.append(second)
+    # BASE_LAB_CAPACITY seats each, so the second scientist can only work if the
+    # spill is real.
+    corp_state = CorpState(faction_id=IRONCLAD, scientists=2 * BASE_LAB_CAPACITY)
+    expected = 1 + 2 * BASE_LAB_CAPACITY * RESEARCH_PER_SCIENTIST
+    assert collect_research(corp_state, corp_map) == expected
+
+
+def test_owned_research_facility_is_the_best_of_several():
+    """build_lab/build_efficiency_upgrade land on this one, so it must be the
+    facility collect_research fills first — not just whichever was found first."""
+    corp_map = _contested_map()
+    weak = _facility(corp_map)
+    strong = Location(id="strong", name="Strong", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
+    strong.labs_built = 1
+    strong.efficiency_upgrades = 2
+    corp_map.territories["iron_second"].locations.append(strong)
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert owned_research_facility(corp_state, corp_map) is strong
+    assert weak is not strong
+
+
+def test_corp_defeated_only_when_it_holds_nothing():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert corp_defeated(corp_state, corp_map) is False
+    for territory in corp_map.territories.values():
+        if territory.owner == IRONCLAD:
+            territory.owner = GHOSTWIRE
+    assert corp_defeated(corp_state, corp_map) is True
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_an_attack_never_creates_or_destroys_operatives_beyond_its_losses(seed):
+    """Conservation sweep: every operative committed either dies, garrisons the
+    captured ground, or comes home. Nothing leaks and nothing is duplicated."""
+    rng = random.Random(seed)
+    corp_map = _contested_map()
+    corp_map.territories["ghost_home"].garrison = rng.randint(0, 4)
+    corp_map.territories["ghost_home"].modifiers = {TerritoryModifier.SECURITY: rng.randint(0, 5)}
+    committed = rng.randint(1, 8)
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=committed + rng.randint(0, 3))
+    before = corp_state.operatives
+    result = attack_territory(corp_state, corp_map, "ghost_home", committed, rng)
+    assert result is not None
+    survivors = committed - result.attacker_losses
+    assert 0 <= result.attacker_losses <= committed
+    if result.captured:
+        assert corp_state.operatives == before - committed
+        assert corp_map.territories["ghost_home"].garrison == survivors
+    else:
+        assert corp_state.operatives == before - result.attacker_losses
+        assert corp_map.territories["ghost_home"].garrison >= 0
+
+
+# --- Rebuilding a captured research facility ---------------------------------
+
+
+def test_rebuild_is_not_offered_while_the_corp_still_holds_a_facility():
+    """A rebuild is a way back from zero, not a way to run two — capturing a rival's
+    is the only route to a second."""
+    corp_map = _contested_map()
+    _facility(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST)
+    assert rebuild_facility_targets(corp_state, corp_map) == []
+    assert build_research_facility(corp_state, corp_map, "iron_second") is False
+    assert corp_state.cash == RESEARCH_FACILITY_REBUILD_COST
+    assert corp_state.daily_action_used is False
+
+
+def test_losing_the_only_facility_opens_the_rebuild():
+    corp_map = _contested_map()
+    _facility(corp_map, territory_id="iron_second")
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST)
+    assert rebuild_facility_targets(corp_state, corp_map) == []
+    # A rival takes the district the labs stood on.
+    capture_territory(corp_map.territories["iron_second"], GHOSTWIRE)
+    assert collect_research(corp_state, corp_map) == 0.0
+    assert [t.id for t in rebuild_facility_targets(corp_state, corp_map)] == ["iron_home"]
+
+
+def test_build_research_facility_stands_a_bare_one_up_and_charges_cash():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST + 50)
+    assert build_research_facility(corp_state, corp_map, "iron_home") is True
+    assert corp_state.cash == 50
+    assert corp_state.daily_action_used is True
+    facility = owned_research_facility(corp_state, corp_map)
+    assert facility is not None
+    assert facility.research_tier == STARTING_RESEARCH_TIER
+    # Bare: whatever was built into the captured one is genuinely gone.
+    assert facility.labs_built == 0
+    assert facility.efficiency_upgrades == 0
+    assert lab_capacity(facility) == BASE_LAB_CAPACITY
+
+
+def test_a_rebuilt_facility_produces_research_again():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST, scientists=1)
+    assert collect_research(corp_state, corp_map) == 0.0
+    build_research_facility(corp_state, corp_map, "iron_home")
+    assert collect_research(corp_state, corp_map) == STARTING_RESEARCH_TIER + RESEARCH_PER_SCIENTIST
+
+
+def test_build_research_facility_fails_closed_on_every_gate():
+    corp_map = _contested_map()
+    # Short cash.
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST - 1)
+    assert build_research_facility(corp_state, corp_map, "iron_home") is False
+    # Not a district this corp holds.
+    corp_state.cash = RESEARCH_FACILITY_REBUILD_COST
+    assert build_research_facility(corp_state, corp_map, "ghost_home") is False
+    assert build_research_facility(corp_state, corp_map, "neutral_a") is False
+    assert owned_research_facilities(corp_state, corp_map) == []
+    assert corp_state.daily_action_used is False
+    # Already moved today.
+    corp_state.daily_action_used = True
+    assert build_research_facility(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == RESEARCH_FACILITY_REBUILD_COST
+
+
+def test_a_rebuilt_facility_is_named_for_its_owner():
+    """add_research_facility reads territory.owner rather than being handed a faction,
+    which is what keeps corp_turn free of a factions import."""
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST)
+    build_research_facility(corp_state, corp_map, "iron_home")
+    facility = owned_research_facility(corp_state, corp_map)
+    assert facility.name == f"{FACTIONS_BY_ID[IRONCLAD].name} Research Facility"
+
+
+def test_rebuilding_cannot_collide_with_an_existing_facility_id():
+    """The id is derived from the district, so the guard against a duplicate is
+    rebuild_facility_targets being empty while any facility is held — including one
+    standing on the very district a rebuild would target."""
+    corp_map = _contested_map()
+    _facility(corp_map, territory_id="iron_home")
+    corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST)
+    assert build_research_facility(corp_state, corp_map, "iron_home") is False
+    ids = [loc.id for loc in corp_map.territories["iron_home"].locations]
+    assert len(ids) == len(set(ids))
+
+
+# --- Rebuilding a captured academy -------------------------------------------
+# Same shape as the facility rebuild above. The academy is the harsher loss: with no
+# way to train operatives, a corp can neither attack nor garrison.
+
+
+def test_academy_rebuild_is_not_offered_while_the_corp_still_holds_one():
+    corp_map = _contested_map()
+    _academy(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=ACADEMY_REBUILD_COST)
+    assert rebuild_academy_targets(corp_state, corp_map) == []
+    assert build_academy(corp_state, corp_map, "iron_second") is False
+    assert corp_state.cash == ACADEMY_REBUILD_COST
+    assert corp_state.daily_action_used is False
+
+
+def test_losing_the_academy_blocks_training_and_opens_the_rebuild():
+    corp_map = _contested_map()
+    _academy(corp_map, territory_id="iron_second")
+    corp_state = CorpState(faction_id=IRONCLAD, cash=5000)
+    assert rebuild_academy_targets(corp_state, corp_map) == []
+
+    capture_territory(corp_map.territories["iron_second"], GHOSTWIRE)
+    # The dead end this exists to prevent: no academy, so no training at all.
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is False
+    assert [t.id for t in rebuild_academy_targets(corp_state, corp_map)] == ["iron_home"]
+
+
+def test_build_academy_restores_training():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=ACADEMY_REBUILD_COST + 500)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is False
+
+    assert build_academy(corp_state, corp_map, "iron_home") is True
+    assert corp_state.cash == 500
+    assert corp_state.daily_action_used is True
+
+    # A fresh day, and the corp can train again.
+    corp_state.daily_action_used = False
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is True
+    assert corp_state.pending_recruit.category is EmployeeCategory.OPERATIVE
+    assert corp_state.pending_recruit.count == STARTING_ACADEMY_TIER
+
+
+def test_build_academy_fails_closed_on_every_gate():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=ACADEMY_REBUILD_COST - 1)
+    assert build_academy(corp_state, corp_map, "iron_home") is False
+    corp_state.cash = ACADEMY_REBUILD_COST
+    assert build_academy(corp_state, corp_map, "ghost_home") is False
+    assert build_academy(corp_state, corp_map, "neutral_a") is False
+    assert corp_state.daily_action_used is False
+    corp_state.daily_action_used = True
+    assert build_academy(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == ACADEMY_REBUILD_COST
+
+
+def test_a_rebuilt_academy_is_named_for_its_owner():
+    corp_map = _contested_map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=ACADEMY_REBUILD_COST)
+    build_academy(corp_state, corp_map, "iron_home")
+    academy = next(
+        loc
+        for loc in corp_map.territories["iron_home"].locations
+        if loc.kind is LocationKind.ACADEMY
+    )
+    assert academy.name == f"{FACTIONS_BY_ID[IRONCLAD].name} Academy"
+    assert academy.academy_tier == STARTING_ACADEMY_TIER
+
+
+def test_rebuilding_an_academy_cannot_collide_with_an_existing_id():
+    corp_map = _contested_map()
+    _academy(corp_map, territory_id="iron_home")
+    corp_state = CorpState(faction_id=IRONCLAD, cash=ACADEMY_REBUILD_COST)
+    assert build_academy(corp_state, corp_map, "iron_home") is False
+    ids = [loc.id for loc in corp_map.territories["iron_home"].locations]
+    assert len(ids) == len(set(ids))

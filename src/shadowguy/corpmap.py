@@ -73,7 +73,7 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 # none of the per-kind world tables below (the injectors are all corpmap_gen's): the
 # runner's own places, each corp's HQ (which has its own officers and screen — see
 # _make_hq / app.CorpHQScreen), each gang's den (see _make_gang_den), each corp's
-# research facility (see _make_research_facility / corp_turn.collect_research), each
+# research facility (see add_research_facility / corp_turn.collect_research), each
 # corp's academy (see _make_academy / corp_turn.train_employees), and a rare scavenging
 # spot on unclaimed ground (see _make_junkyard / shops.scavenge). None of these is
 # player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
@@ -151,7 +151,10 @@ for _kind in GENERATED_KINDS:
 
 
 class TerritoryModifier(StrEnum):
-    """The levers a corp pulls on ground it holds. Displayed only, so far."""
+    """The levers a corp pulls on ground it holds. Three of the five are load-bearing:
+    SECURITY is half of corp_turn.defense_strength (and gates raise_development),
+    SURVEILLANCE drives surveillance.py's detection rolls, DEVELOPMENT prices lodging
+    and safehouses. UNREST and RESTRICTED are still display only."""
 
     SECURITY = "security"
     SURVEILLANCE = "surveillance"
@@ -233,6 +236,13 @@ class Territory:
     # "neutral" here), just operates on it. See corpmap_gen's GANG_TURF_MIN/MAX
     # and _place_gangs.
     gang_id: str | None = None
+    # Operatives stationed here by whichever corp holds it — the defense half of
+    # corp-vs-corp conflict (see corp_turn.attack_territory / defense_strength).
+    # Lives on the Territory rather than on CorpState so the AI factions, which
+    # have no CorpState at all, defend by exactly the same number the player does.
+    # Always 0 on neutral ground: claim_territory/capture_territory both reset it,
+    # and nothing garrisons ground nobody holds.
+    garrison: int = 0
 
 
 @dataclass
@@ -315,6 +325,61 @@ def add_safehouse(territory: Territory) -> None:
     )
 
 
+STARTING_RESEARCH_TIER = 1
+
+
+def add_research_facility(territory: Territory) -> None:
+    """Stand a research facility up on a corp-held district, at
+    STARTING_RESEARCH_TIER with no labs or efficiency upgrades yet.
+
+    Two callers, which is why this lives here rather than in corpmap_gen: the
+    generator injects one per faction at layout time, and corp_turn's
+    build_research_facility rebuilds one after a rival captured the last one a
+    corp had. Same runtime-mutator shape as add_safehouse, cash gate on the
+    caller.
+
+    Names itself off territory.owner (owner_label) so nothing has to hand it a
+    faction — that's what keeps corp_turn.py importing corpmap and nothing else.
+    Callers guard uniqueness: the generator picks one district per faction, and
+    rebuild_facility_targets is empty while the corp still holds a facility
+    anywhere, so the {territory}_research id can't collide.
+    """
+    territory.locations.append(
+        Location(
+            id=f"{territory.id}_research",
+            name=f"{owner_label(territory.owner)} Research Facility",
+            kind=LocationKind.RESEARCH_FACILITY,
+            research_tier=STARTING_RESEARCH_TIER,
+            labs_built=0,
+            efficiency_upgrades=0,
+        )
+    )
+
+
+STARTING_ACADEMY_TIER = 1
+
+
+def add_academy(territory: Territory) -> None:
+    """Stand an academy up on a corp-held district, at STARTING_ACADEMY_TIER.
+
+    Same two callers and same reasoning as add_research_facility above: the
+    generator injects one per faction at layout time, and corp_turn's build_academy
+    rebuilds one after a rival captured the last one a corp had. Names itself off
+    territory.owner; callers guard the {territory}_academy id's uniqueness.
+
+    No labs/efficiency equivalent — nothing has ever raised academy_tier — so unlike
+    a research facility there is no accumulated investment inside one to lose.
+    """
+    territory.locations.append(
+        Location(
+            id=f"{territory.id}_academy",
+            name=f"{owner_label(territory.owner)} Academy",
+            kind=LocationKind.ACADEMY,
+            academy_tier=STARTING_ACADEMY_TIER,
+        )
+    )
+
+
 # One-time cash cost to build a workshop at a safehouse — flat, unlike the safehouse's
 # own price, since a workshop doesn't get more useful in a nicer district. The apartment
 # starts with one already built (corpmap_gen.py); this is what SafehouseScreen spends on
@@ -337,6 +402,25 @@ def claim_territory(territory: Territory, faction_id: str, rng: random.Random) -
     territory.owner = faction_id
     territory.modifiers = _corp_modifiers(territory.value, rng)
     territory.gang_id = None
+    territory.garrison = 0
+
+
+def capture_territory(territory: Territory, faction_id: str) -> None:
+    """A faction takes a district off a *rival* corp: ownership flips and the
+    garrison that just lost the fight is gone.
+
+    Deliberately not claim_territory's twin. That one reseeds modifiers because
+    neutral ground's (flat Unrest, no Security) stop describing the place once a
+    corp moves in; here the district was already corp-run, so its modifiers — and
+    every Location standing on it — carry over to the new owner intact. That is
+    the point of taking ground off a rival rather than off nobody: you inherit
+    what they built, up to and including a RESEARCH_FACILITY (which is why
+    corp_turn.owned_research_facilities is plural).
+
+    Takes no rng, unlike claim_territory: nothing here is randomized.
+    """
+    territory.owner = faction_id
+    territory.garrison = 0
 
 
 def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
@@ -354,6 +438,29 @@ def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
             if (neighbor := corp_map.territories[conn_id]).owner == "neutral"
             and neighbor.gang_id is None
             and neighbor.id != corp_map.player_start_id
+        }
+    )
+
+
+def attack_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
+    """Rival-corp-held territories bordering `faction_id`'s own ground — the
+    conflict-layer mirror of expansion_candidates, and the only ground an attack
+    can legally target.
+
+    Needs none of expansion_candidates' three exclusions, because each one only
+    ever describes ground no corp holds: neutral districts, gang turf (which sits
+    on neutral ground by construction — see Territory.gang_id) and the player's
+    start (reserved neutral at generation and never claimable, so it can never
+    come to be owned by a rival either). Anything with a corp owner that isn't
+    yours is fair game.
+    """
+    owned = [t for t in corp_map.territories.values() if t.owner == faction_id]
+    return sorted(
+        {
+            conn_id
+            for territory in owned
+            for conn_id in territory.connections
+            if corp_map.territories[conn_id].owner not in ("neutral", faction_id)
         }
     )
 

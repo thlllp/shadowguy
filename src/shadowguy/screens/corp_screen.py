@@ -1,10 +1,13 @@
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer
+from textual.containers import ScrollableContainer, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
+    ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
+    RESEARCH_FACILITY_REBUILD_COST,
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
@@ -14,8 +17,14 @@ from shadowguy.corp_turn import (
     FactionEvent,
     assistant_capacity,
     assistant_rate,
+    attack_territory,
     build_efficiency_upgrade,
+    build_academy,
     build_lab,
+    build_research_facility,
+    defense_strength,
+    deploy_operatives,
+    deployable_targets,
     development_targets,
     employee_plural,
     expand_into,
@@ -29,13 +38,15 @@ from shadowguy.corp_turn import (
     prereqs_met,
     raise_development,
     raise_surveillance,
+    rebuild_academy_targets,
+    rebuild_facility_targets,
     research_rate,
     research_technology,
     surveillance_targets,
     technology_tree_layout,
     train_employees,
 )
-from shadowguy.corpmap import TerritoryModifier, expansion_candidates
+from shadowguy.corpmap import TerritoryModifier, attack_candidates, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.runners import RUNNERS_BY_ID
 
@@ -43,6 +54,7 @@ from . import (
     MENU_BACK_BINDINGS,
     BackScreen,
     _boxed_text,
+    _menu_css,
     _replace_items,
 )
 
@@ -53,7 +65,172 @@ def _sighting_label(sighting, corp_map) -> str:
     return f"Day {sighting.day} — {who} spotted in {territory_name}"
 
 
-class CorpScreen(BackScreen):
+def force_options(available: int) -> list[int]:
+    """The operative counts ForcePickScreen offers out of a pool of `available`:
+    a quarter, half, three quarters and all of it, plus 1, deduplicated and sorted.
+
+    Quartiles rather than every number from 1 to N because the pool grows without
+    bound as a corp trains up, and a list of forty rows is not a decision anyone
+    makes. 1 is always in it — committing a token force to see what a district's
+    garrison is actually made of is a real move, and the quartiles of a small pool
+    would otherwise skip it."""
+    return sorted({1, *(available * n // 4 for n in (1, 2, 3, 4))} - {0})
+
+
+class ForcePickScreen(ModalScreen):
+    """How many operatives to commit to a deploy or an attack. Dismisses the chosen
+    count, or None if cancelled — the same dismiss-a-value modal shape
+    GrenadePickScreen/HackerPickScreen use.
+
+    A separate step rather than a fixed all-in commitment because how much to send
+    is the actual decision: hold everything back and you never take ground, commit
+    everything and one bad roll leaves every district you own undefended. The
+    where and the how-many are two different questions and the screen asks them in
+    that order."""
+
+    BINDINGS = [("escape", "cancel", "Back")]
+    CSS = _menu_css("ForcePickScreen", "force_dialog")
+
+    def __init__(self, prompt: str, available: int) -> None:
+        super().__init__()
+        self._prompt = prompt
+        self._available = available
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(self._prompt),
+            ListView(
+                *(
+                    ListItem(Static(f"{n} operative{'s' if n != 1 else ''}"), id=f"force_{n}")
+                    for n in force_options(self._available)
+                ),
+            ),
+            id="force_dialog",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(int(event.item.id.removeprefix("force_")))
+
+
+def operations_rows(corp_state, corp_map) -> list[ListItem]:
+    """The corp's operative moves as ListItems: one "Reinforce" row per district it
+    holds, one "Attack" row per bordering rival district.
+
+    Shared by CorpScreen (its own #operations_list panel) and CorpMapScreen (folded
+    into the flat corp-category list a corp_only run plays from), because a
+    corp-only game never opens CorpScreen and would otherwise have no way to fight
+    at all. Both rows spend the day's directed move, so both carry the same
+    "already acted today" note the expansion rows do.
+    """
+    rows = []
+    for territory in deployable_targets(corp_state, corp_map):
+        security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+        label = (
+            f"Reinforce {territory.name} — defense {defense_strength(territory)} "
+            f"({territory.garrison} garrison + {security} Security)"
+        )
+        if corp_state.daily_action_used:
+            label += " (already acted today)"
+        elif not corp_state.operatives:
+            label += " (no operatives spare)"
+        rows.append(ListItem(Static(label), id=f"deploy_{territory.id}"))
+
+    for territory_id in attack_candidates(corp_map, corp_state.faction_id):
+        territory = corp_map.territories[territory_id]
+        holder = FACTIONS_BY_ID[territory.owner].name
+        label = f"Attack {territory.name} ({holder}) — defense {defense_strength(territory)}"
+        if corp_state.daily_action_used:
+            label += " (already acted today)"
+        elif not corp_state.operatives:
+            label += " (no operatives to send)"
+        rows.append(ListItem(Static(label), id=f"attack_{territory_id}"))
+    return rows
+
+
+class OperationsMixin:
+    """The deploy/attack flow, shared by CorpScreen and CorpMapScreen.
+
+    A mixin rather than duplicated handlers because this one is two screens long
+    and genuinely stateful — it spans a pushed ForcePickScreen and back — unlike
+    the one-liner expand/train/build handlers the two screens do just repeat.
+    Requires the host to provide `_refresh()`.
+    """
+
+    async def _commit_operatives(self, item_id: str) -> None:
+        """Check the two gates that make the pick pointless *before* asking anything,
+        then ask how many (ForcePickScreen) and hand the answer to corp_turn.
+
+        The gates are checked here rather than letting the corp_turn call fail closed
+        so the player isn't walked through a force picker only to be told they'd
+        already acted — the module still fails closed underneath either way."""
+        corp_state = self.app.corp_state
+        is_attack = item_id.startswith("attack_")
+        territory_id = item_id.removeprefix("attack_" if is_attack else "deploy_")
+        territory = self.app.corp_map.territories[territory_id]
+        if corp_state.daily_action_used:
+            self.notify("Already made your move today.", severity="warning")
+            return
+        if not corp_state.operatives:
+            self.notify("No operatives to send. Train some at the Academy.", severity="warning")
+            return
+
+        prompt = (
+            f"Attack {territory.name} — defense {defense_strength(territory)}. Commit how many?"
+            if is_attack
+            else f"Reinforce {territory.name}. Send how many?"
+        )
+        # Stashed rather than closed over: the callback fires after this handler has
+        # returned, and it needs to know which district the count is for. Same
+        # push_screen(screen, callback) shape TacticalScreen uses for its own picks.
+        self._pending_target = (territory_id, is_attack)
+        self.app.push_screen(ForcePickScreen(prompt, corp_state.operatives), self._on_force_picked)
+
+    async def _on_force_picked(self, committed: int | None) -> None:
+        if committed is None:
+            return
+        territory_id, is_attack = self._pending_target
+        corp_state = self.app.corp_state
+        territory = self.app.corp_map.territories[territory_id]
+
+        if not is_attack:
+            deploy_operatives(corp_state, self.app.corp_map, territory_id, committed)
+            self.notify(f"{committed} operative(s) now hold {territory.name}.")
+            await self._refresh()
+            return
+
+        result = attack_territory(corp_state, self.app.corp_map, territory_id, committed, self.app.rng)
+        if result is None:
+            self.notify("That attack can't go in.", severity="warning")
+            await self._refresh()
+            return
+        if result.captured:
+            self.notify(
+                f"{territory.name} is yours — {result.attacker_losses} lost, "
+                f"{committed - result.attacker_losses} holding it."
+            )
+            log_faction_event(
+                self.app.faction_events,
+                corp_state.faction_id,
+                FactionEvent(
+                    kind="seizure",
+                    day=self.app.character.day,
+                    territory_id=territory_id,
+                    from_faction_id=result.defender_id,
+                ),
+            )
+        else:
+            self.notify(
+                f"Driven off {territory.name} — {result.attacker_losses} lost, "
+                f"{result.defender_losses} of theirs down.",
+                severity="warning",
+            )
+        await self._refresh()
+
+
+class CorpScreen(OperationsMixin, BackScreen):
     """Play as a corp instead of the runner. Getting one is not a choice made here:
     a runner takes a corp from inside its own HQ (shop_screens.CorpHQScreen), by
     reaching the executive and buying a controlling stake — see factions.can_take_over.
@@ -64,11 +241,15 @@ class CorpScreen(BackScreen):
     Actions are grouped by the thing they're attached to, not left in one flat
     list: territory expansion + end-day stay in #corp_list, Academy training
     goes in the #academy_list collapsible, Research Facility upgrades go in
-    the #research_list collapsible, and a read-only Surveillance Log goes in
-    #surveillance_list — all three always present once a corp is picked, since
-    every faction's territory carries one guaranteed Academy and one
-    guaranteed Research Facility from the start (corp_turn.py). Technology
-    itself lives on its own pushed ResearchTreeScreen, below."""
+    the #research_list collapsible, the corp's operatives (reinforce a district
+    you hold, attack one you don't) go in #operations_list, and a read-only
+    Surveillance Log goes in #surveillance_list — all four always present once a
+    corp is picked, since every faction's territory carries one guaranteed
+    Academy and one guaranteed Research Facility from the start (corp_turn.py).
+    Technology itself lives on its own pushed ResearchTreeScreen, below.
+
+    Every Operations row goes through ForcePickScreen for its headcount, so both
+    moves ask *where* on this screen and *how many* on that one."""
 
     BINDINGS = [
         *MENU_BACK_BINDINGS,
@@ -81,11 +262,11 @@ class CorpScreen(BackScreen):
     # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
     # each to its actual item count instead.
     CSS = """
-    #corp_list, #academy_list, #research_list, #surveillance_list {
+    #corp_list, #academy_list, #research_list, #operations_list, #surveillance_list {
         height: auto;
     }
 
-    #academy_panel, #research_panel, #surveillance_panel {
+    #academy_panel, #research_panel, #operations_panel, #surveillance_panel {
         height: auto;
     }
     """
@@ -97,6 +278,9 @@ class CorpScreen(BackScreen):
         yield Collapsible(ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel")
         yield Collapsible(
             ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
+        )
+        yield Collapsible(
+            ListView(id="operations_list"), title="Operations", collapsed=False, id="operations_panel"
         )
         yield Collapsible(
             ListView(id="surveillance_list"),
@@ -144,14 +328,17 @@ class CorpScreen(BackScreen):
             await _replace_items(list_view, items)
             await _replace_items(academy_list, [])
             await _replace_items(research_list, [])
+            await _replace_items(self.query_one("#operations_list", ListView), [])
             await _replace_items(self.query_one("#surveillance_list", ListView), [])
             self.query_one("#academy_panel").display = False
             self.query_one("#research_panel").display = False
+            self.query_one("#operations_panel").display = False
             self.query_one("#surveillance_panel").display = False
             return
 
         self.query_one("#academy_panel").display = True
         self.query_one("#research_panel").display = True
+        self.query_one("#operations_panel").display = True
         self.query_one("#surveillance_panel").display = True
 
         corp_map = self.app.corp_map
@@ -218,8 +405,19 @@ class CorpScreen(BackScreen):
         await _replace_items(list_view, items)
 
         academy_items = []
+        rebuild_sites = rebuild_academy_targets(corp_state, corp_map)
         pending = corp_state.pending_recruit
-        if pending is not None:
+        if rebuild_sites:
+            # No Academy at all: it was captured with the district under it, so the only
+            # move left here is standing a new one up. Nothing trains until one does.
+            for territory in rebuild_sites:
+                label = f"Build an Academy in {territory.name} — {ACADEMY_REBUILD_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif ACADEMY_REBUILD_COST > corp_state.cash:
+                    label += " (can't afford)"
+                academy_items.append(ListItem(Static(label), id=f"newacademy_{territory.id}"))
+        elif pending is not None:
             days_left = pending.ready_day - self.app.character.day
             academy_items.append(
                 ListItem(
@@ -242,7 +440,17 @@ class CorpScreen(BackScreen):
         await _replace_items(academy_list, academy_items)
 
         research_items = []
-        if facility is not None:
+        if facility is None:
+            # Nothing to upgrade: the corp's labs were captured with the district under
+            # them, so the only research move left is standing a new one up.
+            for territory in rebuild_facility_targets(corp_state, corp_map):
+                label = f"Build a Research Facility in {territory.name} — {RESEARCH_FACILITY_REBUILD_COST}eb"
+                if corp_state.daily_action_used:
+                    label += " (already acted today)"
+                elif RESEARCH_FACILITY_REBUILD_COST > corp_state.cash:
+                    label += " (can't afford)"
+                research_items.append(ListItem(Static(label), id=f"rebuild_{territory.id}"))
+        else:
             cost = next_lab_cost(facility)
             if cost is None:
                 research_items.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))
@@ -266,6 +474,11 @@ class CorpScreen(BackScreen):
                 research_items.append(ListItem(Static(label), id="build_efficiency"))
         await _replace_items(research_list, research_items)
 
+        operations_items = operations_rows(corp_state, corp_map) or [
+            ListItem(Static("No territory to hold and nobody bordering you."), id="no_operations")
+        ]
+        await _replace_items(self.query_one("#operations_list", ListView), operations_items)
+
         if corp_state.sightings:
             sighting_items = [
                 ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
@@ -277,7 +490,11 @@ class CorpScreen(BackScreen):
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
-        if item_id.startswith("sighting_") or item_id == "no_sightings":
+        if item_id.startswith("sighting_") or item_id in ("no_sightings", "no_operations"):
+            return
+
+        if item_id.startswith("deploy_") or item_id.startswith("attack_"):
+            await self._commit_operatives(item_id)
             return
 
         if item_id.startswith("corpinfo_"):
@@ -341,6 +558,32 @@ class CorpScreen(BackScreen):
                 )
             elif corp_state.pending_recruit is not None:
                 self.notify("The Academy's already training a batch.", severity="warning")
+            elif corp_state.daily_action_used:
+                self.notify("Already made your move today.", severity="warning")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
+            return
+
+        if item_id.startswith("newacademy_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("newacademy_")
+            territory = self.app.corp_map.territories[territory_id]
+            if build_academy(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"New Academy standing in {territory.name}.")
+            elif corp_state.daily_action_used:
+                self.notify("Already made your move today.", severity="warning")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+            await self._refresh()
+            return
+
+        if item_id.startswith("rebuild_"):
+            corp_state = self.app.corp_state
+            territory_id = item_id.removeprefix("rebuild_")
+            territory = self.app.corp_map.territories[territory_id]
+            if build_research_facility(corp_state, self.app.corp_map, territory_id):
+                self.notify(f"New Research Facility standing in {territory.name}.")
             elif corp_state.daily_action_used:
                 self.notify("Already made your move today.", severity="warning")
             else:

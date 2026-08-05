@@ -74,7 +74,7 @@ A text-based cyberpunk roguelite TUI. Python 3.14, managed with `uv`, built on T
 Two coupled game modes, not one game with a reskinned second mode:
 
 - **Runner mode** — RPG scale. One character, stats, scene-based missions, permadeath.
-- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. A first-slice turn loop exists (`shadowguy/corp_turn.py`): take over one of the 4 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, train employees at your Academy, or upgrade your Research Facility's labs/efficiency), and spend research points on `corp_turn.TECHNOLOGIES`. No corp-vs-corp conflict yet — see Corp mode turn loop in `DESIGN.md`.
+- **Corp mode** — 4X scale. Player controls a corp, area-control/resource game against rivals. Take over one of the 4 seeded Factions, collect territory income and research, spend one directed move a day (expand onto neutral ground, train employees at your Academy, upgrade your Research Facility, garrison a district, or attack a rival's), and spend research points on `corp_turn.TECHNOLOGIES`. Corps fight each other over territory — operatives vs. garrison + Security, see Corp conflict in `DESIGN.md` — and a corp that loses its last district ends the run.
 
 Switching between runner and corp is optional and meant to be difficult — a runner earns a corp by buying a controlling stake at that corp's own HQ (`CorpHQScreen`, gated on rep + standing + 15,000eb), not by picking one off a menu. Neither mode is a straight upgrade over the other. **A run can also start as either one** (New Game → Runner / Corp): a Corp game never builds a runner at all (`ShadowguyApp.corp_only`), so it isn't "runner mode plus a corp screen" — it's the 4X half on its own.
 
@@ -132,11 +132,12 @@ src/shadowguy/
 
   security.py    parallel resolution: multi-night security contracts
   encounters.py  parallel resolution: gang turf-entry toll-or-attack
-  rivals.py      parallel resolution: faction expansion + a flavor-only rival research
-                 roll + the NPC runners' daily activity turn (one of which takes a job
-                 off a fixer's board), once a day
+  rivals.py      parallel resolution: faction expansion, garrison upkeep and attacks on
+                 rival corps + a flavor-only rival research roll + the NPC runners' daily
+                 activity turn (one of which takes a job off a fixer's board), once a day
   surveillance.py parallel resolution: detection rolls in the player corp's territory
-  corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action
+  corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action,
+                 and the corp-vs-corp contest (resolve_attack) both sides settle through
 
   shops.py       the retail catalogs (items, consumables, programs) + pricing +
                  buy/sell transactions
@@ -160,7 +161,7 @@ src/shadowguy/
     burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a
                          runner and a corp-only run; no separate MainMenu any more
-    corp_screen.py       CorpScreen + ResearchTreeScreen
+    corp_screen.py       CorpScreen + ResearchTreeScreen + ForcePickScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
                          Safehouse + Junkyard + GangDen
     info_screens.py      Phone (home grid) + its apps: Contacts + Web + CorpWebsite +
@@ -181,13 +182,13 @@ Leaf modules, and why each has to stay one:
 - **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
 - **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`. `corpmap_gen.py` imports it and it never imports back; the modifier cluster (`make_modifiers` and friends) stays here rather than moving to the generator because `claim_territory` reseeds a district at runtime through it.
 - **`buildings.py`** — imports `grid` for the geometry and nothing else from the package; `scene`/`jobs`/`tactical` import *it*. `tactical.py` imports `Building`/`Lock` at runtime, no `TYPE_CHECKING` dance: extracting `grid.py` is what removed the cycle that used to need one.
-- **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle.
-- **`relations.py`** — imports only `factions.py`/`gangs.py`.
+- **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle. `resolve_attack` deliberately takes a bare `Territory` rather than a `CorpState`, which is what lets `rivals.py`'s AI factions (which have no `CorpState`) settle an attack through the same dice the player does.
+- **`relations.py`** — imports only `factions.py`/`gangs.py`. Read by `rivals._pick_attack_target`; nothing writes to it after generation.
 - **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
 - **`saves.py`** — imports no game classes.
 - **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
 
-`scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`).
+`scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
 
 ### Save versions
 
@@ -235,6 +236,7 @@ Leaf modules, and why each has to stay one:
 | 55 | `runners.RivalRunner.deck_id` — remote support is gated on **owning a cyberdeck**, not on the `Netrunner` archetype, and the deck's `program_slots` caps how many support programs a hire carries. `RivalRunner` instances are pickled directly (`ShadowguyApp.runners`), so a pre-v55 roster lacks the attribute entirely |
 | 54 | `combat.Enemy` rewritten onto the player's stat sheet: the six `CORE_STATS` + `ranks`/`weapon`/`armor` **replacing** the hand-set `health`/`attack`/`defense`/`damage`/`toughness`/`reach`/`stun_damage`, which are now derived properties. A pre-v54 pickled `Enemy` (reachable from an accepted job's `Encounter`/`TacticalStage` and from `BurglaryStage.guard`) carries the old fields as instance attributes that **shadow the properties**. Roster also grew 5 → 11 and `ENEMY_TIERS` was re-pooled |
 | 57 | the workshop system: `corpmap.Location.workshop_built` (free on the injected apartment, built at a safehouse for `WORKSHOP_BUILD_COST`) and `shops.InventoryItem.mods` (per-instance mod ids, folded into combat/inventory stats by `shops.effective_item`) |
+| 58 | the corp conflict layer: `corpmap.Territory.garrison`, `scene.Outcome.security_delta`, and `corp_turn.FactionEvent.from_faction_id` + its new `"seizure"` kind. `rivals.RivalAction.attack` holds a `corp_turn.AttackResult`, and `apply_outcome`/`resolve_choice`/`resolve_entrance` all take a `CorpMap` now |
 
 ### Verifying changes
 

@@ -5,6 +5,7 @@ from enum import StrEnum
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check
 from shadowguy.combat import Enemy
+from shadowguy.corpmap import MODIFIER_MAX, CorpMap, TerritoryModifier
 from shadowguy.factions import standing_shift
 from shadowguy.matrix import MatrixNetwork
 from shadowguy.skills import skill_for, skill_value
@@ -61,6 +62,13 @@ class Outcome:
     # gigs/legwork/security deliberately don't pay XP, unlike cash, which every activity
     # type can grant.
     experience_delta: int = 0
+    # Applied to the SECURITY modifier of the scene's target_territory_id — the first
+    # thing that consumes it for anything beyond flavor. Negative on a successful job:
+    # a run that lands on a corp's own ground leaves the block harder to police, which
+    # corp_turn.defense_strength reads directly, so runner work is how a district gets
+    # softened before a corp attack goes in. Clamped 0..MODIFIER_MAX by apply_outcome,
+    # and a no-op on a scene with no target territory (a gig, or a job on neutral ground).
+    security_delta: int = 0
     next_stage: str | None = None
 
 
@@ -407,7 +415,7 @@ class Scene:
         return max(0, -worst)
 
 
-def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
+def apply_outcome(character: Character, outcome: Outcome, scene: Scene, corp_map: CorpMap) -> None:
     character.adjust_health(outcome.health_delta)
     # Not floored, unlike health: the activity list refuses a scene the runner can't
     # cover (Scene.max_cash_loss), so a losing outcome always has the cash to take.
@@ -430,9 +438,17 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene) -> None:
         character.adjust_fixer_trust(scene.target_fixer_id, outcome.fixer_trust_delta)
     if outcome.local_standing_delta:
         character.adjust_local_standing(scene.target_character_id, outcome.local_standing_delta)
+    if outcome.security_delta and scene.target_territory_id in corp_map.territories:
+        territory = corp_map.territories[scene.target_territory_id]
+        current = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+        territory.modifiers[TerritoryModifier.SECURITY] = max(
+            0, min(MODIFIER_MAX, current + outcome.security_delta)
+        )
 
 
-def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[CheckResult, Outcome]:
+def resolve_choice(
+    character: Character, scene: Scene, choice: Choice, corp_map: CorpMap
+) -> tuple[CheckResult, Outcome]:
     advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.JOB else 0
     roll = resolve_check(
         stat_value=skill_value(character, choice.skill),
@@ -440,11 +456,13 @@ def resolve_choice(character: Character, scene: Scene, choice: Choice) -> tuple[
         advantage=advantage,
     )
     outcome = choice.outcome_for(roll.result)
-    apply_outcome(character, outcome, scene)
+    apply_outcome(character, outcome, scene, corp_map)
     return roll.result, outcome
 
 
-def resolve_entrance(character: Character, scene: Scene, entrance: Entrance) -> tuple[CheckResult, Outcome]:
+def resolve_entrance(
+    character: Character, scene: Scene, entrance: Entrance, corp_map: CorpMap
+) -> tuple[CheckResult, Outcome]:
     """Same shape as resolve_choice, for a BurglaryStage's Entrance -- the entrance
     check resolves (and applies its Outcome) the instant it's picked, before any
     interior walk. Only next_stage's actual effect (the scene advancing) waits on
@@ -456,5 +474,5 @@ def resolve_entrance(character: Character, scene: Scene, entrance: Entrance) -> 
         advantage=advantage,
     )
     outcome = entrance.outcome_for(roll.result)
-    apply_outcome(character, outcome, scene)
+    apply_outcome(character, outcome, scene, corp_map)
     return roll.result, outcome

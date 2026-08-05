@@ -32,6 +32,8 @@ from shadowguy.corpmap import (
     Location,
     LocationKind,
     Territory,
+    add_academy,
+    add_research_facility,
     location_stat,
     make_modifiers,
 )
@@ -347,38 +349,6 @@ def _make_hq(territory_id: str, faction: Faction, rng: random.Random) -> Locatio
     )
 
 
-STARTING_RESEARCH_TIER = 1
-
-
-def _make_research_facility(territory_id: str, faction: Faction) -> Location:
-    """A corp's research facility — one per faction, injected into one of its own
-    districts (see generate_corp_map), always a different district than that same
-    faction's HQ. Starts at STARTING_RESEARCH_TIER; nothing raises its tier yet, the
-    same deferred-hook shape as TerritoryModifier before Development got wired up."""
-    return Location(
-        id=f"{territory_id}_research",
-        name=f"{faction.name} Research Facility",
-        kind=LocationKind.RESEARCH_FACILITY,
-        research_tier=STARTING_RESEARCH_TIER,
-        labs_built=0,
-        efficiency_upgrades=0,
-    )
-
-
-STARTING_ACADEMY_TIER = 1
-
-
-def _make_academy(territory_id: str, faction: Faction) -> Location:
-    """A corp's academy — one per faction, injected into one of its own districts
-    (see generate_corp_map), always a different district than that same faction's
-    HQ and Research Facility. Starts at STARTING_ACADEMY_TIER; nothing raises its
-    tier yet, the same deferred-hook shape as the research facility."""
-    return Location(
-        id=f"{territory_id}_academy",
-        name=f"{faction.name} Academy",
-        kind=LocationKind.ACADEMY,
-        academy_tier=STARTING_ACADEMY_TIER,
-    )
 
 
 def _make_gang_members(location_id: str, rng: random.Random) -> list[LocalCharacter]:
@@ -691,9 +661,10 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
     for tid, faction_id in plan.research_ids.items():
-        territories[tid].locations.append(_make_research_facility(tid, FACTIONS_BY_ID[faction_id]))
+        # Named off the district's owner, which _assign_owners has already set.
+        add_research_facility(territories[tid])
     for tid, faction_id in plan.academy_ids.items():
-        territories[tid].locations.append(_make_academy(tid, FACTIONS_BY_ID[faction_id]))
+        add_academy(territories[tid])
     for tid, gang_id in plan.den_ids.items():
         territories[tid].locations.append(_make_gang_den(tid, GANGS_BY_ID[gang_id], rng))
 

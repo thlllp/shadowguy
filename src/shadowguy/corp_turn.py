@@ -13,13 +13,21 @@ territory income into CorpState.cash and resets daily_action_used, right
 alongside the AI factions' own resolve_rival_day (which skips the player's
 faction_id once this is set).
 
-A turn is one real decision, shared by two mutually-exclusive moves gated on the
-same CorpState.daily_action_used flag (the same "_used_today flag reset each
+A turn is one real decision, shared by several mutually-exclusive moves gated on
+the same CorpState.daily_action_used flag (the same "_used_today flag reset each
 day" idiom Character.on_new_day() uses for health_kit_used_today):
   - expand_into a bordering neutral territory, the same area-control move
     rivals.py's AI factions make (reusing corpmap.expansion_candidates/
     claim_territory).
-  - train_employees at the corp's one guaranteed ACADEMY (corpmap_gen._make_academy),
+  - attack_territory, the conflict half of the same move: throw operatives at a
+    bordering *rival-held* district (corpmap.attack_candidates/capture_territory)
+    and contest it against its garrison plus Security (defense_strength). This is
+    the only thing in the game that takes ground off another corp, and the only
+    consumer EmployeeCategory.OPERATIVE has.
+  - deploy_operatives, the defensive counterpart: station operatives on a district
+    you hold so an attacker has something to grind through. One-way — there is no
+    recall — so where your force sits is a commitment.
+  - train_employees at the corp's seeded ACADEMY (corpmap.add_academy),
     spending cash to queue a batch of CorpState.scientists/operatives/
     research_assistants (EmployeeCategory picks which — three separate pools,
     not one, since they're meant to eventually do different things for the
@@ -27,9 +35,12 @@ day" idiom Character.on_new_day() uses for health_kit_used_today):
     (one batch at a time, held in pending_recruit) and advance_training drops
     the hires into the pool on the day tick.
 
-Each faction's one guaranteed RESEARCH_FACILITY (corpmap_gen._make_research_facility)
-generates research_points every day too, at 1 RP per tier — collect_research is
-the read side of that, and research_technology is what finally spends it.
+Each faction is seeded one RESEARCH_FACILITY (corpmap.add_research_facility, called
+by the generator), producing research_points every day at 1 RP per tier —
+collect_research is the read side of that, and research_technology is what finally
+spends it. A corp can come to hold two (capturing a rival's district takes its labs
+with it) or none (losing its own the same way); build_research_facility is the way
+back from none.
 
 TECHNOLOGIES is the researchable list: two three-deep chains gated by
 Technology.prereqs, rendered as a tree by
@@ -71,7 +82,12 @@ expand_into/train_employees' one daily_action_used slot:
   - build_efficiency_upgrade adds +1 RP/day to every scientist working that
     facility (research_rate) — research assistants are unaffected, they always
     add a flat RESEARCH_PER_ASSISTANT.
-Both are strictly sequential — LAB_UPGRADE_COSTS/EFFICIENCY_UPGRADE_COSTS are
+  - build_research_facility stands a whole new one up on a held district, offered
+    *only* to a corp that holds none (rebuild_facility_targets) — a way back from
+    having its labs captured, not a way to run a second facility. build_academy is
+    the exact same shape for the ACADEMY, and matters more: operatives are the only
+    way to attack or garrison, so a corp that can't train has no counterplay left.
+The two upgrade tracks are strictly sequential — LAB_UPGRADE_COSTS/EFFICIENCY_UPGRADE_COSTS are
 indexed by labs_built/efficiency_upgrades, so the second tier's cost isn't
 reachable until the first is built.
 
@@ -97,6 +113,10 @@ from shadowguy.corpmap import (
     LocationKind,
     Territory,
     TerritoryModifier,
+    add_academy,
+    add_research_facility,
+    attack_candidates,
+    capture_territory,
     claim_territory,
     expansion_candidates,
 )
@@ -124,6 +144,23 @@ LAB_UPGRADE_COSTS = (2000, 5000)
 MAX_LABS_BUILT = len(LAB_UPGRADE_COSTS)
 # RP/day each working scientist adds, on top of the facility's own tier.
 RESEARCH_PER_SCIENTIST = 1
+# Standing a new research facility up after a rival captured the last one the corp
+# held (build_research_facility). Priced between the 1st and 2nd lab: dearer than a
+# lab, since it's a whole building and it comes with the free base seat, but not so
+# dear that losing your labs ends research for the run. The rebuild starts bare, so
+# the real cost is this plus re-buying every lab and efficiency upgrade that was in
+# the captured one. Not balance-simulated.
+RESEARCH_FACILITY_REBUILD_COST = 3000
+
+# The academy's equivalent (build_academy). Deliberately cheaper than a research
+# facility's rebuild even though an academy is the worse loss: nothing has ever raised
+# academy_tier, so there are no upgrade tracks inside one, and this single payment
+# restores the *whole* building. The facility's 3000 only buys back a bare shell — its
+# labs and efficiency upgrades cost another 17,000 on top. Pricing them the same would
+# make the academy the strictly worse deal for restoring strictly more. Not
+# balance-simulated.
+ACADEMY_REBUILD_COST = 2000
+
 # Cost of the 1st and 2nd efficiency upgrade, indexed by
 # Location.efficiency_upgrades -- strictly sequential, same shape as
 # LAB_UPGRADE_COSTS. Priced steeper than a lab: +1 RP/scientist compounds with
@@ -137,6 +174,18 @@ RESEARCH_ASSISTANTS_PER_LAB = 2
 # RP/day each working research assistant adds — flat, unlike research_rate:
 # efficiency upgrades boost scientists only.
 RESEARCH_PER_ASSISTANT = 0.5
+
+# --- Conflict ---------------------------------------------------------------
+# Both sides of a contest add one die of this size to their strength, so a
+# defended district is never a foregone conclusion in either direction: a d6
+# swing on top of operatives-vs-(garrison + Security) means a 2-point edge is a
+# strong favorite and a 6-point edge is a certainty. First-slice numbers, not
+# balance-simulated.
+CONTEST_DIE = 6
+# Ties go to the defender (attack_power must strictly exceed defense_power), so
+# an unattended, unpoliced district still costs the attacker at least one
+# operative and one lucky roll rather than falling to a bare zero.
+MIN_ATTACK_FORCE = 1
 
 
 @dataclass(frozen=True)
@@ -368,17 +417,24 @@ MAX_FACTION_EVENTS = 15
 @dataclass
 class FactionEvent:
     """One newsworthy thing a Faction did, for its corp website's blog
-    (screens/info_screens.py's CorpWebsiteScreen): a territory claimed or a
-    Technology researched. Populated for every Faction, not just the player's
-    own — rivals.resolve_rival_day logs both territory expansion and its own
-    simplified per-faction research roll, and CorpScreen/ResearchTreeScreen log
-    the player's own corp's expand_into/research_technology calls the same
-    way, since resolve_rival_day skips whichever faction the player runs."""
+    (screens/info_screens.py's CorpWebsiteScreen): a territory claimed, a
+    Technology researched, or a district seized off a rival. Populated for every
+    Faction, not just the player's own — rivals.resolve_rival_day logs expansion,
+    its own simplified per-faction research roll and every successful attack, and
+    CorpScreen/ResearchTreeScreen log the player's own corp's
+    expand_into/attack_territory/research_technology calls the same way, since
+    resolve_rival_day skips whichever faction the player runs.
 
-    kind: Literal["territory", "technology"]
+    "seizure" is deliberately its own kind rather than another "territory": both
+    grow a corp's holdings, but only one of them took the ground off somebody, and
+    from_faction_id is who. A corp's own site spins it as a win either way — the
+    losing corp's site doesn't report it at all, which is the joke."""
+
+    kind: Literal["territory", "technology", "seizure"]
     day: int
-    territory_id: str | None = None  # kind == "territory"
+    territory_id: str | None = None  # kind == "territory" or "seizure"
     technology_id: str | None = None  # kind == "technology"
+    from_faction_id: str | None = None  # kind == "seizure": who they took it from
 
 
 def log_faction_event(
@@ -392,16 +448,18 @@ def log_faction_event(
 
 
 class EmployeeCategory(StrEnum):
-    """What a training session at the Academy produces — nothing reads which
-    category a hire belongs to yet beyond research_assistants feeding
-    collect_research (that's the obvious next hook for the other two:
-    scientists presumably feed research more directly, operatives presumably
-    feed fieldwork), but the corp already needs to track them separately since
-    they aren't fungible."""
+    """What a training session at the Academy produces. All three now have a
+    consumer: scientists and research assistants staff the research facility
+    (collect_research), and operatives are the corp's field force — deployed onto
+    a district as its garrison, or committed to an attack on a rival's
+    (deploy_operatives / attack_territory). They are tracked as three pools rather
+    than one because they aren't fungible: an operative can't staff a lab and a
+    scientist can't hold a block."""
 
     SCIENTIST = "scientist"
     OPERATIVE = "operative"
     RESEARCH_ASSISTANT = "research_assistant"
+
 
 
 # Days a batch spends at the Academy before the hires land in the pool. Training
@@ -529,15 +587,19 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
-def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
-    """The corp's research facility, or None if it holds none.
+def owned_research_facilities(corp_state: CorpState, corp_map: CorpMap) -> list[Location]:
+    """Every research facility the corp holds, best first — highest research_rate,
+    then most assistant seats, then id to break ties deterministically.
 
-    Singular on purpose: a faction is seeded with exactly one
-    (corpmap_gen._make_research_facility), and expand_into only claims *neutral*
-    ground, which never carries one — so a corp can't come to hold a second.
-    collect_research and both upgrade actions all read this same one place.
+    A corp used to be able to hold exactly one (seeded by
+    corpmap.add_research_facility; expand_into claims only neutral ground,
+    which never carries one). attack_territory broke that: capture_territory
+    hands over every Location standing on the district, so taking a rival's home
+    bloc takes their labs with it. That is the case DESIGN.md flagged in advance —
+    "if corps ever hold more than one facility, revisit collect_research's fill
+    order" — and this ordering is that fill order restored.
     """
-    return next(
+    return sorted(
         (
             location
             for territory in corp_map.territories.values()
@@ -545,8 +607,21 @@ def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Locatio
             for location in territory.locations
             if location.kind == LocationKind.RESEARCH_FACILITY
         ),
-        None,
+        key=lambda f: (-research_rate(corp_state, f), -assistant_capacity(f), f.id),
     )
+
+
+def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
+    """The corp's *primary* research facility — the best one it holds, or None.
+
+    This is where build_lab/build_efficiency_upgrade land, and it's a principled
+    choice rather than an arbitrary one: collect_research fills scientists into
+    this same facility first, so concentrating both capacity and efficiency on it
+    is exactly what maximizes output. Upgrading anything else would be seating
+    scientists at a worse rate while the best facility sat half empty.
+    """
+    facilities = owned_research_facilities(corp_state, corp_map)
+    return facilities[0] if facilities else None
 
 
 def lab_capacity(facility: Location) -> int:
@@ -623,17 +698,25 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     cap how many of each count, so employees trained beyond the seats built for
     them produce nothing — headcount (train_employees) and capacity (build_lab)
     are two separate purchases.
+
+    A corp holding more than one facility (only reachable by taking a rival's
+    ground — see owned_research_facilities) fills them best-first: every scientist
+    sits at the highest-rate facility with a seat free before any of them sits at
+    a worse one. Each facility's own research_tier counts whether or not anyone is
+    staffing it, exactly as it did in the single-facility case.
     """
-    facility = owned_research_facility(corp_state, corp_map)
-    if facility is None:
-        return 0.0
-    scientists = min(corp_state.scientists, lab_capacity(facility))
-    assistants = min(corp_state.research_assistants, assistant_capacity(facility))
-    return (
-        (facility.research_tier or 0)
-        + scientists * research_rate(corp_state, facility)
-        + assistants * assistant_rate(corp_state)
-    )
+    scientists_left = corp_state.scientists
+    assistants_left = corp_state.research_assistants
+    total = 0.0
+    for facility in owned_research_facilities(corp_state, corp_map):
+        total += facility.research_tier or 0
+        working = min(scientists_left, lab_capacity(facility))
+        scientists_left -= working
+        total += working * research_rate(corp_state, facility)
+        aides = min(assistants_left, assistant_capacity(facility))
+        assistants_left -= aides
+        total += aides * assistant_rate(corp_state)
+    return total
 
 
 def _owned_territories(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
@@ -742,6 +825,158 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
     return True
 
 
+def defense_strength(territory: Territory) -> int:
+    """What an attacker has to beat to take this district: the operatives
+    stationed there plus its Security modifier.
+
+    This is what finally makes TerritoryModifier.SECURITY load-bearing — it was
+    seeded, rendered and read as a *gate* (development_targets) but never as a
+    quantity. Note the asymmetry with garrison: Security is bought once and keeps
+    defending forever, while a garrison is spent by the fight that uses it, so a
+    well-policed district is the durable half of a defense and troops are the
+    half you have to keep replacing.
+    """
+    return territory.garrison + territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+
+
+def deployable_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp could station operatives on: simply everything it holds.
+    Separate from _owned_territories only so the Corp screen reads in the same
+    shape as surveillance_targets/development_targets."""
+    return _owned_territories(corp_state, corp_map)
+
+
+def deploy_operatives(
+    corp_state: CorpState, corp_map: CorpMap, territory_id: str, count: int
+) -> bool:
+    """Station `count` of the corp's untasked operatives on a district it holds,
+    moving them from CorpState.operatives onto Territory.garrison. Spends the
+    day's one directed move, same slot as expand_into/train_employees — a redeploy
+    is a real logistical decision, not a free click.
+
+    One-way on purpose: there is no recall. Operatives committed to holding ground
+    are committed, which is what stops a single stack from shuttling around the
+    map defending everything in turn.
+
+    Fails closed (no move consumed, nothing mutated) if the corp has already acted
+    today, `count` isn't positive, it hasn't got that many operatives spare, or the
+    district isn't one it holds.
+    """
+    if corp_state.daily_action_used or count <= 0 or count > corp_state.operatives:
+        return False
+    territory = corp_map.territories.get(territory_id)
+    if territory is None or territory.owner != corp_state.faction_id:
+        return False
+    corp_state.operatives -= count
+    territory.garrison += count
+    corp_state.daily_action_used = True
+    return True
+
+
+@dataclass
+class AttackResult:
+    """What one resolved attack did, for the caller to report. Returned by
+    attack_territory (and built by rivals.py for the AI's own attacks) rather than
+    notified from inside, the same split security.NightResult keeps: the resolver
+    returns data, the screen writes the prose."""
+
+    territory_id: str
+    defender_id: str  # the faction that held it going in
+    committed: int
+    attack_power: int
+    defense_power: int
+    captured: bool
+    attacker_losses: int
+    defender_losses: int
+
+
+def resolve_attack(
+    territory: Territory, attacker_id: str, committed: int, rng: random.Random
+) -> AttackResult:
+    """The contest itself, with no corp state on either side — so rivals.py's AI
+    factions (which have no CorpState) settle an attack through exactly the same
+    dice the player does, and a test can drive it without building a corp.
+
+    Both sides roll one CONTEST_DIE on top of their strength; the attacker needs
+    to strictly exceed the defender, so a tie holds the ground. Losses land the
+    same way either way — the attacker bleeds one operative per point of defense
+    they had to grind through (capped at what they brought), the defender loses
+    their whole garrison if the district falls and one per attacker if it doesn't.
+
+    Mutates `territory` (ownership and garrison) and returns the record.
+    """
+    defender_id = territory.owner
+    defense = defense_strength(territory)
+    attack_power = committed + rng.randint(1, CONTEST_DIE)
+    defense_power = defense + rng.randint(1, CONTEST_DIE)
+    captured = attack_power > defense_power
+
+    attacker_losses = min(committed, defense)
+    survivors = committed - attacker_losses
+    if captured:
+        defender_losses = territory.garrison
+        capture_territory(territory, attacker_id)
+        # Whoever walked out of the fight holds the ground they took: survivors
+        # become the new garrison rather than going back in the pool. Taking a
+        # district and leaving it empty would just invite it straight back.
+        territory.garrison = survivors
+    else:
+        defender_losses = min(territory.garrison, committed)
+        territory.garrison -= defender_losses
+    return AttackResult(
+        territory_id=territory.id,
+        defender_id=defender_id,
+        committed=committed,
+        attack_power=attack_power,
+        defense_power=defense_power,
+        captured=captured,
+        attacker_losses=attacker_losses,
+        defender_losses=defender_losses,
+    )
+
+
+def attack_territory(
+    corp_state: CorpState, corp_map: CorpMap, territory_id: str, committed: int, rng: random.Random
+) -> AttackResult | None:
+    """Throw `committed` operatives at a rival-held district bordering your own
+    ground. Spends the day's one directed move, same slot as expand_into.
+
+    Costs no cash — operatives *are* the cost, and they were paid for at the
+    Academy. This is the mechanic EmployeeCategory.OPERATIVE was trained for and
+    had no consumer for until now.
+
+    Returns None (no move consumed, nothing mutated) if the corp has already acted
+    today, the target isn't a legal attack candidate right now, or it can't field
+    that many operatives. On a repel the survivors come home to the pool; on a
+    capture they stay as the new garrison (see resolve_attack).
+    """
+    if corp_state.daily_action_used:
+        return None
+    if committed < MIN_ATTACK_FORCE or committed > corp_state.operatives:
+        return None
+    if territory_id not in attack_candidates(corp_map, corp_state.faction_id):
+        return None
+    territory = corp_map.territories[territory_id]
+    corp_state.operatives -= committed
+    result = resolve_attack(territory, corp_state.faction_id, committed, rng)
+    if not result.captured:
+        corp_state.operatives += committed - result.attacker_losses
+    corp_state.daily_action_used = True
+    return result
+
+
+def corp_defeated(corp_state: CorpState, corp_map: CorpMap) -> bool:
+    """Whether the corp has been broken up: it holds no territory at all.
+
+    The one loss condition for Corp mode, checked on the day tick (app.py) after
+    the rivals have had their turn. Territory is the right thing to key on rather
+    than cash or headcount — every other corp system (income, research, training,
+    attacking) is downstream of holding ground, so a corp with none of it has no
+    move left to make.
+    """
+    return not any(t.owner == corp_state.faction_id for t in corp_map.territories.values())
+
+
 def _owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
     for territory in corp_map.territories.values():
         if territory.owner != corp_state.faction_id:
@@ -795,6 +1030,39 @@ def advance_training(corp_state: CorpState, day: int) -> PendingRecruit | None:
     return recruit
 
 
+def rebuild_academy_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp could stand a new academy on — empty while it still holds
+    one anywhere, exactly like rebuild_facility_targets.
+
+    An academy is the harsher of the two to lose. A corp with no research facility
+    stops advancing; a corp with no academy stops producing operatives, and since
+    operatives are the only way to attack *or* garrison, it has no counterplay left
+    against the loss condition at all — just a slow slide. That's why this exists.
+    """
+    if _owned_academy(corp_state, corp_map) is not None:
+        return []
+    return _owned_territories(corp_state, corp_map)
+
+
+def build_academy(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
+    """Spend ACADEMY_REBUILD_COST to stand a new academy up on a held district, after
+    a rival took the last one. Shares expand_into's daily slot.
+
+    Fails closed if the corp has already moved today, still holds an academy, can't
+    afford it, or names a district it doesn't hold.
+    """
+    if corp_state.daily_action_used:
+        return False
+    if territory_id not in {t.id for t in rebuild_academy_targets(corp_state, corp_map)}:
+        return False
+    if ACADEMY_REBUILD_COST > corp_state.cash:
+        return False
+    corp_state.cash -= ACADEMY_REBUILD_COST
+    add_academy(corp_map.territories[territory_id])
+    corp_state.daily_action_used = True
+    return True
+
+
 def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:
     """Spend cash on the corp's Research Facility's next lab, raising its
     scientist capacity by one. Shares expand_into/train_employees' daily slot;
@@ -810,6 +1078,45 @@ def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:
         return False
     corp_state.cash -= cost
     facility.labs_built = (facility.labs_built or 0) + 1
+    corp_state.daily_action_used = True
+    return True
+
+
+def rebuild_facility_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp could stand a new research facility up on — **empty while
+    it still holds one anywhere**.
+
+    So this is a rebuild, not a second facility: capturing a rival's labs is the
+    only way to run two (see owned_research_facilities), and a corp that has been
+    stripped of its own isn't locked out of research for the rest of the run. It's
+    also what keeps add_research_facility's id unique — a corp with a facility is
+    never offered another.
+    """
+    if owned_research_facilities(corp_state, corp_map):
+        return []
+    return _owned_territories(corp_state, corp_map)
+
+
+def build_research_facility(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
+    """Spend RESEARCH_FACILITY_REBUILD_COST to stand a new research facility up on a
+    held district, after a rival took the last one. Shares expand_into's daily slot.
+
+    The new facility starts bare — STARTING_RESEARCH_TIER, no labs, no efficiency
+    upgrades — so whatever was built into the captured one is genuinely lost and has
+    to be paid for again. *Where* is a real choice: a facility is captured with the
+    district under it, so rebuilding on the border invites the same loss twice.
+
+    Fails closed if the corp has already moved today, still holds a facility, can't
+    afford it, or names a district it doesn't hold.
+    """
+    if corp_state.daily_action_used:
+        return False
+    if territory_id not in {t.id for t in rebuild_facility_targets(corp_state, corp_map)}:
+        return False
+    if RESEARCH_FACILITY_REBUILD_COST > corp_state.cash:
+        return False
+    corp_state.cash -= RESEARCH_FACILITY_REBUILD_COST
+    add_research_facility(corp_map.territories[territory_id])
     corp_state.daily_action_used = True
     return True
 
