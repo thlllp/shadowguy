@@ -36,20 +36,21 @@ Smartlink (CyberSlot.OPTICS) is the one piece whose effect isn't a flat
 bonus: it does nothing on its own, and only grants combat.smartlink_bonus's
 to-hit dice when the equipped weapon is itself tagged shops.Item.smartlinked
 -- gated on Cyberware.grants_smartlink (has_smartlink below) rather than an
-id check, since a Tier 4 Smartlink (below) is a second piece that has to grant
+id check, since an Alphaware Smartlink (below) is a second piece that has to grant
 the same thing.
 
-Cyberware comes in four quality tiers. A tier changes nothing about what a
-piece *does* -- same bonuses, skill_bonuses and slot as its Tier 1
+Cyberware comes in four quality grades. A grade changes nothing about what a
+piece *does* -- same bonuses, skill_bonuses and slot as its Deltaware
 counterpart -- only what it costs, via CYBERWARE_TIER_MULTIPLIERS (a
-price/humanity_cost multiplier pair per tier, both relative to the Tier 1
-row, not the tier below it): Tier 2 trades nothing on price for a small
-humanity saving (-10% humanity_cost, a cleaner install at the same cost),
-Tier 3 a modest step down (-25% price, +10% humanity_cost), and Tier 4 a
-much cruder knockoff (-50% price, +60% humanity_cost) of the same implant --
-cheaper chrome costs more of you. Generated from the Tier 1 rows via
-dataclasses.replace rather than hand-duplicated, so a higher-tier piece can
-never quietly drift from its Tier 1 twin's effect.
+price/humanity_cost multiplier pair per grade, both relative to the Deltaware
+row, the baseline catalog below): Deltaware is stock, off-the-shelf chrome
+(100% price, regular humanity_cost); Trashware is secondhand -- half price,
+but twice the humanity cost of a fresh install; Betaware is lightly tailored
+to the buyer (1.2x price, -20% humanity_cost); Alphaware is bespoke, built
+for this body alone (2x price, -50% humanity_cost) -- the priciest chrome
+costs the least of you. Generated from the Deltaware rows via
+dataclasses.replace rather than hand-duplicated, so a higher grade can
+never quietly drift from its Deltaware twin's effect.
 
 Cyberware is installed, not equipped -- there's no equipped=True/False toggle
 the way shops.InventoryItem has one. Swapping a slot means removing the old
@@ -100,13 +101,13 @@ class Cyberware:
     # unlike Item.defense there's no wearable-slot restriction, since every piece
     # of cyberware is always active.
     defense: int = 0
-    # Quality grade, 1-4 (see VALID_CYBERWARE_TIERS and the module docstring). Tier 1
-    # is the baseline catalog below; a higher tier is a dataclasses.replace of a Tier
-    # 1 row with the same effect and a different price/humanity_cost -- never a
-    # separate stat/skill profile.
-    tier: int = 1
+    # Quality grade (see CYBERWARE_TIER_IDS and the module docstring). "deltaware" is
+    # the baseline catalog below; a higher grade is a dataclasses.replace of a
+    # deltaware row with the same effect and a different price/humanity_cost -- never
+    # a separate stat/skill profile.
+    tier: str = "deltaware"
     # Whether installing this piece grants a smartlink interface (combat.smartlink_bonus's
-    # gate, via has_smartlink) -- a flag rather than an id check because a Tier 4
+    # gate, via has_smartlink) -- a flag rather than an id check because an Alphaware
     # Smartlink is a second row that has to grant the same thing.
     grants_smartlink: bool = False
     # Standing with the clinic's owner (corpmap.LocalCharacter, via
@@ -114,12 +115,13 @@ class Cyberware:
     # at all -- the same gate shops.Item/Consumable/Program each carry, and
     # RipperdocScreen hides a row above it exactly the way ShopScreen does.
     #
-    # Set per *tier* (CYBERWARE_TIER_MIN_STANDING), never per piece, because the
-    # tier table already says what a tier means: Tier 4 is the cut-price knockoff
-    # that costs more of you, so any back-alley grafter will fit one to a stranger,
-    # while Tier 2's cleaner install is what a doc saves for people they know. The
-    # gate therefore runs *opposite* to price -- the cheapest chrome is the most
-    # freely available, which is the point of it being the cheapest.
+    # Set per *grade* (CYBERWARE_TIER_MIN_STANDING), never per piece, because the
+    # grade already says what it means: Trashware is the cut-price secondhand
+    # knockoff that costs more of you, so any back-alley grafter will fit one to a
+    # stranger, while Alphaware's bespoke tailoring is what a doc saves for people
+    # they know well. The gate therefore runs *opposite* to price -- the cheapest
+    # chrome is the most freely available, which is the point of it being the
+    # cheapest.
     min_standing: int = 0
     # Extra advantage dice on matrix.py's dice-rolling actions (Breach/Extract via
     # _intrude, Harden, Analyze) -- unconditional, unlike Smartlink's weapon-gated
@@ -131,8 +133,8 @@ class Cyberware:
 
 
 # id, name, price, slot, bonuses, skill_bonuses, humanity_cost, tag. First-slice
-# Tier 1 catalog, not balance-simulated. Every row here is min_standing 0 (see
-# CYBERWARE_TIER_MIN_STANDING): the baseline tier is what any clinic will sell a
+# Deltaware catalog, not balance-simulated. Every row here is min_standing 0 (see
+# CYBERWARE_TIER_MIN_STANDING): the baseline grade is what any clinic will sell a
 # stranger, so no *effect* in the catalog is ever locked behind a relationship --
 # only the better trade-offs on it. Two pieces per slot, the same spread shops.py's
 # weapon/armor catalog uses -- most are a flat stat piece plus a
@@ -144,7 +146,7 @@ class Cyberware:
 # but has to give something up to fit any of the pricier, more invasive options in
 # on top. (This comment used to say 5.5, which was simply wrong -- worth knowing,
 # since character.SURGERY_SCARRING was originally sized against that bad figure.)
-_TIER_1_CYBERWARE = [
+_DELTAWARE_CYBERWARE = [
     Cyberware(
         "cybereye_scanner", "Cybereye Scanner", 700, CyberSlot.OPTICS, {"perception": 1}, {}, humanity_cost=1
     ),
@@ -171,6 +173,10 @@ _TIER_1_CYBERWARE = [
         {},
         humanity_cost=2,
     ),
+    # 2.5, not a rounder 3: Trashware's 2x humanity multiplier would put a
+    # humanity_cost of 3 at 6.0 -- at HUMANITY_BASELINE, leaving nothing after
+    # SURGERY_SCARRING and making reflex_coprocessor_trashware permanently
+    # uninstallable (see the guard in character.py).
     Cyberware(
         "reflex_coprocessor",
         "Reflex Coprocessor",
@@ -178,7 +184,7 @@ _TIER_1_CYBERWARE = [
         CyberSlot.NEURALWARE,
         {"agility": 1},
         {},
-        humanity_cost=3,
+        humanity_cost=2.5,
     ),
     # A small, unconditional edge in the matrix (matrix_action_bonus) rather than a
     # flat stat/skill bonus -- see the field's own comment above. First-slice; more
@@ -196,6 +202,8 @@ _TIER_1_CYBERWARE = [
     Cyberware(
         "hydraulic_cyberarm", "Hydraulic Cyberarm", 1000, CyberSlot.ARMS, {"strength": 2}, {}, humanity_cost=2
     ),
+    # 2.5, same reason as reflex_coprocessor above: Trashware's 2x would otherwise
+    # put this at 6.0, past HUMANITY_BASELINE.
     Cyberware(
         "grapple_rig_cyberarm",
         "Grapple Rig Cyberarm",
@@ -203,7 +211,7 @@ _TIER_1_CYBERWARE = [
         CyberSlot.ARMS,
         {},
         {"grapple": 2},
-        humanity_cost=3,
+        humanity_cost=2.5,
     ),
     Cyberware(
         "subdermal_plating", "Subdermal Plating", 850, CyberSlot.INTERNAL, {"body": 1}, {}, humanity_cost=1
@@ -227,47 +235,48 @@ _TIER_1_CYBERWARE = [
     Cyberware(
         "titanium_bones", "Titanium Bones", 3000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2, defense=2
     ),
-    # 3.5 rather than a rounder 4 for a reason that isn't about this row: Tier 4
-    # multiplies humanity_cost by 1.6, and 4 would put the knockoff at 6.4 -- past
-    # HUMANITY_BASELINE, so adamantium_bones_t4 could never be installed by anyone
-    # and would sit on a clinic's shelf forever reading "not enough humanity left".
-    # 3.5 lands its Tier 4 at 5.6, brutal but reachable. character.py guards this for
-    # the whole catalog (it's the module that sees both tables).
+    # 2.8 rather than a rounder 3.5 for a reason that isn't about this row: Trashware
+    # multiplies humanity_cost by 2, and 3.5 would put the knockoff at 7.0 -- past
+    # HUMANITY_BASELINE, so adamantium_bones_trashware could never be installed by
+    # anyone and would sit on a clinic's shelf forever reading "not enough humanity
+    # left". 2.8 lands its Trashware variant at 5.6, brutal but reachable.
+    # character.py guards this for the whole catalog (it's the module that sees both
+    # tables).
     Cyberware(
-        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=3.5, defense=4
+        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2.8, defense=4
     ),
 ]
 
-VALID_CYBERWARE_TIERS = (1, 2, 3, 4)
+CYBERWARE_TIER_IDS = ("deltaware", "trashware", "betaware", "alphaware")
 
-# tier -> (price_mult, humanity_mult), both relative to the same piece's Tier 1 row
-# (not the tier below it) -- see the module docstring.
-CYBERWARE_TIER_MULTIPLIERS: dict[int, tuple[float, float]] = {
-    2: (1.0, 0.9),  # same price, -10% humanity_cost
-    3: (0.75, 1.10),  # -25% price, +10% humanity_cost
-    4: (0.5, 1.6),  # -50% price, +60% humanity_cost
+# grade -> (price_mult, humanity_mult), both relative to the same piece's deltaware
+# row (the baseline, generated at neither multiplier) -- see the module docstring.
+CYBERWARE_TIER_MULTIPLIERS: dict[str, tuple[float, float]] = {
+    "trashware": (0.5, 2.0),  # -50% price, +100% humanity_cost (secondhand)
+    "betaware": (1.2, 0.8),  # +20% price, -20% humanity_cost (lightly tailored)
+    "alphaware": (2.0, 0.5),  # +100% price, -50% humanity_cost (bespoke)
 }
 
 
-# tier -> the standing a ripperdoc wants before selling that tier at all (see
-# Cyberware.min_standing). Deliberately not ordered by price: Tier 4 is the cheap
-# knockoff anyone will fit, Tier 2 the clean install a doc keeps for regulars.
-# Tier 1 is the baseline catalog and stays open to everyone, so a runner who has
+# grade -> the standing a ripperdoc wants before selling that grade at all (see
+# Cyberware.min_standing). Deliberately not ordered by price: Trashware is the cheap
+# knockoff anyone will fit, Alphaware the bespoke tailoring a doc saves for regulars.
+# Deltaware is the baseline catalog and stays open to everyone, so a runner who has
 # never met a grafter can still buy every *effect* in the game -- standing buys a
 # better trade-off on the same implant, never access to a bonus you couldn't get.
 # First-slice numbers, not balance-simulated.
-CYBERWARE_TIER_MIN_STANDING = {1: 0, 2: 3, 3: 1, 4: 0}
+CYBERWARE_TIER_MIN_STANDING = {"deltaware": 0, "trashware": 0, "betaware": 1, "alphaware": 3}
 
 
-def _tier_variant(base: Cyberware, tier: int) -> Cyberware:
-    """A higher-tier row derived from a Tier 1 one via dataclasses.replace, so
-    it can never quietly drift from its Tier 1 twin's bonuses/skill_bonuses/
+def _tier_variant(base: Cyberware, tier: str) -> Cyberware:
+    """A higher-grade row derived from a deltaware one via dataclasses.replace, so
+    it can never quietly drift from its deltaware twin's bonuses/skill_bonuses/
     slot -- only price, humanity_cost and min_standing move."""
     price_mult, humanity_mult = CYBERWARE_TIER_MULTIPLIERS[tier]
     return replace(
         base,
-        id=f"{base.id}_t{tier}",
-        name=f"{base.name} (Tier {tier})",
+        id=f"{base.id}_{tier}",
+        name=f"{base.name} ({tier.capitalize()})",
         price=round(base.price * price_mult),
         humanity_cost=round(base.humanity_cost * humanity_mult, 2),
         tier=tier,
@@ -275,13 +284,13 @@ def _tier_variant(base: Cyberware, tier: int) -> Cyberware:
     )
 
 
-CYBERWARE_CATALOG = _TIER_1_CYBERWARE + [
-    _tier_variant(base, tier) for tier in sorted(CYBERWARE_TIER_MULTIPLIERS) for base in _TIER_1_CYBERWARE
+CYBERWARE_CATALOG = _DELTAWARE_CYBERWARE + [
+    _tier_variant(base, tier) for tier in CYBERWARE_TIER_MULTIPLIERS for base in _DELTAWARE_CYBERWARE
 ]
 
 CYBERWARE_BY_ID = {cyberware.id: cyberware for cyberware in CYBERWARE_CATALOG}
 
-# The Tier 1 baseline id of the one piece that grants a smartlink interface today.
+# The Deltaware baseline id of the one piece that grants a smartlink interface today.
 # has_smartlink checks Cyberware.grants_smartlink rather than this directly -- see
 # the module docstring -- but tests/callers that want "the" Smartlink still want
 # this one.
@@ -292,8 +301,8 @@ for _cyberware in CYBERWARE_CATALOG:
         skill_for(_skill_id)
     if _cyberware.humanity_cost < 0:
         raise ValueError(f"{_cyberware.id}: humanity_cost must be >= 0")
-    if _cyberware.tier not in VALID_CYBERWARE_TIERS:
-        raise ValueError(f"{_cyberware.id}: tier must be one of {VALID_CYBERWARE_TIERS}")
+    if _cyberware.tier not in CYBERWARE_TIER_IDS:
+        raise ValueError(f"{_cyberware.id}: tier must be one of {CYBERWARE_TIER_IDS}")
     if _cyberware.defense and not (1 <= _cyberware.defense <= 8):
         raise ValueError(f"{_cyberware.id}: defense must be 1-8")
     if _cyberware.matrix_action_bonus < 0:
@@ -302,10 +311,11 @@ for _cyberware in CYBERWARE_CATALOG:
 if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
     raise ValueError("CYBERWARE_CATALOG has duplicate ids")
 
-# Tier 1 rows take min_standing from Cyberware's own default rather than from
+# Deltaware rows take min_standing from Cyberware's own default rather than from
 # CYBERWARE_TIER_MIN_STANDING (only _tier_variant reads that table, and only for
-# tiers 2-4), so the table's Tier 1 entry would otherwise be decorative -- editable
-# with no effect on anything in src/. Tie the two together here so they can't drift.
+# the other three grades), so the table's deltaware entry would otherwise be
+# decorative -- editable with no effect on anything in src/. Tie the two together
+# here so they can't drift.
 for _cyberware in CYBERWARE_CATALOG:
     if _cyberware.min_standing != CYBERWARE_TIER_MIN_STANDING[_cyberware.tier]:
         raise ValueError(
@@ -352,8 +362,8 @@ def free_humanity(character: "Character") -> float:
 
 
 def has_smartlink(installed: dict[CyberSlot, str]) -> bool:
-    """Whether any installed piece grants a smartlink interface (Tier 1 or Tier
-    4 Smartlink both do) -- the gate combat.py's smartlink_bonus checks before
+    """Whether any installed piece grants a smartlink interface (Deltaware or
+    Alphaware Smartlink both do) -- the gate combat.py's smartlink_bonus checks before
     granting extra to-hit dice against a shops.Item.smartlinked weapon. Takes
     the raw dict to stay a leaf, same reason installed_bonus does."""
     return any(CYBERWARE_BY_ID[cyberware_id].grants_smartlink for cyberware_id in installed.values())
@@ -365,7 +375,7 @@ def _effective_standing(standing: int) -> int:
     Without this a *negative* standing (a failed gig at the clinic is enough --
     gigs.GIG_FAIL_STANDING_HIT) would hide the entire catalog rather than just the
     gated tiers, since every row's min_standing is >= 0. That would break the one
-    thing CYBERWARE_TIER_MIN_STANDING promises: Tier 1 is open to everyone, so no
+    thing CYBERWARE_TIER_MIN_STANDING promises: Deltaware is open to everyone, so no
     *effect* is ever unreachable. A doc you've annoyed doesn't cut you a deal on
     the good chrome; they still sell you the baseline.
 
@@ -377,7 +387,7 @@ def _effective_standing(standing: int) -> int:
 
 def catalog_for_standing(standing: int) -> list[Cyberware]:
     """Everything a clinic will sell someone at this standing with its owner --
-    CYBERWARE_CATALOG filtered by min_standing, in catalog order (Tier 1 first,
+    CYBERWARE_CATALOG filtered by min_standing, in catalog order (Deltaware first,
     then each higher tier as a block). The read side RipperdocScreen renders,
     mirroring ShopScreen's own `if item.min_standing > standing: continue`."""
     effective = _effective_standing(standing)
