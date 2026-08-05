@@ -5,6 +5,7 @@ from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
+from shadowguy.cybernetics import free_humanity
 from shadowguy.grid import Grid, Tile
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
@@ -136,12 +137,19 @@ class CharacterSheet(Static):
     def render(self) -> str:
         c = self.character
         fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
+        # What's left of the runner (ceiling minus installed chrome), not the ceiling --
+        # the ceiling alone says nothing about how chromed-up they currently are. The
+        # penalty is spelled out for the same reason fatigue's is: so the player isn't
+        # tracking a stat drain blind.
+        humanity = f"{free_humanity(c):g}"
+        if c.humanity_penalty:
+            humanity += f" (-{c.humanity_penalty} to stats)"
         stun = "None" if c.stun == 0 else str(c.stun)
         return (
             f"{c.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
             f"Health: {c.health}/{c.max_health}   {fatigue}   Stun: {stun}\n"
             f"Cash: {c.cash}eb   Rep: {c.rep}   Experience: {c.experience}xp   "
-            f"Humanity: {c.humanity}\n"
+            f"Humanity: {humanity}\n"
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Logic: {c.stat('logic')}  "
             f"Cool: {c.stat('cool')}"

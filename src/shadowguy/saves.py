@@ -112,9 +112,12 @@ SAVE_SUFFIX = ".save"
 # (inside an accepted job, a fixer's offers, or a location's gig) lacks it.
 # v33 added cyberware (cybernetics.py): Character gained `installed_cyberware`
 # (a pre-v33 pickled Character lacks it).
-# v34 added Humanity (character.py): Character gained `humanity`, a fixed
-# baseline (HUMANITY_BASELINE, 6) with no gear/temp bonus and nothing yet to
-# raise or lower it (a pre-v34 pickled Character lacks it).
+# v34 added Humanity (character.py): Character gained `humanity` (a pre-v34
+# pickled Character lacks it). It landed as a fixed baseline with nothing to
+# raise or lower it; the cyberpsychosis work later turned it into a ceiling that
+# SURGERY_SCARRING erodes, which needed *no* bump of its own -- the field already
+# existed and only its annotation widened int -> float, so a save written before
+# that change loads at 6 with zero implied scarring, which is exactly right.
 # v35 made Academy training take days (corp_turn.py): CorpState gained
 # `pending_recruit` (a pre-v35 pickled CorpState lacks it, None when idle).
 # v36 decoupled Rest from the midnight tick and added fatigue (character.py):

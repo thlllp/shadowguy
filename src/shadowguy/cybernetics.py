@@ -11,20 +11,26 @@ Load-bearing beyond the purchase: Character.stat()/skill_gear_bonus fold
 installed_bonus/installed_skill_bonus in alongside worn gear, so cyberware
 strengthens checks the moment it's installed, the same as an equipped Item.
 
-No cyberpsychosis cost yet: Humanity is only spent as install-time capacity
-today, and nothing reads how much is left over for anything else.
+Humanity is two numbers. Character.humanity is a *ceiling*, and it erodes:
+_scar takes SURGERY_SCARRING off it permanently on every install and every
+removal, because both are surgery. free_humanity is that ceiling minus
+everything currently installed -- what's actually left of the runner -- and it
+is the number that matters: Character.humanity_penalty grades a stat drain off
+it, and reaching 0 is cyberpsychosis, which ends the run.
 
-Humanity as capacity: every Cyberware carries a `humanity_cost`, and the sum
-across everything installed can never exceed Character.humanity
-(HUMANITY_BASELINE, 6) -- the same "capacity caps a purchase" shape
-inventory.free_program_slots enforces for a deck's RAM. Nothing lowers
-Character.humanity itself yet (it's a fixed baseline, see character.py), so
-today this is purely a loadout budget: how much of a runner's whole four-slot
-frame they can afford to replace at once, not a resource that depletes over a
-run. `humanity_cost` is a float (Smartlink costs 0.5) rather than an int --
-same reason corp_turn.CorpState.research_points is a float once Brains 2's
-fractional rates enter the picture -- so free_humanity can land on a
-half-point remainder without rounding it away.
+Every Cyberware carries a `humanity_cost`, and the sum across everything
+installed can never exceed the ceiling -- the same "capacity caps a purchase"
+shape inventory.free_program_slots enforces for a deck's RAM. `humanity_cost`
+is a float (Smartlink costs 0.5) rather than an int -- same reason
+corp_turn.CorpState.research_points is a float once Brains 2's fractional rates
+enter the picture -- so free_humanity can land on a half-point remainder
+without rounding it away.
+
+Removal rebounds: the piece stops counting against free_humanity the moment
+it's out, so pulling chrome is how a runner climbs back out of a spiral. It
+costs only the scar, never the implant's own value, which is why there is no
+therapy mechanic. What it isn't is a clean undo -- churning a loadout grinds
+the ceiling down with nothing to show for it.
 
 Smartlink (CyberSlot.OPTICS) is the one piece whose effect isn't a flat
 bonus: it does nothing on its own, and only grants combat.smartlink_bonus's
@@ -133,9 +139,11 @@ class Cyberware:
 # skill-specialized piece, except OPTICS, where Smartlink's whole effect is
 # conditional (see above) rather than a flat skill_bonuses entry.
 # humanity_cost is deliberately uneven: the cheap option in each slot sums to
-# 5.5 of HUMANITY_BASELINE's 6 (Smartlink's 0.5 is the cheapest single piece
-# in the catalog), so a runner can afford one simple piece per slot but has to
-# give something up to fit any of the pricier, more invasive options in on top.
+# 4.0 of HUMANITY_BASELINE's 6 (Smartlink and Datajack tie at 0.5, the cheapest
+# single pieces in the catalog), so a runner can afford one simple piece per slot
+# but has to give something up to fit any of the pricier, more invasive options in
+# on top. (This comment used to say 5.5, which was simply wrong -- worth knowing,
+# since character.SURGERY_SCARRING was originally sized against that bad figure.)
 _TIER_1_CYBERWARE = [
     Cyberware(
         "cybereye_scanner", "Cybereye Scanner", 700, CyberSlot.OPTICS, {"perception": 1}, {}, humanity_cost=1
@@ -314,10 +322,33 @@ def installed_humanity_cost(installed: dict[CyberSlot, str]) -> float:
     return sum(CYBERWARE_BY_ID[cyberware_id].humanity_cost for cyberware_id in installed.values())
 
 
+def _scar(character: "Character") -> None:
+    """Permanently lower a runner's Humanity ceiling by one operation's worth.
+
+    Charged by both install_cyberware and remove_cyberware -- both are surgery. The
+    constant lives in character.py (SURGERY_SCARRING) alongside HUMANITY_BASELINE
+    since that's where the ceiling itself is defined; imported lazily here so this
+    module stays a runtime leaf, the same reason Character is TYPE_CHECKING-only.
+
+    Rounded to 2dp each time, matching _tier_variant's own rounding, so repeated
+    operations can't accumulate binary-float dust into the ceiling."""
+    from shadowguy.character import SURGERY_SCARRING
+
+    character.humanity = round(character.humanity - SURGERY_SCARRING, 2)
+
+
 def free_humanity(character: "Character") -> float:
-    """How much of Character.humanity's capacity is still unspent -- the
-    cyberware counterpart to inventory.free_program_slots."""
-    return character.humanity - installed_humanity_cost(character.installed_cyberware)
+    """How much of the runner is actually left: the Humanity ceiling
+    (Character.humanity, itself worn down by _scar) minus everything currently
+    installed.
+
+    This is *the* Humanity number -- what CharacterSheet shows, what
+    Character.humanity_penalty reads, and what reaching 0 ends the run over. The
+    ceiling on its own says only how much room a runner was born with and has since
+    given up to surgery; this says how much of them is still theirs."""
+    return round(
+        character.humanity - installed_humanity_cost(character.installed_cyberware), 2
+    )
 
 
 def has_smartlink(installed: dict[CyberSlot, str]) -> bool:
@@ -353,6 +384,18 @@ def catalog_for_standing(standing: int) -> list[Cyberware]:
     return [cyberware for cyberware in CYBERWARE_CATALOG if cyberware.min_standing <= effective]
 
 
+def lost_to_cyberpsychosis(character: "Character") -> bool:
+    """Whether there is nothing left of the runner -- free Humanity at or below 0.
+
+    install_cyberware deliberately allows the install that causes this (see its own
+    note), so **every caller of install_cyberware must check this afterwards** and end
+    the run if it's true. It lives here rather than inside install_cyberware because
+    ending a run is an app-level act (app.exit), and cybernetics.py is a leaf that
+    can't reach it -- but the *condition* belongs with the model, not duplicated in
+    whichever screen happens to sell chrome. Today that's RipperdocScreen alone."""
+    return free_humanity(character) <= 0
+
+
 def install_cyberware(character: "Character", cyberware_id: str, standing: int = 0) -> bool:
     """Buy and surgically install one piece of cyberware. Fails closed -- no
     charge, no mutation -- if the clinic won't sell it at this standing, the
@@ -366,7 +409,13 @@ def install_cyberware(character: "Character", cyberware_id: str, standing: int =
     Note there is no standing *discount* here, unlike shops.buy_price: standing
     decides what a doc is willing to cut into you, not what they charge for it.
     Keeping price out of it is also what keeps this module a leaf -- a discount
-    would mean importing shops."""
+    would mean importing shops.
+
+    Only refuses a piece that doesn't *fit*. A piece costing exactly what's left is
+    legal, and then this operation's own scar takes free Humanity to or below 0 --
+    which is cyberpsychosis. That is deliberate (the player is allowed to walk off
+    the cliff, and RipperdocScreen labels the row before they do), so **callers must
+    check lost_to_cyberpsychosis afterwards** and end the run."""
     cyberware = CYBERWARE_BY_ID[cyberware_id]
     if _effective_standing(standing) < cyberware.min_standing:
         return False
@@ -378,13 +427,27 @@ def install_cyberware(character: "Character", cyberware_id: str, standing: int =
         return False
     character.cash -= cyberware.price
     character.installed_cyberware[cyberware.slot] = cyberware_id
+    _scar(character)
     return True
 
 
 def remove_cyberware(character: "Character", slot: CyberSlot) -> str | None:
-    """Uninstall whatever occupies `slot`, freeing it. No refund. Returns the
-    removed cyberware's id, or None if the slot was already empty."""
-    return character.installed_cyberware.pop(slot, None)
+    """Uninstall whatever occupies `slot`, freeing it. No cash refund. Returns the
+    removed cyberware's id, or None if the slot was already empty.
+
+    Humanity *does* come back: the piece stops counting against free_humanity the
+    moment it's out, so pulling chrome is how a runner climbs back out of a
+    cyberpsychosis spiral. It isn't free, though -- the operation scars like any
+    other (_scar), so the rebound is the implant's whole humanity_cost minus
+    SURGERY_SCARRING, always a clear net gain (the cheapest implant costs 0.5
+    against a 0.1 scar) but never a clean undo.
+
+    An empty slot is a no-op and is deliberately *not* scarred -- nobody opened
+    anyone up."""
+    removed = character.installed_cyberware.pop(slot, None)
+    if removed is not None:
+        _scar(character)
+    return removed
 
 
 def installed_bonus(installed: dict[CyberSlot, str], stat: str) -> int:

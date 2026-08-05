@@ -2,7 +2,12 @@
 Character.stat()/skill_value wiring (character.py folds installed_bonus/
 installed_skill_bonus in alongside worn gear -- see the module docstring)."""
 
-from shadowguy.character import HUMANITY_BASELINE, Character
+from shadowguy.character import (
+    HUMANITY_BASELINE,
+    HUMANITY_PENALTY_THRESHOLDS,
+    SURGERY_SCARRING,
+    Character,
+)
 from shadowguy.cybernetics import (
     CYBERWARE_BY_ID,
     CYBERWARE_CATALOG,
@@ -16,6 +21,7 @@ from shadowguy.cybernetics import (
     has_smartlink,
     install_cyberware,
     installed_bonus,
+    lost_to_cyberpsychosis,
     installed_defense,
     installed_humanity_cost,
     installed_matrix_action_bonus,
@@ -136,7 +142,8 @@ def test_installing_cyberware_spends_free_humanity():
     character = Character(name="t", cash=10_000)
     install_cyberware(character, cyberware.id)
     assert installed_humanity_cost(character.installed_cyberware) == cyberware.humanity_cost
-    assert free_humanity(character) == HUMANITY_BASELINE - cyberware.humanity_cost
+    # The implant's cost *and* the operation's permanent scar.
+    assert free_humanity(character) == HUMANITY_BASELINE - cyberware.humanity_cost - SURGERY_SCARRING
 
 
 def test_install_cyberware_fails_when_it_would_exceed_humanity_capacity():
@@ -148,10 +155,13 @@ def test_install_cyberware_fails_when_it_would_exceed_humanity_capacity():
 
 
 def test_install_cyberware_succeeds_exactly_at_remaining_capacity():
+    """Capacity is the gate, so a piece costing exactly what's left still goes in --
+    but the operation's own scar then tips free Humanity under 0. That is the
+    cyberpsychosis cliff, not a rejected install (see the dedicated test below)."""
     cyberware = _first_for_slot(CyberSlot.INTERNAL)
     character = Character(name="t", cash=10_000, humanity=cyberware.humanity_cost)
     assert install_cyberware(character, cyberware.id) is True
-    assert free_humanity(character) == 0
+    assert free_humanity(character) == -SURGERY_SCARRING
 
 
 def test_removing_cyberware_frees_its_humanity_cost():
@@ -159,7 +169,8 @@ def test_removing_cyberware_frees_its_humanity_cost():
     character = Character(name="t", cash=10_000)
     install_cyberware(character, cyberware.id)
     remove_cyberware(character, CyberSlot.ARMS)
-    assert free_humanity(character) == HUMANITY_BASELINE
+    # The implant's cost all comes back; the two operations' scarring does not.
+    assert free_humanity(character) == HUMANITY_BASELINE - 2 * SURGERY_SCARRING
 
 
 def test_smartlink_costs_half_a_point_of_humanity():
@@ -169,7 +180,7 @@ def test_smartlink_costs_half_a_point_of_humanity():
 def test_installing_smartlink_leaves_a_fractional_remainder():
     character = Character(name="t", cash=10_000)
     install_cyberware(character, SMARTLINK_ID)
-    assert free_humanity(character) == HUMANITY_BASELINE - 0.5
+    assert free_humanity(character) == HUMANITY_BASELINE - 0.5 - SURGERY_SCARRING
 
 
 def test_has_smartlink_false_with_nothing_installed():
@@ -327,7 +338,7 @@ def test_install_datajack_succeeds_and_spends_humanity():
     character = Character(name="t", cash=10_000)
     assert install_cyberware(character, "datajack") is True
     assert character.cash == 10_000 - 1000
-    assert free_humanity(character) == HUMANITY_BASELINE - 0.5
+    assert free_humanity(character) == HUMANITY_BASELINE - 0.5 - SURGERY_SCARRING
 
 
 # --- Standing gate ------------------------------------------------------------
@@ -436,3 +447,181 @@ def test_tier_1_min_standing_is_pinned_to_the_table():
     assert all(
         c.min_standing == CYBERWARE_TIER_MIN_STANDING[c.tier] for c in CYBERWARE_CATALOG
     )
+
+
+# --- Cyberpsychosis: surgery scars, removal rebounds --------------------------
+# Humanity is a *ceiling* (Character.humanity) worn down permanently by every
+# operation; free_humanity is what's left of the runner once installed chrome is
+# subtracted. The ceiling only ever falls; free Humanity rebounds when chrome comes
+# out, which is the way back out of the spiral.
+
+
+def test_installing_scars_the_ceiling_permanently():
+    character = Character(name="t")
+    character.cash = 100_000
+    install_cyberware(character, "datajack")  # humanity_cost 0.5
+    assert character.humanity == HUMANITY_BASELINE - SURGERY_SCARRING
+    assert free_humanity(character) == HUMANITY_BASELINE - SURGERY_SCARRING - 0.5
+
+
+def test_removing_rebounds_free_humanity_but_scars_again():
+    """The whole point of the rebound: pulling chrome gives the implant's cost back
+    and charges only the operation, so it's always a clear net gain."""
+    character = Character(name="t")
+    character.cash = 100_000
+    install_cyberware(character, "reflex_coprocessor")  # humanity_cost 3
+    sunk = free_humanity(character)
+    remove_cyberware(character, CyberSlot.NEURALWARE)
+    assert free_humanity(character) > sunk
+    # Two operations' worth of scarring, and nothing installed.
+    assert character.humanity == HUMANITY_BASELINE - 2 * SURGERY_SCARRING
+    assert free_humanity(character) == character.humanity
+
+
+def test_removing_an_empty_slot_does_not_scar():
+    """Nobody opened anyone up — a no-op removal must not cost a scar."""
+    character = Character(name="t")
+    before = character.humanity
+    assert remove_cyberware(character, CyberSlot.ARMS) is None
+    assert character.humanity == before
+
+
+def test_churning_the_same_implant_grinds_the_ceiling_down():
+    """Swapping loadouts repeatedly costs Humanity with nothing to show for it —
+    the ratchet that stops surgery being a free undo."""
+    character = Character(name="t")
+    character.cash = 100_000
+    for _ in range(5):
+        install_cyberware(character, "datajack")
+        remove_cyberware(character, CyberSlot.NEURALWARE)
+    assert character.humanity == round(HUMANITY_BASELINE - 10 * SURGERY_SCARRING, 2)
+    assert character.installed_cyberware == {}
+
+
+def test_humanity_penalty_steps_with_the_thresholds():
+    character = Character(name="t")
+    assert character.humanity_penalty == 0
+    for expected, threshold in enumerate(HUMANITY_PENALTY_THRESHOLDS, start=1):
+        character.humanity = threshold - 0.1
+        character.installed_cyberware = {}
+        assert character.humanity_penalty == expected
+
+
+def test_humanity_penalty_reads_installed_chrome_not_just_the_ceiling():
+    """Chrome you're carrying is the part of you that's gone, so the penalty has to
+    follow free_humanity — otherwise installing would cost nothing until scarring
+    caught up."""
+    character = Character(name="t")
+    character.cash = 100_000
+    assert character.humanity_penalty == 0
+    # One implant is deliberately free of penalty (see HUMANITY_PENALTY_THRESHOLDS);
+    # it takes a real loadout to start losing yourself.
+    for piece in ("reflex_coprocessor", "hydraulic_cyberarm"):
+        install_cyberware(character, piece)
+    assert character.humanity_penalty > 0
+
+
+def test_the_penalty_reaches_every_check_through_stat():
+    """stat() is the one chokepoint gear/cyberware/fatigue already go through, so
+    wiring the penalty there makes every roll in the game feel it for free."""
+    character = Character(name="t")
+    character.cash = 100_000
+    character.body = 5
+    before = character.stat("body")
+    for piece in ("reflex_coprocessor", "hydraulic_cyberarm"):
+        install_cyberware(character, piece)
+    assert character.humanity_penalty > 0
+    # Body gets no cyberware bonus from either piece, so the drop is the penalty alone.
+    assert character.stat("body") == before - character.humanity_penalty
+
+
+def test_pulling_chrome_back_out_lifts_the_penalty_again():
+    character = Character(name="t")
+    character.cash = 100_000
+    for piece in ("reflex_coprocessor", "hydraulic_cyberarm"):
+        install_cyberware(character, piece)
+    assert character.humanity_penalty > 0
+    remove_cyberware(character, CyberSlot.ARMS)
+    assert character.humanity_penalty == 0
+
+
+def test_an_install_that_exactly_fits_still_tips_you_under():
+    """install_cyberware only refuses a piece that doesn't *fit*, so one costing
+    exactly what's left is legal — and the operation's own scar takes free Humanity
+    below 0. That's the cyberpsychosis cliff RipperdocScreen warns about and ends
+    the run on; the model has to actually produce it."""
+    character = Character(name="t")
+    character.cash = 100_000
+    piece = CYBERWARE_BY_ID["reflex_coprocessor"]  # humanity_cost 3
+    character.humanity = piece.humanity_cost  # nothing to spare
+    assert install_cyberware(character, piece.id) is True
+    assert free_humanity(character) < 0
+
+
+def test_a_piece_that_does_not_fit_is_still_refused():
+    """The cliff must not become a free-for-all — capacity is still a gate."""
+    character = Character(name="t")
+    character.cash = 100_000
+    character.humanity = 1.0
+    assert install_cyberware(character, "reflex_coprocessor") is False
+    assert character.installed_cyberware == {}
+    assert character.humanity == 1.0  # no scar for an operation that never happened
+
+
+def test_a_full_cheap_loadout_leaves_the_runner_barely_standing():
+    """SURGERY_SCARRING is sized against the catalog's own 'one cheap piece per slot
+    sums to 5.5 of 6' note: four installs scar 0.4, so the loadout still fits — but
+    only just. Fully chromed should read as barely holding on, not as impossible."""
+    character = Character(name="t")
+    character.cash = 100_000
+    cheapest = {}
+    for cyberware in CYBERWARE_CATALOG:
+        if cyberware.tier != 1:
+            continue
+        current = cheapest.get(cyberware.slot)
+        if current is None or cyberware.humanity_cost < current.humanity_cost:
+            cheapest[cyberware.slot] = cyberware
+    for cyberware in cheapest.values():
+        assert install_cyberware(character, cyberware.id) is True
+    assert len(character.installed_cyberware) == len(CyberSlot)
+    # 4.0 of chrome plus 0.4 of scarring against a baseline of 6: diminished, but a
+    # long way from the cap. Fully chromed must stay playable.
+    assert free_humanity(character) == HUMANITY_BASELINE - 4.0 - 4 * SURGERY_SCARRING
+    assert character.humanity_penalty == 1
+
+
+def test_no_catalog_row_is_instant_death_for_a_fresh_runner():
+    """The guard in character.py has to account for SURGERY_SCARRING, not just fit: a
+    row costing HUMANITY_BASELINE - SURGERY_SCARRING or more passes a naive "does it
+    fit" test and then takes a fresh runner's last sliver on the way in — a shelf row
+    that is instant game over rather than an implant.
+
+    Only 0.3 of slack separates the current catalog's priciest piece
+    (adamantium_bones_t4 at 5.6) from that line, so this is a live constraint on
+    anyone retuning bone lacing, not theoretical headroom."""
+    character = Character(name="t")
+    character.cash = 1_000_000
+    for cyberware in CYBERWARE_CATALOG:
+        assert cyberware.humanity_cost + SURGERY_SCARRING < HUMANITY_BASELINE, cyberware.id
+
+
+def test_lost_to_cyberpsychosis_tracks_free_humanity():
+    character = Character(name="t")
+    assert lost_to_cyberpsychosis(character) is False
+    character.humanity = SURGERY_SCARRING
+    character.installed_cyberware = {}
+    assert lost_to_cyberpsychosis(character) is False
+    character.humanity = 0.0
+    assert lost_to_cyberpsychosis(character) is True
+
+
+def test_the_lethal_install_is_detectable_by_the_model_not_just_a_screen():
+    """install_cyberware allows the install that ends you, so the condition has to be
+    checkable from the model — otherwise the fail state depends on which screen
+    happened to sell the chrome."""
+    character = Character(name="t")
+    character.cash = 100_000
+    piece = CYBERWARE_BY_ID["reflex_coprocessor"]
+    character.humanity = piece.humanity_cost
+    assert install_cyberware(character, piece.id) is True
+    assert lost_to_cyberpsychosis(character) is True

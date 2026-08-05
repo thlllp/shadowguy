@@ -37,6 +37,7 @@ from shadowguy.cybernetics import (
     catalog_for_standing,
     free_humanity,
     install_cyberware,
+    lost_to_cyberpsychosis,
     remove_cyberware,
 )
 from shadowguy.skills import skill_for, skill_value
@@ -918,6 +919,19 @@ def _cyberware_label(cyberware: Cyberware) -> str:
     return ", ".join(parts)
 
 
+def _would_end_you(character: Character, cyberware: Cyberware) -> bool:
+    """Whether installing this piece would leave nothing of the runner behind.
+
+    install_cyberware only refuses a piece that doesn't *fit* (humanity_cost above
+    free_humanity), so a piece costing exactly what's left is legal -- and then the
+    operation's own SURGERY_SCARRING tips free Humanity below 0. That is
+    cyberpsychosis, and it ends the run. Predicting it here is what lets the shelf
+    warn instead of the player finding out by clicking."""
+    from shadowguy.character import SURGERY_SCARRING
+
+    return free_humanity(character) - cyberware.humanity_cost - SURGERY_SCARRING <= 0
+
+
 class RipperdocScreen(PanelNav, BackScreen):
     """A cyber clinic: buy and have cyberware installed, or have a piece cut back out.
 
@@ -1018,6 +1032,13 @@ class RipperdocScreen(PanelNav, BackScreen):
                 label += " — not enough humanity left"
             elif cyberware.price > character.cash:
                 label += " — can't afford"
+            elif _would_end_you(character, cyberware):
+                # Last, not first: a piece you can't pay for is a cash problem, and
+                # saying so is the actionable answer -- warning that an implant you
+                # cannot buy would kill you helps nobody. Deliberately still
+                # selectable, though. This is the cyberpsychosis cliff and the player
+                # is allowed to walk off it, just never by surprise.
+                label += " — WOULD BE THE LAST OF YOU"
             stock.append(ListItem(Static(label), id=f"install_{cyberware.id}"))
         if not stock:
             stock = [ListItem(Static("Nothing here they'll sell you."), id="no_stock")]
@@ -1046,6 +1067,14 @@ class RipperdocScreen(PanelNav, BackScreen):
         if item_id.startswith("install_"):
             cyberware = CYBERWARE_BY_ID[item_id.removeprefix("install_")]
             if install_cyberware(character, cyberware.id, self._owner_standing()):
+                if lost_to_cyberpsychosis(character):
+                    self.app.exit(
+                        message=(
+                            f"{character.name} never came off the table. "
+                            f"There was nothing left to wake up. Game over."
+                        )
+                    )
+                    return
                 self.notify(f"{cyberware.name} installed. It aches, then it's yours.")
             elif cyberware.slot in character.installed_cyberware:
                 self.notify(

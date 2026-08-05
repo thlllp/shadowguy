@@ -129,7 +129,7 @@ Note what does **not** need a bump: catalogs are keyed by id in save state (`Cha
 - **Time**: `elapsed_hours` is a continuous float clock. `spend_time()` is the single chokepoint. Day boundary fires `_apply_day_tick`.
 - **Fatigue**: builds when `elapsed_hours - last_rest_hour > 24`. Rest halves it (doesn't clear). Caps at 3 stat penalty.
 - **Stun**: persistent on `Character`, carries between fights. `mark_rested()` clears it. Still inert on the tactical grid.
-- **Humanity**: fixed baseline (6), a cyberware capacity budget, not a draining pool. No cyberpsychosis yet.
+- **Humanity**: two numbers. `Character.humanity` is a *ceiling* (6) permanently eroded by `SURGERY_SCARRING` on every install **and** removal; `cybernetics.free_humanity` is the ceiling minus installed chrome — that's the one that matters. Graded stat penalty via `Character.stat()`; **0 ends the run** (cyberpsychosis). Removing chrome rebounds its full cost, so pulling implants is the way back out.
 - **Rep**: floored at -10, not 0. Negative rep bars entry from corp HQ lobbies.
 - **Health**: `10 + body * 5` — raw Body, never gear-included.
 - **Combat**: you take one action, then every non-stunned enemy attacks. Running always works; the Dodge check only decides cost.
@@ -151,10 +151,9 @@ Note what does **not** need a bump: catalogs are keyed by id in save state (`Cha
 
 Mechanisms built ahead of their drivers, as of save v58:
 
-- **Cyberpsychosis** — `Character.humanity` never depletes; nothing reads what's left over.
 - **`Medicine` / `Demolitions`** — in the 39-skill table, rolled by nothing. Hooks exist and are checkless today: `tactical.stabilize_ally`'s health kits, and grenade throws.
 - **`Gunnery`** — reached by nothing at all; no mounted weapon exists.
 - **`Character.crew_experience`** — a ledger with no spend path; `runners.RivalRunner` has no sheet.
 - **`CorpState.sightings`** — purely informational, no standing/rep/combat consequence.
 - **Matrix `CPU` node** — no reward wired, unlike `CACHE`.
-- **Balance simulation is one surface deep** — `tools/combat_sim.py` drives only the abstract fight. The matrix, tactical/crew, burglary, security contracts, the whole corp economy, experience, fatigue and the conflict layer are all hand-set.
+- **Balance simulation is one surface deep** — `tools/combat_sim.py` drives only the abstract fight. The matrix, tactical/crew, burglary, security contracts, the whole corp economy, experience, fatigue, the conflict layer and Humanity erosion are all hand-set. `SURGERY_SCARRING` and `HUMANITY_PENALTY_THRESHOLDS` in particular were tuned by hand against the catalog, and the threshold placement is load-bearing — an earlier band made a +1 implant a net stat *loss*.

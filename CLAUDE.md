@@ -143,7 +143,8 @@ src/shadowguy/
                  buy/sell transactions
   inventory.py   equip state, deck programs and using a consumable -- what happens to
                  a Character's inventory *after* shops.py adds something to it
-  cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC
+  cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC;
+                 owns Humanity erosion (every operation scars, 0 free = run over)
   saves.py       pickle-based whole-run save/load
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
 
@@ -212,7 +213,7 @@ Leaf modules, and why each has to stay one:
 | 31 | `CorpState.sightings`, `ShadowguyApp.rival_runner_locations` |
 | 32 | `Character.experience`/`crew_experience`, `Outcome.experience_delta` |
 | 33 | `Character.installed_cyberware` |
-| 34 | `Character.humanity` |
+| 34 | `Character.humanity` — added as a *fixed* baseline. It became a surgery-eroded ceiling with the cyberpsychosis work; **no bump was needed**, since the field already existed and only its annotation widened `int`→`float` (an old save loads at 6 with zero implied scarring, which is correct) |
 | 35 | `CorpState.pending_recruit` (Academy training takes days) |
 | 36 | `Character.last_rest_hour`, `Character.fatigue` (Rest decoupled from the midnight tick) |
 | 37 | `Character.smuggling_job` (gang delivery jobs) |
