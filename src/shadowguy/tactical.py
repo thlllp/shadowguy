@@ -273,6 +273,19 @@ class TacticalState:
     def is_over(self) -> bool:
         return self.outcome is not TacticalOutcome.ONGOING
 
+    @property
+    def in_combat(self) -> bool:
+        """Whether anything is actually hunting you right now -- movement is only
+        rationed by moves_left while this is true. An ordinary tactical fight is this
+        from the first turn (Unit.alerted defaults to True, and `alarm` plays no part
+        in one -- it's never set outside a burglary). A burglary's guards start
+        unalerted and stay that way until check_detection/raise_alarm catches you, so
+        walking a quiet house costs no action points at all -- only the fight that
+        follows does. `alarm` alone covers the case current floor holds no live guard
+        (fled upstairs, or they're all off_level_units) since it flips building-wide.
+        One-way, same as `alarm`: nobody un-notices you."""
+        return self.alarm or any(u.alerted for u in self.enemies)
+
     def occupied(self, *, exclude: Unit | None = None) -> frozenset[Coord]:
         """Cells a unit stands on — what blocks movement and pathing this instant. Living
         units only: a downed enemy (or a downed hire) is a corpse you can walk over, not
@@ -462,14 +475,34 @@ def stairs_here(state: TacticalState) -> tuple[int, Coord] | None:
     return state.building.links_at(state.level_index, state.player.coord)
 
 
+def _moves_exhausted(state: TacticalState, in_combat: bool) -> bool:
+    """Whether nothing more can be spent right now: the fight's over, or movement is
+    being rationed (in_combat) and the pool's empty. Takes the already-computed flag
+    rather than reading TacticalState.in_combat itself -- every caller needs it for its
+    own legality check anyway, so this doesn't ask the (cheap, but not free) question a
+    second time."""
+    return state.is_over or (in_combat and state.moves_left <= 0)
+
+
+def _spend_move(state: TacticalState, in_combat: bool) -> None:
+    """Ration one moves_left point, but only once something is actually hunting you --
+    shared by every action that spends a step (take_stairs, move_player, attempt_lock)
+    so the combat gate can't drift between them. Same precomputed-flag reasoning as
+    _moves_exhausted."""
+    if in_combat:
+        state.moves_left -= 1
+
+
 def take_stairs(state: TacticalState) -> bool:
-    """Take the stairs under your feet. Costs a move, like any other step -- a floor is
-    a place you walk to, not a free teleport. False when there's nothing to take or no
-    movement left to spend."""
+    """Take the stairs under your feet. Costs a move like any other step once something
+    is actually hunting you (see TacticalState.in_combat) -- a floor is a place you walk
+    to, not a free teleport. False when there's nothing to take, or no movement left to
+    spend while in combat."""
     destination = stairs_here(state)
-    if destination is None or state.moves_left <= 0 or state.is_over:
+    in_combat = state.in_combat
+    if destination is None or _moves_exhausted(state, in_combat):
         return False
-    state.moves_left -= 1
+    _spend_move(state, in_combat)
     enter_level(state, *destination)
     check_detection(state)
     _settle(state)
@@ -755,10 +788,19 @@ def _begin_player_turn(state: TacticalState) -> None:
     _reveal(state)
 
 
-def legal_moves(state: TacticalState) -> list[Coord]:
+def legal_moves(state: TacticalState, *, in_combat: bool | None = None) -> list[Coord]:
     """Where the player may step this instant: one cardinal move into open, unoccupied
-    floor, if they have moves left."""
-    if state.moves_left <= 0 or state.is_over:
+    floor, if they have moves left -- but moves are only a limited resource once
+    something is actually hunting you (TacticalState.in_combat). Walking a quiet house
+    before anyone's spotted you doesn't ration steps at all.
+
+    `in_combat` lets a caller that already read TacticalState.in_combat for its own
+    purposes (move_player) pass it straight through instead of asking again; every
+    other caller (tests, a future renderer) omits it and gets the same answer read
+    fresh off `state`."""
+    if in_combat is None:
+        in_combat = state.in_combat
+    if _moves_exhausted(state, in_combat):
         return []
     return step_neighbors(state.grid, state.player.coord, blocked=state.occupied(exclude=state.player))
 
@@ -768,15 +810,20 @@ def move_player(state: TacticalState, dest: Coord, rng: random.Random | None = N
     step isn't legal at all -- a locked door resolves a pick-the-lock check instead of a
     plain step (see attempt_lock), and still returns True on a failed pick: the move was
     spent attempting it, even though state.player.coord didn't change. Check that
-    directly if "did the player actually end up on dest" is what you need."""
-    if dest not in legal_moves(state):
+    directly if "did the player actually end up on dest" is what you need.
+
+    Only actually spends a moves_left point while TacticalState.in_combat -- the step
+    that gets you spotted is itself free, since nothing was hunting you when you took
+    it; every step after check_detection flips it on starts costing again."""
+    in_combat = state.in_combat
+    if dest not in legal_moves(state, in_combat=in_combat):
         return False
     lock = lock_at(state, dest)
     if lock is not None:
-        attempt_lock(state, dest, lock, rng)
+        attempt_lock(state, dest, lock, rng, in_combat=in_combat)
         return True
     state.player.coord = dest
-    state.moves_left -= 1
+    _spend_move(state, in_combat)
     _reveal(state)
     check_detection(state)
     _settle(state)
@@ -790,14 +837,28 @@ def lock_at(state: TacticalState, coord: Coord) -> Lock | None:
     return state.building.locks.get((state.level_index, coord))
 
 
-def attempt_lock(state: TacticalState, dest: Coord, lock: Lock, rng: random.Random | None = None) -> None:
-    """Try the lock instead of just walking through it. Costs the move either way:
-    success clears it for good and steps the player through; failure leaves it standing
-    and risks the alarm -- an ordinary failure only sometimes (LOCK_FAILURE_ALARM_CHANCE),
-    a critical failure always, same shape as a burglary entrance's own critical failure."""
+def attempt_lock(
+    state: TacticalState,
+    dest: Coord,
+    lock: Lock,
+    rng: random.Random | None = None,
+    *,
+    in_combat: bool | None = None,
+) -> None:
+    """Try the lock instead of just walking through it. Costs the move either way, same
+    as any other step (see TacticalState.in_combat): success clears it for good and
+    steps the player through; failure leaves it standing and risks the alarm -- an
+    ordinary failure only sometimes (LOCK_FAILURE_ALARM_CHANCE), a critical failure
+    always, same shape as a burglary entrance's own critical failure.
+
+    `in_combat` is the same pass-through-or-recompute knob legal_moves takes: move_player
+    already read TacticalState.in_combat once and hands it straight through; a caller
+    that hasn't (a test, `>` in a screen with no lock in play) omits it."""
+    if in_combat is None:
+        in_combat = state.in_combat
     rng = resolve_rng(rng)
     roll = resolve_check(skill_value(state.character, lock.skill), lock.difficulty, rng=rng)
-    state.moves_left -= 1
+    _spend_move(state, in_combat)
     if roll.result.passed:
         del state.building.locks[(state.level_index, dest)]
         state.player.coord = dest
