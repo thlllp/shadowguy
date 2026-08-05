@@ -720,12 +720,11 @@ def test_data_heist_ambush_routes_into_a_matrix_fight_and_jack_out_ends_it():
     run(body())
 
 
-def test_test_menu_lists_a_single_tier_of_each_test_fight():
-    """The Test menu was trimmed down to one Tactical Combat and one Matrix Combat
-    entry (the lowest tier of each) rather than one row per combat.ENEMY_TIERS /
-    matrix.ICE_TIERS entry -- lock that in so a future tier addition doesn't quietly
-    reopen the full list. Burglary/Wetwork are each a single fixed building kind, not
-    tiered, so they always contribute exactly one row apiece."""
+def test_test_menu_lists_one_row_per_tier_and_building_kind():
+    """The Test menu is generated straight off ENEMY_TIERS/ICE_TIERS/BuildingKind
+    rather than a hand-picked list -- assert against those same sources (not literal
+    ids) so a future tier or BuildingKind addition is covered by construction, and
+    this test never needs a manual update to match it."""
 
     async def body():
         app = ShadowguyApp()
@@ -736,7 +735,13 @@ def test_test_menu_lists_a_single_tier_of_each_test_fight():
             assert isinstance(app.screen, GameTestMenu)
 
             ids = [item.id for item in app.screen.query_one(ListView).children]
-            assert ids == [f"tactical_{min(ENEMY_TIERS)}", f"matrix_{min(ICE_TIERS)}", "burglary", "wetwork"]
+            expected = (
+                [f"tactical_{tier}" for tier in ENEMY_TIERS]
+                + [f"matrix_{tier}" for tier in ICE_TIERS]
+                + [f"burglary_{kind.value}" for kind in BuildingKind]
+                + ["wetwork"]
+            )
+            assert ids == expected
 
     run(body())
 
@@ -748,7 +753,7 @@ def test_test_menu_burglary_reaches_a_live_infiltration():
             await _settle(pilot)
             await pilot.click("#test")
             await pilot.pause()
-            await pilot.click("#burglary")
+            await pilot.click(f"#burglary_{BuildingKind.OFFICE.value}")
             await pilot.pause()
             assert isinstance(app.screen, EntrancePickScreen)
 

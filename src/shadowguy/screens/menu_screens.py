@@ -9,7 +9,7 @@ from shadowguy.checks import resolve_check
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
 from shadowguy.corp_turn import CorpState
 from shadowguy.factions import FACTIONS
-from shadowguy.jobs import DIFFICULTY_BASE
+from shadowguy.jobs import ARCHETYPES, DIFFICULTY_BASE, WETWORK_STRUCTURE, Approach, StageType
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import BurglaryStage, Entrance, MatrixStage, Outcome, TacticalStage
@@ -22,19 +22,15 @@ from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
 from .tactical_screen import TacticalScreen
 
-# The same three entrance approaches jobs.py's Burglary/Wetwork APPROACH rows use
-# (skill, difficulty_delta, flavor), so the test menu's building matches what those
-# archetypes actually generate.
-_BURGLARY_APPROACHES = (
-    ("forgery", 1, "Front Door"),
-    ("stealth", 0, "Back Window"),
-    ("lift", -2, "Loading Dock"),
-)
-_WETWORK_APPROACHES = (
-    ("grapple", 1, "Perimeter Wall"),
-    ("infer", 0, "Service Entrance"),
-    ("intimidation", -2, "Front Gate"),
-)
+
+def _approach_pool(archetype_name: str) -> tuple[Approach, ...]:
+    """An archetype's APPROACH-stage pool, read straight from jobs.ARCHETYPES so the
+    Test menu's burglary/wetwork entrances always match what a real job generates --
+    no separately hand-copied table here to fall out of sync when jobs.py's rows
+    change."""
+    archetype = next(a for a in ARCHETYPES if a.name == archetype_name)
+    stage = next(s for s in archetype.stages if s.type is StageType.APPROACH)
+    return stage.approaches
 
 
 class QuitMenu(ModalScreen):
@@ -361,16 +357,26 @@ class TestMenu(BackScreen):
         yield Vertical(
             Static("Test"),
             ListView(
-                ListItem(
-                    Static(f"Tactical Combat — Tier {min(ENEMY_TIERS)}"),
-                    id=f"tactical_{min(ENEMY_TIERS)}",
+                *(
+                    ListItem(Static(f"Tactical Combat — Tier {tier}"), id=f"tactical_{tier}")
+                    for tier in ENEMY_TIERS
                 ),
-                ListItem(
-                    Static(f"Matrix Combat — Tier {min(ICE_TIERS)}"),
-                    id=f"matrix_{min(ICE_TIERS)}",
+                *(
+                    ListItem(Static(f"Matrix Combat — Tier {tier}"), id=f"matrix_{tier}")
+                    for tier in ICE_TIERS
                 ),
-                ListItem(Static("Burglary — Office"), id="burglary"),
-                ListItem(Static("Wetwork — Compound"), id="wetwork"),
+                # One row per BuildingKind -- a new kind gets a row here for free, no
+                # hand-wiring. Burglary can hit any of them (BURGLARY_STRUCTURE maps every
+                # generated LocationKind onto one); Wetwork always targets WETWORK_STRUCTURE
+                # specifically, so it stays its own single row below rather than a fourth
+                # BuildingKind entry.
+                *(
+                    ListItem(
+                        Static(f"Burglary — {kind.value.title()}"), id=f"burglary_{kind.value}"
+                    )
+                    for kind in BuildingKind
+                ),
+                ListItem(Static(f"Wetwork — {WETWORK_STRUCTURE.value.title()}"), id="wetwork"),
             ),
             id="test_dialog",
         )
@@ -382,10 +388,11 @@ class TestMenu(BackScreen):
             self._start_tactical(int(item_id.removeprefix("tactical_")))
         elif item_id.startswith("matrix_"):
             self._start_matrix(int(item_id.removeprefix("matrix_")))
-        elif item_id == "burglary":
-            self._start_burglary(BuildingKind.OFFICE, _BURGLARY_APPROACHES)
+        elif item_id.startswith("burglary_"):
+            kind = BuildingKind(item_id.removeprefix("burglary_"))
+            self._start_burglary(kind, _approach_pool("Burglary"))
         elif item_id == "wetwork":
-            self._start_burglary(BuildingKind.COMPOUND, _WETWORK_APPROACHES)
+            self._start_burglary(WETWORK_STRUCTURE, _approach_pool("Wetwork"))
 
     def _start_tactical(self, tier: int) -> None:
         rng = self.app.rng
@@ -419,21 +426,21 @@ class TestMenu(BackScreen):
     def _on_matrix_end(self, result: MatrixOutcome) -> None:
         self.notify(f"Test breach ended: {result.name.title()}.")
 
-    def _start_burglary(self, kind: BuildingKind, approaches: tuple[tuple[str, int, str], ...]) -> None:
+    def _start_burglary(self, kind: BuildingKind, approaches: tuple[Approach, ...]) -> None:
         rng = self.app.rng
         tier = min(ENEMY_TIERS)
         difficulty = DIFFICULTY_BASE[tier]
         building = generate_building(rng, entrance_count=len(approaches), kind=kind)
         entrances = tuple(
             Entrance(
-                label=f"{flavor} ({skill_for(skill).name})",
-                skill=skill,
-                difficulty=difficulty + delta,
+                label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+                skill=approach.skill,
+                difficulty=difficulty + approach.difficulty_delta,
                 spawn=spawn,
                 success=Outcome(text="It goes clean."),
                 failure=Outcome(text="It gets messy, but you're in."),
             )
-            for (skill, delta, flavor), spawn in zip(approaches, building.entrance_spawns, strict=True)
+            for approach, spawn in zip(approaches, building.entrance_spawns, strict=True)
         )
         stage = BurglaryStage(
             prompt=f"Test infiltration — {kind.value.title()}.",
