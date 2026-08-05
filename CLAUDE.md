@@ -238,6 +238,7 @@ Leaf modules, and why each has to stay one:
 | 54 | `combat.Enemy` rewritten onto the player's stat sheet: the six `CORE_STATS` + `ranks`/`weapon`/`armor` **replacing** the hand-set `health`/`attack`/`defense`/`damage`/`toughness`/`reach`/`stun_damage`, which are now derived properties. A pre-v54 pickled `Enemy` (reachable from an accepted job's `Encounter`/`TacticalStage` and from `BurglaryStage.guard`) carries the old fields as instance attributes that **shadow the properties**. Roster also grew 5 → 11 and `ENEMY_TIERS` was re-pooled |
 | 57 | the workshop system: `corpmap.Location.workshop_built` (free on the injected apartment, built at a safehouse for `WORKSHOP_BUILD_COST`) and `shops.InventoryItem.mods` (per-instance mod ids, folded into combat/inventory stats by `shops.effective_item`) |
 | 58 | the corp conflict layer: `corpmap.Territory.garrison`, `scene.Outcome.security_delta`, and `corp_turn.FactionEvent.from_faction_id` + its new `"seizure"` kind. `rivals.RivalAction.attack` holds a `corp_turn.AttackResult`, and `apply_outcome`/`resolve_choice`/`resolve_entrance` all take a `CorpMap` now |
+| 59 | `cybernetics.py`'s quality tiers renamed from numeric (Tier 1-4) to named grades (Deltaware/Trashware/Betaware/Alphaware) with new price/humanity multipliers; every non-Deltaware catalog id changed shape (`reflex_coprocessor_t2` → `reflex_coprocessor_betaware`), so a pre-v59 `Character.installed_cyberware` referencing an old id would `KeyError` against `CYBERWARE_BY_ID` |
 
 ### Verifying changes
 

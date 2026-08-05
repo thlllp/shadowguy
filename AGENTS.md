@@ -104,7 +104,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 
 ## Save versions
 
-Bump `saves.SAVE_VERSION` on any breaking state change. Current: **58** (corp conflict — `Territory.garrison`, `Outcome.security_delta`, `FactionEvent.from_faction_id` + `"seizure"` kind, `RivalAction.attack`, and a `CorpMap` param on `apply_outcome`/`resolve_choice`/`resolve_entrance`). Full version history in CLAUDE.md's "Save versions" section.
+Bump `saves.SAVE_VERSION` on any breaking state change. Current: **59** (cyberware tiers renamed from numeric to Deltaware/Trashware/Betaware/Alphaware — every non-Deltaware catalog id changed shape, breaking a pre-v59 `installed_cyberware` reference). Full version history in CLAUDE.md's "Save versions" section.
 
 Note what does **not** need a bump: catalogs are keyed by id in save state (`Character.installed_cyberware` stores cyberware ids), so adding a field to a frozen catalog dataclass changes no pickled shape.
 

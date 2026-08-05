@@ -3717,7 +3717,7 @@ def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
 
             before_cash = app.character.cash
             before_humanity = free_humanity(app.character)
-            # The first row is always an installable piece — Tier 1 is min_standing 0.
+            # The first row is always an installable piece — Deltaware is min_standing 0.
             await pilot.click("#ripper_stock ListItem")
             await pilot.pause()
             assert len(app.character.installed_cyberware) == 1
@@ -3742,7 +3742,7 @@ def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
 
 def test_ripperdoc_hides_stock_above_the_players_standing():
     """Rows above standing are hidden outright, the same as ShopScreen — never shown
-    locked. Tier 1 stays visible to a stranger, so no effect is ever unreachable."""
+    locked. Deltaware stays visible to a stranger, so no effect is ever unreachable."""
 
     async def body():
         app = ShadowguyApp()
@@ -3763,7 +3763,7 @@ def test_ripperdoc_hides_stock_above_the_players_standing():
             }
             gated = {c.id for c in CYBERWARE_CATALOG if c.min_standing > 0}
             assert shown & gated == set()
-            assert {c.id for c in CYBERWARE_CATALOG if c.tier == 1} <= shown
+            assert {c.id for c in CYBERWARE_CATALOG if c.tier == "deltaware"} <= shown
 
     run(body())
 

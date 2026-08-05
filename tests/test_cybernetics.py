@@ -11,11 +11,11 @@ from shadowguy.character import (
 from shadowguy.cybernetics import (
     CYBERWARE_BY_ID,
     CYBERWARE_CATALOG,
+    CYBERWARE_TIER_IDS,
     CYBERWARE_TIER_MIN_STANDING,
     SMARTLINK_ID,
-    VALID_CYBERWARE_TIERS,
     CyberSlot,
-    _TIER_1_CYBERWARE,
+    _DELTAWARE_CYBERWARE,
     catalog_for_standing,
     free_humanity,
     has_smartlink,
@@ -201,61 +201,61 @@ def test_has_smartlink_true_once_installed():
 
 
 def test_every_catalog_entry_has_a_valid_tier():
-    assert {c.tier for c in CYBERWARE_CATALOG} <= set(VALID_CYBERWARE_TIERS)
+    assert {c.tier for c in CYBERWARE_CATALOG} <= set(CYBERWARE_TIER_IDS)
 
 
-def test_every_tier_1_piece_has_a_tier_2_3_and_4_variant():
-    tier_1 = [c for c in CYBERWARE_CATALOG if c.tier == 1]
-    for base in tier_1:
-        for tier in (2, 3, 4):
-            assert f"{base.id}_t{tier}" in CYBERWARE_BY_ID
+def test_every_deltaware_piece_has_a_trashware_betaware_and_alphaware_variant():
+    deltaware = [c for c in CYBERWARE_CATALOG if c.tier == "deltaware"]
+    for base in deltaware:
+        for tier in ("trashware", "betaware", "alphaware"):
+            assert f"{base.id}_{tier}" in CYBERWARE_BY_ID
 
 
-def test_higher_tier_keeps_the_same_effect_as_tier_1():
+def test_higher_tier_keeps_the_same_effect_as_deltaware():
     base = CYBERWARE_BY_ID["reflex_coprocessor"]
-    for tier in (2, 3, 4):
-        variant = CYBERWARE_BY_ID[f"{base.id}_t{tier}"]
+    for tier in ("trashware", "betaware", "alphaware"):
+        variant = CYBERWARE_BY_ID[f"{base.id}_{tier}"]
         assert variant.slot is base.slot
         assert variant.bonuses == base.bonuses
         assert variant.skill_bonuses == base.skill_bonuses
         assert variant.tier == tier
 
 
-def test_tier_2_is_the_same_price_and_10_percent_less_humanity():
+def test_trashware_is_half_price_and_double_humanity():
     base = CYBERWARE_BY_ID["neural_processor"]
-    tier_2 = CYBERWARE_BY_ID["neural_processor_t2"]
-    assert tier_2.price == base.price
-    assert tier_2.humanity_cost == round(base.humanity_cost * 0.9, 2)
+    trashware = CYBERWARE_BY_ID["neural_processor_trashware"]
+    assert trashware.price == round(base.price * 0.5)
+    assert trashware.humanity_cost == round(base.humanity_cost * 2.0, 2)
 
 
-def test_tier_3_is_25_percent_cheaper_and_10_percent_more_humanity():
+def test_betaware_is_1_2x_price_and_20_percent_less_humanity():
     base = CYBERWARE_BY_ID["neural_processor"]
-    tier_3 = CYBERWARE_BY_ID["neural_processor_t3"]
-    assert tier_3.price == round(base.price * 0.75)
-    assert tier_3.humanity_cost == round(base.humanity_cost * 1.10, 2)
+    betaware = CYBERWARE_BY_ID["neural_processor_betaware"]
+    assert betaware.price == round(base.price * 1.2)
+    assert betaware.humanity_cost == round(base.humanity_cost * 0.8, 2)
 
 
-def test_tier_4_is_50_percent_cheaper_and_60_percent_more_humanity():
+def test_alphaware_is_2x_price_and_half_humanity():
     base = CYBERWARE_BY_ID["neural_processor"]
-    tier_4 = CYBERWARE_BY_ID["neural_processor_t4"]
-    assert tier_4.price == round(base.price * 0.5)
-    assert tier_4.humanity_cost == round(base.humanity_cost * 1.6, 2)
+    alphaware = CYBERWARE_BY_ID["neural_processor_alphaware"]
+    assert alphaware.price == round(base.price * 2.0)
+    assert alphaware.humanity_cost == round(base.humanity_cost * 0.5, 2)
 
 
 def test_every_tier_smartlink_still_grants_smartlink():
-    for tier in (2, 3, 4):
-        assert CYBERWARE_BY_ID[f"smartlink_t{tier}"].grants_smartlink is True
+    for tier in ("trashware", "betaware", "alphaware"):
+        assert CYBERWARE_BY_ID[f"smartlink_{tier}"].grants_smartlink is True
 
 
 def test_has_smartlink_true_for_a_higher_tier_smartlink():
     character = Character(name="t", cash=10_000)
-    install_cyberware(character, "smartlink_t4")
+    install_cyberware(character, "smartlink_trashware")
     assert has_smartlink(character.installed_cyberware) is True
 
 
-def test_install_cyberware_works_with_a_tier_4_id():
+def test_install_cyberware_works_with_a_trashware_id():
     character = Character(name="t", cash=10_000)
-    variant = CYBERWARE_BY_ID["cybereye_scanner_t4"]
+    variant = CYBERWARE_BY_ID["cybereye_scanner_trashware"]
     assert install_cyberware(character, variant.id) is True
     assert character.cash == 10_000 - variant.price
     assert character.installed_cyberware[CyberSlot.OPTICS] == variant.id
@@ -270,9 +270,9 @@ def test_bone_lacing_catalog_values():
     adamantium = CYBERWARE_BY_ID["adamantium_bones"]
     assert (steel.price, steel.defense, steel.humanity_cost) == (1000, 1, 1)
     assert (titanium.price, titanium.defense, titanium.humanity_cost) == (3000, 2, 2)
-    # 3.5, not 4: Tier 4's 1.6x would put a humanity_cost of 4 at 6.4, past
-    # HUMANITY_BASELINE, making adamantium_bones_t4 permanently uninstallable.
-    assert (adamantium.price, adamantium.defense, adamantium.humanity_cost) == (6000, 4, 3.5)
+    # 2.8, not 3.5: Trashware's 2x would put a humanity_cost of 3.5 at 7.0, past
+    # HUMANITY_BASELINE, making adamantium_bones_trashware permanently uninstallable.
+    assert (adamantium.price, adamantium.defense, adamantium.humanity_cost) == (6000, 4, 2.8)
     assert steel.slot is CyberSlot.INTERNAL
     assert titanium.slot is CyberSlot.INTERNAL
     assert adamantium.slot is CyberSlot.INTERNAL
@@ -280,8 +280,8 @@ def test_bone_lacing_catalog_values():
 
 def test_bone_lacing_gets_generated_tier_variants_too():
     for base_id in ("steel_bones", "titanium_bones", "adamantium_bones"):
-        for tier in (2, 3, 4):
-            variant = CYBERWARE_BY_ID[f"{base_id}_t{tier}"]
+        for tier in ("trashware", "betaware", "alphaware"):
+            variant = CYBERWARE_BY_ID[f"{base_id}_{tier}"]
             assert variant.defense == CYBERWARE_BY_ID[base_id].defense
             assert variant.tier == tier
 
@@ -343,14 +343,14 @@ def test_install_datajack_succeeds_and_spends_humanity():
 
 # --- Standing gate ------------------------------------------------------------
 # Cyberware is the last catalog to get shops.py's min_standing gate, and it's the
-# one where the gate runs *opposite* to price: Tier 4 is the cheap knockoff anyone
-# will fit, Tier 2 the clean install a doc keeps for regulars.
+# one where the gate runs *opposite* to price: Trashware is the cheap knockoff
+# anyone will fit, Alphaware the bespoke tailoring a doc keeps for regulars.
 
 
-def test_tier_1_is_open_to_everyone():
+def test_deltaware_is_open_to_everyone():
     """No effect in the game is ever locked behind a relationship — a stranger can
     buy every baseline piece, just not the better trade-offs on it."""
-    assert all(c.min_standing == 0 for c in CYBERWARE_CATALOG if c.tier == 1)
+    assert all(c.min_standing == 0 for c in CYBERWARE_CATALOG if c.tier == "deltaware")
 
 
 def test_tier_min_standing_matches_the_table():
@@ -359,13 +359,13 @@ def test_tier_min_standing_matches_the_table():
 
 
 def test_the_cheapest_tier_is_not_the_hardest_to_get():
-    """Tier 4 is half price and costs 60% more humanity — the gate must not also
+    """Trashware is half price and costs 100% more humanity — the gate must not also
     make it exclusive, or it stops being the desperate option."""
-    tier_4 = [c for c in CYBERWARE_CATALOG if c.tier == 4]
-    tier_2 = [c for c in CYBERWARE_CATALOG if c.tier == 2]
-    assert all(c.min_standing == 0 for c in tier_4)
-    assert all(c.min_standing > 0 for c in tier_2)
-    assert all(c.price < base.price for c, base in zip(tier_4, _TIER_1_CYBERWARE, strict=True))
+    trashware = [c for c in CYBERWARE_CATALOG if c.tier == "trashware"]
+    alphaware = [c for c in CYBERWARE_CATALOG if c.tier == "alphaware"]
+    assert all(c.min_standing == 0 for c in trashware)
+    assert all(c.min_standing > 0 for c in alphaware)
+    assert all(c.price < base.price for c, base in zip(trashware, _DELTAWARE_CYBERWARE, strict=True))
 
 
 def test_catalog_for_standing_widens_as_standing_rises():
@@ -374,8 +374,8 @@ def test_catalog_for_standing_widens_as_standing_rises():
     assert len(at_zero) < len(at_top)
     assert len(at_top) == len(CYBERWARE_CATALOG)
     assert all(c.min_standing == 0 for c in at_zero)
-    # Every tier-1 effect is reachable from a standing of nothing.
-    assert {c.id for c in _TIER_1_CYBERWARE} <= {c.id for c in at_zero}
+    # Every deltaware effect is reachable from a standing of nothing.
+    assert {c.id for c in _DELTAWARE_CYBERWARE} <= {c.id for c in at_zero}
 
 
 def test_install_refuses_a_piece_above_your_standing():
@@ -416,16 +416,16 @@ def test_every_catalog_row_is_installable_within_the_humanity_baseline():
     assert over == []
 
 
-def test_a_negative_standing_still_leaves_tier_1_on_the_shelf():
+def test_a_negative_standing_still_leaves_deltaware_on_the_shelf():
     """A failed gig at the clinic (gigs.GIG_FAIL_STANDING_HIT) drives local standing
     below 0. Without the floor in _effective_standing that hid the *entire* catalog,
-    not just the gated tiers -- breaking "Tier 1 is open to everyone" outright."""
+    not just the gated tiers -- breaking "Deltaware is open to everyone" outright."""
     at_negative = catalog_for_standing(-3)
-    assert {c.id for c in _TIER_1_CYBERWARE} <= {c.id for c in at_negative}
+    assert {c.id for c in _DELTAWARE_CYBERWARE} <= {c.id for c in at_negative}
     assert at_negative == catalog_for_standing(0)
 
 
-def test_a_negative_standing_still_allows_a_tier_1_install():
+def test_a_negative_standing_still_allows_a_deltaware_install():
     character = Character(name="t")
     character.cash = 100_000
     open_piece = next(c for c in CYBERWARE_CATALOG if c.min_standing == 0)
@@ -433,17 +433,18 @@ def test_a_negative_standing_still_allows_a_tier_1_install():
 
 
 def test_a_negative_standing_still_refuses_a_gated_tier():
-    """The floor must not become a free pass — it restores Tier 1, nothing more."""
+    """The floor must not become a free pass — it restores Deltaware, nothing more."""
     character = Character(name="t")
     character.cash = 100_000
     gated = next(c for c in CYBERWARE_CATALOG if c.min_standing > 0)
     assert install_cyberware(character, gated.id, standing=-5) is False
 
 
-def test_tier_1_min_standing_is_pinned_to_the_table():
-    """_tier_variant only reads tiers 2-4, so a Tier 1 row takes min_standing from
-    the dataclass default — the table's Tier 1 entry would otherwise be decorative.
-    cybernetics.py guards this at import; asserting it here documents why."""
+def test_deltaware_min_standing_is_pinned_to_the_table():
+    """_tier_variant only reads the other three grades, so a deltaware row takes
+    min_standing from the dataclass default — the table's deltaware entry would
+    otherwise be decorative. cybernetics.py guards this at import; asserting it
+    here documents why."""
     assert all(
         c.min_standing == CYBERWARE_TIER_MIN_STANDING[c.tier] for c in CYBERWARE_CATALOG
     )
@@ -469,7 +470,7 @@ def test_removing_rebounds_free_humanity_but_scars_again():
     and charges only the operation, so it's always a clear net gain."""
     character = Character(name="t")
     character.cash = 100_000
-    install_cyberware(character, "reflex_coprocessor")  # humanity_cost 3
+    install_cyberware(character, "reflex_coprocessor")  # humanity_cost 2.5
     sunk = free_humanity(character)
     remove_cyberware(character, CyberSlot.NEURALWARE)
     assert free_humanity(character) > sunk
@@ -552,7 +553,7 @@ def test_an_install_that_exactly_fits_still_tips_you_under():
     the run on; the model has to actually produce it."""
     character = Character(name="t")
     character.cash = 100_000
-    piece = CYBERWARE_BY_ID["reflex_coprocessor"]  # humanity_cost 3
+    piece = CYBERWARE_BY_ID["reflex_coprocessor"]  # humanity_cost 2.5
     character.humanity = piece.humanity_cost  # nothing to spare
     assert install_cyberware(character, piece.id) is True
     assert free_humanity(character) < 0
@@ -576,7 +577,7 @@ def test_a_full_cheap_loadout_leaves_the_runner_barely_standing():
     character.cash = 100_000
     cheapest = {}
     for cyberware in CYBERWARE_CATALOG:
-        if cyberware.tier != 1:
+        if cyberware.tier != "deltaware":
             continue
         current = cheapest.get(cyberware.slot)
         if current is None or cyberware.humanity_cost < current.humanity_cost:
@@ -597,7 +598,7 @@ def test_no_catalog_row_is_instant_death_for_a_fresh_runner():
     that is instant game over rather than an implant.
 
     Only 0.3 of slack separates the current catalog's priciest piece
-    (adamantium_bones_t4 at 5.6) from that line, so this is a live constraint on
+    (adamantium_bones_trashware at 5.6) from that line, so this is a live constraint on
     anyone retuning bone lacing, not theoretical headroom."""
     character = Character(name="t")
     character.cash = 1_000_000
