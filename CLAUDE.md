@@ -143,7 +143,7 @@ src/shadowguy/
                  buy/sell transactions
   inventory.py   equip state, deck programs and using a consumable -- what happens to
                  a Character's inventory *after* shops.py adds something to it
-  cybernetics.py the Cyberware catalog + install/remove; no shop wired to it yet
+  cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC
   saves.py       pickle-based whole-run save/load
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
 
@@ -158,12 +158,12 @@ src/shadowguy/
     tactical_screen.py   TacticalScreen + GrenadePickScreen + HackerPickScreen (the
                          remote-support menu)
     matrix_screen.py     MatrixScreen
-    burglary_screens.py  EntrancePick (the interior itself plays on TacticalScreen)
+    burglary_screens.py  EntrancePickScreen (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a
                          runner and a corp-only run; no separate MainMenu any more
     corp_screen.py       CorpScreen + ResearchTreeScreen + ForcePickScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
-                         Safehouse + Junkyard + GangDen
+                         Safehouse + Junkyard + GangDen + Ripperdoc
     info_screens.py      Phone (home grid) + its apps: Contacts + Web + CorpWebsite +
                          AlarmClock + Messages; plus Inventory + Cyberdeck + Skills
 ```
@@ -240,7 +240,7 @@ Leaf modules, and why each has to stay one:
 
 ### Verifying changes
 
-A real test suite exists (`tests/`, 25 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
+A real test suite exists (`tests/`, 26 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap_gen.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.

@@ -6,9 +6,12 @@ from shadowguy.character import HUMANITY_BASELINE, Character
 from shadowguy.cybernetics import (
     CYBERWARE_BY_ID,
     CYBERWARE_CATALOG,
+    CYBERWARE_TIER_MIN_STANDING,
     SMARTLINK_ID,
     VALID_CYBERWARE_TIERS,
     CyberSlot,
+    _TIER_1_CYBERWARE,
+    catalog_for_standing,
     free_humanity,
     has_smartlink,
     install_cyberware,
@@ -256,7 +259,9 @@ def test_bone_lacing_catalog_values():
     adamantium = CYBERWARE_BY_ID["adamantium_bones"]
     assert (steel.price, steel.defense, steel.humanity_cost) == (1000, 1, 1)
     assert (titanium.price, titanium.defense, titanium.humanity_cost) == (3000, 2, 2)
-    assert (adamantium.price, adamantium.defense, adamantium.humanity_cost) == (6000, 4, 4)
+    # 3.5, not 4: Tier 4's 1.6x would put a humanity_cost of 4 at 6.4, past
+    # HUMANITY_BASELINE, making adamantium_bones_t4 permanently uninstallable.
+    assert (adamantium.price, adamantium.defense, adamantium.humanity_cost) == (6000, 4, 3.5)
     assert steel.slot is CyberSlot.INTERNAL
     assert titanium.slot is CyberSlot.INTERNAL
     assert adamantium.slot is CyberSlot.INTERNAL
@@ -323,3 +328,111 @@ def test_install_datajack_succeeds_and_spends_humanity():
     assert install_cyberware(character, "datajack") is True
     assert character.cash == 10_000 - 1000
     assert free_humanity(character) == HUMANITY_BASELINE - 0.5
+
+
+# --- Standing gate ------------------------------------------------------------
+# Cyberware is the last catalog to get shops.py's min_standing gate, and it's the
+# one where the gate runs *opposite* to price: Tier 4 is the cheap knockoff anyone
+# will fit, Tier 2 the clean install a doc keeps for regulars.
+
+
+def test_tier_1_is_open_to_everyone():
+    """No effect in the game is ever locked behind a relationship — a stranger can
+    buy every baseline piece, just not the better trade-offs on it."""
+    assert all(c.min_standing == 0 for c in CYBERWARE_CATALOG if c.tier == 1)
+
+
+def test_tier_min_standing_matches_the_table():
+    for cyberware in CYBERWARE_CATALOG:
+        assert cyberware.min_standing == CYBERWARE_TIER_MIN_STANDING[cyberware.tier]
+
+
+def test_the_cheapest_tier_is_not_the_hardest_to_get():
+    """Tier 4 is half price and costs 60% more humanity — the gate must not also
+    make it exclusive, or it stops being the desperate option."""
+    tier_4 = [c for c in CYBERWARE_CATALOG if c.tier == 4]
+    tier_2 = [c for c in CYBERWARE_CATALOG if c.tier == 2]
+    assert all(c.min_standing == 0 for c in tier_4)
+    assert all(c.min_standing > 0 for c in tier_2)
+    assert all(c.price < base.price for c, base in zip(tier_4, _TIER_1_CYBERWARE, strict=True))
+
+
+def test_catalog_for_standing_widens_as_standing_rises():
+    at_zero = catalog_for_standing(0)
+    at_top = catalog_for_standing(max(CYBERWARE_TIER_MIN_STANDING.values()))
+    assert len(at_zero) < len(at_top)
+    assert len(at_top) == len(CYBERWARE_CATALOG)
+    assert all(c.min_standing == 0 for c in at_zero)
+    # Every tier-1 effect is reachable from a standing of nothing.
+    assert {c.id for c in _TIER_1_CYBERWARE} <= {c.id for c in at_zero}
+
+
+def test_install_refuses_a_piece_above_your_standing():
+    character = Character(name="t")
+    character.cash = 100_000
+    gated = next(c for c in CYBERWARE_CATALOG if c.min_standing > 0)
+    assert install_cyberware(character, gated.id, standing=gated.min_standing - 1) is False
+    assert character.installed_cyberware == {}
+    assert character.cash == 100_000
+
+
+def test_install_allows_it_at_exactly_the_required_standing():
+    character = Character(name="t")
+    character.cash = 100_000
+    gated = next(c for c in CYBERWARE_CATALOG if c.min_standing > 0)
+    assert install_cyberware(character, gated.id, standing=gated.min_standing) is True
+    assert character.installed_cyberware[gated.slot] == gated.id
+
+
+def test_install_standing_defaults_to_zero_for_existing_callers():
+    """The default keeps every pre-existing caller — and a clinic with no owner NPC —
+    working, the same default shops.buy_item uses."""
+    character = Character(name="t")
+    character.cash = 100_000
+    open_piece = next(c for c in CYBERWARE_CATALOG if c.min_standing == 0)
+    assert install_cyberware(character, open_piece.id) is True
+
+
+def test_every_catalog_row_is_installable_within_the_humanity_baseline():
+    """A row nobody can ever install is a permanent dead line on a clinic's shelf,
+    reading "not enough humanity left" forever. character.py guards this at import
+    (it's the module that sees both HUMANITY_BASELINE and the catalog); this pins
+    the intent from the cyberware side too.
+
+    The escalating tier multipliers are what make it easy to break: a Tier 1 row
+    priced right can still push its Tier 4 knockoff past the baseline."""
+    over = [c.id for c in CYBERWARE_CATALOG if c.humanity_cost > HUMANITY_BASELINE]
+    assert over == []
+
+
+def test_a_negative_standing_still_leaves_tier_1_on_the_shelf():
+    """A failed gig at the clinic (gigs.GIG_FAIL_STANDING_HIT) drives local standing
+    below 0. Without the floor in _effective_standing that hid the *entire* catalog,
+    not just the gated tiers -- breaking "Tier 1 is open to everyone" outright."""
+    at_negative = catalog_for_standing(-3)
+    assert {c.id for c in _TIER_1_CYBERWARE} <= {c.id for c in at_negative}
+    assert at_negative == catalog_for_standing(0)
+
+
+def test_a_negative_standing_still_allows_a_tier_1_install():
+    character = Character(name="t")
+    character.cash = 100_000
+    open_piece = next(c for c in CYBERWARE_CATALOG if c.min_standing == 0)
+    assert install_cyberware(character, open_piece.id, standing=-5) is True
+
+
+def test_a_negative_standing_still_refuses_a_gated_tier():
+    """The floor must not become a free pass — it restores Tier 1, nothing more."""
+    character = Character(name="t")
+    character.cash = 100_000
+    gated = next(c for c in CYBERWARE_CATALOG if c.min_standing > 0)
+    assert install_cyberware(character, gated.id, standing=-5) is False
+
+
+def test_tier_1_min_standing_is_pinned_to_the_table():
+    """_tier_variant only reads tiers 2-4, so a Tier 1 row takes min_standing from
+    the dataclass default — the table's Tier 1 entry would otherwise be decorative.
+    cybernetics.py guards this at import; asserting it here documents why."""
+    assert all(
+        c.min_standing == CYBERWARE_TIER_MIN_STANDING[c.tier] for c in CYBERWARE_CATALOG
+    )

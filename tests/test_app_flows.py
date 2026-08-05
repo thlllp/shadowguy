@@ -65,6 +65,7 @@ from shadowguy.corp_turn import (
     has_technology,
     owned_research_facility,
 )
+from shadowguy.cybernetics import CYBERWARE_CATALOG, free_humanity
 from shadowguy.screens.corp_screen import CorpScreen, ForcePickScreen, ResearchTreeScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen, GearScreen
 
@@ -113,6 +114,7 @@ from shadowguy.screens.shop_screens import (
     HospitalScreen,
     JunkyardScreen,
     SafehouseScreen,
+    RipperdocScreen,
     ShopScreen,
 )
 from shadowguy.shops import (
@@ -3667,5 +3669,92 @@ def test_corp_screen_offers_an_academy_rebuild_once_it_is_captured():
             await _settle(pilot)
             rows = [item.id for item in screen.query_one("#academy_list", ListView).children]
             assert any(r.startswith("train_") for r in rows)
+
+    run(body())
+
+
+def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
+    """Walking into a CYBER_CLINIC and buying chrome — the acquisition path
+    cybernetics.py had a full catalog for and no way to reach."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            clinic = None
+            clinic_territory_id = None
+            for territory in app.corp_map.territories.values():
+                for location in territory.locations:
+                    if location.kind == LocationKind.CYBER_CLINIC:
+                        clinic, clinic_territory_id = location, territory.id
+                        break
+                if clinic:
+                    break
+            assert clinic is not None, "every generated map carries at least one clinic"
+            app.character.location_id = clinic_territory_id
+            app.character.cash = 1_000_000
+            # Same reason the shop flow above does it: a live gig adds a row ahead of
+            # the "Enter" row this test clicks.
+            app.location_gigs.pop(clinic.id, None)
+
+            app.push_screen(CorpMapScreen())
+            await _settle_map_boxes(pilot, app.screen)
+            app.screen.query_one(f"#map_local_box_{clinic.id}", Collapsible).collapsed = False
+            await _settle(pilot)
+            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
+            await _settle(pilot)
+            await pilot.click(f"#map_local_{clinic.id}")
+            await pilot.pause()
+            assert isinstance(app.screen, RipperdocScreen)
+
+            before_cash = app.character.cash
+            before_humanity = free_humanity(app.character)
+            # The first row is always an installable piece — Tier 1 is min_standing 0.
+            await pilot.click("#ripper_stock ListItem")
+            await pilot.pause()
+            assert len(app.character.installed_cyberware) == 1
+            assert app.character.cash < before_cash
+            assert free_humanity(app.character) < before_humanity
+
+            # It's load-bearing immediately: the installed piece now shows as an
+            # extraction row rather than the "no chrome" placeholder.
+            rows = [i.id for i in app.screen.query_one("#ripper_installed", ListView).children]
+            assert rows and all(r.startswith("remove_") for r in rows)
+
+            await pilot.click("#ripper_installed ListItem")
+            await pilot.pause()
+            assert app.character.installed_cyberware == {}
+            # No refund: taking it out gives the humanity back but not the cash.
+            assert app.character.cash < before_cash
+            assert free_humanity(app.character) == before_humanity
+
+    run(body())
+
+
+def test_ripperdoc_hides_stock_above_the_players_standing():
+    """Rows above standing are hidden outright, the same as ShopScreen — never shown
+    locked. Tier 1 stays visible to a stranger, so no effect is ever unreachable."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            clinic = next(
+                loc
+                for t in app.corp_map.territories.values()
+                for loc in t.locations
+                if loc.kind == LocationKind.CYBER_CLINIC
+            )
+            app.push_screen(RipperdocScreen(clinic))
+            await _settle(pilot)
+
+            shown = {
+                i.id.removeprefix("install_")
+                for i in app.screen.query_one("#ripper_stock", ListView).children
+            }
+            gated = {c.id for c in CYBERWARE_CATALOG if c.min_standing > 0}
+            assert shown & gated == set()
+            assert {c.id for c in CYBERWARE_CATALOG if c.tier == 1} <= shown
 
     run(body())

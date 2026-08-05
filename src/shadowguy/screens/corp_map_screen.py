@@ -62,6 +62,7 @@ from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
+from shadowguy.cybernetics import catalog_for_standing
 from shadowguy.rivals import RunnerActivity
 from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.scene import Scene
@@ -88,6 +89,7 @@ from .shop_screens import (
     JunkyardScreen,
     RealEstateScreen,
     SafehouseScreen,
+    RipperdocScreen,
     ShopScreen,
 )
 
@@ -845,6 +847,8 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         elif location.kind == LocationKind.CORP_HQ:
             if territory.owner is not None:
                 self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[territory.owner]))
+        elif location.kind == LocationKind.CYBER_CLINIC:
+            self.app.push_screen(RipperdocScreen(location))
         elif location.kind == LocationKind.BAR:
             self.app.push_screen(BarScreen(location))
         elif location.kind == LocationKind.GANG_DEN:
@@ -982,16 +986,24 @@ class CorpMapScreen(OperationsMixin, BackScreen):
             runner_text = "\n".join(f"{r.name} — {r.archetype}" for r in runners_here)
             content.append(Static(f"Runners here:\n{runner_text or 'No other runners here.'}", markup=False))
 
-        if location.kind in SHOP_KINDS:
+        if location.kind in SHOP_KINDS or location.kind == LocationKind.CYBER_CLINIC:
             owner = location.characters[0] if location.characters else None
             standing = character.local_standing_with(owner.id) if owner else 0
-            names = [item.name for item in CATALOG.get(location.kind, []) if item.min_standing <= standing]
-            names += [
-                c.name for c in CONSUMABLE_CATALOG.get(location.kind, []) if c.min_standing <= standing
-            ]
-            names += [
-                p.name for p in PROGRAM_CATALOG.get(location.kind, []) if p.min_standing <= standing
-            ]
+            # A clinic's shelf is cyberware rather than the item/consumable/program
+            # catalogs, but it previews identically -- same min_standing filter, same
+            # truncation. RipperdocScreen (via "Enter") is where prices live.
+            if location.kind == LocationKind.CYBER_CLINIC:
+                names = [c.name for c in catalog_for_standing(standing)]
+            else:
+                names = [
+                    item.name for item in CATALOG.get(location.kind, []) if item.min_standing <= standing
+                ]
+                names += [
+                    c.name for c in CONSUMABLE_CATALOG.get(location.kind, []) if c.min_standing <= standing
+                ]
+                names += [
+                    p.name for p in PROGRAM_CATALOG.get(location.kind, []) if p.min_standing <= standing
+                ]
             # A preview, not the catalog -- ShopScreen (via "Enter") is where full
             # pricing lives. A shop like WEAPON_SHOP stocks 20+ items; spelling every
             # one out here would make this box taller than the screen.

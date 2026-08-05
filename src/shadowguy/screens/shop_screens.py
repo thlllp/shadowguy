@@ -30,7 +30,16 @@ from shadowguy.jobs import generate_smuggling_job
 from shadowguy.rivals import RunnerActivity
 from shadowguy.security import SecurityContract
 from shadowguy.runners import RUNNERS_BY_ID, intro_cost, recruit_cut, recruit_wage
-from shadowguy.skills import skill_value
+from shadowguy.cybernetics import (
+    CYBERWARE_BY_ID,
+    CyberSlot,
+    Cyberware,
+    catalog_for_standing,
+    free_humanity,
+    install_cyberware,
+    remove_cyberware,
+)
+from shadowguy.skills import skill_for, skill_value
 from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
@@ -892,3 +901,166 @@ class CorpHQScreen(BackScreen):
             f"The paperwork takes an afternoon. You walk out running {self.faction.name} — "
             f"and every rival on the map now knows exactly who to come for."
         )
+
+
+def _cyberware_label(cyberware: Cyberware) -> str:
+    """What a piece does, in one parenthesised clause — the cyberware counterpart to
+    shops.bonus_text. Smartlink and Datajack carry no bonuses/skill_bonuses at all,
+    so each names its own effect rather than rendering as a bare price."""
+    parts = [f"+{value} {stat.title()}" for stat, value in cyberware.bonuses.items()]
+    parts += [f"+{value} {skill_for(skill_id).name}" for skill_id, value in cyberware.skill_bonuses.items()]
+    if cyberware.defense:
+        parts.append(f"+{cyberware.defense} soak")
+    if cyberware.matrix_action_bonus:
+        parts.append(f"+{cyberware.matrix_action_bonus} matrix")
+    if cyberware.grants_smartlink:
+        parts.append("smartlink")
+    return ", ".join(parts)
+
+
+class RipperdocScreen(PanelNav, BackScreen):
+    """A cyber clinic: buy and have cyberware installed, or have a piece cut back out.
+
+    The acquisition half of cybernetics.py, which had a full catalog and a working
+    install_cyberware long before anything could reach them. Clinics themselves were
+    never the missing piece — LocationKind.CYBER_CLINIC has been a fully generated
+    kind (name pools, owner roles, LOCATION_SKILL, gig templates, legwork text) all
+    along, so a runner could already case one or run a job against one. They just
+    couldn't walk in.
+
+    Two panels, the same shape ShopScreen uses: #ripper_stock is what this doc will
+    sell you (cybernetics.catalog_for_standing — rows above your standing with the
+    owner are hidden outright, exactly as ShopScreen hides them, not shown locked),
+    and #ripper_installed is what's already in you, each row an extraction.
+
+    Humanity is the second budget and the reason this isn't just another shop: the
+    header carries free_humanity, and a piece that won't fit says so on its own row
+    rather than failing silently on click.
+    """
+
+    PANEL_IDS = ("ripper_stock", "ripper_installed")
+    BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
+
+    CSS = """
+    #ripper_stock_panel, #ripper_installed_panel, #ripper_stock, #ripper_installed {
+        height: auto;
+    }
+    """
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="ripper_info")
+        yield Collapsible(
+            ListView(id="ripper_stock"), title="On the shelf", collapsed=False, id="ripper_stock_panel"
+        )
+        yield Collapsible(
+            ListView(id="ripper_installed"), title="Installed", collapsed=False, id="ripper_installed_panel"
+        )
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+    def _contact(self):
+        """Whoever at this clinic vouches for you -- the character you stand best with,
+        not simply characters[0].
+
+        ShopScreen can assume characters[0] is "the owner" because every SHOP_KINDS
+        location is generated with exactly one character. A clinic is not in
+        SHOP_KINDS (it sells cyberware, not Items), so corpmap_gen._make_characters
+        gives it 1-2 like any other non-shop kind -- and gigs.refresh_gigs assigns a
+        gig to a *random* one of a location's characters. Reading only the first would
+        mean roughly half a clinic's gigs moved a standing the shelf never looked at,
+        with nothing on screen to say which relationship was the one that mattered.
+
+        Best-of instead: knowing anyone at the clinic is what gets you served, and the
+        header names whoever that currently is. Ties break on list order."""
+        character = self.app.character
+        if not self.location.characters:
+            return None
+        return max(
+            self.location.characters, key=lambda c: character.local_standing_with(c.id)
+        )
+
+    def _owner_standing(self) -> int:
+        contact = self._contact()
+        return self.app.character.local_standing_with(contact.id) if contact else 0
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        standing = self._owner_standing()
+        owner = self._contact()
+        header = self.location.name
+        if owner:
+            header += f" — {owner.name} ({owner.role}), standing {standing:+d}"
+        header += f"\nHumanity: {free_humanity(character):g} of {character.humanity:g} free"
+        self.query_one("#ripper_info", Static).update(header)
+
+        stock = []
+        for cyberware in catalog_for_standing(standing):
+            effect = _cyberware_label(cyberware)
+            label = f"{cyberware.name} — {cyberware.price}eb, {cyberware.humanity_cost:g} humanity"
+            if effect:
+                label += f" ({effect})"
+            # Reasons in the order the player can act on them: a full slot is fixed by
+            # an extraction below, short Humanity by a different piece, cash by a job.
+            if cyberware.slot in character.installed_cyberware:
+                label += f" — {cyberware.slot.value} slot full"
+            elif cyberware.humanity_cost > free_humanity(character):
+                label += " — not enough humanity left"
+            elif cyberware.price > character.cash:
+                label += " — can't afford"
+            stock.append(ListItem(Static(label), id=f"install_{cyberware.id}"))
+        if not stock:
+            stock = [ListItem(Static("Nothing here they'll sell you."), id="no_stock")]
+        await _replace_items(self.query_one("#ripper_stock", ListView), stock)
+
+        installed = [
+            ListItem(
+                Static(
+                    f"Remove {CYBERWARE_BY_ID[cyberware_id].name} — no refund "
+                    f"(frees {CYBERWARE_BY_ID[cyberware_id].humanity_cost:g} humanity)"
+                ),
+                id=f"remove_{slot.value}",
+            )
+            for slot, cyberware_id in character.installed_cyberware.items()
+        ]
+        if not installed:
+            installed = [ListItem(Static("No chrome in you yet."), id="no_installed")]
+        await _replace_items(self.query_one("#ripper_installed", ListView), installed)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        item_id = event.item.id
+        if item_id in ("no_stock", "no_installed"):
+            return
+
+        if item_id.startswith("install_"):
+            cyberware = CYBERWARE_BY_ID[item_id.removeprefix("install_")]
+            if install_cyberware(character, cyberware.id, self._owner_standing()):
+                self.notify(f"{cyberware.name} installed. It aches, then it's yours.")
+            elif cyberware.slot in character.installed_cyberware:
+                self.notify(
+                    f"Your {cyberware.slot.value} slot is already taken — have it out first.",
+                    severity="warning",
+                )
+            elif cyberware.humanity_cost > free_humanity(character):
+                self.notify("There isn't enough of you left to hang that off.", severity="warning")
+            else:
+                self.notify(f"Can't afford {cyberware.name}.", severity="warning")
+        elif item_id.startswith("remove_"):
+            slot = CyberSlot(item_id.removeprefix("remove_"))
+            removed = remove_cyberware(character, slot)
+            if removed is not None:
+                self.notify(f"{CYBERWARE_BY_ID[removed].name} is out. No refund.")
+
+        self.query_one(CharacterSheet).refresh()
+        await self._refresh()

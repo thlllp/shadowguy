@@ -1,18 +1,18 @@
 """Cyberware: persistent body modifications a runner can have installed.
 
-First slice of a system, not the whole thing yet -- deliberately no ripperdoc
-LocationKind/ShopScreen wiring (that's map-generation surface: corpmap.py's
-name pools, LOCATION_SKILL, GENERATED_KINDS guards, jobs.LEGWORK_APPROACH_TEXT,
-gigs._GIG_TEMPLATES all have to agree, the same reason a new shop kind isn't a
-small change) -- install_cyberware just charges cash, plus a piece of
-Character.humanity's capacity (below). No cyberpsychosis cost yet: Humanity is
-only spent as install-time capacity today, nothing reads how much is left over
-for anything else. What's real today: a catalog, one slot per CyberSlot
-(install_cyberware/remove_cyberware enforce that), and it's load-bearing --
-Character.stat()/skill_gear_bonus already fold installed_bonus/
-installed_skill_bonus in alongside worn gear, so cyberware strengthens checks
-the moment it's installed, the same as an equipped Item. The missing piece is
-purely acquisition: nothing calls install_cyberware from a screen yet.
+Acquired in-run at a LocationKind.CYBER_CLINIC, through
+screens/shop_screens.py's RipperdocScreen -- install_cyberware charges cash plus
+a piece of Character.humanity's capacity (below), gated on standing with the
+clinic's owner (Cyberware.min_standing). Clinics were already a fully generated
+location kind long before anything sold from one; all that was ever missing was
+the screen.
+
+Load-bearing beyond the purchase: Character.stat()/skill_gear_bonus fold
+installed_bonus/installed_skill_bonus in alongside worn gear, so cyberware
+strengthens checks the moment it's installed, the same as an equipped Item.
+
+No cyberpsychosis cost yet: Humanity is only spent as install-time capacity
+today, and nothing reads how much is left over for anything else.
 
 Humanity as capacity: every Cyberware carries a `humanity_cost`, and the sum
 across everything installed can never exceed Character.humanity
@@ -103,6 +103,18 @@ class Cyberware:
     # gate, via has_smartlink) -- a flag rather than an id check because a Tier 4
     # Smartlink is a second row that has to grant the same thing.
     grants_smartlink: bool = False
+    # Standing with the clinic's owner (corpmap.LocalCharacter, via
+    # Character.local_standing_with) needed before a ripperdoc will sell this piece
+    # at all -- the same gate shops.Item/Consumable/Program each carry, and
+    # RipperdocScreen hides a row above it exactly the way ShopScreen does.
+    #
+    # Set per *tier* (CYBERWARE_TIER_MIN_STANDING), never per piece, because the
+    # tier table already says what a tier means: Tier 4 is the cut-price knockoff
+    # that costs more of you, so any back-alley grafter will fit one to a stranger,
+    # while Tier 2's cleaner install is what a doc saves for people they know. The
+    # gate therefore runs *opposite* to price -- the cheapest chrome is the most
+    # freely available, which is the point of it being the cheapest.
+    min_standing: int = 0
     # Extra advantage dice on matrix.py's dice-rolling actions (Breach/Extract via
     # _intrude, Harden, Analyze) -- unconditional, unlike Smartlink's weapon-gated
     # bonus, since Datajack (the first piece to set this) helps every matrix action
@@ -113,8 +125,10 @@ class Cyberware:
 
 
 # id, name, price, slot, bonuses, skill_bonuses, humanity_cost, tag. First-slice
-# Tier 1 catalog, not balance-simulated, and not reachable from any shop screen
-# yet -- see module docstring. Two pieces per slot, the same spread shops.py's
+# Tier 1 catalog, not balance-simulated. Every row here is min_standing 0 (see
+# CYBERWARE_TIER_MIN_STANDING): the baseline tier is what any clinic will sell a
+# stranger, so no *effect* in the catalog is ever locked behind a relationship --
+# only the better trade-offs on it. Two pieces per slot, the same spread shops.py's
 # weapon/armor catalog uses -- most are a flat stat piece plus a
 # skill-specialized piece, except OPTICS, where Smartlink's whole effect is
 # conditional (see above) rather than a flat skill_bonuses entry.
@@ -205,8 +219,14 @@ _TIER_1_CYBERWARE = [
     Cyberware(
         "titanium_bones", "Titanium Bones", 3000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2, defense=2
     ),
+    # 3.5 rather than a rounder 4 for a reason that isn't about this row: Tier 4
+    # multiplies humanity_cost by 1.6, and 4 would put the knockoff at 6.4 -- past
+    # HUMANITY_BASELINE, so adamantium_bones_t4 could never be installed by anyone
+    # and would sit on a clinic's shelf forever reading "not enough humanity left".
+    # 3.5 lands its Tier 4 at 5.6, brutal but reachable. character.py guards this for
+    # the whole catalog (it's the module that sees both tables).
     Cyberware(
-        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=4, defense=4
+        "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=3.5, defense=4
     ),
 ]
 
@@ -221,10 +241,20 @@ CYBERWARE_TIER_MULTIPLIERS: dict[int, tuple[float, float]] = {
 }
 
 
+# tier -> the standing a ripperdoc wants before selling that tier at all (see
+# Cyberware.min_standing). Deliberately not ordered by price: Tier 4 is the cheap
+# knockoff anyone will fit, Tier 2 the clean install a doc keeps for regulars.
+# Tier 1 is the baseline catalog and stays open to everyone, so a runner who has
+# never met a grafter can still buy every *effect* in the game -- standing buys a
+# better trade-off on the same implant, never access to a bonus you couldn't get.
+# First-slice numbers, not balance-simulated.
+CYBERWARE_TIER_MIN_STANDING = {1: 0, 2: 3, 3: 1, 4: 0}
+
+
 def _tier_variant(base: Cyberware, tier: int) -> Cyberware:
     """A higher-tier row derived from a Tier 1 one via dataclasses.replace, so
     it can never quietly drift from its Tier 1 twin's bonuses/skill_bonuses/
-    slot -- only price and humanity_cost move."""
+    slot -- only price, humanity_cost and min_standing move."""
     price_mult, humanity_mult = CYBERWARE_TIER_MULTIPLIERS[tier]
     return replace(
         base,
@@ -233,6 +263,7 @@ def _tier_variant(base: Cyberware, tier: int) -> Cyberware:
         price=round(base.price * price_mult),
         humanity_cost=round(base.humanity_cost * humanity_mult, 2),
         tier=tier,
+        min_standing=CYBERWARE_TIER_MIN_STANDING[tier],
     )
 
 
@@ -263,6 +294,17 @@ for _cyberware in CYBERWARE_CATALOG:
 if len(CYBERWARE_BY_ID) != len(CYBERWARE_CATALOG):
     raise ValueError("CYBERWARE_CATALOG has duplicate ids")
 
+# Tier 1 rows take min_standing from Cyberware's own default rather than from
+# CYBERWARE_TIER_MIN_STANDING (only _tier_variant reads that table, and only for
+# tiers 2-4), so the table's Tier 1 entry would otherwise be decorative -- editable
+# with no effect on anything in src/. Tie the two together here so they can't drift.
+for _cyberware in CYBERWARE_CATALOG:
+    if _cyberware.min_standing != CYBERWARE_TIER_MIN_STANDING[_cyberware.tier]:
+        raise ValueError(
+            f"{_cyberware.id}: min_standing must match CYBERWARE_TIER_MIN_STANDING"
+            f"[{_cyberware.tier}]"
+        )
+
 
 def installed_humanity_cost(installed: dict[CyberSlot, str]) -> float:
     """Total Humanity capacity spent by everything currently installed -- the
@@ -286,12 +328,48 @@ def has_smartlink(installed: dict[CyberSlot, str]) -> bool:
     return any(CYBERWARE_BY_ID[cyberware_id].grants_smartlink for cyberware_id in installed.values())
 
 
-def install_cyberware(character: "Character", cyberware_id: str) -> bool:
+def _effective_standing(standing: int) -> int:
+    """Standing floored at 0 for gating purposes.
+
+    Without this a *negative* standing (a failed gig at the clinic is enough --
+    gigs.GIG_FAIL_STANDING_HIT) would hide the entire catalog rather than just the
+    gated tiers, since every row's min_standing is >= 0. That would break the one
+    thing CYBERWARE_TIER_MIN_STANDING promises: Tier 1 is open to everyone, so no
+    *effect* is ever unreachable. A doc you've annoyed doesn't cut you a deal on
+    the good chrome; they still sell you the baseline.
+
+    Note shops.py deliberately does NOT do this -- a shopkeeper who dislikes you
+    can refuse their whole stock, because no shop catalog commits to an
+    always-available tier the way this one does."""
+    return max(standing, 0)
+
+
+def catalog_for_standing(standing: int) -> list[Cyberware]:
+    """Everything a clinic will sell someone at this standing with its owner --
+    CYBERWARE_CATALOG filtered by min_standing, in catalog order (Tier 1 first,
+    then each higher tier as a block). The read side RipperdocScreen renders,
+    mirroring ShopScreen's own `if item.min_standing > standing: continue`."""
+    effective = _effective_standing(standing)
+    return [cyberware for cyberware in CYBERWARE_CATALOG if cyberware.min_standing <= effective]
+
+
+def install_cyberware(character: "Character", cyberware_id: str, standing: int = 0) -> bool:
     """Buy and surgically install one piece of cyberware. Fails closed -- no
-    charge, no mutation -- if the runner can't afford it, the piece's CyberSlot
-    is already occupied (remove_cyberware it first to swap), or it wouldn't
-    fit in whatever Humanity capacity is left free."""
+    charge, no mutation -- if the clinic won't sell it at this standing, the
+    runner can't afford it, the piece's CyberSlot is already occupied
+    (remove_cyberware it first to swap), or it wouldn't fit in whatever Humanity
+    capacity is left free.
+
+    `standing` defaults to 0 so every pre-existing caller (and any clinic with no
+    owner NPC) keeps working, the same default shops.buy_item uses.
+
+    Note there is no standing *discount* here, unlike shops.buy_price: standing
+    decides what a doc is willing to cut into you, not what they charge for it.
+    Keeping price out of it is also what keeps this module a leaf -- a discount
+    would mean importing shops."""
     cyberware = CYBERWARE_BY_ID[cyberware_id]
+    if _effective_standing(standing) < cyberware.min_standing:
+        return False
     if cyberware.slot in character.installed_cyberware:
         return False
     if cyberware.price > character.cash:
