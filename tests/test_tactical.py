@@ -1162,8 +1162,11 @@ def test_only_the_current_levels_units_are_on_the_board():
     assert not on_board & waiting
 
 
-def test_taking_the_stairs_swaps_the_level_and_costs_a_move():
+def test_taking_the_stairs_swaps_the_level_and_is_free_while_unseen():
+    """Nothing is hunting you in a quiet house (TacticalState.in_combat is False), so
+    walking the stairs doesn't ration moves_left at all."""
     building, state = _burglary()
+    assert not state.in_combat
     stair = next(cell for link in building.links for level, cell in (link.a, link.b) if level == state.level_index)
     state.player.coord = stair
     destination = stairs_here(state)
@@ -1173,6 +1176,21 @@ def test_taking_the_stairs_swaps_the_level_and_costs_a_move():
     assert take_stairs(state)
     assert (state.level_index, state.player.coord) == destination
     assert state.grid is building.levels[state.level_index].grid
+    assert state.moves_left == moves
+
+
+def test_taking_the_stairs_costs_a_move_once_in_combat():
+    building, state = _burglary()
+    state.alarm = True
+    assert state.in_combat
+    stair = next(cell for link in building.links for level, cell in (link.a, link.b) if level == state.level_index)
+    state.player.coord = stair
+    destination = stairs_here(state)
+    assert destination is not None
+    moves = state.moves_left
+
+    assert take_stairs(state)
+    assert (state.level_index, state.player.coord) == destination
     assert state.moves_left == moves - 1
 
 
@@ -1315,8 +1333,9 @@ def test_a_camera_raises_the_alarm_without_any_guard_seeing_you():
     assert "camera" in state.log[-1].lower()
 
 
-def test_stepping_into_a_pickable_locked_door_opens_it_and_moves_you_through():
+def test_stepping_into_a_pickable_locked_door_opens_it_and_is_free_while_unseen():
     building, state = _burglary()
+    assert not state.in_combat
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
     state.character.logic = 6  # comfortably clears a difficulty-9 lock (opposing pool 0)
@@ -1327,11 +1346,25 @@ def test_stepping_into_a_pickable_locked_door_opens_it_and_moves_you_through():
     assert move_player(state, dest, AlwaysSix())
     assert state.player.coord == dest
     assert lock_at(state, dest) is None
+    assert state.moves_left == moves
+
+
+def test_a_pickable_locked_door_still_costs_a_move_once_in_combat():
+    building, state = _burglary()
+    state.alarm = True
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.logic = 6
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
+    moves = state.moves_left
+
+    assert move_player(state, dest, AlwaysSix())
     assert state.moves_left == moves - 1
 
 
-def test_a_failed_lock_pick_leaves_it_locked_and_still_costs_the_move():
+def test_a_failed_lock_pick_leaves_it_locked_and_is_free_while_unseen():
     building, state = _burglary()
+    assert not state.in_combat
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
     state.character.logic = 0  # a difficulty-9 lock still has an opposing pool of 0,
@@ -1343,8 +1376,24 @@ def test_a_failed_lock_pick_leaves_it_locked_and_still_costs_the_move():
     assert move_player(state, dest, ForcedChance(LOCK_FAILURE_ALARM_CHANCE + 0.01))
     assert state.player.coord != dest
     assert lock_at(state, dest) is not None
-    assert state.moves_left == moves - 1
+    assert state.moves_left == moves
     assert not state.alarm
+
+
+def test_a_failed_lock_pick_still_costs_a_move_once_in_combat():
+    building, state = _burglary()
+    state.alarm = True
+    assert state.in_combat
+    dest = next(iter(legal_moves(state)))
+    state.character.skill_ranks["hack"] = 0
+    state.character.logic = 0
+    state.building.locks[(state.level_index, dest)] = Lock(skill="hack", difficulty=9)
+    moves = state.moves_left
+
+    assert move_player(state, dest, ForcedChance(LOCK_FAILURE_ALARM_CHANCE + 0.01))
+    assert state.player.coord != dest
+    assert lock_at(state, dest) is not None
+    assert state.moves_left == moves - 1
 
 
 def test_a_failed_lock_pick_can_still_trip_the_alarm():

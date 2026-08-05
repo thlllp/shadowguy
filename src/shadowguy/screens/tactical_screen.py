@@ -605,6 +605,8 @@ class TacticalScreen(Screen):
             move_detail = "looking"
         elif aiming:
             move_detail = "aiming target"
+        elif not state.in_combat:
+            move_detail = "free — unseen"
         else:
             move_detail = f"{state.moves_left}/{state.player.speed} left"
         if aiming_attack:
