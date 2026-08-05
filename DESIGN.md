@@ -861,7 +861,7 @@ The only standing that isn't player-facing: corps and gangs' standing with **eac
 
 Generated once per run inside `generate_corp_map`, stored as `CorpMap.relations`, round-trips via the existing `"corp_map"` save key. Defaults to `{}` so hand-built test fixtures don't need updating.
 
-**Data only for now — nothing reads or moves these values yet.** Natural next hooks: `rivals.py`'s expansion roll favoring/avoiding a disliked/liked neighbor, or a gang's turf-entry encounter softening near a friendly corp.
+**Read by `rivals._pick_attack_target`** (see Rival AI below): a faction weights attack candidates by how badly it gets on with each one, so corp-vs-corp conflict picks its targets off this seed. Still unread everywhere else — a gang's turf-entry encounter softening near a friendly corp is an open hook.
 
 ## Location characters & standing (`shadowguy/corpmap.py`, `shadowguy/corpmap_gen.py`, `shadowguy/gigs.py`, `shadowguy/shops.py`, `shadowguy/character.py`)
 
