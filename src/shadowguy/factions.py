@@ -92,7 +92,7 @@ def officer_unlocked(rep: int, standing: int, role: str) -> bool:
 # stacking into two separate grinds. The cash is the part you have to deliberately save
 # for, and it's the gate most likely to need tuning: at roughly 30 completed jobs of gross
 # income (jobs.REWARD_BASE) it sits an order of magnitude past the priciest thing in any
-# shop (1400eb), which is the point — a corp is not a purchase you make in passing.
+# shop (1800eb), which is the point — a corp is not a purchase you make in passing.
 #
 # CLAUDE.md: switching modes is "meant to be difficult — neither mode is a straight upgrade
 # over the other". These are first-slice numbers, not balance-simulated.

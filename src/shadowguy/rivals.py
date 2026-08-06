@@ -57,8 +57,8 @@ something to report for a corp the player isn't running. Both that and a
 territory claim get appended to a caller-owned `faction_events` blog log via
 corp_turn.log_faction_event.
 
-Leaf-ish: imports character/corpmap/corp_turn/factions/runners, never scene or
-app. The fixer board is reached through a TYPE_CHECKING-only import (the same
+Leaf-ish: imports character/corpmap/corp_turn/factions/relations/runners, never
+scene or app. The fixer board is reached through a TYPE_CHECKING-only import (the same
 trick fixer.py itself uses for Character) — a runner only ever reads an
 offer's timing and marks it taken, so nothing here needs fixer/scene at
 runtime.

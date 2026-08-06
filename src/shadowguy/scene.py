@@ -131,15 +131,12 @@ class Encounter:
 
 @dataclass
 class TacticalStage:
-    """A tactical-combat fight, as the scene graph sees it — the grid analogue of Encounter.
+    """A tactical-combat fight, as the scene graph sees it — the grid analogue of Encounter,
+    same split for the same reason (see Encounter's own docstring): tactical.py owns *how
+    the grid fight resolves*, this owns *what winning or slipping out is worth*.
 
-    Same split, same reason: it lives here, not in tactical.py, because it holds Outcomes
-    and tactical.py must not import scene. tactical.py owns *how the grid fight resolves*;
-    this owns *what winning or slipping out is worth*, through the ordinary Outcome — so a
-    tactical stage pays a job's cash/rep/standing on the same reward path as everything else.
-
-    `escape` is the Outcome for leaving by an exit tile. Losing has no Outcome: you're at
-    0 health, which is death everywhere else in the game.
+    `escape` is the Outcome for leaving by an exit tile. Losing has no Outcome, same as
+    Encounter.
     """
 
     prompt: str
@@ -201,7 +198,7 @@ class BurglaryStage:
     # Who's watching, as a template -- one live Unit per buildings.Building.guards
     # position is built from this when the fight opens (tactical.start_burglary), so the
     # difficulty of a burglary's guards scales with the job like any other fight's.
-    guard: Enemy = None
+    guard: Enemy
 
     @property
     def kind(self) -> BuildingKind:
@@ -212,13 +209,9 @@ class BurglaryStage:
 
 @dataclass(frozen=True)
 class MatrixStage:
-    """A matrix fight, as the scene graph sees it — the ICE analogue of Encounter.
-
-    Same split, same reason as Encounter/TacticalStage: it lives here, not in matrix.py,
-    because it holds Outcomes and matrix.py must not import scene. matrix.py owns *how the
-    ICE fight resolves*; this owns *what seizing the data or being ejected is worth*,
-    through the ordinary Outcome — so a Data Heist's matrix stage pays its cash/rep/
-    standing on the same reward path as every other stage.
+    """A matrix fight, as the scene graph sees it — the ICE analogue of Encounter, same
+    split for the same reason (see Encounter's own docstring): matrix.py owns *how the
+    ICE fight resolves*, this owns *what seizing the data or being ejected is worth*.
 
     `victory` is seizing the data — reaching and clearing the network's DATA node and
     then choosing to extract (matrix.extract); `escape` is being ejected — integrity
