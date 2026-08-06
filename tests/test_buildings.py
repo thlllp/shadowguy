@@ -11,6 +11,7 @@ import random
 import pytest
 
 from shadowguy.buildings import (
+    BASEMENT_HEIGHT,
     BUILDING_PROFILES,
     LEVEL_PROGRAMS,
     LOCK_DIFFICULTY,
@@ -21,6 +22,7 @@ from shadowguy.buildings import (
     BuildingKind,
     RoomKind,
     _connected,
+    _footprint,
     generate_building,
 )
 from shadowguy.grid import Tile, step_neighbors
@@ -34,12 +36,14 @@ KINDS = list(BuildingKind)
 
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("seed", SEEDS)
-def test_every_level_is_its_profiles_size(seed, kind):
+def test_a_levels_footprint_matches_its_own_room_count(seed, kind):
+    """Each level is sized off its own program's room list (see buildings._footprint),
+    not a single footprint shared by every level of a kind -- a basement with two rooms
+    is a different shape than the floor above it, not just a smaller copy of it."""
     building = generate_building(random.Random(seed), entrance_count=3, kind=kind)
-    profile = BUILDING_PROFILES[building.kind]
     for level in building.levels:
-        assert level.grid.width == profile.width
-        assert level.grid.height == profile.height
+        expected_height = BASEMENT_HEIGHT if level.name == "Basement" else 10
+        assert (level.grid.width, level.grid.height) == _footprint(len(level.rooms), height=expected_height)
 
 
 @pytest.mark.parametrize("seed", SEEDS)

@@ -186,21 +186,29 @@ class Building:
 
 @dataclass(frozen=True)
 class LevelProgram:
-    """What one level of a building is made of: its name and the rooms it must contain,
-    as a list of RoomKinds (repeats allowed -- three BEDROOMs means three of them). The
-    room *count* is what drives the partition, so this is also the level's granularity."""
+    """What one level of a building is made of: its name, the rooms it must contain (as a
+    list of RoomKinds -- repeats allowed, three BEDROOMs means three of them), and the
+    footprint to carve them into. The room *count* is what drives the partition, so it's
+    also the level's granularity -- see `_footprint`, which is how every LEVEL_PROGRAMS
+    builder derives width/height from its own room list rather than every level of a
+    building sharing one fixed size.
+
+    Width/height are capped by what a screen can show at 80x24 (tactical_gen.TAC_MAP_WIDTH
+    /TAC_MAP_HEIGHT are that ceiling for the unrelated fight-map generator, but the same
+    80x24 budget applies here)."""
 
     name: str
     rooms: tuple[RoomKind, ...]
+    width: int
+    height: int
 
 
 @dataclass(frozen=True)
 class BuildingProfile:
-    """How a BuildingKind generates: footprint per level, how many people are watching,
-    how cluttered it is, and the room program for each of its levels.
-
-    Width/height are capped by what a screen can show at 80x24
-    (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling).
+    """How a BuildingKind generates: how cluttered it is, how many people are watching,
+    and the room program for each of its levels. Each level's own footprint comes from its
+    LevelProgram instead (see `_footprint`) -- a basement and an upstairs are shaped by
+    what they hold, not by one size shared across every level of the kind.
 
     `objective_rooms` is where the thing worth stealing plausibly is for this sort of
     building, `guard_rooms`/`camera_rooms` where somebody (or something) plausibly watches.
@@ -211,8 +219,6 @@ class BuildingProfile:
     `locked_door_chance` is rolled independently per interior door (Level.doors) -- not a
     room preference, since a lock sits on the doorway itself, not in either room it joins."""
 
-    width: int
-    height: int
     cover_density: float
     guards: int
     objective_rooms: tuple[RoomKind, ...]
@@ -243,8 +249,6 @@ RESIDENTIAL_BATHROOMS = (1, 2)
 
 BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
     BuildingKind.RESIDENTIAL: BuildingProfile(
-        width=26,
-        height=10,
         cover_density=0.10,  # furniture: a home is the most cluttered thing to cross
         guards=1,
         objective_rooms=(RoomKind.BEDROOM, RoomKind.BASEMENT, RoomKind.LIVING),
@@ -254,8 +258,6 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         locked_door_chance=0.05,  # rare -- a locked closet or a strongbox room, not a norm
     ),
     BuildingKind.OFFICE: BuildingProfile(
-        width=30,
-        height=10,
         cover_density=0.06,  # desks and partitions, but an open floor is barer than a home
         guards=2,
         objective_rooms=(RoomKind.OFFICE, RoomKind.SERVER_ROOM, RoomKind.CONFERENCE, RoomKind.STORAGE),
@@ -276,12 +278,18 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         locked_door_chance=0.15,  # records, server closets -- the doors worth locking
     ),
     BuildingKind.COMPOUND: BuildingProfile(
-        width=30,
-        height=10,
         cover_density=0.09,  # a wealthy house, furnished like RESIDENTIAL but with room to spare
         guards=3,  # a bigger private stake than an OFFICE floor, watched more closely
         objective_rooms=(RoomKind.BEDROOM, RoomKind.OFFICE, RoomKind.BASEMENT),
-        guard_rooms=(RoomKind.HALL, RoomKind.LIVING, RoomKind.DINING, RoomKind.KITCHEN, RoomKind.OFFICE),
+        # BASEMENT is here as well as in objective_rooms (the way OFFICE is for the
+        # profile above): 3 guards against 5 sometimes-thin rooms started missing that
+        # room too once per-level footprints stopped sharing one fixed size -- a guard
+        # watching over the same basement the prize might be in is exactly where you'd
+        # expect one anyway.
+        guard_rooms=(
+            RoomKind.HALL, RoomKind.LIVING, RoomKind.DINING, RoomKind.KITCHEN,
+            RoomKind.OFFICE, RoomKind.BASEMENT,
+        ),
         # A private system, lighter than a corp's -- the guards do most of the watching --
         # but widened past just (HALL, OFFICE) the same way OFFICE's camera_rooms is: with
         # guards/objective/entrances already spoken for, a single camera still missed
@@ -302,6 +310,22 @@ if set(BUILDING_PROFILES) != set(BuildingKind):
 # this; generate_building raises if one doesn't.
 GROUND_FLOOR = "Ground floor"
 
+# A basement's own program never runs past two rooms (see BASEMENT_ROOMS, shared by every
+# LEVEL_PROGRAMS builder that has one), so it reads as a cramped afterthought under the
+# house rather than another full storey -- a real difference in *shape*, not just a
+# smaller copy of the floor above it.
+BASEMENT_HEIGHT = 8
+BASEMENT_ROOMS = (RoomKind.BASEMENT, RoomKind.BASEMENT)
+
+
+def _footprint(room_count: int, height: int = 10) -> tuple[int, int]:
+    """A level's interior footprint, sized to the room count its own program asks for --
+    a level with more rooms gets more floor to carve them into, instead of every level of
+    a kind sharing one fixed profile.width/height. Each room costs roughly MIN_ROOM_SPAN
+    cells of width plus its share of wall; 16 is the floor a 1-2 room level (a basement)
+    still needs to carve at all."""
+    return max(16, MIN_ROOM_SPAN * room_count + 10), height
+
 
 def _residential_program(rng: random.Random) -> list[LevelProgram]:
     """A house's levels, bottom to top: basement, ground floor, upstairs. Sizes vary by
@@ -315,9 +339,9 @@ def _residential_program(rng: random.Random) -> list[LevelProgram]:
         ground.append(RoomKind.BATHROOM)
     upstairs = [RoomKind.HALL, *(RoomKind.BEDROOM,) * bedrooms, RoomKind.BATHROOM]
     return [
-        LevelProgram("Basement", (RoomKind.BASEMENT, RoomKind.BASEMENT)),
-        LevelProgram(GROUND_FLOOR, tuple(ground)),
-        LevelProgram("Upstairs", tuple(upstairs)),
+        LevelProgram("Basement", BASEMENT_ROOMS, *_footprint(len(BASEMENT_ROOMS), height=BASEMENT_HEIGHT)),
+        LevelProgram(GROUND_FLOOR, tuple(ground), *_footprint(len(ground))),
+        LevelProgram("Upstairs", tuple(upstairs), *_footprint(len(upstairs))),
     ]
 
 
@@ -327,7 +351,7 @@ def _office_program(rng: random.Random) -> list[LevelProgram]:
     closet, not under the building."""
     floors = rng.randint(2, 4)
     ground = [RoomKind.RECEPTION, RoomKind.HALL, RoomKind.OFFICE, RoomKind.BATHROOM]
-    program = [LevelProgram(GROUND_FLOOR, tuple(ground))]
+    program = [LevelProgram(GROUND_FLOOR, tuple(ground), *_footprint(len(ground)))]
     for i in range(1, floors):
         name = "Upper floor" if floors == 2 else f"Floor {i + 1}"
         upper = [RoomKind.HALL, RoomKind.BATHROOM]
@@ -341,7 +365,7 @@ def _office_program(rng: random.Random) -> list[LevelProgram]:
             upper.append(RoomKind.SERVER_ROOM)
         if rng.random() < 0.2:
             upper.append(RoomKind.STORAGE)
-        program.append(LevelProgram(name, tuple(upper)))
+        program.append(LevelProgram(name, tuple(upper), *_footprint(len(upper))))
     return program
 
 
@@ -357,10 +381,12 @@ def _compound_program(rng: random.Random) -> list[LevelProgram]:
     ]
     program = []
     if has_basement:
-        program.append(LevelProgram("Basement", (RoomKind.BASEMENT, RoomKind.BASEMENT)))
-    program.append(LevelProgram(GROUND_FLOOR, tuple(ground)))
+        program.append(
+            LevelProgram("Basement", BASEMENT_ROOMS, *_footprint(len(BASEMENT_ROOMS), height=BASEMENT_HEIGHT))
+        )
+    program.append(LevelProgram(GROUND_FLOOR, tuple(ground), *_footprint(len(ground))))
     upper = [RoomKind.HALL, *(RoomKind.BEDROOM,) * rng.randint(2, 4), RoomKind.BATHROOM]
-    program.append(LevelProgram("Upper floor", tuple(upper)))
+    program.append(LevelProgram("Upper floor", tuple(upper), *_footprint(len(upper))))
     return program
 
 
@@ -480,17 +506,17 @@ def _carve_level(rng: random.Random, profile: BuildingProfile, program: LevelPro
     Order matters: furniture goes in *before* the connectivity check, because a chair in
     the wrong cell can seal a room as effectively as a wall. Doorways and the cells
     either side of them are kept clear so a door is never furnished shut."""
-    interior = (1, 1, profile.width - 2, profile.height - 2)
+    interior = (1, 1, program.width - 2, program.height - 2)
     rects = _split_rects(rng, interior, len(program.rooms))
     if len(rects) < len(program.rooms):
         return None
 
-    tiles = [[Tile.WALL] * profile.width for _ in range(profile.height)]
+    tiles = [[Tile.WALL] * program.width for _ in range(program.height)]
     rooms = _assign_kinds(rects, program)
     for room in rooms:
         for x, y in room.cells:
             tiles[y][x] = Tile.FLOOR
-    grid = Grid(width=profile.width, height=profile.height, tiles=tiles)
+    grid = Grid(width=program.width, height=program.height, tiles=tiles)
 
     # Doors: every room that shares a wall with circulation opens onto it, which is how
     # a house works. Anything still cut off (a back room reachable only through another

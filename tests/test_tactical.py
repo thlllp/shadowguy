@@ -732,7 +732,7 @@ def test_enter_level_catches_up_an_already_alerted_arriving_guard():
     """The same pile-on raise_alarm guards against can recur one hop later: a guard
     caught up to the alarm's moment can go stale again if several more player turns
     pass on the *current* level before the player actually reaches its floor."""
-    building, state = _burglary()
+    building, state = _burglary(seed=0)  # needs a guard off the entrance level
     raise_alarm(state, "spotted")
     guard_level = next(level for level, guards in state.off_level_units.items() if guards)
     state.player.next_turn = 300  # more player turns pass before the player gets there
@@ -1653,7 +1653,7 @@ def test_scouting_reveals_a_room_the_player_has_not_seen():
 
 def test_hacking_a_device_opens_a_lock_or_blinds_a_camera():
     """One task rather than two: from the far end of a link they're the same job."""
-    for seed in range(30):
+    for seed in range(100):
         building, state = _supported_burglary(seed=seed)
         wrench = next((p for p in support_tasks(state) if p.id == "wrench"), None)
         if wrench is None:
