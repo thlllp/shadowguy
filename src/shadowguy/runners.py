@@ -394,10 +394,10 @@ def buy_gear(runner: RivalRunner) -> Item | None:
     """Spend a runner's savings on the next thing they want, if they can cover it now.
     Returns what they bought, or None if they're still short (or done shopping).
 
-    No shop, no location and no standing: an independent runner buying their own kit is
-    modelled as the purchase, not as a trip. They have no "go shopping" activity to
-    wander into a COMPUTER_STORE with (rivals.RunnerActivity), and inventing one to make
-    the price honest would be a bigger mechanic than the price is worth.
+    Called from two places: a completed job (complete_job, below) and an idle day
+    spent on rivals.RunnerActivity.SHOPPING. Either way there's no shop, no location
+    and no standing: an independent runner buying their own kit is modelled as the
+    purchase, not as a trip into a COMPUTER_STORE.
     """
     item = next_purchase(runner)
     if item is None or item.price > runner.cash:

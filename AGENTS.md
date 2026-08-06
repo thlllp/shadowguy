@@ -107,7 +107,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 
 ## Save versions
 
-Bump `saves.SAVE_VERSION` on any breaking state change. Current: **60** (`RivalRunner.experience`/`cash`/`gear` — runners now earn rating and buy gear in play; a pre-v60 pickled roster lacks all three fields). Full version history in CLAUDE.md's "Save versions" section.
+Bump `saves.SAVE_VERSION` on any breaking state change. Current: **61** (`rivals.RunnerState.activity` → `activities`, a 3-tuple for the runner's new three-block day, plus `current(hour_of_day)`; a pre-v61 pickled `RunnerState` lacks `activities`). Full version history in CLAUDE.md's "Save versions" section.
 
 Note what does **not** need a bump: catalogs are keyed by id in save state (`Character.installed_cyberware` stores cyberware ids), so adding a field to a frozen catalog dataclass changes no pickled shape.
 

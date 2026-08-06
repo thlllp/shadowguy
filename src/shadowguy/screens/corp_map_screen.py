@@ -842,7 +842,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 for runner in self.app.runners
                 if (state := self.app.rival_runner_states.get(runner.id)) is not None
                 and state.territory_id == here.id
-                and state.activity is RunnerActivity.DRINKING
+                and state.current(character.hour_of_day) is RunnerActivity.DRINKING
             ]
             runner_text = "\n".join(f"{r.name} — {r.archetype}" for r in runners_here)
             content.append(Static(f"Runners here:\n{runner_text or 'No other runners here.'}", markup=False))

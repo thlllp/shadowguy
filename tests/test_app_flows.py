@@ -2809,7 +2809,7 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
             character.meet_runner(RIVAL_RUNNERS[1].id)
             app.rival_runner_states[RIVAL_RUNNERS[0].id] = RunnerState(
                 territory_id=territory.id,
-                activity=RunnerActivity.WORKING,
+                activities=(RunnerActivity.WORKING,) * 3,
                 job_title="Server Pull",
             )
 
@@ -2879,7 +2879,7 @@ def test_bar_gates_recruiting_on_meeting_the_runner_first():
             await pilot.pause()
 
             app.rival_runner_states[runner.id] = RunnerState(
-                territory_id=territory.id, activity=RunnerActivity.DRINKING
+                territory_id=territory.id, activities=(RunnerActivity.DRINKING,) * 3
             )
             app.push_screen(BarScreen(bar))
             await pilot.pause()

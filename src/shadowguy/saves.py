@@ -222,7 +222,13 @@ SAVE_SUFFIX = ".save"
 # (e.g. `reflex_coprocessor_t2` -> `reflex_coprocessor_betaware`), so a pre-v59
 # Character.installed_cyberware referencing an old id would KeyError against
 # CYBERWARE_BY_ID the first time anything read it.
-SAVE_VERSION = 60
+# v61 split an independent runner's day into three 8-hour blocks: rivals.RunnerState's
+# single `activity` field became `activities` (a 3-tuple, one RunnerActivity per block)
+# plus a `current(hour_of_day)` reader. A pre-v61 pickled RunnerState (ShadowguyApp.
+# rival_runner_states) carries the old `activity` attribute instead, which every reader
+# (BarScreen, ContactsScreen, CorpMapScreen's bar box, app's job-taken toast) now misses
+# entirely since they all read `activities`/`current` instead.
+SAVE_VERSION = 61
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

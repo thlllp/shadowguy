@@ -359,7 +359,7 @@ class BarScreen(BackScreen):
         return (
             state is not None
             and state.territory_id == self.app.character.location_id
-            and state.activity is RunnerActivity.DRINKING
+            and state.current(self.app.character.hour_of_day) is RunnerActivity.DRINKING
         )
 
     def _roster_items(self) -> list[ListItem]:

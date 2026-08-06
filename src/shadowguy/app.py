@@ -25,7 +25,7 @@ from shadowguy.fixer import create_fixers, expire_offers, refresh_offers, refres
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN
-from shadowguy.rivals import RivalAction, RunnerActivity, RunnerState, resolve_rival_day
+from shadowguy.rivals import RivalAction, RunnerState, resolve_rival_day
 from shadowguy.runners import live_runner, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
@@ -276,8 +276,8 @@ class ShadowguyApp(App):
         taken = [
             f"{self.runner(action.actor_id).name} took the {action.job_title} job"
             for action in today_actions
-            if action.activity is RunnerActivity.WORKING
-            and action.fixer_id in self.character.discovered_fixers
+            # job_title is only ever set on a day a runner went WORKING (rivals._runner_turn).
+            if action.job_title and action.fixer_id in self.character.discovered_fixers
         ]
         if taken:
             self.notify(f"Word on the street: {', '.join(taken)}.")

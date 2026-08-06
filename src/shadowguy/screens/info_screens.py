@@ -254,20 +254,22 @@ class ContactsScreen(PanelNav, RefreshOnResume, BackScreen):
         )
 
     def _status(self, runner: RivalRunner) -> str:
-        """What an independent runner was last seen doing (rivals.py). A runner
-        with no state yet hasn't had a day tick since the run started."""
+        """What an independent runner is doing right now (RunnerState.current,
+        rivals.py). A runner with no state yet hasn't had a day tick since the
+        run started."""
         state = self.app.rival_runner_states.get(runner.id)
         if state is None:
             return "whereabouts unknown"
         territory = self.app.corp_map.territories[state.territory_id]
-        if state.activity is RunnerActivity.WORKING and state.job_title:
+        current = state.current(self.app.character.hour_of_day)
+        if current is RunnerActivity.WORKING and state.job_title:
             return f"{territory.name}, running {state.job_title}"
-        if state.activity is RunnerActivity.DRINKING:
+        if current is RunnerActivity.DRINKING:
             # rivals.py only picks DRINKING in a territory that has a bar, so
             # naming it here is safe — and much better flavor than "drinking".
             bar = next(loc for loc in territory.locations if loc.kind is LocationKind.BAR)
             return f"{territory.name}, drinking at {bar.name}"
-        return f"{territory.name}, {ACTIVITY_LABELS[state.activity]}"
+        return f"{territory.name}, {ACTIVITY_LABELS[current]}"
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
@@ -437,7 +439,8 @@ class MessagesScreen(RefreshOnResume, BackScreen):
                 lines.append(f"{fixer.name}: security work up for grabs too, if that's more your speed.")
         for runner in self.app.runners:
             state = self.app.rival_runner_states.get(runner.id)
-            if state is not None and state.activity is RunnerActivity.WORKING and state.job_title:
+            # job_title is only ever set on a day a runner went WORKING (rivals._runner_turn).
+            if state is not None and state.job_title:
                 lines.append(f"{runner.name}: heads up, I'm out running {state.job_title} today.")
         return lines
 
