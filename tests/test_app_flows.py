@@ -568,47 +568,24 @@ def test_corp_map_screen_has_sidebar_categories():
     run(body())
 
 
-def test_job_ambush_choice_routes_into_an_abstract_fight_and_flee_ends_it():
-    """Regression test for the Drop-import crash: selecting a job's guaranteed
-    'Take them first' ambush choice must reach a live CombatScreen, and fleeing
-    (which always works) must cleanly end the fight and return to the scene."""
+def test_gang_turf_fight_reaches_a_live_combat_screen_and_flee_ends_it():
+    """Regression test for the Drop-import crash: walking onto turf held by a gang
+    the runner is deep-negative with must reach a live CombatScreen, and fleeing
+    (which always works) must cleanly end the fight."""
 
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
+            neighbor_id = _stage_gang_turf(app, standing=-5)  # attack band
 
-            # Find a generated job whose first fight is abstract (not tactical) --
-            # is_tactical is a per-job coin flip, so try a few seeds. Also skip a
-            # Burglary job: its start stage has no `choices` at all (it's a
-            # BurglaryStage, picked via EntrancePickScreen, not #choice_N rows) --
-            # this test is specifically about the plain-Choice-list ambush door.
-            scene = None
-            for seed in range(30):
-                candidate, _timing = generate_job(
-                    day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
-                )
-                if candidate.stages[candidate.start_stage].burglary is not None:
-                    continue
-                fight_id = f"{candidate.start_stage}_fight"
-                if candidate.stages[fight_id].combat is not None:
-                    scene = candidate
-                    break
-            assert scene is not None, "no abstract-combat job turned up in 30 seeds"
-
-            app.push_screen(SceneScreen(scene))
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
-
-            stage = scene.stages[scene.start_stage]
-            ambush_index = len(stage.choices) - 1  # the ambush is always appended last
-            await pilot.click(f"#choice_{ambush_index}")
+            app.screen.selected_id = neighbor_id
+            app.screen._refresh()
             await pilot.pause()
-            # Picking a choice shows its outcome text and waits for "Continue" before
-            # actually advancing to the next stage -- click through it.
-            await pilot.click("#choices ListItem")
+            await pilot.press("enter")
             await pilot.pause()
-            # Any result of the ambush choice routes to the fight -- win, lose, or
-            # draw the check, we should now be looking at a live CombatScreen.
             assert isinstance(app.screen, CombatScreen)
 
             combat_screen = app.screen
@@ -638,27 +615,14 @@ def test_combat_action_list_boxes_only_the_highlighted_action():
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
-            scene = None
-            for seed in range(30):
-                candidate, _timing = generate_job(
-                    day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
-                )
-                if candidate.stages[candidate.start_stage].burglary is not None:
-                    continue
-                fight_id = f"{candidate.start_stage}_fight"
-                if candidate.stages[fight_id].combat is not None:
-                    scene = candidate
-                    break
-            assert scene is not None, "no abstract-combat job turned up in 30 seeds"
+            neighbor_id = _stage_gang_turf(app, standing=-5)  # attack band
 
-            app.push_screen(SceneScreen(scene))
+            app.push_screen(CorpMapScreen())
             await pilot.pause()
-
-            stage = scene.stages[scene.start_stage]
-            ambush_index = len(stage.choices) - 1
-            await pilot.click(f"#choice_{ambush_index}")
+            app.screen.selected_id = neighbor_id
+            app.screen._refresh()
             await pilot.pause()
-            await pilot.click("#choices ListItem")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, CombatScreen)
 
