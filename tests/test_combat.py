@@ -1,6 +1,7 @@
 """Tests for combat.py: drop_for_result, attack_verbs, resolve_hit, defense and soak,
 and the Enemy stat block that derives its combat numbers the way the player does."""
 
+import copy
 import random
 
 
@@ -31,7 +32,7 @@ from shadowguy.combat import (
     weapon_range,
 )
 from shadowguy.cybernetics import CyberSlot, install_cyberware
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, gain_experience
 from shadowguy.shops import ITEMS_BY_ID, MIN_WEAPON_DAMAGE, MOD_CATALOG, Slot, buy_item
 from shadowguy.skills import skill_value
 
@@ -361,3 +362,27 @@ def test_only_the_solo_converts_its_whole_rating_into_the_gun():
             assert attack == runner.rating
         else:
             assert attack < runner.rating
+
+
+def test_a_hire_who_levelled_up_fights_better_than_the_one_you_met():
+    """rating is earned now (runners.gain_experience), and crew_stats buys rank with it —
+    so the growth has to come out the other end as a bigger attack pool."""
+    met = copy.deepcopy(next(r for r in RIVAL_RUNNERS if r.archetype == "Solo"))
+    veteran = copy.deepcopy(met)
+    gain_experience(veteran, 10_000)
+    assert veteran.rating > met.rating
+    assert crew_stats(veteran).attack > crew_stats(met).attack
+
+
+def test_bought_gear_beats_the_kit_the_profile_issues():
+    """_CREW_PROFILES is what a hire owns when you meet them, not a cap. A runner who
+    spent a run's fees on a rifle and a vest turns up carrying both."""
+    runner = copy.deepcopy(next(r for r in RIVAL_RUNNERS if r.archetype == "Solo"))
+    issued = crew_stats(runner)
+    runner.gear = ["assault_rifle", "kevlar_vest"]
+    kitted = crew_stats(runner)
+    assert kitted.weapon.id == "assault_rifle"
+    assert kitted.damage > issued.damage
+    assert kitted.armor == ITEMS_BY_ID["kevlar_vest"].defense > issued.armor
+    # Still built on their own skill: the gun's own skill is what they rolled rank in.
+    assert kitted.attack > 0

@@ -136,7 +136,7 @@ from shadowguy.shops import (
     buy_item,
 )
 from shadowguy.rivals import RunnerActivity, RunnerState
-from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, intro_cost
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, complete_job, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.geometry import Offset
 from textual.widgets import Collapsible, ListItem, ListView, Static
@@ -2822,6 +2822,37 @@ def test_contacts_runner_panel_reports_what_each_runner_is_doing():
             assert f"{territory.name}, running Server Pull" in working
             unknown = next(label for label in labels if RIVAL_RUNNERS[1].name in label)
             assert "whereabouts unknown" in unknown
+
+    run(body())
+
+
+def test_a_runners_earned_rating_belongs_to_the_run_not_the_roster_table():
+    """runners.select_active_runners copies, so progress made in a run lives on
+    app.runners and never on the module table the next run is built from. app.runner()
+    is the only way back from an id to the instance carrying it — reading RUNNERS_BY_ID
+    would show every runner at their day-one numbers."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            runner = app.runners[0]
+            authored = RUNNERS_BY_ID[runner.id]
+            complete_job(runner, pay=5000, experience=10_000)
+            assert runner.rating > authored.rating
+            assert authored.rating == RIVAL_RUNNERS[0].rating  # table untouched
+            assert app.runner(runner.id) is runner
+
+            app.character.meet_runner(runner.id)
+            app.push_screen(ContactsScreen())
+            await pilot.pause()
+            rows = app.screen.query_one("#runners_list", ListView).children
+            label = next(
+                str(row.query_one(Static).content)
+                for row in rows
+                if runner.name in str(row.query_one(Static).content)
+            )
+            assert f"rating {runner.rating}" in label
 
     run(body())
 

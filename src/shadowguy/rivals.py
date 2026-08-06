@@ -50,6 +50,12 @@ are informational: they drive movement and give PhoneScreen something true
 to show, but nothing rolls against them yet. RECOVERING is the one with a
 cause: it only ever follows a WORKING day that went badly.
 
+WORKING is also how the city's runners get *better*: a job that doesn't hurt
+them pays RUNNER_JOB_PAY and RUNNER_JOB_XP through runners.complete_job, which
+is where experience becomes rating and eb becomes gear. Nothing about that
+lives here — this module decides who worked today, runners.py decides what a
+day's work is worth.
+
 Each faction also gets a simplified, unstaffed research roll of its own
 (RIVAL_RESEARCH_CHANCE) — no economy behind it, just enough to give
 screens/info_screens.py's CorpWebsiteScreen (each corp's public "site")
@@ -64,6 +70,7 @@ offer's timing and marks it taken, so nothing here needs fixer/scene at
 runtime.
 """
 
+import copy
 import random
 from dataclasses import dataclass
 from enum import StrEnum
@@ -86,7 +93,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.relations import Relations, relation
-from shadowguy.runners import RIVAL_RUNNERS, RivalRunner
+from shadowguy.runners import RIVAL_RUNNERS, RivalRunner, complete_job
 
 if TYPE_CHECKING:
     from shadowguy.fixer import Fixer, JobOffer
@@ -196,6 +203,23 @@ IDLE_ACTIVITY_WEIGHTS = {
 # a runner is never hurt by anything the player did.
 JOB_INJURY_CHANCE = 0.25
 RECOVERY_DAYS = (1, 2)
+
+# What a job a runner ran pays them, in eb and experience — banked through
+# runners.complete_job, which is where it turns into rating and gear.
+#
+# Flat, not scaled by day tier the way the player's own jobs are
+# (jobs.REWARD_BASE/JOB_XP_BASE): the offer they took carries its payout only
+# inside its final stage's Outcome, and digging a Scene apart to read it would
+# cost rivals.py an import of scene/jobs it deliberately doesn't have. Sized off
+# the middle tier of both instead, so a runner's day of work is worth roughly
+# what one of yours is.
+#
+# **An injured day pays nothing.** JOB_INJURY_CHANCE isn't only a day off any
+# more — it's the job that went wrong, so it costs them the fee and the
+# experience as well as the recovery. First-slice numbers, not
+# balance-simulated.
+RUNNER_JOB_PAY = 300
+RUNNER_JOB_XP = 15
 
 
 @dataclass
@@ -312,7 +336,7 @@ def _takeable_offers(fixers: list["Fixer"], day: int) -> list["JobOffer"]:
 
 
 def _runner_turn(
-    runner_id: str,
+    runner: RivalRunner,
     state: RunnerState,
     corp_map: CorpMap,
     fixers: list["Fixer"],
@@ -322,6 +346,11 @@ def _runner_turn(
     """Resolve one runner's day, mutating `state` in place and returning the
     offer they took, if any — the caller needs the offer's fixer, which isn't
     worth persisting on the state past the day it was taken.
+
+    Takes the RivalRunner itself, not just their id: a day's work also pays
+    them (runners.complete_job), and that lands on the runner rather than on
+    their RunnerState — a hire earns the same way from the player's jobs, where
+    there is no RunnerState in sight.
 
     Recovery pre-empts everything (they don't get a choice). Otherwise they try
     for work first — the only branch that touches anything outside this module
@@ -336,7 +365,7 @@ def _runner_turn(
     offers = _takeable_offers(fixers, day)
     if offers and rng.random() < RUNNER_WORK_CHANCE:
         offer = rng.choice(offers)
-        offer.taken_by = runner_id
+        offer.taken_by = runner.id
         state.activity = RunnerActivity.WORKING
         state.job_title = offer.scene.title
         # A job whose target territory isn't on this map (or isn't set at all)
@@ -345,6 +374,8 @@ def _runner_turn(
             state.territory_id = offer.scene.target_territory_id
         if rng.random() < JOB_INJURY_CHANCE:
             state.recovery_days = rng.randint(*RECOVERY_DAYS)
+        else:
+            complete_job(runner, RUNNER_JOB_PAY, RUNNER_JOB_XP)
         return offer
 
     activity = rng.choices(
@@ -409,15 +440,18 @@ def resolve_rival_day(
 
     runners is the run's actual independent-runner roster (ShadowguyApp.runners
     in production: the guaranteed RIVAL_RUNNERS plus that run's random pick from
-    runners.RUNNER_POOL, see runners.select_active_runners). Defaults to the bare
-    RIVAL_RUNNERS three, which is fine for callers (mostly tests) that don't care
-    about the extras."""
+    runners.RUNNER_POOL, see runners.select_active_runners). Defaults to a
+    throwaway *copy* of the RIVAL_RUNNERS three, which is fine for callers
+    (mostly tests) that don't care about the extras — the copy is because a day
+    of work now mutates the runner who did it, and handing out the roster table
+    itself would leave that progress sitting in a module constant for everything
+    that reads one afterwards."""
     if rival_runner_states is None:
         rival_runner_states = {}
     if fixers is None:
         fixers = []
     if runners is None:
-        runners = RIVAL_RUNNERS
+        runners = copy.deepcopy(RIVAL_RUNNERS)
     if rival_researched is None:
         rival_researched = {}
     actions = []
@@ -474,7 +508,7 @@ def resolve_rival_day(
         if state is None:
             state = RunnerState(territory_id=rng.choice(list(corp_map.territories)))
             rival_runner_states[runner.id] = state
-        taken = _runner_turn(runner.id, state, corp_map, fixers, day, rng)
+        taken = _runner_turn(runner, state, corp_map, fixers, day, rng)
         actions.append(
             RivalAction(
                 kind="runner",

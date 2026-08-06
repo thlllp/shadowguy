@@ -23,12 +23,27 @@ way fixer.create_fixers varies *where* the fixed roster sits rather than *who's 
 `RUNNERS_BY_ID` still spans the whole universe (guaranteed three plus every pool
 candidate), not just what got sampled -- a saved `CrewHire`/`JobOffer.taken_by` id must
 resolve by id lookup regardless of whether this run happened to roll that runner in.
+
+**A runner is no longer a constant.** `rating`/`deck_id` used to be authored once and
+read forever; a runner who works now earns `experience` and `cash` and spends them
+(complete_job -> gain_experience / buy_gear), so what someone is worth is a property of
+*this run*, not of the roster table. Two consequences fall out of that and both are
+load-bearing:
+
+- `select_active_runners` hands a run **deep copies**. The tables above are templates,
+  never a run's live state -- without the copy, a levelled Specter would still be
+  levelled in the next run started in the same process, and a pickled save would
+  disagree with the module either way.
+- **Nothing outside this module should read `RUNNERS_BY_ID` for a live value.** Use
+  `live_runner(id, roster)` (ShadowguyApp.runner) instead: the template's `rating` is
+  what that runner was authored at, not what they're worth today.
 """
 
+import copy
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from shadowguy.shops import ITEMS_BY_ID
+from shadowguy.shops import ITEMS_BY_ID, Item, Slot
 
 
 @dataclass
@@ -45,7 +60,20 @@ class RivalRunner:
     # able to work remote support** -- see can_work_support. Gating on the gear rather
     # than the label means a solo who somehow ends up with a deck can work it, and a
     # netrunner who doesn't own one can't, which is the honest reading of both.
+    #
+    # Traded up by buy_gear, so this is authored *starting* kit rather than a fixture.
     deck_id: str | None = None
+    # --- earned in play, never authored (see complete_job) ---------------------
+    # Career experience, converted into `rating` a point at a time by gain_experience.
+    # Kept as its own running total rather than being consumed, so a runner's sheet
+    # says how much work they've done as well as how good it made them.
+    experience: int = 0
+    # Eb in hand, paid by the jobs they run and spent on GEAR_LADDERS.
+    cash: int = 0
+    # Item ids (shops.ITEMS_BY_ID) they've bought -- weapons and worn armor, read by
+    # combat.crew_stats when they fight beside you. A bought *deck* isn't in here: it
+    # replaces `deck_id` above, which is where every support check already looks.
+    gear: list[str] = field(default_factory=list)
 
 
 RIVAL_RUNNERS = [
@@ -195,8 +223,32 @@ def select_active_runners(rng: random.Random) -> list["RivalRunner"]:
     """The independent-runner roster for a run: the guaranteed three plus a random
     RANDOM_RUNNER_COUNT from RUNNER_POOL. Called once at game start
     (ShadowguyApp._new_run) and persisted as `app.runners`, the same "seeded once,
-    lives for the run" treatment fixer.create_fixers gives the fixer roster."""
-    return RIVAL_RUNNERS + rng.sample(RUNNER_POOL, RANDOM_RUNNER_COUNT)
+    lives for the run" treatment fixer.create_fixers gives the fixer roster.
+
+    **Copies, not the table's own instances.** A runner levels up and buys gear over a
+    run (complete_job), so handing back RIVAL_RUNNERS itself would have one run's
+    progress waiting in the roster table for the next one started in the same process.
+    """
+    return copy.deepcopy(RIVAL_RUNNERS + rng.sample(RUNNER_POOL, RANDOM_RUNNER_COUNT))
+
+
+def live_runner(runner_id: str, roster: list["RivalRunner"] | None = None) -> "RivalRunner | None":
+    """The instance carrying *this run's* rating and gear for `runner_id`.
+
+    `.get`-shaped (None for an id nobody has ever authored) because that's what the
+    callers taking a bare id off a CrewHire already relied on.
+
+    Every by-id lookup that reads a value play can move -- rating, deck, gear -- has to
+    come through here rather than RUNNERS_BY_ID, which since select_active_runners
+    started copying only ever holds the *authored* numbers. `roster` omitted falls back
+    to those templates, which is right for a caller that has no run in hand (tests, and
+    an id from a save this run's roster doesn't list).
+    """
+    if roster is not None:
+        for runner in roster:
+            if runner.id == runner_id:
+                return runner
+    return RUNNERS_BY_ID.get(runner_id)
 
 
 # Leadership (a cool skill, skills.py) discounts recruiting terms, one-directionally: a
@@ -237,6 +289,162 @@ RUNNER_INTRO_COST_MULT = 2
 
 def intro_cost(runner: RivalRunner) -> int:
     return runner.daily_cost * RUNNER_INTRO_COST_MULT
+
+
+# --- getting better at it: rating, and what the work pays for ---------------
+#
+# The world's runners are on the same treadmill the player is. Work pays experience and
+# eb; experience becomes `rating` (their one competence number -- read as a crew fighter's
+# skill by combat.crew_stats, as the pool a remote hacker rolls by support.py, and as the
+# gate on which support programs they can run at all), and eb becomes gear.
+#
+# Deliberately *not* the player's own curve. Character.experience is a pool the player
+# chooses where to spend, over 39 skills and 6 stats; a runner has one number and no
+# choice to make, so a table would be ceremony. The next point costs `rating *
+# RATING_XP_STEP` -- the same escalating shape as Character.next_stat_cost, cheap to read
+# and steep enough that an elite runner improves slowly.
+#
+# First-slice numbers, not balance-simulated. At rivals.RUNNER_JOB_XP a rating-5 runner
+# needs four completed jobs for their next point and a rating-9 runner needs eight.
+MAX_RATING = 10
+RATING_XP_STEP = 12
+
+# What one runner spends their earnings on, in order, per archetype. Hand-authored like
+# _CREW_PROFILES rather than derived from the catalog: what a runner *wants* is character,
+# not arithmetic over prices, and a shopping AI that reads the whole catalog would spend a
+# netrunner's savings on a katana.
+#
+# Two rules make this a ladder and not a shopping list -- see next_purchase: they buy
+# strictly in order, and they *save* for the next thing rather than skipping down to
+# something they can already afford. A runner who already owns better (Specter starts on
+# the Zetatech Rig) skips that rung instead of trading down.
+#
+# The standing-2 rows (assault rifle, mono katana) are shops.py's back room, gated on the
+# *player's* standing with a specific gunsmith. A runner buying one isn't a loophole:
+# min_standing is a stock gate on one shop's counter, and these people have their own
+# contacts.
+GEAR_LADDERS: dict[str, tuple[str, ...]] = {
+    # Decks first and in slot order: the deck is the only gear that changes what a
+    # netrunner can *do* (can_work_support, support_programs_for), rather than how well.
+    "Netrunner": ("burner_deck", "cracked_cyberdeck", "zetatech_rig", "leather_jacket"),
+    "Solo": ("kevlar_vest", "assault_rifle", "hardsuit"),
+    "Infiltrator": ("kevlar_vest", "mono_katana", "armored_suit_ii"),
+}
+
+for _archetype, _ladder in GEAR_LADDERS.items():
+    for _item_id in _ladder:
+        if _item_id not in ITEMS_BY_ID:
+            raise ValueError(f"{_archetype} gear ladder names an unknown item: {_item_id}")
+if {runner.archetype for runner in RUNNERS_BY_ID.values()} - set(GEAR_LADDERS):
+    raise ValueError("every roster archetype needs a GEAR_LADDERS entry, or it never spends")
+
+
+def experience_for_next_rating(runner: RivalRunner) -> int | None:
+    """What the next rating point costs this runner, or None once they're at MAX_RATING.
+    Same read-the-price-before-you-spend shape as Character.next_rank_cost."""
+    if runner.rating >= MAX_RATING:
+        return None
+    return runner.rating * RATING_XP_STEP
+
+
+def gain_experience(runner: RivalRunner, amount: int) -> int:
+    """Bank `amount` experience and cash in whatever rating points it buys. Returns how
+    many points they gained, which is 0 on most jobs and never more than one per call at
+    today's numbers (the loop is what makes that a consequence of the constants rather
+    than an assumption baked into the code)."""
+    runner.experience += amount
+    gained = 0
+    while (cost := experience_for_next_rating(runner)) is not None and runner.experience >= cost:
+        runner.experience -= cost
+        runner.rating += 1
+        gained += 1
+    return gained
+
+
+def _deck_slots(runner: RivalRunner) -> int:
+    deck = support_deck(runner)
+    return deck.program_slots if deck else 0
+
+
+def _wants(runner: RivalRunner, item: Item) -> bool:
+    """Whether this rung is still an upgrade. A deck is measured (more program_slots than
+    the one they carry) rather than merely owned, so a runner authored with the best deck
+    in the catalog can't be walked back down the ladder to a Burner."""
+    if item.program_slots:
+        return item.program_slots > _deck_slots(runner)
+    return item.id not in runner.gear
+
+
+def next_purchase(runner: RivalRunner) -> Item | None:
+    """What this runner is saving for: the first rung of their ladder they don't already
+    have covered, or None once they've bought it out.
+
+    Note this is what they *want*, affordable or not -- buy_gear is the one that checks
+    the price, and the fact that it doesn't then look further down the list is the whole
+    "save up for it" rule.
+    """
+    for item_id in GEAR_LADDERS.get(runner.archetype, ()):
+        item = ITEMS_BY_ID[item_id]
+        if _wants(runner, item):
+            return item
+    return None
+
+
+def buy_gear(runner: RivalRunner) -> Item | None:
+    """Spend a runner's savings on the next thing they want, if they can cover it now.
+    Returns what they bought, or None if they're still short (or done shopping).
+
+    No shop, no location and no standing: an independent runner buying their own kit is
+    modelled as the purchase, not as a trip. They have no "go shopping" activity to
+    wander into a COMPUTER_STORE with (rivals.RunnerActivity), and inventing one to make
+    the price honest would be a bigger mechanic than the price is worth.
+    """
+    item = next_purchase(runner)
+    if item is None or item.price > runner.cash:
+        return None
+    runner.cash -= item.price
+    if item.program_slots:
+        runner.deck_id = item.id  # traded up: nobody keeps two decks
+    else:
+        runner.gear.append(item.id)
+    return item
+
+
+def complete_job(runner: RivalRunner, pay: int, experience: int) -> Item | None:
+    """One finished job's worth of progress, and the one place a runner grows.
+
+    Called from both jobs a runner can work: their own (rivals._runner_turn, off a
+    fixer's board) and yours (scene_screen._take_crew_cut, where `pay` is the cut they
+    just took). Buying happens here rather than on its own daily roll because the money
+    only ever moves on a completed job -- checking any other day could never find
+    anything new to afford.
+
+    Returns whatever they bought with it, for a caller that wants to report it.
+    """
+    runner.cash += pay
+    gain_experience(runner, experience)
+    return buy_gear(runner)
+
+
+def best_weapon_id(runner: RivalRunner) -> str | None:
+    """The hardest-hitting weapon a runner has bought, or None if they're still on the
+    kit combat._CREW_PROFILES issues them. Ties break on the ladder's own order (max
+    keeps the first), so a later, pricier rung has to actually hit harder to displace an
+    earlier one."""
+    weapons = [
+        ITEMS_BY_ID[item_id] for item_id in runner.gear if ITEMS_BY_ID[item_id].slot is Slot.WEAPON
+    ]
+    if not weapons:
+        return None
+    return max(weapons, key=lambda item: item.damage).id
+
+
+def gear_defense(runner: RivalRunner) -> int:
+    """The best armor they've bought, as a flat defense number -- combat.Enemy.armor's
+    shape, since an enemy (a hire included) wears one armor value rather than an
+    inventory. Best rather than summed, the same way inventory.equipped_defense doesn't
+    stack two coats."""
+    return max((ITEMS_BY_ID[item_id].defense for item_id in runner.gear), default=0)
 
 
 # --- remote support: what a hire does from the far end of a comm link ---

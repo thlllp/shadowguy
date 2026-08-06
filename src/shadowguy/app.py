@@ -26,7 +26,7 @@ from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import refresh_gigs
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN
 from shadowguy.rivals import RivalAction, RunnerActivity, RunnerState, resolve_rival_day
-from shadowguy.runners import RUNNERS_BY_ID, select_active_runners
+from shadowguy.runners import live_runner, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
 from shadowguy.screens.corp_map_screen import CorpMapScreen
@@ -126,6 +126,16 @@ class ShadowguyApp(App):
         # Read back by CorpMapScreen to restore the last-viewed category across a full
         # screen rebuild; None (the map itself) is the right default for a fresh run.
         self.main_menu_category: str | None = None
+
+    def runner(self, runner_id: str):
+        """This run's own runners.RivalRunner for an id — the instance carrying whatever
+        rating and gear they've earned since the run started, not the roster template
+        they were authored as (see runners.select_active_runners, which copies).
+
+        The one way a screen should turn a CrewHire/JobOffer.taken_by id back into a
+        runner: reading runners.RUNNERS_BY_ID directly gets day-one numbers.
+        """
+        return live_runner(runner_id, self.runners)
 
     def spend_time(
         self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
@@ -264,7 +274,7 @@ class ShadowguyApp(App):
         # the board rather than announced. One notify for the whole roster, like
         # the surveillance sweep below.
         taken = [
-            f"{RUNNERS_BY_ID[action.actor_id].name} took the {action.job_title} job"
+            f"{self.runner(action.actor_id).name} took the {action.job_title} job"
             for action in today_actions
             if action.activity is RunnerActivity.WORKING
             and action.fixer_id in self.character.discovered_fixers

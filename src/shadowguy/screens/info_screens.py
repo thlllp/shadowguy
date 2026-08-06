@@ -241,8 +241,11 @@ class ContactsScreen(PanelNav, RefreshOnResume, BackScreen):
             self.query_one("#runners_list", ListView),
             known_runners,
             id_prefix="runner_",
+            # Rating is here and not only on BarScreen because it *moves* now
+            # (runners.gain_experience): a contact you met at rating 5 and haven't hired
+            # since may be worth more than the price you remember.
             label=lambda runner: (
-                f"{runner.name} — {runner.archetype}"
+                f"{runner.name} — {runner.archetype}, rating {runner.rating}"
                 + (" (on your crew)" if character.on_crew(runner.id) else f" — {self._status(runner)}")
                 + f": {runner.description}"
             ),
