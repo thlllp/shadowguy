@@ -27,7 +27,7 @@ from shadowguy.scene import (
 )
 from shadowguy.skills import skill_for
 from shadowguy.buildings import BuildingKind, generate_building
-from shadowguy.tactical import generate_map
+from shadowguy.tactical_gen import generate_map
 
 TARGETS = [
     "a corp exec's private files",

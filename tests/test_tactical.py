@@ -29,6 +29,20 @@ from shadowguy.grid import (
     visible_tiles,
 )
 from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, InventoryItem
+from shadowguy.support import (
+    support_for,
+    support_tasks,
+    CYBERWARE_STUN_ROUNDS,
+    Support,
+    TRACE_CAP,
+    _nearest_guard,
+    run_support_task,
+)
+from shadowguy.tactical_gen import (
+    TAC_MAP_HEIGHT,
+    TAC_MAP_WIDTH,
+    generate_map,
+)
 from shadowguy.tactical import (
     ARREST_DAYS,
     ENEMY_SPEED,
@@ -36,15 +50,10 @@ from shadowguy.tactical import (
     GRENADE_RADIUS,
     GRENADE_RANGE,
     HALF_COVER,
-    CYBERWARE_STUN_ROUNDS,
     LOCK_FAILURE_ALARM_CHANCE,
-    TRACE_CAP,
-    TAC_MAP_HEIGHT,
-    TAC_MAP_WIDTH,
     AimKind,
     CrewFate,
     Side,
-    Support,
     TacticalOutcome,
     Unit,
     aim_is_legal,
@@ -68,7 +77,6 @@ from shadowguy.tactical import (
     enter_level,
     enemy_at,
     enemy_target,
-    generate_map,
     leave,
     legal_attack_target,
     legal_grenade_target,
@@ -84,12 +92,8 @@ from shadowguy.tactical import (
     stabilize_ally,
     stairs_here,
     start_burglary,
-    _nearest_guard,
-    run_support_task,
     stabilize_targets,
     start_tactical,
-    support_for,
-    support_tasks,
     take_stairs,
     targets_for,
     throw_grenade,

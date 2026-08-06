@@ -30,6 +30,7 @@ from enum import StrEnum
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
+    FREE_ROUND,
     UNARMED,
     Drop,
     Enemy,
@@ -75,21 +76,6 @@ INTIMIDATE_DIFFICULTY_BONUS = 2
 # parting shot as you turn your back.
 FLEE_DIFFICULTY = 10
 FLEE_DIFFICULTY_PER_ENEMY = 2
-
-# What "getting the drop" is worth, in whichever direction it points.
-#
-# A free round is the obvious payoff, and on its own it is far too small a one: in a
-# four-round fight it's a 25% swing, which is not enough to make *choosing* a fight
-# meaningfully better than being dropped into one — the balance sim had the ambush
-# killing a Hacker 22% of the time it was taken, which makes the "guaranteed way
-# through" a trap rather than a way through.
-#
-# So a landed ambush also takes one of them off the board before the fight starts: you
-# caught a straggler away from the squad. Enemy *count* is the real lethality lever
-# (every one of them swings at you every round), so this is the lever that matters,
-# and it reads right — the difference between picking your moment and having the alarm
-# bring everyone is who you have to fight, not just who moves first.
-FREE_ROUND = 1
 
 
 class CombatOutcome(StrEnum):
@@ -169,8 +155,6 @@ def available_actions(
         )
         for weapon in weapons
     ]
-
-
     actions.append(
         Action(kind=ActionKind.BRACE, label="Brace for it (Toughness)", skill="toughness")
     )
@@ -244,6 +228,15 @@ def start_combat(
     if drop is Drop.PLAYER:
         state.enemy_skip_rounds = FREE_ROUND
         state.log.append("You have the drop on them.")
+        # What a landed ambush is worth *here*, on top of combat.FREE_ROUND: one of them
+        # comes off the board before the fight starts — you caught a straggler away from
+        # the squad. Enemy *count* is the real lethality lever (every one of them swings
+        # at you every round), so this is the lever that matters, and it reads right: the
+        # difference between picking your moment and having the alarm bring everyone is
+        # who you have to fight, not just who moves first. The free round alone was too
+        # small a prize — the balance sim had the ambush killing a Hacker 22% of the time
+        # it was taken, which makes the "guaranteed way through" a trap.
+        #
         # Never the last one standing: taking out a lone enemy before the fight would
         # be a fight you never had, and a stage you passed for free.
         if len(state.fighters) > 1:
@@ -332,14 +325,15 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
         state.log.append(
             f"You land {weapon.name} on {target.enemy.name} for {' and '.join(parts)}."
         )
-    elif damage:
-        prefix = "Critical hit — " if roll.result is CheckResult.CRITICAL_SUCCESS else ""
-        state.log.append(f"{prefix}You land {weapon.name} on {target.enemy.name} for {damage}.")
-    else:
-        state.log.append(f"You land {weapon.name} on {target.enemy.name}, but it doesn't get through.")
-    _damage_fighter(state, target, damage)
-    if weapon.stun_damage:
+        _damage_fighter(state, target, damage)
         _stun_fighter(state, target, weapon.stun_damage)
+    else:
+        if damage:
+            prefix = "Critical hit — " if roll.result is CheckResult.CRITICAL_SUCCESS else ""
+            state.log.append(f"{prefix}You land {weapon.name} on {target.enemy.name} for {damage}.")
+        else:
+            state.log.append(f"You land {weapon.name} on {target.enemy.name}, but it doesn't get through.")
+        _damage_fighter(state, target, damage)
     if weapon.recharge_rounds:
         state.weapon_cooldowns[weapon.id] = weapon.recharge_rounds
 
