@@ -1,11 +1,12 @@
 """The player's own Corp turn: a parallel resolution module, like rivals.py/
 security.py — not a Scene.
 
-First slice of "the player runs a corp instead of just a runner": the player
-takes over one of the 4 seeded Factions (CorpState.faction_id) rather than
-founding a new one, via a plain menu pick (screens/corp_screen.py) — there's no
-in-fiction takeover mechanic yet, the same shortcut-before-the-real-gate
-precedent TestMenu already sets for jumping straight into a fight.
+The player runs one of the 4 seeded Factions (CorpState.faction_id) rather than
+founding a new one. Two ways in, both building a CorpState: a corp-only run picks
+one at New Game (screens/menu_screens.py's CorpSelectScreen), and a runner earns
+one mid-run by buying a controlling stake at that corp's own HQ
+(screens/shop_screens.py's CorpHQScreen, gated on rep + standing +
+factions.TAKEOVER_COST).
 
 Corp mode shares the runner's own day clock rather than keeping a separate
 calendar: ShadowguyApp's day tick (app._apply_day_tick) collects each day's
@@ -13,90 +14,32 @@ territory income into CorpState.cash and resets daily_action_used, right
 alongside the AI factions' own resolve_rival_day (which skips the player's
 faction_id once this is set).
 
-A turn is one real decision, shared by several mutually-exclusive moves gated on
-the same CorpState.daily_action_used flag (the same "_used_today flag reset each
-day" idiom Character.on_new_day() uses for health_kit_used_today):
-  - expand_into a bordering neutral territory, the same area-control move
-    rivals.py's AI factions make (reusing corpmap.expansion_candidates/
-    claim_territory).
-  - attack_territory, the conflict half of the same move: throw operatives at a
-    bordering *rival-held* district (corpmap.attack_candidates/capture_territory)
-    and contest it against its garrison plus Security (defense_strength). This is
-    the only thing in the game that takes ground off another corp, and the only
-    consumer EmployeeCategory.OPERATIVE has.
-  - deploy_operatives, the defensive counterpart: station operatives on a district
-    you hold so an attacker has something to grind through. One-way — there is no
-    recall — so where your force sits is a commitment.
-  - train_employees at the corp's seeded ACADEMY (corpmap.add_academy),
-    spending cash to queue a batch of CorpState.scientists/operatives/
-    research_assistants (EmployeeCategory picks which — three separate pools,
-    not one, since they're meant to eventually do different things for the
-    corp). The batch doesn't land immediately: it trains for TRAINING_DAYS days
-    (one batch at a time, held in pending_recruit) and advance_training drops
-    the hires into the pool on the day tick.
+**A corp turn has two independent budgets**, which is the one thing worth knowing
+before reading any function here:
 
-Each faction is seeded one RESEARCH_FACILITY (corpmap.add_research_facility, called
-by the generator), producing research_points every day at 1 RP per tier —
-collect_research is the read side of that, and research_technology is what finally
-spends it. A corp can come to hold two (capturing a rival's district takes its labs
-with it) or none (losing its own the same way); build_research_facility is the way
-back from none.
+- **The day's one directed move**, gated on CorpState.daily_action_used (the same
+  "_used_today flag reset each day" idiom Character.on_new_day() uses for
+  health_kit_used_today). Mutually exclusive, and every one of them documents the
+  slot it shares: expand_into, attack_territory, deploy_operatives,
+  train_employees, build_lab, build_efficiency_upgrade, build_research_facility,
+  build_academy.
+- **Whatever cash/RP has piled up.** research_technology and the two territory
+  bumps (raise_surveillance, raise_development) deliberately do NOT touch
+  daily_action_used — RP and cash are their own pacing gates, and double-gating
+  them behind the directed move would make researching compete with expanding for
+  no design reason.
+
+Each faction is seeded one RESEARCH_FACILITY and one ACADEMY (corpmap.add_research_facility
+/add_academy, called by the generator). A corp can come to hold two of a kind
+(capturing a rival's district takes its buildings with it) or none (losing its own
+the same way); build_research_facility/build_academy are the way back from none.
 
 TECHNOLOGIES is the researchable list: two three-deep chains gated by
-Technology.prereqs, rendered as a tree by
-screens.corp_screen.ResearchTreeScreen (see technology_tree_layout). Only the
-two roots — Worker Surveillance and Brains 2 — are available from day one; each
-of their two follow-on techs requires the one before it in its own chain. A
-tech's *effect* isn't a field on Technology — it's read wherever it applies,
-keyed off the id:
-  - Worker Surveillance / Panopticon Grid / Shadow Economy: collect_income sums
-    whichever of the three per-territory income bonuses are researched, and
-    surveillance_targets/raise_surveillance only work once Worker Surveillance
-    itself is researched (the two follow-ons are pure income, no new ability).
-  - Brains 2 / Brains 3 / Cognitive Uplink: scientist_base_rate/assistant_rate
-    return the highest-tier-researched per-head research rate, which
-    research_rate and collect_research read. Each tier replaces the one before
-    it rather than stacking, but facility efficiency upgrades still stack on
-    top of the scientist rate — the two paths compose. Note this chain
-    compounds: faster research buys the next tier faster.
-
-Neither research_technology nor the two territory bumps below touch
-daily_action_used: RP and cash are their own gates, and the day's one *directed
-move* is for expand/train/build. So a corp turn now has two independent budgets
-— the daily slot, and whatever cash/RP has piled up.
-
-Territory modifiers are no longer generation-only. raise_surveillance and
-raise_development each buy one point of corpmap.TerritoryModifier on a held
-district, and they chain: Development can only be bought once Security AND
-Surveillance clear DEVELOPMENT_MIN_*, so Worker Surveillance is the route to
-developing a district that didn't seed well enough. Note raise_surveillance
-deliberately does NOT re-derive Development the way corpmap._development() does
-at generation time — Development is its own purchase here, not a formula.
-
-A research facility can also be upgraded, two ways, both sharing
-expand_into/train_employees' one daily_action_used slot:
-  - build_lab seats one more trained scientist actually working the facility
-    (collect_research caps how many of the corp's scientists count by the
-    facility's total lab_capacity), plus RESEARCH_ASSISTANTS_PER_LAB research
-    assistants on top of that scientist (assistant_capacity).
-  - build_efficiency_upgrade adds +1 RP/day to every scientist working that
-    facility (research_rate) — research assistants are unaffected, they always
-    add a flat RESEARCH_PER_ASSISTANT.
-  - build_research_facility stands a whole new one up on a held district, offered
-    *only* to a corp that holds none (rebuild_facility_targets) — a way back from
-    having its labs captured, not a way to run a second facility. build_academy is
-    the exact same shape for the ACADEMY, and matters more: operatives are the only
-    way to attack or garrison, so a corp that can't train has no counterplay left.
-The two upgrade tracks are strictly sequential — LAB_UPGRADE_COSTS/EFFICIENCY_UPGRADE_COSTS are
-indexed by labs_built/efficiency_upgrades, so the second tier's cost isn't
-reachable until the first is built.
-
-CorpState.sightings is a log of Surveillance hits, but corp_turn.py doesn't roll
-them: surveillance.py is what reads TerritoryModifier.SURVEILLANCE and appends a
-Sighting here, once per day tick, the same "parallel resolution module" shape as
-rivals.py/security.py. Sighting itself lives here anyway (plain data, like
-scene.Role) so CorpState can hold a list of them without corp_turn.py importing
-surveillance.py back.
+Technology.prereqs, rendered as a tree by screens.corp_screen.ResearchTreeScreen
+(see technology_tree_layout). A tech's *effect* is not a field on Technology — it
+is read wherever it applies, keyed off the id, so follow the id from the constants
+below to its consumer (collect_income for the surveillance chain,
+scientist_base_rate/assistant_rate for the brains chain).
 
 Leaf-ish: imports corpmap only, never scene or app.
 """
@@ -190,12 +133,11 @@ MIN_ATTACK_FORCE = 1
 
 @dataclass(frozen=True)
 class Technology:
-    """One researchable corp technology. `cost` is in research points — this is
-    the first thing in the game that actually spends them (collect_research had
-    been accruing RP against nothing). `prereqs` names other Technology ids that
-    must already be researched before this one can be — a tuple so a tech can
-    (today doesn't, but could) name more than one — and is what turns the flat
-    catalog into the tree screens/corp_screen.ResearchTreeScreen renders.
+    """One researchable corp technology. `cost` is in research points. `prereqs`
+    names other Technology ids that must already be researched before this one can
+    be — a tuple so a tech can (today doesn't, but could) name more than one — and
+    is what turns the flat catalog into the tree
+    screens/corp_screen.ResearchTreeScreen renders.
 
     Effects are *not* fields here: a tech's effect is read where it applies
     (collect_income for the income bonus, raise_surveillance for the ability),
@@ -461,7 +403,6 @@ class EmployeeCategory(StrEnum):
     RESEARCH_ASSISTANT = "research_assistant"
 
 
-
 # Days a batch spends at the Academy before the hires land in the pool. Training
 # is no longer instant: train_employees queues the batch and advance_training
 # completes it on the day tick this many days later. Different roles take
@@ -481,8 +422,8 @@ TRAINING_DAYS = {
 # category off its own RESEARCH_PER_SCIENTIST/RESEARCH_PER_ASSISTANT rate keeps
 # cash-per-RP even across the two, so the real choice is capacity (lab_capacity vs
 # assistant_capacity) and how soon you want the hire, not a strictly dominated
-# option. Operative has no rate to peg to yet (no consumer wired up -- see the
-# module docstring), so it keeps the original flat price. Not balance-simulated.
+# option. An Operative produces no RP at all, so there's no rate to peg its price
+# to -- it keeps the original flat price. Not balance-simulated.
 ACADEMY_TRAINING_COST = {
     EmployeeCategory.SCIENTIST: 200,
     EmployeeCategory.OPERATIVE: 200,
@@ -829,10 +770,8 @@ def defense_strength(territory: Territory) -> int:
     """What an attacker has to beat to take this district: the operatives
     stationed there plus its Security modifier.
 
-    This is what finally makes TerritoryModifier.SECURITY load-bearing — it was
-    seeded, rendered and read as a *gate* (development_targets) but never as a
-    quantity. Note the asymmetry with garrison: Security is bought once and keeps
-    defending forever, while a garrison is spent by the fight that uses it, so a
+    Note the asymmetry with garrison: Security is bought once and keeps defending
+    forever, while a garrison is spent by the fight that uses it, so a
     well-policed district is the durable half of a defense and troops are the
     half you have to keep replacing.
     """
@@ -942,8 +881,7 @@ def attack_territory(
     ground. Spends the day's one directed move, same slot as expand_into.
 
     Costs no cash — operatives *are* the cost, and they were paid for at the
-    Academy. This is the mechanic EmployeeCategory.OPERATIVE was trained for and
-    had no consumer for until now.
+    Academy.
 
     Returns None (no move consumed, nothing mutated) if the corp has already acted
     today, the target isn't a legal attack candidate right now, or it can't field
@@ -995,8 +933,8 @@ def train_employees(
     picks, Academy-tier many) to land TRAINING_DAYS[category] days later, when
     advance_training completes it. Shares expand_into's once-a-day slot and the
     Academy's single training slot — fails closed if the corp's already made its
-    move today, a batch is already training, holds no Academy (it always does
-    once its territory has been claimed at all), or can't afford it."""
+    move today, a batch is already training, holds no Academy (a rival can capture
+    the one it was seeded — see build_academy), or can't afford it."""
     if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = _owned_academy(corp_state, corp_map)

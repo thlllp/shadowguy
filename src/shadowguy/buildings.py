@@ -8,19 +8,12 @@ That is why BuildingKind lives here rather than beside corpmap.LocationKind: tha
 answers "what does this place sell" for a permanent fixture of the world, this one
 answers "what is this building shaped like" for something temporary.
 
-Three ideas, in the order they nest:
-
-- A **Room** is a rectangle with a RoomKind. Kinds are not flavor: they decide where an
-  objective can plausibly sit (valuables live in bedrooms and basements, not bathrooms),
-  where a guard stands, and what the walk tells the player they're standing in.
-- A **Level** is one Grid plus the rooms carved into it. Rooms are laid out
-  hall-centrically -- the room touching the most others becomes circulation, and
-  everything with a wall against it gets a door -- which is what makes a floorplan read
-  like a home rather than a randomly chopped rectangle.
-- A **Building** is levels plus **links** between them (a stair, a lift, a door between
-  two warehouses). Deliberately a *graph*, not a stack: an office tower is a line of
-  links and a compound is several ground-level grids side by side with a couple below,
-  and neither needs a special case.
+Three ideas, in the order they nest: a **Room** is a rectangle with a RoomKind, a
+**Level** is one Grid plus the rooms carved into it, and a **Building** is levels plus
+**links** between them. Each documents itself below; the one thing worth saying here is
+that a Building is deliberately a *graph*, not a stack -- an office tower is a line of
+links and a compound is several ground-level grids side by side with a couple below, and
+neither needs a special case.
 
 Leaf above grid.py: imports Grid/Tile and the pathing helper to carve and verify, and
 is imported in turn by tactical.py (which walks a Building), scene.py (BurglaryStage
@@ -206,8 +199,8 @@ class BuildingProfile:
     """How a BuildingKind generates: footprint per level, how many people are watching,
     how cluttered it is, and the room program for each of its levels.
 
-    `label` is what a screen calls the place. Width/height are capped by what a screen
-    can show at 80x24 (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling).
+    Width/height are capped by what a screen can show at 80x24
+    (tactical.TAC_MAP_WIDTH/TAC_MAP_HEIGHT are that ceiling).
 
     `objective_rooms` is where the thing worth stealing plausibly is for this sort of
     building, `guard_rooms`/`camera_rooms` where somebody (or something) plausibly watches.
@@ -218,7 +211,6 @@ class BuildingProfile:
     `locked_door_chance` is rolled independently per interior door (Level.doors) -- not a
     room preference, since a lock sits on the doorway itself, not in either room it joins."""
 
-    label: str
     width: int
     height: int
     cover_density: float
@@ -251,7 +243,6 @@ RESIDENTIAL_BATHROOMS = (1, 2)
 
 BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
     BuildingKind.RESIDENTIAL: BuildingProfile(
-        label="Residential",
         width=26,
         height=10,
         cover_density=0.10,  # furniture: a home is the most cluttered thing to cross
@@ -263,7 +254,6 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         locked_door_chance=0.05,  # rare -- a locked closet or a strongbox room, not a norm
     ),
     BuildingKind.OFFICE: BuildingProfile(
-        label="Office",
         width=30,
         height=10,
         cover_density=0.06,  # desks and partitions, but an open floor is barer than a home
@@ -286,7 +276,6 @@ BUILDING_PROFILES: dict[BuildingKind, BuildingProfile] = {
         locked_door_chance=0.15,  # records, server closets -- the doors worth locking
     ),
     BuildingKind.COMPOUND: BuildingProfile(
-        label="Compound",
         width=30,
         height=10,
         cover_density=0.09,  # a wealthy house, furnished like RESIDENTIAL but with room to spare
@@ -439,12 +428,14 @@ def _adjacent(a: Room, b: Room) -> list[Coord]:
     return doors
 
 
-def _assign_kinds(rng: random.Random, rects: list[tuple[int, int, int, int]], program: LevelProgram) -> tuple[Room, ...]:
+def _assign_kinds(rects: list[tuple[int, int, int, int]], program: LevelProgram) -> tuple[Room, ...]:
     """Give each rectangle one of the program's kinds, by what the kind *is*: the
     rectangle touching the most others becomes the HALL (circulation is the room
     everything else opens off), the biggest of what's left takes the biggest social room,
     and the smallest takes the bathroom. That ordering is the whole difference between a
-    floorplan and a chopped rectangle."""
+    floorplan and a chopped rectangle.
+
+    Deterministic given the partition -- the variety comes from _split_rects upstream."""
     plain = [Room(RoomKind.HALL, *rect) for rect in rects]  # kind is a placeholder here
     wanted = list(program.rooms)
 
@@ -495,7 +486,7 @@ def _carve_level(rng: random.Random, profile: BuildingProfile, program: LevelPro
         return None
 
     tiles = [[Tile.WALL] * profile.width for _ in range(profile.height)]
-    rooms = _assign_kinds(rng, rects, program)
+    rooms = _assign_kinds(rects, program)
     for room in rooms:
         for x, y in room.cells:
             tiles[y][x] = Tile.FLOOR
