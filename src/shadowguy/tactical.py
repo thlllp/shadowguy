@@ -32,6 +32,7 @@ from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
     MELEE_RANGE,
+    QUICKNESS_BASE,
     Enemy,
     attack_verbs,
     combat_consumables,
@@ -39,6 +40,7 @@ from shadowguy.combat import (
     equipped_weapons,
     melee_damage_bonus,
     player_defense,
+    player_quickness,
     player_soak,
     resolve_hit,
     smartlink_bonus,
@@ -72,13 +74,30 @@ from shadowguy.skills import skill_value
 # street muscle closes) — read by _enemy_phase. There is deliberately no global enemy
 # range; it falls out of what each one is carrying.
 
-# Move budget per turn. A constant for now; Agility (or a future ability) raising the
-# player's is the obvious hook, which is why it's a field on the unit, not a global.
+# Move budget per turn -- how far a unit gets when it's their turn, deliberately
+# separate from how *often* they get one (see Unit.quickness/combat.player_quickness,
+# both off Agility). A flat constant for now; a future ability raising it is the
+# obvious hook, which is why it's a field on the unit, not a global.
 PLAYER_SPEED = 4
 ENEMY_SPEED = 4
 # A hired runner moves like everyone else; they're a unit on the same board, and giving
 # backup its own movement rule would be a second thing to reason about for no gain.
 ALLY_SPEED = 4
+
+# tactical.py's turn-order scheduler: how many ticks a "work unit" (one tile moved, or
+# the turn's one action) costs a unit at exactly QUICKNESS_BASE quickness -- see
+# _time_cost and end_turn. A quicker unit's turns come around faster; a slower one's
+# turns come around slower, both relative to this baseline. First-slice, not
+# balance-simulated, like the rest of tactical.py's own numbers.
+BASE_ACTION_TIME = 100
+
+
+def _time_cost(quickness: int, work: int) -> int:
+    """How many scheduler ticks `work` units of a turn cost this unit -- work is tiles
+    moved plus one more if the turn's action was spent too (an AI unit's turn is always
+    exactly 1: one combined close-and-attack action). Scaled by
+    combat.QUICKNESS_BASE/quickness, so a quicker unit's turns come around faster."""
+    return round(BASE_ACTION_TIME * work * QUICKNESS_BASE / quickness)
 
 # Cover raises the to-hit difficulty against a unit hugging it, on the side facing the
 # shooter: a full wall is worth more than a low crate you can shoot over. Added straight
@@ -149,12 +168,16 @@ class Unit:
     that says which way a unit is pointing. The *player's* health stays on the Character —
     the single source of truth combat.py already mutates — so the player Unit is the one
     with `stats is None` and an unused `health` field. `speed` is the per-turn move
-    budget (see PLAYER_SPEED)."""
+    budget (see PLAYER_SPEED); `quickness`/`next_turn` are the turn-order scheduler's
+    (see _time_cost/end_turn) -- how often this unit's turn comes up, and the tick it's
+    next due, both cached at construction like speed is."""
 
     name: str
     side: Side
     coord: Coord
     speed: int
+    quickness: int = QUICKNESS_BASE
+    next_turn: int = 0
     stats: Enemy | None = None
     health: int = 0
     # Enemy-only, set by a thrown Webbing/Flash-family grenade (EffectKind.COMBAT_STUN):
@@ -189,7 +212,9 @@ class Unit:
 @dataclass
 class TacticalState:
     """A tactical fight in progress. The screen renders this; the functions below advance
-    it. One player turn (move up to `speed`, then one action) then the enemy phase."""
+    it. One player turn (move up to `speed`, then one action), then a quickness-paced
+    scheduler decides which allies and enemies get theirs before the player is up again
+    (see end_turn)."""
 
     character: Character
     grid: Grid
@@ -199,6 +224,13 @@ class TacticalState:
     log: list[str] = field(default_factory=list)
     moves_left: int = 0
     acted: bool = False
+    # Unconditional tally of tiles moved this player turn -- unlike moves_left, this
+    # keeps counting even while not TacticalState.in_combat (where moves_left never
+    # decrements at all, per the free-movement-while-unseen rule). end_turn's scheduler
+    # needs to know how much a turn actually did regardless of whether it was rationed,
+    # so the two counters serve different purposes and both have to exist. Reset in
+    # _begin_player_turn alongside moves_left/acted.
+    moves_taken_this_turn: int = 0
     # Targeting, in progress between begin_attack_aim/begin_grenade_aim and
     # confirm_aim/cancel_aim. A non-None cursor means the screen is in aim mode: arrow
     # keys move this cursor instead of the player (tactical_screen.action_move), and
@@ -352,7 +384,15 @@ def start_tactical(
     """Set up a fight: place the player, each enemy, and any hired runner who came along
     (`allies`, stat blocks from combat.crew_stats — they spawn around the player via
     ally_spawns, and any that don't fit sit the fight out), then open the player's turn."""
-    units = [Unit(name=character.name, side=Side.PLAYER, coord=player_start, speed=PLAYER_SPEED)]
+    units = [
+        Unit(
+            name=character.name,
+            side=Side.PLAYER,
+            coord=player_start,
+            speed=PLAYER_SPEED,
+            quickness=player_quickness(character),
+        )
+    ]
     for enemy, coord in enemy_placements:
         units.append(
             Unit(
@@ -360,6 +400,7 @@ def start_tactical(
                 side=Side.ENEMY,
                 coord=coord,
                 speed=ENEMY_SPEED,
+                quickness=enemy.quickness,
                 stats=enemy,
                 health=enemy.health,
             )
@@ -372,6 +413,7 @@ def start_tactical(
                 side=Side.ALLY,
                 coord=coord,
                 speed=ALLY_SPEED,
+                quickness=ally.quickness,
                 stats=ally,
                 health=ally.health,
             )
@@ -424,17 +466,32 @@ def start_burglary(
                 side=Side.ENEMY,
                 coord=coord,
                 speed=ENEMY_SPEED,
+                quickness=guard.quickness,
                 stats=guard,
                 health=guard.health,
                 alerted=False,
             )
         )
-    player = Unit(name=character.name, side=Side.PLAYER, coord=spawn[1], speed=PLAYER_SPEED)
+    player = Unit(
+        name=character.name,
+        side=Side.PLAYER,
+        coord=spawn[1],
+        speed=PLAYER_SPEED,
+        quickness=player_quickness(character),
+    )
     spawns = ally_spawns(
         state.grid, spawn[1], len(allies), frozenset(u.coord for u in state.off_level_units.get(spawn[0], []))
     )
     crew = [
-        Unit(name=ally.name, side=Side.ALLY, coord=coord, speed=ALLY_SPEED, stats=ally, health=ally.health)
+        Unit(
+            name=ally.name,
+            side=Side.ALLY,
+            coord=coord,
+            speed=ALLY_SPEED,
+            quickness=ally.quickness,
+            stats=ally,
+            health=ally.health,
+        )
         for ally, coord in zip(allies, spawns, strict=False)
     ]
     state.units = [player, *state.off_level_units.pop(spawn[0], []), *crew]
@@ -461,6 +518,14 @@ def enter_level(state: TacticalState, index: int, coord: Coord) -> None:
     arriving = state.off_level_units.pop(index, [])
     for ally, spot in zip(crew, ally_spawns(state.grid, coord, len(crew), frozenset(u.coord for u in arriving)), strict=False):
         ally.coord = spot
+    # raise_alarm catches an alerted unit's next_turn up to *now* the moment it fires,
+    # but a guard can sit off-level for several more player turns after that before
+    # actually joining the board -- catch it up again here (max, not overwrite, so an
+    # already-current unit is never pushed backward) or it re-floods the scheduler with
+    # catch-up turns on arrival, same bug one hop later.
+    for unit in arriving:
+        if unit.alerted:
+            unit.next_turn = max(unit.next_turn, player.next_turn)
     state.units = [player, *arriving, *crew]
     state.exits = frozenset(
         cell for level, cell in state.building.entrance_spawns if level == index
@@ -485,10 +550,15 @@ def _moves_exhausted(state: TacticalState, in_combat: bool) -> bool:
 
 
 def _spend_move(state: TacticalState, in_combat: bool) -> None:
-    """Ration one moves_left point, but only once something is actually hunting you --
-    shared by every action that spends a step (take_stairs, move_player, attempt_lock)
-    so the combat gate can't drift between them. Same precomputed-flag reasoning as
-    _moves_exhausted."""
+    """Count one step, always -- and ration one moves_left point off it, but only once
+    something is actually hunting you. Shared by every action that spends a step
+    (take_stairs, move_player, attempt_lock) so the combat gate can't drift between
+    them. Same precomputed-flag reasoning as _moves_exhausted.
+
+    moves_taken_this_turn is unconditional (unlike moves_left) so end_turn's scheduler
+    still knows how far a turn actually went even on the rare manual End Turn taken
+    while not in_combat, where moves_left never moved at all."""
+    state.moves_taken_this_turn += 1
     if in_combat:
         state.moves_left -= 1
 
@@ -547,7 +617,13 @@ def check_detection(state: TacticalState) -> bool:
 
 def raise_alarm(state: TacticalState, reason: str) -> None:
     """It's gone loud. Every guard on this level drops their post and fights, and the
-    ones elsewhere are alert by the time you reach them."""
+    ones elsewhere are alert by the time you reach them.
+
+    Also catches every newly-alerted unit's next_turn up to *now* (state.player.
+    next_turn) rather than leaving it at its construction-time 0: a sneak can run for
+    many player turns before the alarm fires, and without this a guard who's been
+    frozen at time-zero the whole while would flood the scheduler with catch-up turns
+    the instant it's alerted -- see enter_level for the matching fix one hop later."""
     if state.alarm:
         return
     state.alarm = True
@@ -555,9 +631,11 @@ def raise_alarm(state: TacticalState, reason: str) -> None:
     for unit in state.units:
         if unit.is_enemy:
             unit.alerted = True
+            unit.next_turn = state.player.next_turn
     for waiting in state.off_level_units.values():
         for unit in waiting:
             unit.alerted = True
+            unit.next_turn = state.player.next_turn
 
 
 def reached_score(state: TacticalState) -> bool:
@@ -779,6 +857,7 @@ def _reveal(state: TacticalState) -> None:
 def _begin_player_turn(state: TacticalState) -> None:
     state.moves_left = state.player.speed
     state.acted = False
+    state.moves_taken_this_turn = 0
     if state.support is not None:
         state.support.acted = False  # the hacker's turn is their own, refreshed with yours
     for weapon_id in list(state.weapon_cooldowns):
@@ -1224,17 +1303,36 @@ def leave(state: TacticalState, rng: random.Random | None = None) -> bool:
 
 
 def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
-    """End the player's turn: the hired crew acts, then the enemy phase, then the next
-    player turn opens. Allies go first because they're on your side of the round — the
-    fire they draw and the enemies they drop are part of what your turn bought."""
+    """End the player's turn: charge the scheduler for what it cost -- tiles moved, plus
+    the action if one was spent, floored at 1 so even an empty End Turn passes real time
+    rather than being a free way to skip everyone's turn forever -- then let allies and
+    enemies take their own scheduled turns in whatever order their accumulated time puts
+    them in, not a fixed "allies then enemies" phase pair any more. A slow unit can sit
+    out several of these; a quick one can act more than once before the player is up
+    again (see Unit.quickness/_time_cost). Runs the same whichever way TacticalState.
+    in_combat sits: pre-alarm no enemy is ever alerted, so candidates only ever holds
+    allies (crew always defaults alerted=True) -- the same "crew still reacts to a
+    manual End Turn during a sneak" quirk the old block-turn model always had, just now
+    also quickness-paced for them."""
     rng = resolve_rng(rng)
     if state.is_over:
         return
-    # Allies go first because they're on your side of the round — the fire they draw and
-    # the enemies they drop are part of what your turn bought.
-    _ai_phase(state, allied=True, rng=rng)
-    if not state.is_over:
-        _ai_phase(state, allied=False, rng=rng)
+    work = max(1, state.moves_taken_this_turn + (1 if state.acted else 0))
+    state.player.next_turn += _time_cost(state.player.quickness, work)
+    while not state.is_over:
+        candidates = [
+            unit
+            for unit in (*state.allies, *state.enemies)
+            if unit.alerted and unit.next_turn < state.player.next_turn
+        ]
+        if not candidates:
+            break
+        # Strict < above, not <=: a unit whose per-action cost divides evenly into the
+        # player's committed time would otherwise re-qualify the instant it lands
+        # exactly on the boundary, silently doubling its actions in the equal-quickness
+        # case -- the common one, since most of the roster shares QUICKNESS_BASE + 1.
+        unit = min(candidates, key=lambda u: u.next_turn)  # earliest due; ties favor allies (list order)
+        _take_unit_turn(state, unit, rng)
     _settle(state, rng)
     if not state.is_over:
         _begin_player_turn(state)
@@ -1299,27 +1397,30 @@ def _advance_and_attack(state: TacticalState, attacker: Unit, target: Unit, rng:
         _settle(state, rng)
 
 
-def _ai_phase(state: TacticalState, *, allied: bool, rng: random.Random) -> None:
-    """One side's turn: each unit picks a target (pick_target), closes until it can hit
-    them, then does. Targets are re-picked per unit per round rather than locked in at the
-    start of the fight, so a runner who steps out of cover draws the next one's fire.
+def _take_unit_turn(state: TacticalState, unit: Unit, rng: random.Random) -> None:
+    """One unit's scheduled turn -- ally or enemy, whichever end_turn's scheduler decided
+    is next due. Picks a target (pick_target), closes until it can hit them, then does.
+    Targets are re-picked per unit per turn rather than locked in at the start of the
+    fight, so a runner who steps out of cover draws the next one's fire.
 
     Both sides run this same body — a hire fights the way a Sec Heavy does, pointed the
     other way. They're AI-driven, not a second unit you steer: a hire you have to
-    micromanage is a second character, not backup."""
-    for unit in state.allies if allied else state.enemies:
-        if state.is_over:
-            return
-        if not unit.alerted:
-            continue  # standing their post, none the wiser -- see check_detection
-        if unit.stunned_rounds > 0:
-            unit.stunned_rounds -= 1
-            state.log.append(f"{unit.name} is still reeling.")
-            continue
-        target = pick_target(state, unit, state.enemies if allied else state.friendlies)
-        if target is None:
-            return
-        _advance_and_attack(state, unit, target, rng)
+    micromanage is a second character, not backup.
+
+    Every branch falls through to the same next_turn advance at the bottom; none of them
+    return/continue early. A stunned unit or one with no target must still spend its
+    turn's worth of scheduler time, or it would stay permanently eligible and end_turn's
+    while loop would spin on it forever -- the caller already filtered on `alerted`, so
+    that check doesn't need repeating here."""
+    if unit.stunned_rounds > 0:
+        unit.stunned_rounds -= 1
+        state.log.append(f"{unit.name} is still reeling.")
+    else:
+        candidates = state.enemies if unit.is_ally else state.friendlies
+        target = pick_target(state, unit, candidates)
+        if target is not None:
+            _advance_and_attack(state, unit, target, rng)
+    unit.next_turn += _time_cost(unit.quickness, 1)
 
 
 def _unit_attack(state: TacticalState, attacker: Unit, target: Unit, rng: random.Random) -> None:

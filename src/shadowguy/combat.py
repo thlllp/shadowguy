@@ -73,6 +73,12 @@ from shadowguy.skills import skill_for, skill_value
 # Agility from being a stat you only spend on job approaches.
 DEFENSE_BASE = 12
 
+# tactical.py's scheduler pace at "no agility bonus" -- true floor for the unpenalized
+# Enemy side (agility never drops below 1), but Character.stat() can take a fatigued or
+# scarred player's effective agility negative, so player_quickness can dip under this.
+# First-slice, not balance-simulated, like the rest of tactical.py's own numbers.
+QUICKNESS_BASE = 10
+
 # Extra to-hit dice a Smartlink implant grants when firing a weapon that's
 # itself smartlinked (shops.Item.smartlinked) -- zero otherwise, including a
 # melee weapon or an unlinked gun. Conditional on *which* weapon this attack
@@ -365,6 +371,14 @@ class Enemy:
         (tactical._enemy_phase). Abstract combat has no positions, so it ignores this."""
         return weapon_range(self.weapon)
 
+    @property
+    def quickness(self) -> int:
+        """How often this unit's turn comes up on tactical.py's scheduler, relative to
+        everyone else's -- tactical-only, like reach. Raw agility, no bonus terms (same
+        asymmetry as toughness/defense): an enemy's speed is what it's born with, not
+        what a runner's gear or cyberware would add to it."""
+        return QUICKNESS_BASE + self.agility
+
 
 def _enemy(
     id: str,
@@ -537,6 +551,13 @@ def crew_stats(runner: RivalRunner) -> Enemy:
 
 def player_defense(character: Character) -> int:
     return DEFENSE_BASE + skill_value(character, "dodge")
+
+
+def player_quickness(character: Character) -> int:
+    """tactical.py's scheduler pace, the player's side of Enemy.quickness -- through
+    Character.stat(), so gear, cyberware, fatigue and Humanity all feed it exactly as
+    they feed every other stat read."""
+    return QUICKNESS_BASE + character.stat("agility")
 
 
 def player_soak(character: Character) -> int:

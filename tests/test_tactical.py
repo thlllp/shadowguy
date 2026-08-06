@@ -61,6 +61,7 @@ from shadowguy.tactical import (
     confirm_grenade_aim,
     _reveal,
     _settle,
+    _take_unit_turn,
     check_detection,
     cover_bonus,
     end_turn,
@@ -77,6 +78,7 @@ from shadowguy.tactical import (
     move_player,
     player_attack,
     player_weapons,
+    raise_alarm,
     resolve_downed_crew,
     snap_aim_to_next_target,
     stabilize_ally,
@@ -646,11 +648,98 @@ def test_enemy_phase_resolves_every_standing_enemy_not_just_the_first():
     assert len(misses) == 2  # both enemies were already adjacent and both attacked
 
 
+# --- turn-order scheduler (Unit.quickness/next_turn, end_turn's while loop) ---
+
+
+def test_a_quicker_enemy_can_act_more_than_once_in_one_end_turn():
+    """An enforcer (agility 2, quickness 12) is quicker than a default player (quickness
+    11) -- the scheduler lets it act twice in a single End Turn, unlike the old
+    fixed-phase model, which capped every unit at exactly one action per round no matter
+    how it compared to anyone else's speed."""
+    grid = parse_grid(["......"])
+    state = start_tactical(
+        Character(name="t"), grid, player_start=(0, 0),
+        enemy_placements=[(ENEMIES_BY_ID["enforcer"], (1, 0))], exits=frozenset(),
+    )
+    end_turn(state, AlwaysOne())  # guaranteed misses -- purely a count of attempts
+    misses = [line for line in state.log if "swings wide" in line]
+    assert len(misses) == 2
+
+
+def test_a_unit_whose_next_turn_hasnt_come_up_sits_the_round_out():
+    """A unit isn't guaranteed one action per End Turn any more -- if the scheduler says
+    it isn't their turn yet, nothing happens for them this round."""
+    grid = parse_grid(["......", "......", "......"])
+    state = start_tactical(
+        Character(name="t"), grid, player_start=(0, 0),
+        enemy_placements=[(ENEMIES_BY_ID["thug"], (1, 0))], exits=frozenset(),
+    )
+    state.enemies[0].next_turn = 10_000  # far past anything one End Turn could reach
+    end_turn(state, AlwaysSix())
+    assert state.log == []
+
+
+def test_end_turn_does_not_hang_when_an_ally_has_no_target_on_the_current_level():
+    """A burglary never ends on an empty enemy list (the objective might be upstairs),
+    so an ally who's cleared every guard on the *current* level can have pick_target
+    return None turn after turn. _take_unit_turn must still spend that ally's scheduler
+    time regardless, or end_turn's while loop would reselect it forever."""
+    building, state = _burglary(entrances=2)
+    ally = crew_stats_for("Solo")
+    state.units.append(
+        Unit(
+            name=ally.name, side=Side.ALLY, coord=state.player.coord,
+            speed=4, quickness=ally.quickness, stats=ally, health=ally.health,
+        )
+    )
+    for unit in state.units:
+        if unit.is_enemy:
+            unit.health = 0
+    assert state.enemies == []
+    end_turn(state, AlwaysSix())  # must return, not hang
+    assert state.outcome is TacticalOutcome.ONGOING  # a burglary doesn't end on this
+
+
+def test_raise_alarm_catches_every_newly_alerted_guard_up_to_the_players_current_time():
+    """Without this, a guard who's sat unalerted (frozen at next_turn=0) through a long
+    sneak would flood the scheduler with a burst of catch-up turns the instant it's
+    alerted -- an unfair pile-on, not it legitimately being quick."""
+    building, state = _burglary()
+    state.player.next_turn = 500  # several player turns have already elapsed
+    everyone = [*state.units, *(u for units in state.off_level_units.values() for u in units)]
+    guards = [u for u in everyone if u.is_enemy]
+    assert guards and all(g.next_turn == 0 for g in guards)
+    raise_alarm(state, "test")
+    assert all(g.next_turn == 500 for g in guards)
+
+
+def test_enter_level_catches_up_an_already_alerted_arriving_guard():
+    """The same pile-on raise_alarm guards against can recur one hop later: a guard
+    caught up to the alarm's moment can go stale again if several more player turns
+    pass on the *current* level before the player actually reaches its floor."""
+    building, state = _burglary()
+    raise_alarm(state, "spotted")
+    guard_level = next(level for level, guards in state.off_level_units.items() if guards)
+    state.player.next_turn = 300  # more player turns pass before the player gets there
+    off_level_guard = state.off_level_units[guard_level][0]
+    assert off_level_guard.alerted is True
+    assert off_level_guard.next_turn == 0  # caught up at alarm time, now stale again
+    enter_level(state, guard_level, building.levels[guard_level].rooms[0].center)
+    arrived = next(u for u in state.units if u.is_enemy)
+    assert arrived.next_turn == 300
+
+
 def test_enemy_attack_guaranteed_hit_deals_the_exact_margin_damage():
     """A fresh Character's player_defense (14) converts to a 2-dice opposing pool;
     the enforcer's attack pool (4) is the strongest in the roster, so under AlwaysSix
     margin is 4-2=2. player_soak (1, also fully saturated under AlwaysSix) takes the
-    rest: damage is enforcer.damage (4) + 2 - 1 = 5, exact and non-random."""
+    rest: damage is enforcer.damage (4) + 2 - 1 = 5, exact and non-random.
+
+    Drives _take_unit_turn directly rather than end_turn: an enforcer (agility 2,
+    quickness 12) is quicker than a default-agility player (quickness 11), so a real
+    end_turn call legitimately grants it two actions here — correct scheduler behavior,
+    but it would double this test's exact-damage pin for a reason unrelated to what the
+    test is actually checking (the hit-margin formula, not turn pacing)."""
     character = Character(name="t")
     assert ENEMIES_BY_ID["enforcer"].attack > pool_for_difficulty(player_defense(character))
     grid = parse_grid(["......"])
@@ -659,7 +748,7 @@ def test_enemy_attack_guaranteed_hit_deals_the_exact_margin_damage():
         enemy_placements=[(ENEMIES_BY_ID["enforcer"], (1, 0))], exits=frozenset(),
     )
     health_before = character.health
-    end_turn(state, AlwaysSix())
+    _take_unit_turn(state, state.enemies[0], AlwaysSix())
     assert character.health == health_before - 5
     assert "hits you" in state.log[-1]
 
