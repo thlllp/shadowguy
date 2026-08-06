@@ -15,19 +15,25 @@ Like combat.py it imports no scene: it owns space, turn order and movement, not 
 winning is worth. scene.py holds the Outcome-bearing wrappers (TacticalStage,
 BurglaryStage), importing this the same way it imports combat for Enemy.
 
-The tail of the module is the BSP map generator (generate_map), which emits a Grid for
-an ordinary tactical stage; a burglary walks a buildings.Building instead.
+Two things that used to sit in here now have modules of their own, both one-way:
+
+- **tactical_gen.py** — the BSP map generator that emits the Grid an ordinary tactical
+  stage is fought on. Generation runs once, the fight runs for the rest of the stage, and
+  the generator needs nothing from this module at all (corpmap/corpmap_gen, same split).
+- **support.py** — the remote hacker a burglary can be backed by. That one imports *this*
+  module and never the reverse: the fight only ever carries a `Support` and touches two of
+  its attributes, so the `support` fields below stay string annotations and nothing here
+  imports it back.
 """
 
 import random
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import numpy as np
-import tcod.bsp
-import tcod.random
 
-from shadowguy.buildings import ROOM_LABELS, Building, Lock
+from shadowguy.buildings import Building, Lock
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
@@ -56,14 +62,13 @@ from shadowguy.grid import (
     step_neighbors,
     visible_tiles,
 )
-from shadowguy.runners import (
-    RUNNERS_BY_ID,
-    SUPPORT_PROGRAMS,
-    SupportProgram,
-    support_programs_for,
-)
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, EffectKind, Item
 from shadowguy.skills import skill_value
+
+if TYPE_CHECKING:
+    # Type-only, and deliberately the *only* mention of support.py in here: the runtime
+    # arrow runs support -> tactical, never back. See the module docstring.
+    from shadowguy.support import Support
 
 
 # MELEE_RANGE/THROWN_RANGE/FIREARM_RANGE and weapon_range now live in combat.py — an
@@ -71,7 +76,7 @@ from shadowguy.skills import skill_value
 # readable from the side of the fight that has no Character behind it.
 #
 # How far an enemy can attack is still per-enemy, on combat.Enemy.reach (a guard shoots,
-# street muscle closes) — read by _enemy_phase. There is deliberately no global enemy
+# street muscle closes) — read by _take_unit_turn. There is deliberately no global enemy
 # range; it falls out of what each one is carrying.
 
 # Move budget per turn -- how far a unit gets when it's their turn, deliberately
@@ -266,7 +271,7 @@ class TacticalState:
     weapon_cooldowns: dict[str, int] = field(default_factory=dict)
     # The remote hacker, if one was hired as support for this job (Character.crew_support).
     # None for every fight nobody is backing: an ordinary shootout, a solo burglary, a
-    # Test-menu fight. See the remote support section below.
+    # Test-menu fight. See support.py.
     support: "Support | None" = None
     # What became of any hire who went down, filled by _end_fight when the fight ends
     # (None while it's still running). The screen reports it; it isn't the screen's to
@@ -432,20 +437,16 @@ def start_burglary(
     support: "Support | None" = None,
 ) -> TacticalState:
     """Set up a burglary: the same tactical fight every other stage plays, with three
-    differences that make it a burglary rather than a shootout.
+    differences.
 
-    The board is one *level* of a building and the player can take stairs to the others
-    (take_stairs). The guards are real units but start unalerted, standing their post --
-    they only act once somebody sees you (check_detection), which is what makes walking
-    past one a thing you can do. And it ends when you reach what you came for
-    (SECURED), not when the last guard falls: clearing the house is a way to make the
-    rest of the walk quiet, never the win itself.
+    The board is one *level* of a building, and stairs reach the others. The guards are
+    real units but start unalerted at their posts, acting only once somebody sees you
+    (check_detection) -- which is what makes walking past one possible. And it ends when
+    you reach what you came for (SECURED), not when the last guard falls: clearing the
+    house makes the rest of the walk quiet, it is never the win itself.
 
-    `allies` are on-site hires and become units; `support` is the one who isn't there at
-    all -- see the remote support section. A burglary is where support earns its cut:
-    locks, cameras and unalerted guards are exactly what a hacker in the system reaches.
-
-    Every entrance is an exit, so the way you came in is the way you bail."""
+    `allies` are on-site hires and become units; `support` (support.py) is the hire who
+    isn't there at all. Every entrance is an exit, so the way in is the way you bail."""
     exits = frozenset(coord for level, coord in building.entrance_spawns if level == spawn[0])
     state = TacticalState(
         character=character,
@@ -641,207 +642,6 @@ def raise_alarm(state: TacticalState, reason: str) -> None:
 def reached_score(state: TacticalState) -> bool:
     """Whether the player is standing on what they came to steal."""
     return state.objective is not None and (state.level_index, state.player.coord) == state.objective
-
-
-# --- remote support: the hacker on the far end of a comm link ---
-#
-# The other half of a crew (see Character.crew_on_site / crew_support). An on-site hire
-# is a body on the board with a combat.Enemy stat block; a support hire never appears on
-# the map at all and instead does things to the *building* on the player's order.
-#
-# **They act on their own turn, not yours.** Directing them costs no move and no action,
-# which is the whole reason to pay for a second person rather than a better gun. What
-# stops that being free is the trace: every task rolls, a miss climbs the meter, and at
-# TRACE_CAP the building's ICE has them -- they drop offline for the rest of the job and
-# the noise brings the alarm with them. So the pressure is "how hard do you push them",
-# the same shape as matrix.MatrixState.security, rather than a resource you count down.
-TRACE_CAP = 10
-# How many enemy phases a guard sits out when their own chrome is turned against them.
-# Reuses Unit.stunned_rounds, the same field a Flash grenade sets -- a guard convulsing
-# on the floor and a guard blinded by a flashbang are the same thing to the AI phase.
-CYBERWARE_STUN_ROUNDS = 2
-
-
-class SupportTaskKind(StrEnum):
-    """What a support program does when run. The string values are what
-    runners.SupportProgram.task holds -- runners.py is a leaf and can't import this."""
-
-    SCOUT = "scout"  # read the building's sensors back at it: reveal a room you haven't seen
-    DEVICE = "device"  # talk a lock open, or a camera into looking elsewhere
-    CYBERWARE = "cyberware"  # reach through a guard's own implants and drop them
-
-
-if {kind.value for kind in SupportTaskKind} < {p.task for p in SUPPORT_PROGRAMS}:
-    raise ValueError("a SupportProgram names a task with no SupportTaskKind")
-
-
-@dataclass
-class Support:
-    """The remote hacker as the fight sees them: what they can run, how hot they are.
-
-    Not a Unit and deliberately not a combat.Enemy -- they have no position, no health
-    and nothing can shoot them. The only thing that can hurt them is the trace, and the
-    only thing that can spend it is the player choosing to push.
-    """
-
-    name: str
-    rating: int
-    programs: tuple[SupportProgram, ...]
-    trace: int = 0
-    # Spent for this player turn; cleared in _begin_player_turn. One task per turn, so
-    # directing them is a real choice between the three rather than a shopping list.
-    acted: bool = False
-    # Traced and burned for the rest of the job. Terminal -- nothing clears it.
-    offline: bool = False
-    # (level, cell) of every camera talked out of looking. check_detection skips these.
-    # Held here rather than mutating Building.cameras because the building is pickled
-    # inside the accepted job and a camera should come back when the job is re-walked.
-    blinded_cameras: set[tuple[int, Coord]] = field(default_factory=set)
-
-    @property
-    def can_act(self) -> bool:
-        return not self.offline and not self.acted
-
-
-def support_for(hires) -> "Support | None":
-    """Build the Support a fight opens with from this job's support hires
-    (Character.crew_support), or None if nobody is backing it.
-
-    Takes the *best* one rather than stacking several: two hackers in the same system is
-    a second feature (whose trace? whose turn?), and only one of them can be told what to
-    do on a turn anyway. Anyone whose archetype can't work support has no programs at all
-    (runners.support_programs_for), so they can't be the pick.
-    """
-    candidates = [
-        (RUNNERS_BY_ID[hire.runner_id], support_programs_for(RUNNERS_BY_ID[hire.runner_id]))
-        for hire in hires
-    ]
-    staffed = [(runner, programs) for runner, programs in candidates if programs]
-    if not staffed:
-        return None
-    runner, programs = max(staffed, key=lambda pair: pair[0].rating)
-    return Support(name=runner.name, rating=runner.rating, programs=programs)
-
-
-def support_tasks(state: TacticalState) -> list[SupportProgram]:
-    """The programs the hacker could run *this instant* -- rating already filtered them
-    at hire time, so what this adds is whether there's anything on this level to point
-    them at. An empty list is why the side menu greys out rather than lying."""
-    support = state.support
-    if support is None or not support.can_act or state.is_over:
-        return [p for p in ()]
-    return [p for p in support.programs if _support_target(state, p) is not None]
-
-
-def _support_target(state: TacticalState, program: SupportProgram):
-    """What this program would act on right now, or None if there's nothing. One place
-    that answers it, so the menu and the resolution can't disagree about what's legal."""
-    kind = SupportTaskKind(program.task)
-    if kind is SupportTaskKind.SCOUT:
-        return _nearest_unseen_room(state)
-    if kind is SupportTaskKind.DEVICE:
-        return _nearest_device(state)
-    return _nearest_guard(state)
-
-
-def _by_distance(state: TacticalState, items, coord_of):
-    return min(items, key=lambda item: chebyshev(state.player.coord, coord_of(item)), default=None)
-
-
-def _nearest_unseen_room(state: TacticalState):
-    """The closest room on this level with anything in it the player hasn't laid eyes on.
-    Rooms rather than tiles because a hacker pulling a floor plan reads a *room*."""
-    if state.building is None:
-        return None
-    explored = state.explored.get(state.level_index, set())
-    unseen = [
-        room
-        for room in state.building.levels[state.level_index].rooms
-        if any(cell not in explored for cell in _room_interior(room))
-    ]
-    return _by_distance(state, unseen, lambda room: room.center)
-
-
-def _room_interior(room) -> list[Coord]:
-    """Every interior cell of a buildings.Room. Named apart from _room_cells further
-    down, which takes a Grid and a BSP rect and is generation's, not the walk's."""
-    return [(x, y) for x in range(room.x, room.x + room.width) for y in range(room.y, room.y + room.height)]
-
-
-def _nearest_device(state: TacticalState):
-    """A locked door or a live camera on this level, whichever is closer -- "device" is
-    one task rather than two because from the far end of a link they're the same job."""
-    if state.building is None:
-        return None
-    here = state.level_index
-    devices = [(level, cell) for (level, cell) in state.building.locks if level == here]
-    devices += [
-        (level, cell)
-        for (level, cell) in state.building.cameras
-        if level == here and (level, cell) not in state.support.blinded_cameras
-    ]
-    return _by_distance(state, devices, lambda device: device[1])
-
-
-def _nearest_guard(state: TacticalState):
-    """Any standing enemy on this level. Deliberately not gated on line of sight: the
-    hacker isn't looking through the player's eyes, they're in the building's network."""
-    return _by_distance(state, [e for e in state.enemies if e.health > 0], lambda unit: unit.coord)
-
-
-def run_support_task(
-    state: TacticalState, program: SupportProgram, rng: random.Random | None = None
-) -> None:
-    """Direct the hacker at one task. Costs the player nothing but the hacker's own turn.
-
-    Rolls their `rating` as the pool (runners.RivalRunner.rating is an effective
-    skill_value, which is what that field was always for) against the program's
-    difficulty. A miss climbs the trace and nothing else happens; reaching TRACE_CAP
-    burns them for the job and brings the alarm down at the same time.
-    """
-    rng = resolve_rng(rng)
-    support = state.support
-    if support is None or not support.can_act or program not in support_tasks(state):
-        return
-    target = _support_target(state, program)
-    support.acted = True
-
-    roll = resolve_check(stat_value=support.rating, difficulty=program.difficulty, rng=rng)
-    if not roll.result.passed:
-        support.trace += program.trace_on_failure
-        state.log.append(f"{support.name}: {program.name} glances off. Trace {support.trace}/{TRACE_CAP}.")
-        if support.trace >= TRACE_CAP:
-            support.offline = True
-            state.log.append(f"{support.name} is traced and drops the link.")
-            raise_alarm(state, "The trace runs both ways. The building knows.")
-        return
-
-    _apply_support_success(state, program, target)
-
-
-def _apply_support_success(state: TacticalState, program: SupportProgram, target) -> None:
-    support = state.support
-    kind = SupportTaskKind(program.task)
-    if kind is SupportTaskKind.SCOUT:
-        explored = state.explored.setdefault(state.level_index, set())
-        explored.update(_room_interior(target))
-        watchers = sum(
-            1 for level, cell in state.building.cameras
-            if level == state.level_index and cell in set(_room_interior(target))
-        )
-        room_name = ROOM_LABELS.get(target.kind, "room")
-        note = f" {watchers} camera(s) on it." if watchers else " Nothing watching it."
-        state.log.append(f"{support.name}: {room_name.lower()} mapped.{note}")
-    elif kind is SupportTaskKind.DEVICE:
-        if target in state.building.locks:
-            del state.building.locks[target]
-            state.log.append(f"{support.name}: that lock just opened itself.")
-        else:
-            support.blinded_cameras.add(target)
-            state.log.append(f"{support.name}: camera's looking somewhere else now.")
-    else:
-        target.stunned_rounds += CYBERWARE_STUN_ROUNDS
-        state.log.append(f"{support.name}: {target.name}'s own chrome puts them down.")
 
 
 def _reveal(state: TacticalState) -> None:
@@ -1254,6 +1054,12 @@ def confirm_grenade_aim(state: TacticalState) -> bool:
     return True
 
 
+def _blast_targets(state: TacticalState, target: Coord) -> list[Unit]:
+    """Every standing enemy inside a grenade's blast — a GRENADE_RADIUS chebyshev square
+    centered on where it landed, so radius 1 is a literal 3x3."""
+    return [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+
+
 def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | None = None) -> None:
     """Resolve the player's one action as a grenade throw instead of an attack: pops
     Character.consumables[consumable_index] and applies it exactly the way combat.py's
@@ -1272,13 +1078,13 @@ def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | N
     state.acted = True
     state.character.consumables.pop(consumable_index)
     if consumable.effect is EffectKind.COMBAT_DAMAGE_ALL:
-        hit = [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+        hit = _blast_targets(state, target)
         state.log.append(f"{consumable.name} — {consumable.amount} to everything in the blast.")
         for enemy in hit:
             enemy.health = max(0, enemy.health - consumable.amount)
         _settle(state)
     elif consumable.effect is EffectKind.COMBAT_STUN:
-        hit = [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+        hit = _blast_targets(state, target)
         for enemy in hit:
             enemy.stunned_rounds = consumable.amount
         state.log.append(f"{consumable.name} — {len(hit)} pinned down for {consumable.amount}.")
@@ -1303,17 +1109,12 @@ def leave(state: TacticalState, rng: random.Random | None = None) -> bool:
 
 
 def end_turn(state: TacticalState, rng: random.Random | None = None) -> None:
-    """End the player's turn: charge the scheduler for what it cost -- tiles moved, plus
-    the action if one was spent, floored at 1 so even an empty End Turn passes real time
-    rather than being a free way to skip everyone's turn forever -- then let allies and
-    enemies take their own scheduled turns in whatever order their accumulated time puts
-    them in, not a fixed "allies then enemies" phase pair any more. A slow unit can sit
-    out several of these; a quick one can act more than once before the player is up
-    again (see Unit.quickness/_time_cost). Runs the same whichever way TacticalState.
-    in_combat sits: pre-alarm no enemy is ever alerted, so candidates only ever holds
-    allies (crew always defaults alerted=True) -- the same "crew still reacts to a
-    manual End Turn during a sneak" quirk the old block-turn model always had, just now
-    also quickness-paced for them."""
+    """End the player's turn: charge the scheduler for what it cost -- tiles moved plus
+    the action if one was spent, floored at 1 so an empty End Turn still passes real time
+    rather than being a free way to skip everyone else forever -- then let allies and
+    enemies take their scheduled turns in whatever order their accumulated time puts them
+    in. A slow unit can sit several out; a quick one can act twice before the player is
+    up again. Pre-alarm no enemy is alerted, so candidates only ever holds allies."""
     rng = resolve_rng(rng)
     if state.is_over:
         return
@@ -1346,19 +1147,17 @@ def _can_reach(state: TacticalState, attacker: Unit, target: Unit) -> bool:
 
 
 def pick_target(state: TacticalState, attacker: Unit, candidates: list[Unit]) -> Unit | None:
-    """Who a unit goes after — **the one they can actually hit**, and the one ranking both
-    sides use.
+    """Who a unit goes after — the one ranking both sides use.
 
-    Candidates are ordered by the cover between them and the attacker (`cover_bonus` —
-    the same number that raises the to-hit difficulty), then by distance, with anyone the
-    attacker has no line to sorting last. So ducking behind a wall genuinely redirects
-    fire onto whoever is standing in the open: cover stops being "my rolls got better"
-    and becomes a decision about who eats the round. `min` is stable, so the candidate
-    list's own order breaks exact ties — which is why `friendlies` puts the player first,
-    and a hire is never a quiet meat shield. Called before movement too, so a unit crosses
-    the room toward the target it *wants*, not the nearest body.
+    Ordered by the cover between target and attacker (`cover_bonus`, the same number that
+    raises the to-hit difficulty), then distance, with anyone out of line sorting last. So
+    ducking behind a wall genuinely redirects fire onto whoever is in the open: cover
+    stops being "my rolls got better" and becomes a decision about who eats the round.
+    `min` is stable, so the candidate list's order breaks exact ties — which is why
+    `friendlies` puts the player first and a hire is never a quiet meat shield. Called
+    before movement, so a unit crosses the room toward the target it *wants*.
 
-    One FOV pass covers every candidate (see visible_tiles); None when the list is empty."""
+    One FOV pass covers every candidate; None when the list is empty."""
     seen = visible_tiles(state.grid, attacker.coord)
     return min(
         candidates,
@@ -1398,20 +1197,14 @@ def _advance_and_attack(state: TacticalState, attacker: Unit, target: Unit, rng:
 
 
 def _take_unit_turn(state: TacticalState, unit: Unit, rng: random.Random) -> None:
-    """One unit's scheduled turn -- ally or enemy, whichever end_turn's scheduler decided
-    is next due. Picks a target (pick_target), closes until it can hit them, then does.
-    Targets are re-picked per unit per turn rather than locked in at the start of the
-    fight, so a runner who steps out of cover draws the next one's fire.
+    """One unit's scheduled turn -- ally or enemy, whichever end_turn decided is next
+    due. Pick a target, close until it can be hit, then hit it. Targets are re-picked per
+    turn, so a runner who steps out of cover draws the next one's fire. Both sides run
+    this same body: a hire fights the way a Sec Heavy does, pointed the other way.
 
-    Both sides run this same body — a hire fights the way a Sec Heavy does, pointed the
-    other way. They're AI-driven, not a second unit you steer: a hire you have to
-    micromanage is a second character, not backup.
-
-    Every branch falls through to the same next_turn advance at the bottom; none of them
-    return/continue early. A stunned unit or one with no target must still spend its
-    turn's worth of scheduler time, or it would stay permanently eligible and end_turn's
-    while loop would spin on it forever -- the caller already filtered on `alerted`, so
-    that check doesn't need repeating here."""
+    **Every branch falls through to the same next_turn advance; none return early.** A
+    stunned unit, or one with no target, must still spend scheduler time or it stays
+    permanently eligible and end_turn's while loop spins on it forever."""
     if unit.stunned_rounds > 0:
         unit.stunned_rounds -= 1
         state.log.append(f"{unit.name} is still reeling.")
@@ -1553,7 +1346,7 @@ def best_shot(state: TacticalState) -> Unit | None:
 
 def available_grenades(state: TacticalState) -> list[tuple[int, Consumable]]:
     """The grenades throw_grenade is legal for right now: every combat-only consumable
-    the runner carries (combat.combat_consumables — the same set combat.py's abstract
+    the runner carries (combat.combat_consumables — the same set abstract_combat's
     fight offers), or none once the action for the turn is already spent. Same "fight
     policy lives here, not the screen" reasoning as best_shot."""
     if state.acted or state.is_over:
@@ -1561,156 +1354,3 @@ def available_grenades(state: TacticalState) -> list[tuple[int, Consumable]]:
     return combat_consumables(state.character)
 
 
-# ---------------------------------------------------------------------------
-# Procedural maps. A job's tactical fight lands on one of these (see jobs.py). BSP
-# rooms + corridors, some scattered low cover, the player entering one end and the
-# squad holding the other. tcod does the partition (seeded off the caller's rng so a
-# run stays reproducible); the carving/placement/validation is ours.
-# ---------------------------------------------------------------------------
-
-# Sized to sit inside the fight screen at 80x24 without scrolling (see app.TacticalScreen).
-TAC_MAP_WIDTH = 30
-TAC_MAP_HEIGHT = 10
-_BSP_DEPTH = 3
-_ROOM_MIN = 4
-_MAP_GEN_ATTEMPTS = 60
-
-
-@dataclass
-class TacticalMap:
-    """A generated fight map plus where everyone starts — what a TacticalStage is built
-    from. The player enters at `player_start` (near the `exits`, the way back out); the
-    squad holds `enemy_spawns` at the far end."""
-
-    grid: Grid
-    player_start: Coord
-    enemy_spawns: list[Coord]
-    exits: frozenset[Coord]
-
-
-def _carve(tiles: list[list[Tile]], x: int, y: int, tile: Tile = Tile.FLOOR) -> None:
-    """Set a cell if it's in bounds and not on the outer wall ring — the border stays
-    solid so no room or tunnel ever opens onto the edge."""
-    if 0 < x < len(tiles[0]) - 1 and 0 < y < len(tiles) - 1:
-        tiles[y][x] = tile
-
-
-def _carve_room(tiles: list[list[Tile]], x: int, y: int, w: int, h: int) -> None:
-    for j in range(y, y + h):
-        for i in range(x, x + w):
-            _carve(tiles, i, j)
-
-
-def _carve_tunnel(tiles: list[list[Tile]], a: Coord, b: Coord) -> None:
-    """An L-shaped corridor between two room centers: horizontal, then vertical."""
-    (x1, y1), (x2, y2) = a, b
-    for x in range(min(x1, x2), max(x1, x2) + 1):
-        _carve(tiles, x, y1)
-    for y in range(min(y1, y2), max(y1, y2) + 1):
-        _carve(tiles, x2, y)
-
-
-def _room_cells(grid: Grid, rect: tuple[int, int, int, int]) -> list[Coord]:
-    rx, ry, rw, rh = rect
-    return [
-        (x, y)
-        for y in range(ry, ry + rh)
-        for x in range(rx, rx + rw)
-        if grid.in_bounds((x, y)) and grid.tile((x, y)) is Tile.FLOOR
-    ]
-
-
-def _bsp_rooms(
-    tiles: list[list[Tile]], width: int, height: int, rng: random.Random, depth: int = _BSP_DEPTH
-) -> list[tuple[Coord, tuple[int, int, int, int]]] | None:
-    """Carve BSP rooms and corridors into tiles. Returns room list or None. `depth` is
-    room granularity -- deeper splits the same footprint into more, smaller rooms, which
-    is how a residential block differs from a fight map carved at the same size."""
-    bsp = tcod.bsp.BSP(x=1, y=1, width=width - 2, height=height - 2)
-    bsp.split_recursive(
-        depth=depth, min_width=_ROOM_MIN, min_height=_ROOM_MIN,
-        max_horizontal_ratio=1.5, max_vertical_ratio=1.5,
-        seed=tcod.random.Random(tcod.random.MERSENNE_TWISTER, seed=rng.getrandbits(31)),
-    )
-    rooms: list[tuple[Coord, tuple[int, int, int, int]]] = []
-    for leaf in bsp.pre_order():
-        if leaf.children:
-            continue
-        rx, ry = leaf.x + 1, leaf.y + 1
-        rw, rh = max(2, leaf.width - 2), max(2, leaf.height - 2)
-        _carve_room(tiles, rx, ry, rw, rh)
-        rooms.append(((rx + rw // 2, ry + rh // 2), (rx, ry, rw, rh)))
-    if len(rooms) < 2:
-        return None
-    for prev, cur in zip(rooms, rooms[1:]):
-        _carve_tunnel(tiles, prev[0], cur[0])
-    return rooms
-
-
-def _pick_spawns(cells_by_room: list[list[Coord]], enemy_count: int, reserved: set[Coord], rng: random.Random) -> list[Coord] | None:
-    """Pick enemy spawn cells away from the entry room; fall back to all rooms."""
-    spawn_pool = [cell for cells in cells_by_room[1:] for cell in cells if cell not in reserved]
-    if len(spawn_pool) < enemy_count:
-        spawn_pool = [cell for cells in cells_by_room for cell in cells if cell not in reserved]
-    if len(spawn_pool) < enemy_count:
-        return None
-    return rng.sample(spawn_pool, enemy_count)
-
-
-def _scatter_cover(tiles: list[list[Tile]], cells_by_room: list[list[Coord]], keep_clear: set[Coord], rng: random.Random, density: float) -> None:
-    for cells in cells_by_room:
-        for cell in cells:
-            if cell not in keep_clear and rng.random() < density:
-                tiles[cell[1]][cell[0]] = Tile.LOW_COVER
-
-
-def _verify_map(grid: Grid, player_start: Coord, enemy_spawns: list[Coord], exits: frozenset[Coord]) -> bool:
-    return all(
-        target == player_start or path_between(grid, player_start, target)
-        for target in (*enemy_spawns, *exits)
-    )
-
-
-def generate_map(
-    rng: random.Random,
-    enemy_count: int,
-    width: int = TAC_MAP_WIDTH,
-    height: int = TAC_MAP_HEIGHT,
-    cover_density: float = 0.08,
-) -> TacticalMap:
-    for _ in range(_MAP_GEN_ATTEMPTS):
-        tiles = [[Tile.WALL] * width for _ in range(height)]
-        rooms = _bsp_rooms(tiles, width, height, rng)
-        if rooms is None:
-            continue
-
-        grid = Grid(width=width, height=height, tiles=tiles)
-        rooms.sort(key=lambda room: room[0][0])
-        cells_by_room = [_room_cells(grid, rect) for _center, rect in rooms]
-        player_start = rooms[0][0]
-        exits = frozenset(sorted(cells_by_room[0])[:2])
-
-        reserved = {player_start, *exits}
-        enemy_spawns = _pick_spawns(cells_by_room, enemy_count, reserved, rng)
-        if enemy_spawns is None:
-            continue
-
-        keep_clear = {player_start, *exits, *enemy_spawns}
-        _scatter_cover(tiles, cells_by_room, keep_clear, rng, cover_density)
-        # `tiles` was just edited in place under an already-constructed Grid.
-        grid._invalidate()
-
-        if _verify_map(grid, player_start, enemy_spawns, exits):
-            return TacticalMap(grid, player_start, enemy_spawns, exits)
-    raise RuntimeError("could not generate a playable tactical map")
-
-
-# ---------------------------------------------------------------------------
-# Burglary buildings. A different shape of generated map from TacticalMap: not one
-# player_start converging enemies onto it, but several candidate entry points (one
-# per Entrance the runner could pick, see scene.BurglaryStage) converging on one
-# objective, with static guards to avoid rather than a squad to fight. Reuses the
-# same BSP room-carving as generate_map (_bsp_rooms already carves the connecting
-# tunnels; nothing here assumes a single entry room the way generate_map's own
-# player_start/exits selection does).
-# ---------------------------------------------------------------------------

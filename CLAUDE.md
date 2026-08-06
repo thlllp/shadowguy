@@ -113,7 +113,10 @@ src/shadowguy/
                  resolve_hit, player defense/soak, weapon+consumable queries, the Drop
   abstract_combat.py  fight surface 1: abstract rounds, no positions
   grid.py        space itself: Grid/Tile, tcod FOV+A*, distance -- no game state
-  tactical.py    fight surface 2: the grid fight, plus the BSP generate_map
+  tactical.py    fight surface 2: the grid fight
+  tactical_gen.py generate_map: the BSP fight map, laid out once per stage. A leaf --
+                 grid.py + tcod, and deliberately never tactical.py
+  support.py     the remote hacker backing a burglary. Imports tactical.py, never back
   matrix.py      fight surface 3: ICE, node networks, integrity pool, cyberdeck programs
 
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
@@ -180,6 +183,8 @@ Leaf modules, and why each has to stay one:
 - **`skills.py`** — imports nothing from the package; `character.py → shops.py → corpmap.py` all import it. The "every `Skill.stat` is a real core stat" guard therefore lives in `character.py`, the one module seeing both tables. A runtime `character` import here is a cycle.
 - **`combat.py`** — the shared fight foundation, no `scene`. All three fight surfaces (`abstract_combat.py` / `tactical.py` / `matrix.py`) import *it* and never each other; `soak_damage` is public (not `_soak_damage`) because `abstract_combat`'s flee resolves a parting shot through it. `Enemy` stays here rather than moving to `abstract_combat.py` — a pickled `scene.Encounter` holds one, so the move would cost a save version for nothing.
 - **`abstract_combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
+- **`tactical_gen.py`** — imports `grid` and tcod, nothing else from the package, and pointedly not `tactical`: a generated map has no units or turns in it, which is what lets it be built ahead of the fight and pickled onto a `scene.TacticalStage`. Same split as `corpmap`/`corpmap_gen`.
+- **`support.py`** — the one module that imports `tactical` rather than being imported by it. The fight only ever *carries* a `Support` (a string-annotated field plus a `TYPE_CHECKING` import) and touches `acted`/`blinded_cameras`; every entry point here is called by a screen, never by the engine mid-turn. Keep it that way or the arrow becomes a cycle.
 - **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
 - **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`. `corpmap_gen.py` imports it and it never imports back; the modifier cluster (`make_modifiers` and friends) stays here rather than moving to the generator because `claim_territory` reseeds a district at runtime through it.
 - **`buildings.py`** — imports `grid` for the geometry and nothing else from the package; `scene`/`jobs`/`tactical` import *it*. `tactical.py` imports `Building`/`Lock` at runtime, no `TYPE_CHECKING` dance: extracting `grid.py` is what removed the cycle that used to need one.

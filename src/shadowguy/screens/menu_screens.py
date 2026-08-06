@@ -14,7 +14,8 @@ from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import BurglaryStage, Entrance, MatrixStage, Outcome, TacticalStage
 from shadowguy.skills import skill_for, skill_value
-from shadowguy.tactical import TacticalOutcome, generate_map
+from shadowguy.tactical import TacticalOutcome
+from shadowguy.tactical_gen import generate_map
 
 from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .burglary_screens import EntrancePickScreen
