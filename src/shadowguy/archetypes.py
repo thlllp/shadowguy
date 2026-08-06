@@ -28,15 +28,22 @@ class Archetype:
     skills: dict[str, int]
     # shops item ids this build walks in carrying, bought with the skill points the rank
     # list deliberately leaves unspent (character.convert_skill_point_to_gear -- two
-    # points, at today's GEAR_EB_PER_POINT). A preset is the *whole* build, so it picks
-    # the kit too rather than leaving the player at a shop screen with a pool they may
-    # not know they have. Change the rate and these rank lists have to move with it:
-    # _validate_preset fails the moment a loadout costs more points than its ranks left
-    # over, which is the guard that keeps the two in step.
+    # points at today's GEAR_EB_PER_POINT for most rows, three for anything pricier).
+    # A preset is the *whole* build, so it picks the kit too rather than leaving the
+    # player at a shop screen with a pool they may not know they have. Change a price
+    # and the rank list that ships it has to move with it: _validate_preset fails the
+    # moment a loadout costs more points than its ranks left over, which is the guard
+    # that keeps the two in step.
     gear: tuple[str, ...] = ()
+    # cybernetics.Cyberware ids installed at creation, drawn from the same gear_budget
+    # as `gear` above (Character.buy_creation_cyberware) rather than cash -- only
+    # Deltaware/Trashware (min_standing 0) are ever reachable here, same reason `gear`
+    # never names a standing-gated Item.
+    cyberware: tuple[str, ...] = ()
 
     def apply(self, character: "Character") -> None:
         from shadowguy.character import GEAR_EB_PER_POINT
+        from shadowguy.cybernetics import CYBERWARE_BY_ID
         from shadowguy.shops import ITEMS_BY_ID
 
         for stat, points in self.stats.items():
@@ -47,10 +54,12 @@ class Archetype:
             while character.skill_rank(skill_id) < target_rank:
                 if not character.spend_skill_point(skill_id):
                     raise ValueError(f"{self.id}: cannot afford {skill_id} rank {target_rank}")
-        # Gear last: the rank list above leaves exactly the points this needs, so
-        # converting first would starve it. Buy in the order written -- a preset that
-        # can't afford its own list is a bad row, and _validate_preset says so.
-        bill = sum(ITEMS_BY_ID[item_id].price for item_id in self.gear)
+        # Gear (and cyberware) last: the rank list above leaves exactly the points this
+        # needs, so converting first would starve it. Buy in the order written -- a
+        # preset that can't afford its own list is a bad row, and _validate_preset says so.
+        bill = sum(ITEMS_BY_ID[item_id].price for item_id in self.gear) + sum(
+            CYBERWARE_BY_ID[cyberware_id].price for cyberware_id in self.cyberware
+        )
         while character.gear_budget < bill:
             if not character.convert_skill_point_to_gear():
                 raise ValueError(
@@ -60,6 +69,9 @@ class Archetype:
         for item_id in self.gear:
             if not character.buy_creation_gear(ITEMS_BY_ID[item_id]):
                 raise ValueError(f"{self.id}: cannot buy {item_id}")
+        for cyberware_id in self.cyberware:
+            if not character.buy_creation_cyberware(cyberware_id):
+                raise ValueError(f"{self.id}: cannot install {cyberware_id}")
 
 
 # id, name, description, stats, skills (id -> target rank)
@@ -89,6 +101,7 @@ _ARCHETYPE_ROWS = (
         # Walks in wearing the heaviest armor the ungated catalog sells: this build wins
         # by still standing, and Body already feeds the soak roll the Hardsuit adds to.
         ("brass_knuckles", "combat_knife", "hardsuit", "reinforced_helmet", "steel_toe_boots"),
+        (),
     ),
     (
         "hacker",
@@ -103,11 +116,18 @@ _ARCHETYPE_ROWS = (
         # firewall (matrix.firewall_defense), Tinkering is Harden. Cybercombat leads
         # because that is what a Data Heist's fights actually roll -- and it clears
         # MIN_READY_CYBERCOMBAT, so this preset never trips the readiness warning.
-        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2},
+        # Infer sits one rank lower than the read above would otherwise buy: the
+        # Zetatech Rig's price is the point of the build (see gear below), and it now
+        # eats a third skill point rather than two, so this is the rank that gives up
+        # the ground.
+        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2},
         # The deck *is* the build -- a hacker with no cyberdeck cannot enter the matrix
         # at all, and the Zetatech Rig's 3 program slots are the most the ungated catalog
-        # offers. The pistol and jacket are so the walk to the job isn't fatal.
+        # offers. It's also the priciest single item in the ungated catalog, which is
+        # deliberate: a top-tier deck is meant to cost this build a real rank, not pocket
+        # change. The pistol and jacket are so the walk to the job isn't fatal.
         ("zetatech_rig", "pipe_pistol", "leather_jacket", "kevlar_helmet"),
+        (),
     ),
     (
         "infiltrator",
@@ -122,6 +142,7 @@ _ARCHETYPE_ROWS = (
         # (shops.Item.skill_bonuses), and light armor because being seen is the failure
         # state, not being shot.
         ("monoblade", "combat_knife", "leather_jacket", "slippers"),
+        (),
     ),
     (
         "gunslinger",
@@ -138,6 +159,38 @@ _ARCHETYPE_ROWS = (
         # sidearm the second weapon slot carries.
         {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3},
         ("pump_shotgun", "pipe_pistol", "kevlar_vest", "reinforced_helmet", "steel_toe_boots"),
+        (),
+    ),
+    (
+        "street_samurai",
+        "Street Samurai",
+        "Blade-first mercenary muscle. Closes distance fast and hits harder than a duelist"
+        " has any right to, but has nothing to fall back on at range.",
+        # Strength is bought for melee_damage_bonus, same reasoning as the Enforcer, but
+        # paired with Agility instead of Body: this build wins by not being where the hit
+        # lands, not by soaking it.
+        {"agility": 4, "strength": 2},
+        # Blades is the signature; Dodge and Acrobatics are the agility half of "closes
+        # distance and doesn't get hit doing it." Grapple is the one strength-tied skill
+        # on the sheet -- pinning a mark once the blade's already in -- which is what
+        # keeps the raised Strength from going idle (_validate_preset). It sits one rank
+        # lower than a pure skill build would buy: the cyberarm below (Deltaware, min
+        # standing 0 -- see Archetype.cyberware) now eats the point instead, and its own
+        # +2 Strength partly covers what the rank gave up.
+        {"blades": 7, "dodge": 5, "acrobatics": 3, "grapple": 2},
+        # The same Monoblade the Infiltrator carries, but built to actually swing it: this
+        # preset's Strength and rank-7 Blades turn the same weapon into a very different
+        # fight. Combat Knife rides stowed as the backup once the Monoblade eats both
+        # weapon slots (two_handed) -- light armor throughout, since the build's answer to
+        # getting hit is Dodge, not soak.
+        ("monoblade", "combat_knife", "leather_jacket", "reinforced_helmet", "steel_toe_boots"),
+        # A Deltaware Hydraulic Cyberarm: +2 Strength stacked straight onto
+        # melee_damage_bonus, which is what "hits harder than a duelist has any right
+        # to" means mechanically. Deltaware over Trashware on purpose -- min_standing 0
+        # either way, but Trashware's doubled humanity_cost (5.0 of the HUMANITY_BASELINE
+        # 6) would leave this build one bad ripperdoc visit from cyberpsychosis before
+        # its first job.
+        ("hydraulic_cyberarm",),
     ),
     (
         "fixer",
@@ -155,6 +208,7 @@ _ARCHETYPE_ROWS = (
         # on every hop (shops.Item.travel_reduction), and this is the build that spends
         # its run moving between people rather than shooting them.
         ("armored_towncar", "pipe_pistol", "leather_jacket", "pawned_charm"),
+        (),
     ),
 )
 
@@ -195,9 +249,15 @@ def _init() -> None:
     import sys
     archetypes_list = [
         Archetype(
-            id=id_, name=name, description=description, stats=stats, skills=skills, gear=gear
+            id=id_,
+            name=name,
+            description=description,
+            stats=stats,
+            skills=skills,
+            gear=gear,
+            cyberware=cyberware,
         )
-        for id_, name, description, stats, skills, gear in _ARCHETYPE_ROWS
+        for id_, name, description, stats, skills, gear, cyberware in _ARCHETYPE_ROWS
     ]
     for archetype in archetypes_list:
         _validate_preset(archetype)

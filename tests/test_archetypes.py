@@ -33,15 +33,15 @@ def test_lazy_init_populates_on_access():
     archetypes._ARCHETYPES_BY_ID = None
     _ = archetypes.ARCHETYPES
     assert archetypes._ARCHETYPES is not None
-    assert len(archetypes._ARCHETYPES) == 5
+    assert len(archetypes._ARCHETYPES) == 6
 
 
 def test_archetypes_count():
-    assert len(archetypes.ARCHETYPES) == 5
+    assert len(archetypes.ARCHETYPES) == 6
 
 
 def test_archetypes_by_id_count():
-    assert len(archetypes.ARCHETYPES_BY_ID) == 5
+    assert len(archetypes.ARCHETYPES_BY_ID) == 6
 
 
 def test_archetypes_by_id_keys_match():
@@ -60,7 +60,7 @@ def test_hacker():
     a = archetypes.ARCHETYPES_BY_ID["hacker"]
     assert a.name == "Hacker"
     assert a.stats == {"logic": 6}
-    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 3, "tinkering": 2}
+    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2}
 
 
 def test_infiltrator():
@@ -75,6 +75,26 @@ def test_gunslinger():
     assert a.name == "Gunslinger"
     assert a.stats == {"agility": 3, "body": 3}
     assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}
+
+
+def test_street_samurai():
+    a = archetypes.ARCHETYPES_BY_ID["street_samurai"]
+    assert a.name == "Street Samurai"
+    assert a.stats == {"agility": 4, "strength": 2}
+    assert a.skills == {"blades": 7, "dodge": 5, "acrobatics": 3, "grapple": 2}
+    assert a.cyberware == ("hydraulic_cyberarm",)
+
+
+def test_street_samurai_installs_its_cyberarm_from_gear_budget_not_cash():
+    from shadowguy.cybernetics import CyberSlot
+
+    a = archetypes.ARCHETYPES_BY_ID["street_samurai"]
+    c = Character(name="test")
+    starting_cash = c.cash
+    a.apply(c)
+    assert c.installed_cyberware[CyberSlot.ARMS] == "hydraulic_cyberarm"
+    assert c.cash == starting_cash
+    assert c.humanity < 6
 
 
 def test_fixer():
@@ -185,6 +205,17 @@ def test_no_preset_ships_gear_a_fresh_runner_could_not_buy():
         for item_id in a.gear:
             assert item_id in ITEMS_BY_ID, f"{a.id}: unknown item {item_id}"
             assert not ITEMS_BY_ID[item_id].min_standing, f"{a.id}: {item_id} is gated"
+
+
+def test_no_preset_ships_cyberware_a_fresh_runner_could_not_buy():
+    """Same gate as gear, above, for Archetype.cyberware -- only Deltaware/Trashware
+    (min_standing 0) are ever reachable before the run starts."""
+    from shadowguy.cybernetics import CYBERWARE_BY_ID
+
+    for a in archetypes.ARCHETYPES:
+        for cyberware_id in a.cyberware:
+            assert cyberware_id in CYBERWARE_BY_ID, f"{a.id}: unknown cyberware {cyberware_id}"
+            assert not CYBERWARE_BY_ID[cyberware_id].min_standing, f"{a.id}: {cyberware_id} is gated"
 
 
 def test_every_preset_still_spends_both_pools_to_zero_with_gear_in_the_mix():
