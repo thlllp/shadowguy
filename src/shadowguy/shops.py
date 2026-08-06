@@ -187,8 +187,11 @@ class InventoryItem:
     # several decks; each carries its own loadout.
     installed_programs: list[str] = field(default_factory=list)
     # Mod ids (MODS_BY_ID) installed on this specific weapon/wearable instance —
-    # same per-instance shape as installed_programs above, capped at
-    # MOD_SLOTS_PER_ITEM. See install_mod/remove_mod and effective_item.
+    # same per-instance shape as installed_programs above. Capped at
+    # MOD_SLOTS_PER_ITEM for a weapon skill with no named layout; for one in
+    # WEAPON_MOD_SLOTS this is always exactly len(that tuple) long, one mod id per
+    # named slot in order (buy_item seeds it, install_mod swaps by index). See
+    # install_mod/remove_mod and effective_item.
     mods: list[str] = field(default_factory=list)
 
 
@@ -457,6 +460,35 @@ SCAVENGE_MATERIALS = tuple(row[0] for row in _SCAVENGE_ROWS)
 ITEMS_BY_ID = {item.id: item for items in (*CATALOG.values(), LOOT_ITEMS) for item in items}
 
 
+class WeaponModSlot(Enum):
+    """A named part slot on a weapon whose skill carries a fixed layout
+    (WEAPON_MOD_SLOTS) — unlike the old flat MOD_SLOTS_PER_ITEM cap, each of these is
+    always occupied (by a stock part or an upgrade sharing this slot type), never
+    empty, so swapping one out is always an install (of the replacement, or of the
+    matching stock part), never a bare removal."""
+
+    GRIP = "grip"
+    SIGHT = "sight"
+    BARREL = "barrel"
+    UNDERBARREL = "underbarrel"
+
+
+# Which weapon skills carry a named mod-slot layout, and in what order —
+# InventoryItem.mods is seeded (buy_item) and indexed (install_mod) positionally
+# against this tuple rather than appended/removed like the old flat list. A weapon
+# skill absent here keeps that old flat MOD_SLOTS_PER_ITEM-capped list untouched, so
+# extending this to e.g. automatics later is a one-line addition here, not a new
+# mechanism. Only pistols populated today.
+WEAPON_MOD_SLOTS: dict[str, tuple[WeaponModSlot, ...]] = {
+    "pistols": (
+        WeaponModSlot.GRIP,
+        WeaponModSlot.SIGHT,
+        WeaponModSlot.BARREL,
+        WeaponModSlot.UNDERBARREL,
+    ),
+}
+
+
 @dataclass(frozen=True)
 class Mod:
     """A workshop upgrade for one already-owned weapon or wearable — installed onto a
@@ -474,15 +506,30 @@ class Mod:
     applies_to: frozenset[Slot]
     damage: int = 0
     defense: int = 0
+    # Which WeaponModSlot this mod occupies on a weapon whose skill has a named
+    # layout (WEAPON_MOD_SLOTS) — e.g. Hollow Points is a BARREL part. Only valid
+    # (and only meaningful) on a weapon-only mod (applies_to == {Slot.WEAPON});
+    # unset on every wearable mod. A weapon mod still installs into the old flat
+    # list on any weapon skill with no named layout, regardless of this field.
+    weapon_slot: WeaponModSlot | None = None
 
 
 # How many mods a single weapon or wearable can carry at once, regardless of tier —
 # a flat cap (like SLOT_CAPACITY) rather than a per-item field, since nothing yet
-# needs a weapon that takes more mods than another.
+# needs a weapon that takes more mods than another. Not read for a weapon skill with
+# a WEAPON_MOD_SLOTS layout — its slot count comes from that tuple's length instead.
 MOD_SLOTS_PER_ITEM = 2
 
 MOD_CATALOG: list[Mod] = [
-    Mod("sharpened_edge", "Sharpened Edge", 60, {"screws": 1}, frozenset({Slot.WEAPON}), damage=1),
+    Mod(
+        "sharpened_edge",
+        "Sharpened Edge",
+        60,
+        {"screws": 1},
+        frozenset({Slot.WEAPON}),
+        damage=1,
+        weapon_slot=WeaponModSlot.UNDERBARREL,
+    ),
     Mod(
         "hollow_points",
         "Hollow Points",
@@ -490,6 +537,7 @@ MOD_CATALOG: list[Mod] = [
         {"wire": 1, "screws": 1},
         frozenset({Slot.WEAPON}),
         damage=2,
+        weapon_slot=WeaponModSlot.BARREL,
     ),
     Mod("scrap_plating", "Scrap Plating", 80, {"armor_plating": 1}, WEARABLE_SLOTS, defense=1),
     Mod(
@@ -500,17 +548,55 @@ MOD_CATALOG: list[Mod] = [
         WEARABLE_SLOTS,
         defense=2,
     ),
+    # Stock parts: zero-price, zero-bonus, one per WeaponModSlot. What buy_item seeds
+    # a freshly bought named-slot weapon with (STOCK_MOD_IDS), and what a slot reverts
+    # to when a player installs a stock part back over an upgrade.
+    Mod("stock_grip", "Stock Grip", 0, {}, frozenset({Slot.WEAPON}), weapon_slot=WeaponModSlot.GRIP),
+    Mod("stock_sight", "Stock Sight", 0, {}, frozenset({Slot.WEAPON}), weapon_slot=WeaponModSlot.SIGHT),
+    Mod("stock_barrel", "Stock Barrel", 0, {}, frozenset({Slot.WEAPON}), weapon_slot=WeaponModSlot.BARREL),
+    Mod(
+        "stock_underbarrel",
+        "Stock Underbarrel",
+        0,
+        {},
+        frozenset({Slot.WEAPON}),
+        weapon_slot=WeaponModSlot.UNDERBARREL,
+    ),
 ]
 MODS_BY_ID = {mod.id: mod for mod in MOD_CATALOG}
+
+# WeaponModSlot -> the stock Mod id that fills it by default. Every value in every
+# WEAPON_MOD_SLOTS tuple must resolve through here (checked below) so buy_item can
+# always seed a full loadout.
+STOCK_MOD_IDS: dict[WeaponModSlot, str] = {
+    WeaponModSlot.GRIP: "stock_grip",
+    WeaponModSlot.SIGHT: "stock_sight",
+    WeaponModSlot.BARREL: "stock_barrel",
+    WeaponModSlot.UNDERBARREL: "stock_underbarrel",
+}
 
 for _mod in MODS_BY_ID.values():
     if _mod.applies_to == frozenset({Slot.WEAPON}) and _mod.defense:
         raise ValueError(f"{_mod.id}: a weapon mod can't carry defense")
     if _mod.applies_to == WEARABLE_SLOTS and _mod.damage:
         raise ValueError(f"{_mod.id}: a wearable mod can't carry damage")
+    if _mod.weapon_slot is not None and _mod.applies_to != frozenset({Slot.WEAPON}):
+        raise ValueError(f"{_mod.id}: weapon_slot is only valid on a weapon-only mod")
     for _material_id in _mod.materials:
         if _material_id not in SCAVENGE_MATERIALS:
             raise ValueError(f"{_mod.id}: {_material_id!r} is not a scavenged material")
+
+for _skill_id, _slot_types in WEAPON_MOD_SLOTS.items():
+    skill_for(_skill_id)
+    if len(set(_slot_types)) != len(_slot_types):
+        raise ValueError(f"{_skill_id}: WEAPON_MOD_SLOTS has a duplicate slot type")
+    for _slot_type in _slot_types:
+        _stock_id = STOCK_MOD_IDS.get(_slot_type)
+        if _stock_id is None or _stock_id not in MODS_BY_ID:
+            raise ValueError(f"{_slot_type}: no stock mod registered in STOCK_MOD_IDS")
+        _stock_mod = MODS_BY_ID[_stock_id]
+        if _stock_mod.weapon_slot is not _slot_type or _stock_mod.price or _stock_mod.materials:
+            raise ValueError(f"{_stock_id}: must be a free mod tagged with {_slot_type}")
 
 
 def effective_item(entry: InventoryItem) -> Item:
@@ -801,6 +887,17 @@ def fits_in_slot(inventory: list[InventoryItem], item: Item) -> bool:
     return slot_usage(inventory, item.slot) + _slot_cost(item) <= SLOT_CAPACITY[item.slot]
 
 
+def stock_mod_ids(item: Item) -> list[str]:
+    """The mod loadout a freshly acquired item starts with: one stock part per
+    WEAPON_MOD_SLOTS entry, in slot order, for a weapon skill with a named layout —
+    empty for everything else (the old flat mod list still starts empty). Public
+    (not a shop-local helper) because character.buy_creation_gear needs the same
+    seeding buy_item does — a starting pistol goes through neither buy_item nor
+    scavenge/loot, but still needs every named slot filled before install_mod's
+    positional lookup can touch it."""
+    return [STOCK_MOD_IDS[slot_type] for slot_type in WEAPON_MOD_SLOTS.get(item.skill, ())]
+
+
 def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
     if standing < item.min_standing:
         return False
@@ -810,7 +907,9 @@ def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
     character.cash -= price
     # Auto-equip only if there's room; otherwise it's bought stowed and the
     # player equips it manually (swapping out whatever's occupying the slot).
-    entry = InventoryItem(item.id, equipped=fits_in_slot(character.inventory, item))
+    entry = InventoryItem(
+        item.id, equipped=fits_in_slot(character.inventory, item), mods=stock_mod_ids(item)
+    )
     character.inventory.append(entry)
     return True
 
@@ -907,6 +1006,13 @@ def install_mod(
     """Attach a Mod to the weapon/wearable at character.inventory[inventory_index].
     Caller (SafehouseScreen) gates this on the location's workshop_built.
 
+    On a weapon skill with a named layout (WEAPON_MOD_SLOTS), mod_id's own
+    weapon_slot picks which slot it goes into — installing always replaces whatever
+    that slot currently holds (a stock part or a prior upgrade), including
+    installing a stock mod back over an upgrade; there is no separate "remove" for
+    these, since a named slot is never empty. Every other weapon/wearable keeps the
+    old flat MOD_SLOTS_PER_ITEM-capped list (append-only, paired with remove_mod).
+
     Returns (attempted, message): attempted is False on a precondition the caller
     should treat as never having happened (wrong slot, already installed, no free
     slots, can't afford, missing materials) — no time should be spent on those, the
@@ -917,10 +1023,19 @@ def install_mod(
     mod = MODS_BY_ID[mod_id]
     if item.slot not in mod.applies_to:
         return False, f"{mod.name} doesn't fit {item.name}."
-    if mod_id in entry.mods:
-        return False, f"{item.name} already has {mod.name}."
-    if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
-        return False, f"{item.name} has no free mod slots."
+    weapon_slots = WEAPON_MOD_SLOTS.get(item.skill, ())
+    slot_index: int | None = None
+    if weapon_slots:
+        if mod.weapon_slot not in weapon_slots:
+            return False, f"{mod.name} doesn't fit {item.name}."
+        slot_index = weapon_slots.index(mod.weapon_slot)
+        if entry.mods[slot_index] == mod_id:
+            return False, f"{item.name} already has {mod.name}."
+    else:
+        if mod_id in entry.mods:
+            return False, f"{item.name} already has {mod.name}."
+        if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
+            return False, f"{item.name} has no free mod slots."
     if character.cash < mod.price:
         return False, f"Can't afford {mod.name} ({mod.price}eb)."
     if not _has_materials(character, mod.materials):
@@ -934,7 +1049,10 @@ def install_mod(
         return True, f"The {mod.name} install doesn't take — nothing spent, try again."
     character.cash -= mod.price
     _consume_materials(character, mod.materials)
-    entry.mods.append(mod_id)
+    if slot_index is not None:
+        entry.mods[slot_index] = mod_id
+    else:
+        entry.mods.append(mod_id)
     return True, f"Installed {mod.name} on {item.name}."
 
 

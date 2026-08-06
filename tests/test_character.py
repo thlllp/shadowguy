@@ -2,7 +2,7 @@
 
 import pytest
 
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, STOCK_MOD_IDS, WEAPON_MOD_SLOTS, InventoryItem
 from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
@@ -597,6 +597,21 @@ def test_buying_creation_gear_spends_budget_and_equips_what_fits():
     assert c.creation_gear == ["kevlar_vest"]
     assert [e.item_id for e in c.inventory] == ["kevlar_vest"]
     assert c.inventory[0].equipped  # the torso slot was free
+
+
+def test_buying_creation_gear_seeds_a_pistols_named_mod_slots_with_stock_parts():
+    """Regression: buy_creation_gear used to build InventoryItem directly, bypassing
+    shops.buy_item's stock-mod seeding -- a pistol picked as starting gear (several
+    archetypes grant pipe_pistol) would end up with an empty mods list, and the first
+    workshop mod install on it would IndexError against install_mod's positional
+    named-slot lookup."""
+    c = Character(name="t")
+    c.convert_skill_point_to_gear()
+    pistol = ITEMS_BY_ID["pipe_pistol"]
+    assert c.buy_creation_gear(pistol)
+    assert c.inventory[0].mods == [
+        STOCK_MOD_IDS[slot_type] for slot_type in WEAPON_MOD_SLOTS["pistols"]
+    ]
 
 
 def test_creation_gear_refuses_what_the_budget_cannot_cover_or_standing_gates():

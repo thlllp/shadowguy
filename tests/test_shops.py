@@ -8,6 +8,7 @@ from shadowguy.shops import (
     ITEMS_BY_ID,
     MOD_CATALOG,
     MOD_SLOTS_PER_ITEM,
+    MODS_BY_ID,
     PAWN_SELL_FRACTION,
     PROGRAMS_BY_ID,
     SCAVENGE_CRITICAL_FINDS,
@@ -15,11 +16,14 @@ from shadowguy.shops import (
     SCAVENGE_MATERIALS,
     STANDING_PRICE_CAP,
     STANDING_PRICE_STEP,
+    STOCK_MOD_IDS,
     STOLEN_DATASHARD_ID,
+    WEAPON_MOD_SLOTS,
     WORKSHOP_ARMORER_DIFFICULTY,
     WORKSHOP_CHEMISTRY_DIFFICULTY,
     InventoryItem,
     Slot,
+    WeaponModSlot,
     bonus_text,
     buy_consumable,
     buy_item,
@@ -389,6 +393,69 @@ def test_remove_mod_refuses_when_not_installed():
     c = _char_with_weapon()
     message = remove_mod(c, 0, WEAPON_MOD.id)
     assert "not installed" in message.lower()
+
+
+# --- Pistols' named mod-slot layout (WEAPON_MOD_SLOTS) ---
+
+
+def _char_with_pistol(cash: int = 100_000) -> Character:
+    c = Character(name="t", cash=cash)
+    buy_item(c, ITEMS_BY_ID["pipe_pistol"])
+    return c
+
+
+def test_buy_item_seeds_a_pistol_with_one_stock_mod_per_named_slot():
+    c = _char_with_pistol()
+    assert c.inventory[0].mods == [
+        STOCK_MOD_IDS[slot_type] for slot_type in WEAPON_MOD_SLOTS["pistols"]
+    ]
+
+
+def test_buy_item_leaves_a_non_named_slot_weapon_with_no_mods():
+    c = _char_with_weapon()
+    assert c.inventory[0].mods == []
+
+
+def test_install_mod_on_a_pistol_swaps_the_named_slot_instead_of_appending():
+    c = _char_with_pistol()
+    _grant_materials(c, MODS_BY_ID["hollow_points"].materials)
+    before_len = len(c.inventory[0].mods)
+    attempted, message = install_mod(c, 0, "hollow_points", rng=AlwaysSix())
+    assert attempted is True
+    assert len(c.inventory[0].mods) == before_len
+    barrel_index = WEAPON_MOD_SLOTS["pistols"].index(WeaponModSlot.BARREL)
+    assert c.inventory[0].mods[barrel_index] == "hollow_points"
+    assert "Installed" in message
+
+
+def test_install_mod_on_a_pistol_can_swap_a_slot_back_to_stock():
+    c = _char_with_pistol()
+    _grant_materials(c, MODS_BY_ID["hollow_points"].materials)
+    install_mod(c, 0, "hollow_points", rng=AlwaysSix())
+    attempted, _ = install_mod(c, 0, "stock_barrel", rng=AlwaysSix())
+    assert attempted is True
+    barrel_index = WEAPON_MOD_SLOTS["pistols"].index(WeaponModSlot.BARREL)
+    assert c.inventory[0].mods[barrel_index] == "stock_barrel"
+
+
+def test_install_mod_on_a_pistol_refuses_a_mod_already_in_that_slot():
+    c = _char_with_pistol()
+    barrel_index = WEAPON_MOD_SLOTS["pistols"].index(WeaponModSlot.BARREL)
+    stock_barrel_id = c.inventory[0].mods[barrel_index]
+    attempted, message = install_mod(c, 0, stock_barrel_id, rng=AlwaysSix())
+    assert attempted is False
+    assert "already has" in message
+
+
+def test_install_mod_on_a_pistol_leaves_other_slots_untouched():
+    c = _char_with_pistol()
+    before = list(c.inventory[0].mods)
+    _grant_materials(c, MODS_BY_ID["hollow_points"].materials)
+    install_mod(c, 0, "hollow_points", rng=AlwaysSix())
+    barrel_index = WEAPON_MOD_SLOTS["pistols"].index(WeaponModSlot.BARREL)
+    for i, mod_id in enumerate(c.inventory[0].mods):
+        if i != barrel_index:
+            assert mod_id == before[i]
 
 
 CRAFTABLE_ID = next(iter(CRAFT_RECIPES))

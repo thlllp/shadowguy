@@ -53,6 +53,7 @@ from shadowguy.shops import (
     MODS_BY_ID,
     PROGRAM_CATALOG,
     SCAVENGE_HOURS_COST,
+    WEAPON_MOD_SLOTS,
     WORKSHOP_HOURS_COST,
     bonus_text,
     buy_consumable,
@@ -483,6 +484,21 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
 
         for index, entry in enumerate(character.inventory):
             item = ITEMS_BY_ID[entry.item_id]
+            weapon_slots = WEAPON_MOD_SLOTS.get(item.skill, ())
+            if weapon_slots:
+                # Every named slot always holds something (a stock part or an
+                # upgrade) — installing is the only action, and it always replaces
+                # whatever's currently in that slot, stock part included.
+                for slot_index, slot_type in enumerate(weapon_slots):
+                    current_mod_id = entry.mods[slot_index]
+                    for mod in MOD_CATALOG:
+                        if mod.weapon_slot is not slot_type or mod.id == current_mod_id:
+                            continue
+                        label = f"Install {mod.name} ({slot_type.value}) on {item.name} — {mod.price}eb"
+                        if character.cash < mod.price:
+                            label += " — can't afford"
+                        items.append(ListItem(Static(label), id=f"mod_{index}_{mod.id}"))
+                continue
             for mod in MOD_CATALOG:
                 if item.slot not in mod.applies_to or mod.id in entry.mods:
                     continue

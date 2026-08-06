@@ -228,7 +228,13 @@ SAVE_SUFFIX = ".save"
 # rival_runner_states) carries the old `activity` attribute instead, which every reader
 # (BarScreen, ContactsScreen, CorpMapScreen's bar box, app's job-taken toast) now misses
 # entirely since they all read `activities`/`current` instead.
-SAVE_VERSION = 61
+# v62 gave pistols a named 4-slot mod layout (Grip/Sight/Barrel/Underbarrel,
+# shops.WEAPON_MOD_SLOTS): buy_item now seeds a bought pistol's InventoryItem.mods
+# with one stock-part id per slot, and install_mod indexes that list positionally by
+# slot rather than appending to it. A pre-v62 pistol's `mods` is still the old empty
+# (or flat, unslotted) list, so install_mod's `entry.mods[slot_index]` would IndexError
+# the first time anything tried to mod one.
+SAVE_VERSION = 62
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
