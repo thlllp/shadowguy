@@ -157,7 +157,7 @@ Two import-time guards: the **last stage cannot be optional** (the final stage c
 
 **Crew capacity runs along `Posture`**: several `ON_SITE` runners but at most one `REMOTE` — free rather than enforced, since only `hack` beats are `REMOTE` and a job has one objective.
 
-**Runners & crew (`runners.py`, `BarScreen`, `Character.crew`/`CrewHire`).** `RIVAL_RUNNERS` — Specter (Netrunner), Juncture (Solo), Mireille (Infiltrator) — are guaranteed every run, like every `FIXER_ROSTER` entry. `RUNNER_POOL` is a nine-strong bench (three per archetype, spanning budget/mid/elite `rating`) that `runners.select_active_runners(rng)` samples `RANDOM_RUNNER_COUNT` (6) from once at game start (`ShadowguyApp._new_run`), stored as `app.runners` — so a run's independent-runner roster is the guaranteed three plus six of the nine extras, different runners each run. `RUNNERS_BY_ID` still spans the whole universe (guaranteed plus every pool candidate) so a saved `CrewHire`/`JobOffer.taken_by` id resolves regardless of whether this run rolled that runner in. Every `RivalRunner` carries a `rating` (future run-time effect), `daily_cost`, `job_cut`. `BAR` opens `BarScreen`: pick a runner, then terms —
+**Runners & crew (`runners.py`, `BarScreen`, `Character.crew`/`CrewHire`).** `RIVAL_RUNNERS` — Specter (Netrunner), Juncture (Solo), Mireille (Infiltrator) — are guaranteed every run, like every `FIXER_ROSTER` entry. `RUNNER_POOL` is a nine-strong bench (three per archetype, spanning budget/mid/elite `rating`) that `runners.select_active_runners(rng)` samples `RANDOM_RUNNER_COUNT` (6) from once at game start (`ShadowguyApp._new_run`), stored as `app.runners` — so a run's independent-runner roster is the guaranteed three plus six of the nine extras, different runners each run. `RUNNERS_BY_ID` still spans the whole universe (guaranteed plus every pool candidate) so a saved `CrewHire`/`JobOffer.taken_by` id resolves regardless of whether this run rolled that runner in. Every `RivalRunner` carries a `rating` (now a run-time value earned in play — see Runner progression below), `daily_cost`, `job_cut`. `BAR` opens `BarScreen`: pick a runner, then terms —
 
 - **Indefinitely** — draws `daily_cost` every day tick (`Character.pay_crew_wages`); miss payroll and they **walk** (no debt).
 - **For a job** — signed for `job_cut` of that job's payout, taken via `SceneScreen._take_crew_cut`; ends with the job.
@@ -577,7 +577,7 @@ Six separate standings, easy to confuse. `Rep` (global street standing, see Stat
 | `Character.fixer_trust` | player ↔ Fixer | direct, one-person |
 | `Character.local_standing` | player ↔ `LocalCharacter` | direct, one-person |
 | `Character.gang_standing` | player ↔ Gang | direct, one-gang |
-| `Character.crew_experience` | player ↔ hired runner | a ledger, not a standing — no spend path yet |
+| `Character.crew_experience` | player ↔ hired runner | a ledger, not a standing — the player's record of what a hire earned on *their* jobs; the spend path is on the runner's own sheet (`RivalRunner.experience`/`rating`, see Runner progression under Runners & crew) |
 | `CorpMap.relations` | Faction ↔ Gang | **not player-facing**; symmetric, one value per pair |
 
 ## Faction standing (`shadowguy/factions.py`, `shadowguy/scene.py`, `shadowguy/character.py`)
