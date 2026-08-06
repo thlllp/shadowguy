@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+import pytest
+
 import shadowguy.archetypes as archetypes
 from shadowguy.character import Character
 
@@ -49,40 +51,29 @@ def test_archetypes_by_id_keys_match():
         assert archetypes.ARCHETYPES_BY_ID[a.id] is a
 
 
-def test_enforcer():
-    a = archetypes.ARCHETYPES_BY_ID["enforcer"]
-    assert a.name == "Enforcer"
-    assert a.stats == {"body": 3, "strength": 3}
-    assert a.skills == {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1}
-
-
-def test_hacker():
-    a = archetypes.ARCHETYPES_BY_ID["hacker"]
-    assert a.name == "Hacker"
-    assert a.stats == {"logic": 6}
-    assert a.skills == {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2}
-
-
-def test_infiltrator():
-    a = archetypes.ARCHETYPES_BY_ID["infiltrator"]
-    assert a.name == "Infiltrator"
-    assert a.stats == {"agility": 4, "perception": 2}
-    assert a.skills == {"stealth": 7, "deception": 5, "sight": 3, "blades": 3}
-
-
-def test_gunslinger():
-    a = archetypes.ARCHETYPES_BY_ID["gunslinger"]
-    assert a.name == "Gunslinger"
-    assert a.stats == {"agility": 3, "body": 3}
-    assert a.skills == {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}
-
-
-def test_street_samurai():
-    a = archetypes.ARCHETYPES_BY_ID["street_samurai"]
-    assert a.name == "Street Samurai"
-    assert a.stats == {"agility": 4, "strength": 2}
-    assert a.skills == {"blades": 7, "dodge": 5, "acrobatics": 3, "grapple": 2}
-    assert a.cyberware == ("hydraulic_cyberarm",)
+@pytest.mark.parametrize(
+    "archetype_id,name,stats,skills,cyberware",
+    [
+        ("enforcer", "Enforcer", {"body": 3, "strength": 3},
+         {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1}, ()),
+        ("hacker", "Hacker", {"logic": 6},
+         {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2}, ()),
+        ("infiltrator", "Infiltrator", {"agility": 4, "perception": 2},
+         {"stealth": 7, "deception": 5, "sight": 3, "blades": 3}, ()),
+        ("gunslinger", "Gunslinger", {"agility": 3, "body": 3},
+         {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}, ()),
+        ("street_samurai", "Street Samurai", {"agility": 4, "strength": 2},
+         {"blades": 7, "dodge": 5, "acrobatics": 3, "grapple": 2}, ("hydraulic_cyberarm",)),
+        ("fixer", "Fixer", {"cool": 4, "logic": 2},
+         {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3}, ()),
+    ],
+)
+def test_preset_contents(archetype_id, name, stats, skills, cyberware):
+    a = archetypes.ARCHETYPES_BY_ID[archetype_id]
+    assert a.name == name
+    assert a.stats == stats
+    assert a.skills == skills
+    assert a.cyberware == cyberware
 
 
 def test_street_samurai_installs_its_cyberarm_from_gear_budget_not_cash():
@@ -95,13 +86,6 @@ def test_street_samurai_installs_its_cyberarm_from_gear_budget_not_cash():
     assert c.installed_cyberware[CyberSlot.ARMS] == "hydraulic_cyberarm"
     assert c.cash == starting_cash
     assert c.humanity < 6
-
-
-def test_fixer():
-    a = archetypes.ARCHETYPES_BY_ID["fixer"]
-    assert a.name == "Fixer"
-    assert a.stats == {"cool": 4, "logic": 2}
-    assert a.skills == {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3}
 
 
 def test_no_preset_raises_a_stat_it_never_rolls():

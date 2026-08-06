@@ -34,11 +34,6 @@ from shadowguy.gangs import GANG_RANKS, GANGS, GANGS_BY_ID
 SEEDS = range(200)
 
 
-def _maps():
-    for seed in SEEDS:
-        yield generate_corp_map(FACTIONS, random.Random(seed))
-
-
 @pytest.mark.parametrize("seed", SEEDS)
 def test_map_has_exactly_territory_count_territories(seed):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
@@ -255,18 +250,12 @@ def test_hq_research_facility_and_academy_never_share_a_district(seed):
         assert len(kinds) <= 1
 
 
+@pytest.mark.parametrize("attribute", ["id", "name"])
 @pytest.mark.parametrize("seed", SEEDS)
-def test_location_ids_are_unique_across_the_map(seed):
+def test_location_ids_and_names_are_unique_across_the_map(seed, attribute):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
-    ids = [loc.id for t in corp_map.territories.values() for loc in t.locations]
-    assert len(ids) == len(set(ids))
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_location_names_are_unique_across_the_map(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
-    names = [loc.name for t in corp_map.territories.values() for loc in t.locations]
-    assert len(names) == len(set(names))
+    values = [getattr(loc, attribute) for t in corp_map.territories.values() for loc in t.locations]
+    assert len(values) == len(set(values))
 
 
 @pytest.mark.parametrize("seed", SEEDS)

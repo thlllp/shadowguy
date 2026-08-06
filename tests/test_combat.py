@@ -37,7 +37,7 @@ from shadowguy.skills import skill_value
 
 import pytest
 
-from helpers import npc_weapon, synthetic_enemy
+from helpers import AlwaysOne, AlwaysSix, npc_weapon, synthetic_enemy
 
 
 # --- drop_for_result ---
@@ -115,10 +115,6 @@ def test_attack_verbs_fall_back_for_an_unknown_skill():
 
 
 def test_resolve_hit_miss_deals_zero_damage():
-    class AlwaysOne(random.Random):
-        def randint(self, a, b):
-            return 1
-
     roll, damage = resolve_hit(AlwaysOne(), attacker_stat_value=1, attacker_advantage=0,
                                 to_hit_difficulty=21, base_damage=10, soak_pool=0)
     assert not roll.result.passed
@@ -126,10 +122,6 @@ def test_resolve_hit_miss_deals_zero_damage():
 
 
 def test_resolve_hit_full_soak_reduces_damage_to_zero():
-    class AlwaysSix(random.Random):
-        def randint(self, a, b):
-            return 6
-
     # attacker pool 1 (difficulty 9 -> 0 opposing dice) hits for margin 1, so total
     # damage before soak is base_damage(1) + margin(1) = 2; a 5-die soak (5 successes
     # with AlwaysSix) swallows that whole, floored at 0.
@@ -140,10 +132,6 @@ def test_resolve_hit_full_soak_reduces_damage_to_zero():
 
 
 def test_resolve_hit_landed_hit_adds_margin_to_base_damage_before_soak():
-    class AlwaysSix(random.Random):
-        def randint(self, a, b):
-            return 6
-
     roll, damage = resolve_hit(AlwaysSix(), attacker_stat_value=5, attacker_advantage=0,
                                 to_hit_difficulty=9, base_damage=3, soak_pool=0)
     assert roll.result.passed

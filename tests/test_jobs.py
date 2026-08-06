@@ -39,6 +39,26 @@ from shadowguy.skills import skill_for
 SEEDS = range(150)
 
 
+def _seeds_where(match) -> list[int]:
+    """The SEEDS whose job comes out as an archetype `match` accepts. generate_job draws
+    the archetype with rng.choice(ARCHETYPES) off a fresh Random(seed), so the draw is
+    predictable without building the job -- which lets the archetype-specific tests below
+    parametrize over only the seeds they can use, rather than generating all 150 and
+    skipping the (large) majority."""
+    return [seed for seed in SEEDS if match(random.Random(seed).choice(ARCHETYPES))]
+
+
+SPECIALIST_SEEDS = _seeds_where(lambda a: archetype_specialist(a) is not None)
+BURGLARY_SEEDS = _seeds_where(lambda a: a.name in ("Burglary", "Wetwork"))
+DATA_HEIST_SEEDS = _seeds_where(lambda a: a.name == "Data Heist")
+
+
+def test_every_archetype_specific_seed_pool_is_non_empty():
+    """An empty pool parametrizes to zero cases and passes silently -- the one way the
+    filtering above can hide a regression the old pytest.skip made visible."""
+    assert SPECIALIST_SEEDS and BURGLARY_SEEDS and DATA_HEIST_SEEDS
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_generated_job_runs_three_or_four_stages(corp_map, seed):
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
@@ -187,7 +207,7 @@ def test_generated_job_roles_match_non_fight_stage_count(corp_map, seed):
     assert len(scene.roles) == non_fight_count
 
 
-@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("seed", SPECIALIST_SEEDS)
 def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_map, seed):
     """A Netrunner/Solo-specialist job (Intrusion/Wetwork) must never withdraw the
     lead approach that makes it that specialist's contract -- generate_job pins it.
@@ -197,11 +217,7 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
     non-fight stage of a specialist job must offer at least one choice for that
     specialist, i.e. the specialist always has a way through every beat of their job.
     """
-    rng = random.Random(seed)
-    archetype = rng.choice(ARCHETYPES)
-    specialist = archetype_specialist(archetype)
-    if specialist is None:
-        pytest.skip("generic archetype, no lead to pin")
+    specialist = archetype_specialist(random.Random(seed).choice(ARCHETYPES))
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     for sid, stage in scene.stages.items():
         if sid.endswith("_fight") or stage.narration is not None:
@@ -218,12 +234,9 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
         assert specialist in specialists
 
 
-@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("seed", BURGLARY_SEEDS)
 def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(corp_map, seed):
-    rng = random.Random(seed)
-    archetype = rng.choice(ARCHETYPES)
-    if archetype.name not in ("Burglary", "Wetwork"):
-        pytest.skip("not a burglary-stage job this seed")
+    archetype = random.Random(seed).choice(ARCHETYPES)
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     # APPROACH is always the first stage kept (only COMPLICATION can be dropped),
     # so it's always stage_0.
@@ -243,12 +256,9 @@ def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(
         assert stage.choices
 
 
-@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("seed", DATA_HEIST_SEEDS)
 def test_data_heist_fights_are_all_matrix_and_it_reads_as_a_netrunner_job(corp_map, seed):
-    rng = random.Random(seed)
-    archetype = rng.choice(ARCHETYPES)
-    if archetype.name != "Data Heist":
-        pytest.skip("not a Data Heist this seed")
+    archetype = random.Random(seed).choice(ARCHETYPES)
     scene, _timing = generate_job(day=7, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     # A remote hack reads as the Netrunner's contract, worked entirely from afar.
     assert archetype_specialist(archetype) == "Netrunner"
@@ -383,9 +393,13 @@ def test_only_the_final_stage_of_a_job_carries_a_security_hit(corp_map, seed):
     assert all(o.security_delta == 0 for o in non_terminal)
 
 
-def test_apply_outcome_lowers_security_on_the_target_district(corp_map):
+@pytest.mark.parametrize("starting,expected", [(3, 2), (0, 0)], ids=["lowers", "clamps_at_zero"])
+def test_apply_outcome_lowers_security_on_the_target_district(corp_map, starting, expected):
+    """A job pulled off on a district softens it -- and grinding the same block forever
+    bottoms out at 0 rather than going negative, since defense_strength reads this
+    number directly."""
     territory = corp_map.territories[corp_map.player_start_id]
-    territory.modifiers[TerritoryModifier.SECURITY] = 3
+    territory.modifiers[TerritoryModifier.SECURITY] = starting
     scene = Scene(
         id="s",
         title="t",
@@ -393,22 +407,7 @@ def test_apply_outcome_lowers_security_on_the_target_district(corp_map):
         target_territory_id=territory.id,
     )
     apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
-    assert territory.modifiers[TerritoryModifier.SECURITY] == 2
-
-
-def test_apply_outcome_clamps_security_at_zero(corp_map):
-    """Grinding the same block forever bottoms out rather than going negative —
-    defense_strength reads this number directly."""
-    territory = corp_map.territories[corp_map.player_start_id]
-    territory.modifiers[TerritoryModifier.SECURITY] = 0
-    scene = Scene(
-        id="s",
-        title="t",
-        stages={"start": Stage(id="start", prompt="p", choices=[])},
-        target_territory_id=territory.id,
-    )
-    apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
-    assert territory.modifiers[TerritoryModifier.SECURITY] == 0
+    assert territory.modifiers[TerritoryModifier.SECURITY] == expected
 
 
 def test_apply_outcome_ignores_a_security_delta_with_no_target_territory(corp_map):
@@ -420,4 +419,6 @@ def test_apply_outcome_ignores_a_security_delta_with_no_target_territory(corp_ma
         stages={"start": Stage(id="start", prompt="p", choices=[])},
         target_territory_id=None,
     )
+    before = {tid: t.modifiers[TerritoryModifier.SECURITY] for tid, t in corp_map.territories.items()}
     apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
+    assert {tid: t.modifiers[TerritoryModifier.SECURITY] for tid, t in corp_map.territories.items()} == before

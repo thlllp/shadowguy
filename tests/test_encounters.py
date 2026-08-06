@@ -82,7 +82,7 @@ def test_gang_attack_builds_a_real_fight():
     assert enc.victory.text and enc.escape.text
 
 
-def test_chance_boundary_is_strict_less_than():
+def test_gang_encounter_chance_boundary_is_strict_less_than():
     """random() == chance must miss (>=), so the 0.25 constant means 'under a quarter'."""
     c = Character(name="t")
     c.adjust_gang_standing(GANG_ID, -1)

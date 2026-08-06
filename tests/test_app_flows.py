@@ -1677,10 +1677,6 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
     (opposing pool is a fixed handful of dice at SCAVENGE_DIFFICULTY), so the resulting
     inventory gain is a real assertion, not a coin flip."""
 
-    class AlwaysSix(random.Random):
-        def randint(self, a, b):
-            return 6
-
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -1707,10 +1703,6 @@ def test_workshop_builds_installs_a_mod_and_crafts_a_consumable():
     """SafehouseScreen end to end: build a workshop, install a Mod on an owned weapon
     (rolls Armorer), and craft a Consumable from scavenged materials (rolls Chemistry)
     -- exercising shops.effective_item through the real UI, not just its unit math."""
-
-    class AlwaysSix(random.Random):
-        def randint(self, a, b):
-            return 6
 
     async def body():
         app = ShadowguyApp()
@@ -3468,7 +3460,6 @@ def test_corp_screen_reinforce_flow_moves_operatives_onto_the_district():
             app.corp_state.operatives = 4
             app.push_screen(CorpScreen())
             await _settle(pilot)
-            screen = app.screen
 
             ours = app.corp_state.faction_id
             target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]

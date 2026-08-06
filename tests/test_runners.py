@@ -48,7 +48,7 @@ def test_no_leadership_is_never_a_markup():
 
 
 def test_wage_is_monotonic_in_leadership():
-    wages = [recruit_wage(RUNNER, lead) for lead in range(0, 20)]
+    wages = [recruit_wage(RUNNER, lead) for lead in range(20)]
     assert wages == sorted(wages, reverse=True)
 
 

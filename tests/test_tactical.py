@@ -131,24 +131,18 @@ def test_weapon_range_bands_run_melee_then_thrown_then_ranged():
 # --- cover_bonus ---
 
 
-def test_cover_bonus_is_zero_with_nothing_between():
-    grid = parse_grid(["....."])
-    assert cover_bonus(grid, defender=(2, 0), attacker=(4, 0)) == 0
-
-
-def test_cover_bonus_is_zero_against_your_own_cell():
-    grid = parse_grid(["....."])
-    assert cover_bonus(grid, defender=(2, 0), attacker=(2, 0)) == 0
-
-
-def test_cover_bonus_wall_grants_full_cover():
-    grid = parse_grid(["...#."])
-    assert cover_bonus(grid, defender=(2, 0), attacker=(4, 0)) == FULL_COVER
-
-
-def test_cover_bonus_low_cover_grants_half_cover():
-    grid = parse_grid(["...%."])
-    assert cover_bonus(grid, defender=(2, 0), attacker=(4, 0)) == HALF_COVER
+@pytest.mark.parametrize(
+    "row,attacker,expected",
+    [
+        (".....", (4, 0), 0),
+        (".....", (2, 0), 0),  # the defender's own cell
+        ("...#.", (4, 0), FULL_COVER),
+        ("...%.", (4, 0), HALF_COVER),
+    ],
+    ids=["nothing_between", "own_cell", "wall", "low_cover"],
+)
+def test_cover_bonus_across_one_row(row, attacker, expected):
+    assert cover_bonus(parse_grid([row]), defender=(2, 0), attacker=attacker) == expected
 
 
 def test_cover_bonus_takes_the_best_of_both_cardinal_sides():
@@ -181,19 +175,13 @@ def test_move_player_rejects_illegal_step():
     assert state.player.coord == (0, 0)
 
 
-def test_move_player_accepts_legal_step_and_spends_a_move():
+@pytest.mark.parametrize("step", [(1, 0), (1, 1)], ids=["orthogonal", "diagonal"])
+def test_move_player_accepts_a_legal_step_and_spends_one_move(step):
+    """A diagonal costs the same single move as a straight one."""
     state = _simple_state()
     before = state.moves_left
-    assert move_player(state, (1, 0))
-    assert state.player.coord == (1, 0)
-    assert state.moves_left == before - 1
-
-
-def test_move_player_accepts_a_diagonal_step_for_one_move():
-    state = _simple_state()
-    before = state.moves_left
-    assert move_player(state, (1, 1))
-    assert state.player.coord == (1, 1)
+    assert move_player(state, step)
+    assert state.player.coord == step
     assert state.moves_left == before - 1
 
 
@@ -688,7 +676,7 @@ def test_end_turn_does_not_hang_when_an_ally_has_no_target_on_the_current_level(
     so an ally who's cleared every guard on the *current* level can have pick_target
     return None turn after turn. _take_unit_turn must still spend that ally's scheduler
     time regardless, or end_turn's while loop would reselect it forever."""
-    building, state = _burglary(entrances=2)
+    _building, state = _burglary(entrances=2)
     ally = crew_stats_for("Solo")
     state.units.append(
         Unit(
@@ -708,7 +696,7 @@ def test_raise_alarm_catches_every_newly_alerted_guard_up_to_the_players_current
     """Without this, a guard who's sat unalerted (frozen at next_turn=0) through a long
     sneak would flood the scheduler with a burst of catch-up turns the instant it's
     alerted -- an unfair pile-on, not it legitimately being quick."""
-    building, state = _burglary()
+    _building, state = _burglary()
     state.player.next_turn = 500  # several player turns have already elapsed
     everyone = [*state.units, *(u for units in state.off_level_units.values() for u in units)]
     guards = [u for u in everyone if u.is_enemy]
@@ -1105,7 +1093,7 @@ def test_stabilize_spends_the_kit_and_the_action_but_leaves_them_down():
 
 
 def test_stabilize_refuses_once_the_action_is_spent_or_already_stable():
-    state, ally = _downed_ally_state(consumables=["health_kit", "health_kit"])
+    state, _ally = _downed_ally_state(consumables=["health_kit", "health_kit"])
     state.acted = True
     assert stabilize_ally(state) is not None
     assert state.character.consumables == ["health_kit", "health_kit"]  # nothing spent
@@ -1298,7 +1286,7 @@ def test_explored_is_kept_separately_per_level():
 
     stair = next(cell for link in building.links for level, cell in (link.a, link.b) if level == entry_level)
     state.player.coord = stair
-    destination_level, destination_coord = stairs_here(state)
+    destination_level, _destination_coord = stairs_here(state)
     assert take_stairs(state)
     assert state.level_index == destination_level
 
@@ -1355,7 +1343,7 @@ def test_walking_into_a_guards_sightline_raises_the_alarm_for_the_whole_building
 
 
 def test_staying_out_of_sight_keeps_you_undetected():
-    building, state = _burglary()
+    _building, state = _burglary()
     # Standing where they aren't: nobody on this level, so nobody sees anything.
     assert not any(unit.is_enemy for unit in state.units) or not check_detection(state)
     assert not state.alarm
@@ -1385,7 +1373,7 @@ def test_reaching_the_score_ends_the_burglary_secured():
 def test_clearing_every_guard_does_not_end_a_burglary():
     """You came for the score, not the bodies -- an empty house is a quiet house, and
     the job is still unfinished."""
-    building, state = _burglary()
+    _building, state = _burglary()
     for units in state.off_level_units.values():
         for unit in units:
             unit.health = 0
@@ -1397,7 +1385,7 @@ def test_clearing_every_guard_does_not_end_a_burglary():
 
 
 def test_the_way_you_came_in_is_a_way_out():
-    building, state = _burglary()
+    _building, state = _burglary()
     assert state.player.coord in state.exits
     assert leave(state)
     assert state.outcome is TacticalOutcome.ESCAPED
@@ -1427,7 +1415,7 @@ def test_a_camera_raises_the_alarm_without_any_guard_seeing_you():
 
 
 def test_stepping_into_a_pickable_locked_door_opens_it_and_is_free_while_unseen():
-    building, state = _burglary()
+    _building, state = _burglary()
     assert not state.in_combat
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
@@ -1443,7 +1431,7 @@ def test_stepping_into_a_pickable_locked_door_opens_it_and_is_free_while_unseen(
 
 
 def test_a_pickable_locked_door_still_costs_a_move_once_in_combat():
-    building, state = _burglary()
+    _building, state = _burglary()
     state.alarm = True
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
@@ -1456,7 +1444,7 @@ def test_a_pickable_locked_door_still_costs_a_move_once_in_combat():
 
 
 def test_a_failed_lock_pick_leaves_it_locked_and_is_free_while_unseen():
-    building, state = _burglary()
+    _building, state = _burglary()
     assert not state.in_combat
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
@@ -1474,7 +1462,7 @@ def test_a_failed_lock_pick_leaves_it_locked_and_is_free_while_unseen():
 
 
 def test_a_failed_lock_pick_still_costs_a_move_once_in_combat():
-    building, state = _burglary()
+    _building, state = _burglary()
     state.alarm = True
     assert state.in_combat
     dest = next(iter(legal_moves(state)))
@@ -1490,7 +1478,7 @@ def test_a_failed_lock_pick_still_costs_a_move_once_in_combat():
 
 
 def test_a_failed_lock_pick_can_still_trip_the_alarm():
-    building, state = _burglary()
+    _building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
     state.character.logic = 0
@@ -1505,7 +1493,7 @@ def test_a_critical_failure_lock_pick_always_trips_the_alarm():
     failure (AlwaysSix forces every opposing die to hit too) -- and that always goes
     loud, same as a burglary entrance's own critical failure, whatever the ordinary
     LOCK_FAILURE_ALARM_CHANCE roll would have said."""
-    building, state = _burglary()
+    _building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
     state.character.logic = 0
@@ -1520,7 +1508,7 @@ def test_attempt_lock_is_what_move_player_dispatches_to():
     """move_player's locked-door branch is attempt_lock, called directly here so a
     regression in the dispatch (e.g. move_player stops checking lock_at) shows up as a
     behavioral difference between the two, not just a passing test either way."""
-    building, state = _burglary()
+    _building, state = _burglary()
     dest = next(iter(legal_moves(state)))
     state.character.skill_ranks["hack"] = 0
     state.character.logic = 6

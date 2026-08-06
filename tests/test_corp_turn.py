@@ -358,22 +358,17 @@ def test_train_employees_fails_with_no_academy():
     assert corp_state.pending_recruit is None
 
 
-def test_train_employees_fails_when_unaffordable():
+@pytest.mark.parametrize(
+    "cash,daily_action_used",
+    [(0, False), (10_000, True)],
+    ids=["unaffordable", "already_used_today"],
+)
+def test_train_employees_fails_closed_with_an_academy_standing(cash, daily_action_used):
     corp_map = _map()
     corp_map.territories["iron_second"].locations.append(
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
     )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=0)
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
-    assert corp_state.pending_recruit is None
-
-
-def test_train_employees_fails_when_already_used_today():
-    corp_map = _map()
-    corp_map.territories["iron_second"].locations.append(
-        Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
-    )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=cash, daily_action_used=daily_action_used)
     assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
     assert corp_state.pending_recruit is None
 
@@ -420,58 +415,80 @@ def test_collect_research_adds_working_scientists_capped_by_capacity():
     assert collect_research(corp_state, corp_map) == expected
 
 
-def test_build_lab_succeeds_and_charges_cash():
+# build_lab and build_efficiency_upgrade are the same daily action over two counters on
+# the same facility, so they share their whole gate list -- parametrized rather than
+# written out twice.
+_UPGRADES = [
+    pytest.param(build_lab, "labs_built", LAB_UPGRADE_COSTS, MAX_LABS_BUILT, id="lab"),
+    pytest.param(
+        build_efficiency_upgrade, "efficiency_upgrades", EFFICIENCY_UPGRADE_COSTS,
+        MAX_EFFICIENCY_UPGRADES, id="efficiency_upgrade",
+    ),
+]
+_BUILDERS = [
+    pytest.param(build_lab, id="lab"),
+    pytest.param(build_efficiency_upgrade, id="efficiency_upgrade"),
+]
+
+
+def _map_with_facility():
     corp_map = _map()
     corp_map.territories["iron_home"].locations.append(
-        Location(id="rf1", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=1, labs_built=0)
+        Location(
+            id="rf1",
+            name="Facility",
+            kind=LocationKind.RESEARCH_FACILITY,
+            research_tier=1,
+            labs_built=0,
+            efficiency_upgrades=0,
+        )
     )
+    return corp_map
+
+
+@pytest.mark.parametrize("build,counter,costs,cap", _UPGRADES)
+def test_build_upgrade_succeeds_and_charges_cash(build, counter, costs, cap):
+    corp_map = _map_with_facility()
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert build_lab(corp_state, corp_map) is True
+    assert build(corp_state, corp_map) is True
     facility = owned_research_facility(corp_state, corp_map)
-    assert facility.labs_built == 1
-    assert corp_state.cash == 10_000 - LAB_UPGRADE_COSTS[0]
+    assert getattr(facility, counter) == 1
+    assert corp_state.cash == 10_000 - costs[0]
     assert corp_state.daily_action_used is True
 
 
-def test_build_lab_is_sequential():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(id="rf1", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=1, labs_built=0)
-    )
+@pytest.mark.parametrize("build,counter,costs,cap", _UPGRADES)
+def test_build_upgrade_is_sequential(build, counter, costs, cap):
+    corp_map = _map_with_facility()
     corp_state = CorpState(faction_id=IRONCLAD, cash=100_000)
-    assert build_lab(corp_state, corp_map) is True
+    assert build(corp_state, corp_map) is True
     corp_state.daily_action_used = False
-    assert build_lab(corp_state, corp_map) is True
+    assert build(corp_state, corp_map) is True
     facility = owned_research_facility(corp_state, corp_map)
-    assert facility.labs_built == MAX_LABS_BUILT
+    assert getattr(facility, counter) == cap
     corp_state.daily_action_used = False
-    assert build_lab(corp_state, corp_map) is False
-    assert facility.labs_built == MAX_LABS_BUILT
+    assert build(corp_state, corp_map) is False
+    assert getattr(facility, counter) == cap
 
 
-def test_build_lab_fails_with_no_research_facility():
+@pytest.mark.parametrize("build", _BUILDERS)
+def test_build_upgrade_fails_with_no_research_facility(build):
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert build_lab(corp_state, corp_map) is False
+    assert build(corp_state, corp_map) is False
     assert corp_state.cash == 10_000
 
 
-def test_build_lab_fails_when_unaffordable():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(id="rf1", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=1, labs_built=0)
-    )
+@pytest.mark.parametrize("build", _BUILDERS)
+def test_build_upgrade_fails_when_unaffordable(build):
     corp_state = CorpState(faction_id=IRONCLAD, cash=0)
-    assert build_lab(corp_state, corp_map) is False
+    assert build(corp_state, _map_with_facility()) is False
 
 
-def test_build_lab_fails_when_already_used_today():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(id="rf1", name="Facility", kind=LocationKind.RESEARCH_FACILITY, research_tier=1, labs_built=0)
-    )
+@pytest.mark.parametrize("build", _BUILDERS)
+def test_build_upgrade_fails_when_already_used_today(build):
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
-    assert build_lab(corp_state, corp_map) is False
+    assert build(corp_state, _map_with_facility()) is False
 
 
 def test_research_rate_starts_at_base_with_no_efficiency_upgrades():
@@ -539,84 +556,6 @@ def test_collect_research_reads_only_the_corps_own_facility():
     corp_state = CorpState(faction_id=IRONCLAD, scientists=BASE_LAB_CAPACITY)
     expected = BASE_LAB_CAPACITY * (RESEARCH_PER_SCIENTIST + 2)
     assert collect_research(corp_state, corp_map) == expected
-
-
-def test_build_efficiency_upgrade_succeeds_and_charges_cash():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(
-            id="rf1",
-            name="Facility",
-            kind=LocationKind.RESEARCH_FACILITY,
-            research_tier=1,
-            efficiency_upgrades=0,
-        )
-    )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert build_efficiency_upgrade(corp_state, corp_map) is True
-    facility = owned_research_facility(corp_state, corp_map)
-    assert facility.efficiency_upgrades == 1
-    assert corp_state.cash == 10_000 - EFFICIENCY_UPGRADE_COSTS[0]
-    assert corp_state.daily_action_used is True
-
-
-def test_build_efficiency_upgrade_is_sequential():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(
-            id="rf1",
-            name="Facility",
-            kind=LocationKind.RESEARCH_FACILITY,
-            research_tier=1,
-            efficiency_upgrades=0,
-        )
-    )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=100_000)
-    assert build_efficiency_upgrade(corp_state, corp_map) is True
-    corp_state.daily_action_used = False
-    assert build_efficiency_upgrade(corp_state, corp_map) is True
-    facility = owned_research_facility(corp_state, corp_map)
-    assert facility.efficiency_upgrades == MAX_EFFICIENCY_UPGRADES
-    corp_state.daily_action_used = False
-    assert build_efficiency_upgrade(corp_state, corp_map) is False
-    assert facility.efficiency_upgrades == MAX_EFFICIENCY_UPGRADES
-
-
-def test_build_efficiency_upgrade_fails_with_no_research_facility():
-    corp_map = _map()
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
-    assert build_efficiency_upgrade(corp_state, corp_map) is False
-    assert corp_state.cash == 10_000
-
-
-def test_build_efficiency_upgrade_fails_when_unaffordable():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(
-            id="rf1",
-            name="Facility",
-            kind=LocationKind.RESEARCH_FACILITY,
-            research_tier=1,
-            efficiency_upgrades=0,
-        )
-    )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=0)
-    assert build_efficiency_upgrade(corp_state, corp_map) is False
-
-
-def test_build_efficiency_upgrade_fails_when_already_used_today():
-    corp_map = _map()
-    corp_map.territories["iron_home"].locations.append(
-        Location(
-            id="rf1",
-            name="Facility",
-            kind=LocationKind.RESEARCH_FACILITY,
-            research_tier=1,
-            efficiency_upgrades=0,
-        )
-    )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
-    assert build_efficiency_upgrade(corp_state, corp_map) is False
 
 
 def test_assistant_capacity_scales_with_labs_built():
@@ -1104,7 +1043,7 @@ def test_collect_research_fills_the_best_facility_first():
 
 def test_collect_research_spills_into_a_second_facility_once_the_first_is_full():
     corp_map = _contested_map()
-    first = _facility(corp_map)
+    _facility(corp_map)
     second = Location(id="second", name="Second", kind=LocationKind.RESEARCH_FACILITY, research_tier=1)
     second.labs_built = 0
     second.efficiency_upgrades = 0
