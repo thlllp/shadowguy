@@ -12,6 +12,7 @@ from shadowguy.combat import (
     ENEMIES_BY_ID,
     ENEMY_TIERS,
     NPC_WEAPONS,
+    QUICKNESS_BASE,
     SMARTLINK_ATTACK_BONUS,
     _DEFAULT_ATTACK_VERBS,
     Drop,
@@ -21,6 +22,7 @@ from shadowguy.combat import (
     drop_for_result,
     equipped_weapons,
     player_defense,
+    player_quickness,
     player_soak,
     resolve_hit,
     melee_damage_bonus,
@@ -217,6 +219,21 @@ def test_player_soak_folds_in_installed_cyberware_defense():
     assert player_soak(character) == before + 2
 
 
+def test_player_quickness_is_base_plus_agility():
+    character = Character(name="t", agility=3)
+    assert player_quickness(character) == QUICKNESS_BASE + 3
+
+
+def test_player_quickness_goes_through_character_stat_so_gear_counts():
+    """Unlike Enemy.quickness (raw agility, no bonuses), the player side reads through
+    Character.stat() -- the same chokepoint every other stat passes through -- so a
+    reflex_coprocessor's +1 agility reaches quickness too."""
+    character = Character(name="t", cash=10_000)
+    before = player_quickness(character)
+    install_cyberware(character, "reflex_coprocessor")
+    assert player_quickness(character) == before + 1
+
+
 # --- Enemy: the stat block derives what a fight reads ---
 
 
@@ -230,6 +247,7 @@ def test_every_enemy_derives_its_combat_numbers_from_its_own_sheet(enemy):
     assert enemy.defense == DEFENSE_BASE + skill_value(enemy, "dodge")
     assert enemy.stun_damage == enemy.weapon.stun_damage
     assert enemy.reach == weapon_range(enemy.weapon)
+    assert enemy.quickness == QUICKNESS_BASE + enemy.agility
 
 
 @pytest.mark.parametrize("enemy", ENEMIES, ids=lambda e: e.id)
