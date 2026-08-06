@@ -11,7 +11,7 @@ from shadowguy.cybernetics import (
 )
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, can_work_support, live_runner, recruit_wage
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot
+from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot, stock_mod_ids
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
@@ -647,7 +647,11 @@ class Character:
         if item.min_standing or item.price > self.gear_budget:
             return False
         self.gear_budget -= item.price
-        self.inventory.append(InventoryItem(item.id, equipped=fits_in_slot(self.inventory, item)))
+        self.inventory.append(
+            InventoryItem(
+                item.id, equipped=fits_in_slot(self.inventory, item), mods=stock_mod_ids(item)
+            )
+        )
         self.creation_gear.append(item.id)
         return True
 
