@@ -1,6 +1,4 @@
-import os
 import random
-import sys
 import traceback
 from datetime import datetime, timezone
 
@@ -75,7 +73,7 @@ class CrashScreen(Screen):
 
 
 def _write_crash_log(error: BaseException) -> str:
-    path = os.path.join("/tmp", "shadowguy_crash.log")
+    path = "/tmp/shadowguy_crash.log"
     with open(path, "w") as f:
         f.write(f"Crash at {datetime.now(timezone.utc).isoformat()}\n")
         f.write("".join(traceback.format_exception(error)))
@@ -125,31 +123,26 @@ class ShadowguyApp(App):
         self.faction_events: dict[str, list[FactionEvent]] = {}
         self.corp_state: CorpState | None = None
         self.corp_only = False
-        # CorpMapScreen reads this back to restore the last-viewed category across a
-        # full screen rebuild (load_state/restart_run) -- None (the map itself) is the
-        # correct default for a fresh run, same as CorpMapScreen.selected_category.
+        # Read back by CorpMapScreen to restore the last-viewed category across a full
+        # screen rebuild; None (the map itself) is the right default for a fresh run.
         self.main_menu_category: str | None = None
 
     def spend_time(
         self, hours: float, *, skip_night_effects: bool = False, protect_job_id: str | None = None
     ) -> None:
         """The single chokepoint that advances the clock — travel, every job/gig/
-        legwork run, a hospital stay, and the Rest action all funnel through this
-        instead of the old stamina spend. Firing a day tick is a side effect of
-        crossing midnight, not something the player triggers directly: whichever
-        action happens to push elapsed_hours past a multiple of HOURS_PER_DAY
-        fires it, at wherever the runner currently is.
+        legwork run, a hospital stay, and the Rest action all funnel through here.
+        A day tick is a side effect of crossing midnight, not something the player
+        triggers directly: whichever action pushes elapsed_hours past a multiple of
+        HOURS_PER_DAY fires it, at wherever the runner currently is.
 
         `protect_job_id` (a Scene.id) is passed by the job/legwork run handlers so
         the job being run right now can't be expired out from under itself by the
         very tick its own hours_cost triggers — see Character.on_new_day.
 
-        The loop below only ever runs once with today's costs (no single spend
-        reaches 2*HOURS_PER_DAY), but it's written to handle more than one
-        boundary crossing in a single spend — e.g. a future long job — rather
-        than assuming one tick per call. rival_actions is reset once here (not
-        inside the loop) so a spend crossing several boundaries accumulates every
-        day's actions into one list instead of only keeping the last day's.
+        No single spend currently reaches 2*HOURS_PER_DAY, but the loop handles
+        several crossings anyway. rival_actions is reset once outside it so a
+        multi-day spend accumulates every day's actions instead of only the last's.
         """
         old_day = self.character.day
         self.character.elapsed_hours += hours
@@ -160,13 +153,11 @@ class ShadowguyApp(App):
                 self._apply_day_tick(day, skip_night_effects, protect_job_id)
 
     def rest_cost(self) -> int:
-        """What Rest would charge for lodging right now, wherever the runner is —
-        also read by CorpMapScreen/CorpScreen to preview it on the menu item. Free under
-        an active security contract here, same as an owned home (corpmap.lodging_cost) —
-        and free outright for a corp-only game (self.corp_only): there's no runner
-        body paying for a flophouse, and CorpMapScreen's travel is a free reposition
-        for exactly that reason, so charging lodging by wherever '@' happens to sit
-        would just be a cost with no matching mechanic behind it."""
+        """What Rest would charge for lodging right now — also read by CorpMapScreen/
+        CorpScreen to preview it on the menu item. Free under an active security
+        contract here, same as an owned home (corpmap.lodging_cost), and free outright
+        in a corp-only game: there's no runner body paying for a flophouse, and travel
+        is a free reposition there for exactly that reason."""
         if self.corp_only:
             return 0
         character = self.character
@@ -194,20 +185,11 @@ class ShadowguyApp(App):
         return f"Rest ({hours}h, {cost}eb lodging)"
 
     def rest(self) -> None:
-        """Shared "Rest" action wiring for CorpMapScreen and CorpScreen. Spends
-        REST_HOURS_COST hours, wherever the runner currently is — same lodging pricing
-        as the old midnight charge (corpmap.lodging_cost), just paid at the moment of
-        resting instead of at whatever territory happened to hold the runner at
-        midnight.
-
-        If the Phone's Alarm Clock tab has set Character.alarm_hour, _rest_hours()
-        overrides the fixed duration: sleep only until that hour instead of a flat 8.
-        The alarm is cleared here so it doesn't keep firing on every later Rest.
-
-        Resting only halves accumulated fatigue rather than clearing it (see
-        Character.fatigue) — a bad stretch of skipped rest still costs a few more
-        nights to fully shake off. It does heal a flat point of health, though,
-        wherever the runner rests and whatever else happened that day."""
+        """Shared "Rest" action wiring for CorpMapScreen and CorpScreen: pay lodging
+        wherever the runner currently is, sleep _rest_hours(), heal a flat point of
+        health. The alarm is cleared here so a one-off short night set on the Phone
+        doesn't keep cutting every later Rest short. Fatigue and stun are
+        Character.mark_rested's business."""
         character = self.character
         cost = self.rest_cost()
         if cost:
@@ -221,7 +203,7 @@ class ShadowguyApp(App):
         character.mark_rested()
         character.adjust_health(1)
 
-    def _report_corp_attacks(self, actions: list) -> list[str]:
+    def _report_corp_attacks(self, actions: list[RivalAction]) -> list[str]:
         """One line per rival attack that landed on the player's own corp last
         night — captures and repelled pushes alike, since a raid that cost you
         half a garrison is news even when the block held.
@@ -246,8 +228,8 @@ class ShadowguyApp(App):
         return lines
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
-        """Everything that used to fire from a deliberate "End the day" click —
-        now fired once per day boundary crossed, by whatever action crossed it."""
+        """Everything that fires on a day boundary, run once per boundary crossed by
+        whatever action crossed it."""
         self.character.on_new_day(day, protect_job_id)
         expired = self.character.expire_smuggling_job(day, GANG_JOB_STANDING_GAIN)
         if expired is not None:
@@ -355,18 +337,11 @@ class ShadowguyApp(App):
     def action_quit_menu(self) -> None:
         self.push_screen(QuitMenu())
 
-    def home_menu(self) -> Screen:
-        """Backwards-compatible stub: the sidebar is now part of CorpMapScreen itself,
-        so pressing 'm' on the map is no longer a thing -- callers that still pass
-        through here get the home screen directly instead."""
-        return CorpMapScreen()
-
     def begin_run(self) -> None:
-        """Leave character/corp setup for the run proper. Clears the menu screens out
-        from under the home screen rather than replacing just the top one: they are
-        unreachable either way (CorpMapScreen.action_back is a no-op), but a live
-        ArchetypeSelectScreen sitting one pop below home is loaded gun -- selecting a
-        row on it calls reset_build() on the character mid-run."""
+        """Leave character/corp setup for the run proper. Clears the whole menu stack
+        rather than replacing just the top screen: a live ArchetypeSelectScreen sitting
+        one pop below home is a loaded gun -- selecting a row on it calls reset_build()
+        on the character mid-run."""
         self._reopen(CorpMapScreen())
 
     def restart_run(self) -> None:
@@ -394,12 +369,12 @@ class ShadowguyApp(App):
         return save_game(state, self.character.day)
 
     def load_state(self, state: dict) -> None:
-        rng, corp_map = state["rng"], state["corp_map"]
-        character, fixers = state["character"], state["fixers"]
-        location_gigs = state["location_gigs"]
-        self.rng, self.corp_map, self.character, self.fixers = rng, corp_map, character, fixers
+        self.rng = state["rng"]
+        self.corp_map = state["corp_map"]
+        self.character = state["character"]
+        self.fixers = state["fixers"]
         self.runners = state["runners"]
-        self.location_gigs = location_gigs
+        self.location_gigs = state["location_gigs"]
         self.rival_actions = state["rival_actions"]
         self.rival_runner_states = state["rival_runner_states"]
         self.rival_researched = state["rival_researched"]
@@ -434,15 +409,11 @@ def _show_crash_console(error: BaseException) -> None:
 
 
 def main() -> None:
-    def _excepthook(etype, value, tb):
-        _show_crash_console(value)
-
-    sys.excepthook = _excepthook
     try:
         ShadowguyApp().run()
+    except KeyboardInterrupt:
+        raise
     except BaseException as exc:
-        if isinstance(exc, KeyboardInterrupt):
-            raise
         _show_crash_console(exc)
 
 
