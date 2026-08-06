@@ -181,7 +181,7 @@ def test_player_faction_is_skipped_entirely():
     assert _faction_action(actions, GHOSTWIRE).territory_id is None
 
 
-def test_chance_boundary_is_strict_less_than():
+def test_expansion_chance_boundary_is_strict_less_than():
     """random() == EXPANSION_CHANCE must miss (>=), matching the >= convention
     test_encounters.py establishes for its own flat-chance gate."""
     corp_map = _map()
@@ -258,7 +258,8 @@ def test_player_faction_is_excluded_from_the_research_roll_too():
 def test_omitted_rival_researched_and_faction_events_default_gracefully():
     """Every pre-existing call site doesn't pass either -- must keep working,
     just without any persistence across calls, same as rival_runner_states."""
-    resolve_rival_day(Character(name="t"), _map(), day=1, rng=HIT)
+    actions = resolve_rival_day(Character(name="t"), _map(), day=1, rng=HIT)
+    assert actions  # the day still resolves; it just keeps no record of the research
 
 
 def _pair_map(locations=()):

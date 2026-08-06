@@ -15,7 +15,7 @@ from shadowguy.character import Character
 from shadowguy.combat import ENEMIES_BY_ID, UNARMED, Drop, Enemy, equipped_weapons
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem
 
-from helpers import AlwaysSix, npc_weapon, synthetic_enemy
+from helpers import AlwaysOne, AlwaysSix, npc_weapon, synthetic_enemy
 
 
 # --- available_actions ---
@@ -112,10 +112,6 @@ def test_flee_parting_shot_is_from_one_enemy_not_the_whole_squad():
     c = Character(name="t", agility=1, body=10)  # tanky, so the shot alone won't kill
     enemies = tuple(ENEMIES_BY_ID["thug"] for _ in range(5))
 
-    class AlwaysOne(random.Random):
-        def randint(self, a, b):
-            return 1  # guarantees the flee check itself fails
-
     state = start_combat(c, enemies, rng=random.Random(0))
 
     flee_action = Action(kind=ActionKind.FLEE, label="flee", skill="dodge")
@@ -126,11 +122,6 @@ def test_flee_parting_shot_is_from_one_enemy_not_the_whole_squad():
 
 
 # --- persistent stun (Character.stun replaced the old per-CombatState counter) ---
-
-
-class _AlwaysSix(random.Random):
-    def randint(self, a, b):
-        return 6  # guarantees every to-hit/brace roll in these tests passes
 
 
 def _stunning_enemy(stun_damage: int) -> Enemy:
@@ -148,7 +139,7 @@ def test_a_landed_hit_from_a_stun_weapon_raises_character_stun():
     state = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
     brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
     before = c.stun
-    take_turn(state, brace, rng=_AlwaysSix())
+    take_turn(state, brace, rng=AlwaysSix())
     assert c.stun == before + 4
 
 
@@ -160,13 +151,13 @@ def test_stun_carries_over_into_a_second_fight_instead_of_resetting():
     brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
 
     first = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
-    take_turn(first, brace, rng=_AlwaysSix())
+    take_turn(first, brace, rng=AlwaysSix())
     after_first_fight = c.stun
     assert after_first_fight > 0
 
     second = start_combat(c, (_stunning_enemy(4),), rng=random.Random(0))
     assert second.character.stun == after_first_fight  # carried over, not reset to 0
-    take_turn(second, brace, rng=_AlwaysSix())
+    take_turn(second, brace, rng=AlwaysSix())
     assert c.stun == after_first_fight + 4
 
 
@@ -174,7 +165,7 @@ def test_stun_reaching_current_health_knocks_the_player_out():
     c = Character(name="t", body=1)  # low max_health, easy to reach the threshold in one hit
     state = start_combat(c, (_stunning_enemy(stun_damage=c.health),), rng=random.Random(0))
     brace = Action(kind=ActionKind.BRACE, label="brace", skill="toughness")
-    take_turn(state, brace, rng=_AlwaysSix())
+    take_turn(state, brace, rng=AlwaysSix())
     assert state.outcome is CombatOutcome.KNOCKED_OUT
 
 

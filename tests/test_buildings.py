@@ -141,7 +141,7 @@ def test_nothing_is_placed_on_top_of_anything_else(seed, kind):
 def test_entrances_are_all_on_the_ground_floor(seed, kind):
     """You come in at street level and find your own way up or down."""
     building = generate_building(random.Random(seed), entrance_count=3, kind=kind)
-    ground = [i for i, level in enumerate(building.levels) if level.name == "Ground floor"][0]
+    ground = next(i for i, level in enumerate(building.levels) if level.name == "Ground floor")
     assert {level for level, _coord in building.entrance_spawns} == {ground}
 
 

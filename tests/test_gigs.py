@@ -126,33 +126,19 @@ def test_refresh_gigs_never_churns_an_existing_gig():
         assert gigs[location_id] is scene
 
 
-def test_refresh_gigs_skips_corp_hq():
-    """A corp HQ has characters (its officers) but no gig template -- refresh_gigs
-    must skip it explicitly rather than KeyError in generate_gig."""
+@pytest.mark.parametrize("kind", ["corp_hq", "gang_den"])
+def test_refresh_gigs_skips_locations_with_characters_but_no_gig_template(kind):
+    """A corp HQ has its officers and a gang den its soldier and lieutenant, but neither
+    has a gig template -- refresh_gigs must skip them explicitly rather than KeyError in
+    generate_gig."""
     corp_map_ = generate_corp_map(FACTIONS, random.Random(2))
     gigs: dict[str, object] = {}
     refresh_gigs(corp_map_, gigs, day=1, rng=random.Random(2))
-    hq_ids = {
+    ids = {
         location.id
         for territory in corp_map_.territories.values()
         for location in territory.locations
-        if location.kind == "corp_hq"
+        if location.kind == kind
     }
-    assert hq_ids  # every faction has one
-    assert not (hq_ids & set(gigs))
-
-
-def test_refresh_gigs_skips_gang_den():
-    """A gang's den has characters (its soldier and lieutenant) but no gig template --
-    refresh_gigs must skip it explicitly rather than KeyError in generate_gig."""
-    corp_map_ = generate_corp_map(FACTIONS, random.Random(2))
-    gigs: dict[str, object] = {}
-    refresh_gigs(corp_map_, gigs, day=1, rng=random.Random(2))
-    den_ids = {
-        location.id
-        for territory in corp_map_.territories.values()
-        for location in territory.locations
-        if location.kind == "gang_den"
-    }
-    assert den_ids  # every gang has one
-    assert not (den_ids & set(gigs))
+    assert ids  # every faction has an HQ, every gang a den
+    assert not (ids & set(gigs))

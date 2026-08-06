@@ -2,6 +2,8 @@
 Character.stat()/skill_value wiring (character.py folds installed_bonus/
 installed_skill_bonus in alongside worn gear -- see the module docstring)."""
 
+import pytest
+
 from shadowguy.character import (
     HUMANITY_BASELINE,
     HUMANITY_PENALTY_THRESHOLDS,
@@ -221,25 +223,15 @@ def test_higher_tier_keeps_the_same_effect_as_deltaware():
         assert variant.tier == tier
 
 
-def test_trashware_is_half_price_and_double_humanity():
+@pytest.mark.parametrize(
+    "tier,price_multiplier,humanity_multiplier",
+    [("trashware", 0.5, 2.0), ("betaware", 1.2, 0.8), ("alphaware", 2.0, 0.5)],
+)
+def test_tier_price_and_humanity_multipliers(tier, price_multiplier, humanity_multiplier):
     base = CYBERWARE_BY_ID["neural_processor"]
-    trashware = CYBERWARE_BY_ID["neural_processor_trashware"]
-    assert trashware.price == round(base.price * 0.5)
-    assert trashware.humanity_cost == round(base.humanity_cost * 2.0, 2)
-
-
-def test_betaware_is_1_2x_price_and_20_percent_less_humanity():
-    base = CYBERWARE_BY_ID["neural_processor"]
-    betaware = CYBERWARE_BY_ID["neural_processor_betaware"]
-    assert betaware.price == round(base.price * 1.2)
-    assert betaware.humanity_cost == round(base.humanity_cost * 0.8, 2)
-
-
-def test_alphaware_is_2x_price_and_half_humanity():
-    base = CYBERWARE_BY_ID["neural_processor"]
-    alphaware = CYBERWARE_BY_ID["neural_processor_alphaware"]
-    assert alphaware.price == round(base.price * 2.0)
-    assert alphaware.humanity_cost == round(base.humanity_cost * 0.5, 2)
+    variant = CYBERWARE_BY_ID[f"neural_processor_{tier}"]
+    assert variant.price == round(base.price * price_multiplier)
+    assert variant.humanity_cost == round(base.humanity_cost * humanity_multiplier, 2)
 
 
 def test_every_tier_smartlink_still_grants_smartlink():
@@ -395,13 +387,15 @@ def test_install_allows_it_at_exactly_the_required_standing():
     assert character.installed_cyberware[gated.slot] == gated.id
 
 
-def test_install_standing_defaults_to_zero_for_existing_callers():
-    """The default keeps every pre-existing caller — and a clinic with no owner NPC —
-    working, the same default shops.buy_item uses."""
+@pytest.mark.parametrize("kwargs", [{}, {"standing": -5}], ids=["default", "negative"])
+def test_an_ungated_install_goes_through_at_or_below_zero_standing(kwargs):
+    """Omitting standing keeps every pre-existing caller — and a clinic with no owner
+    NPC — working, on the same default shops.buy_item uses; a negative one still clears,
+    because _effective_standing floors it rather than hiding the whole catalog."""
     character = Character(name="t")
     character.cash = 100_000
     open_piece = next(c for c in CYBERWARE_CATALOG if c.min_standing == 0)
-    assert install_cyberware(character, open_piece.id) is True
+    assert install_cyberware(character, open_piece.id, **kwargs) is True
 
 
 def test_every_catalog_row_is_installable_within_the_humanity_baseline():
@@ -423,13 +417,6 @@ def test_a_negative_standing_still_leaves_deltaware_on_the_shelf():
     at_negative = catalog_for_standing(-3)
     assert {c.id for c in _DELTAWARE_CYBERWARE} <= {c.id for c in at_negative}
     assert at_negative == catalog_for_standing(0)
-
-
-def test_a_negative_standing_still_allows_a_deltaware_install():
-    character = Character(name="t")
-    character.cash = 100_000
-    open_piece = next(c for c in CYBERWARE_CATALOG if c.min_standing == 0)
-    assert install_cyberware(character, open_piece.id, standing=-5) is True
 
 
 def test_a_negative_standing_still_refuses_a_gated_tier():
