@@ -161,7 +161,7 @@ class ShadowguyApp(App):
 
     def rest_cost(self) -> int:
         """What Rest would charge for lodging right now, wherever the runner is —
-        also read by MainMenu/CorpScreen to preview it on the menu item. Free under
+        also read by CorpMapScreen/CorpScreen to preview it on the menu item. Free under
         an active security contract here, same as an owned home (corpmap.lodging_cost) —
         and free outright for a corp-only game (self.corp_only): there's no runner
         body paying for a flophouse, and CorpMapScreen's travel is a free reposition
@@ -185,7 +185,7 @@ class ShadowguyApp(App):
         return (character.alarm_hour - character.hour_of_day) % HOURS_PER_DAY or HOURS_PER_DAY
 
     def rest_label(self) -> str:
-        """The "Rest" menu item's text for MainMenu/CorpScreen, previewing rest_cost()
+        """The "Rest" menu item's text for CorpMapScreen/CorpScreen, previewing rest_cost()
         and, with an alarm set, the shorter actual duration."""
         hours = self._rest_hours()
         cost = self.rest_cost()
@@ -194,7 +194,7 @@ class ShadowguyApp(App):
         return f"Rest ({hours}h, {cost}eb lodging)"
 
     def rest(self) -> None:
-        """Shared "Rest" action wiring for MainMenu and CorpScreen. Spends
+        """Shared "Rest" action wiring for CorpMapScreen and CorpScreen. Spends
         REST_HOURS_COST hours, wherever the runner currently is — same lodging pricing
         as the old midnight charge (corpmap.lodging_cost), just paid at the moment of
         resting instead of at whatever territory happened to hold the runner at

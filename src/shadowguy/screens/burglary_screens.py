@@ -1,10 +1,9 @@
-"""The first phase of a Burglary job's APPROACH: pick a way in, on a small diagram.
+"""The first phase of a Burglary job's APPROACH: pick a way in.
 
 What happens *after* the door is an ordinary tactical fight the runner is trying not to
-start, so it plays on TacticalScreen (see tactical.start_burglary) rather than in a
-stripped-down walk of its own -- this module is only the choice of entrance. It owns no
-check resolution or Outcome logic; SceneScreen does that (resolve_entrance,
-apply_outcome), the same separation every other screen in this package keeps."""
+start, so it plays on TacticalScreen (see tactical.start_burglary) -- this module is
+only the choice of entrance, and owns no check resolution or Outcome logic. SceneScreen
+does that, via resolve_entrance/apply_outcome."""
 
 from textual.app import ComposeResult
 from textual.screen import Screen
@@ -14,10 +13,9 @@ from shadowguy.scene import BurglaryStage
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 
-# A fixed illustration, not a positional layout -- deliberately not corpmap.py's
-# dynamic column/connector rendering, which is built for dozens of interconnected
-# nodes; a burglary's entrance count is always small and the entrances have no
-# connectivity to show between them.
+# A fixed illustration, not a positional layout: a burglary's entrances have no
+# connectivity to show between them, so there is nothing for corpmap.py's dynamic
+# column/connector rendering to draw.
 _ENTRANCE_DIAGRAM = (
     "      .----------------------.\n"
     "      |                      |\n"

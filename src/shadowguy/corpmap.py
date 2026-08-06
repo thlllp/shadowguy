@@ -282,7 +282,7 @@ def has_home(territory: Territory) -> bool:
 
 # Nightly lodging when the runner rests in a district where they own no place to
 # sleep: this much Cash per Development level, so a more developed district costs more
-# to bed down in. Charged on rest() — see app.MainMenu's end-of-day handler.
+# to bed down in. Charged on rest() — see ShadowguyApp.rest().
 LODGING_COST_PER_DEVELOPMENT = 5
 
 

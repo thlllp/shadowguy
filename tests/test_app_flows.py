@@ -582,7 +582,7 @@ def test_gang_turf_fight_reaches_a_live_combat_screen_and_flee_ends_it():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             app.screen.selected_id = neighbor_id
-            app.screen._refresh()
+            app.screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -620,7 +620,7 @@ def test_combat_action_list_boxes_only_the_highlighted_action():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             app.screen.selected_id = neighbor_id
-            app.screen._refresh()
+            app.screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -1415,7 +1415,7 @@ def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
             neighbor_id = app.corp_map.territories[start_id].connections[0]
             screen = app.screen
             screen.selected_id = neighbor_id
-            screen._refresh()
+            screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -1440,7 +1440,7 @@ def test_travel_never_refused_regardless_of_hours_already_spent():
             for _ in range(15):
                 neighbor_id = app.corp_map.territories[here_id].connections[0]
                 screen.selected_id = neighbor_id
-                screen._refresh()
+                screen.refresh_map()
                 await pilot.pause()
                 await pilot.press("enter")
                 await pilot.pause()
@@ -1470,7 +1470,7 @@ def test_corp_only_travel_is_free_and_instant():
             neighbor_id = app.corp_map.territories[start_id].connections[0]
             screen = app.screen
             screen.selected_id = neighbor_id
-            screen._refresh()
+            screen.refresh_map()
             await pilot.pause()
 
             elapsed_before = app.character.elapsed_hours
@@ -2514,7 +2514,7 @@ def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             app.screen.selected_id = neighbor_id
-            app.screen._refresh()
+            app.screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -2542,7 +2542,7 @@ def test_toll_the_runner_cant_cover_falls_through_to_a_fight():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             app.screen.selected_id = neighbor_id
-            app.screen._refresh()
+            app.screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -2567,7 +2567,7 @@ def test_entering_gang_turf_at_deep_negative_drops_straight_into_a_fight():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             app.screen.selected_id = neighbor_id
-            app.screen._refresh()
+            app.screen.refresh_map()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -3531,6 +3531,106 @@ def test_corp_screen_attack_flow_resolves_against_a_rival():
             seizures = [e for e in app.faction_events[ours] if e.kind == "seizure"]
             assert seizures[0].territory_id == target
             assert seizures[0].from_faction_id == defender
+
+    run(body())
+
+
+def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
+    """The same Operations flow from a corp-only run, which never opens CorpScreen and
+    plays it off CorpMapScreen's Corp tab instead.
+
+    Regression: CorpActionsMixin awaits its host's refresh hook, and CorpMapScreen used
+    to expose a *sync* `_refresh` where the mixin could reach it -- so committing a
+    force spent the operatives and then killed the app on `await None`, taking out the
+    only way a corp-only game can fight."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            assert isinstance(app.screen, CorpMapScreen), "corp-only lands on the map screen"
+            screen = app.screen
+            app.corp_state.operatives = 4
+            await screen._select_category("corp")
+            await _settle(pilot)
+
+            ours = app.corp_state.faction_id
+            target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
+            await pilot.click(f"#deploy_{target}")
+            await _settle(pilot)
+            assert isinstance(app.screen, ForcePickScreen)
+
+            await pilot.click("#force_4")
+            await _settle(pilot)
+
+            assert app.corp_map.territories[target].garrison == 4
+            assert app.corp_state.operatives == 0
+            assert app.corp_state.daily_action_used is True
+            # Survived the callback and redrew, rather than dying inside it.
+            assert isinstance(app.screen, CorpMapScreen)
+            rows = [item.id for item in screen.query_one("#activities", ListView).children]
+            assert f"deploy_{target}" in rows
+
+    run(body())
+
+
+def test_corp_only_attack_flow_resolves_on_the_map_screen():
+    """The attack half of the same flow, which resolves down a separate tail in
+    _commit_operatives -- the one that outlived the reinforce fix and still reached for
+    the host's `_refresh`, so a corp-only run could garrison but never take ground."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            ours = app.corp_state.faction_id
+            defender = next(f.id for f in FACTIONS if f.id != ours)
+            # Same as the CorpScreen attack test: a generated map doesn't guarantee we
+            # border a rival, so hand a neighbour to one rather than skipping.
+            target = next(
+                c
+                for t in app.corp_map.territories.values()
+                if t.owner == ours
+                for c in t.connections
+                if app.corp_map.territories[c].owner != ours
+            )
+            territory = app.corp_map.territories[target]
+            territory.owner = defender
+            territory.garrison = 0
+            territory.modifiers[TerritoryModifier.SECURITY] = 1
+            app.corp_state.operatives = 4
+            app.rng = AlwaysSix()
+
+            await screen._select_category("corp")
+            await _settle(pilot)
+
+            await pilot.click(f"#attack_{target}")
+            await _settle(pilot)
+            assert isinstance(app.screen, ForcePickScreen)
+            await pilot.click("#force_4")
+            await _settle(pilot)
+
+            assert app.corp_map.territories[target].owner == ours
+            assert app.corp_map.territories[target].garrison == 3
+            # Survived the callback and redrew, rather than dying inside it.
+            assert isinstance(app.screen, CorpMapScreen)
+            rows = [item.id for item in screen.query_one("#activities", ListView).children]
+            assert f"deploy_{target}" in rows, "the captured district is ours to garrison now"
 
     run(body())
 

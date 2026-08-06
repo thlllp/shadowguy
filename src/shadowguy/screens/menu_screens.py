@@ -261,9 +261,9 @@ class BuildSelectScreen(BackScreen):
 
 
 class ArchetypeSelectScreen(BackScreen):
-    """The presets, which used to be a grid of cards on CharacterCreationScreen
-    itself. Picking one resets the build first -- a preset is the *whole* build,
-    not a top-up -- then opens creation with both pools already at zero.
+    """The preset builds. Picking one resets the build first -- a preset is the
+    *whole* build, not a top-up -- then opens creation with both pools already at
+    zero, so it stays editable rather than being a one-way shortcut.
 
     archetypes.ARCHETYPES is read in compose(), not in the class body: the table is
     lazily validated on first access (see archetypes.py), and a class body runs at

@@ -73,6 +73,7 @@ from . import (
     PANEL_NAV_BINDINGS,
     BackScreen,
     CharacterSheet,
+    RefreshOnResume,
     PanelNav,
     _populate_list,
     _replace_items,
@@ -152,12 +153,8 @@ class FixerOffersScreen(BackScreen):
                 and not character.knows_runner(runner.id)
                 and not character.on_crew(runner.id)
             ]
-        offers = self.query_one("#offers", ListView)
-        await _replace_items(offers, items)
-        first_id = items[0].id if items else None
-        if items:
-            offers.index = 0
-        self._show_roles(first_id)
+        await _replace_items(self.query_one("#offers", ListView), items)
+        self._show_roles(items[0].id if items else None)
 
     def _show_roles(self, offer_id: str | None) -> None:
         panel = self.query_one("#offer_roles", Static)
@@ -234,15 +231,19 @@ class ShopScreen(PanelNav, BackScreen):
     async def on_mount(self) -> None:
         await self._refresh()
 
+    def _owner(self):
+        """Every SHOP_KINDS location is generated with exactly one character, so the
+        first one is the owner whose standing prices this shelf."""
+        return self.location.characters[0] if self.location.characters else None
+
     def _owner_standing(self) -> int:
-        character = self.app.character
-        owner = self.location.characters[0] if self.location.characters else None
-        return character.local_standing_with(owner.id) if owner else 0
+        owner = self._owner()
+        return self.app.character.local_standing_with(owner.id) if owner else 0
 
     async def _refresh(self) -> None:
         character = self.app.character
-        owner = self.location.characters[0] if self.location.characters else None
-        standing = character.local_standing_with(owner.id) if owner else 0
+        owner = self._owner()
+        standing = self._owner_standing()
         header = self.location.name
         if owner:
             header += f" — {owner.name} ({owner.role}), standing {standing:+d}"
@@ -446,10 +447,9 @@ class BarScreen(BackScreen):
                 self.notify(f"{runner.name} signed on for the job, in support.")
         self.chosen_runner = None
         await self._refresh()
-        await self._refresh()
 
 
-class SafehouseScreen(BackScreen):
+class SafehouseScreen(RefreshOnResume, BackScreen):
     """The runner's own apartment or a bought safehouse (corpmap.PLAYER_OWNED_KINDS).
     Nothing to do here until it has a workshop (Location.workshop_built) — the
     apartment starts with one, a safehouse is built here for WORKSHOP_BUILD_COST.
@@ -469,12 +469,6 @@ class SafehouseScreen(BackScreen):
         yield Static(self.location.name, id="workshop_info")
         yield ListView(id="workshop_actions")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -543,7 +537,7 @@ class SafehouseScreen(BackScreen):
         await self._refresh()
 
 
-class RealEstateScreen(BackScreen):
+class RealEstateScreen(RefreshOnResume, BackScreen):
     BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
@@ -556,12 +550,6 @@ class RealEstateScreen(BackScreen):
         yield Static(self.location.name, id="realestate_info")
         yield ListView(id="realestate_listings")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -598,7 +586,7 @@ class RealEstateScreen(BackScreen):
         await self._refresh()
 
 
-class HospitalScreen(BackScreen):
+class HospitalScreen(RefreshOnResume, BackScreen):
     BINDINGS = MENU_BACK_BINDINGS
 
     def __init__(self, location: Location) -> None:
@@ -611,12 +599,6 @@ class HospitalScreen(BackScreen):
         yield Static(self.location.name, id="hospital_info")
         yield ListView(id="hospital_actions")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -691,7 +673,7 @@ JUNKYARD_ART = r"""
 """.strip("\n")
 
 
-class JunkyardScreen(BackScreen):
+class JunkyardScreen(RefreshOnResume, BackScreen):
     BINDINGS = MENU_BACK_BINDINGS
     CSS = """
     #junkyard_scene {
@@ -739,12 +721,6 @@ class JunkyardScreen(BackScreen):
         )
         yield Footer()
 
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
-
     async def _refresh(self) -> None:
         row = ListItem(Static(f"Scavenge the scrap ({SCAVENGE_HOURS_COST} hours)"), id="scavenge")
         await _replace_items(self.query_one("#junkyard_actions", ListView), [row])
@@ -759,7 +735,7 @@ class JunkyardScreen(BackScreen):
         await self._refresh()
 
 
-class GangDenScreen(BackScreen):
+class GangDenScreen(RefreshOnResume, BackScreen):
     """A gang's den (corpmap.LocationKind.GANG_DEN) -- the source of a Smuggling
     delivery (jobs.SmugglingJob). One job at a time: the den just tells the runner
     to come back once they're clear."""
@@ -777,12 +753,6 @@ class GangDenScreen(BackScreen):
         yield Static(id="gang_info")
         yield ListView(id="gang_actions")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -932,19 +902,12 @@ def _would_end_you(character: Character, cyberware: Cyberware) -> bool:
     return free_humanity(character) - cyberware.humanity_cost - SURGERY_SCARRING <= 0
 
 
-class RipperdocScreen(PanelNav, BackScreen):
+class RipperdocScreen(PanelNav, RefreshOnResume, BackScreen):
     """A cyber clinic: buy and have cyberware installed, or have a piece cut back out.
-
-    The acquisition half of cybernetics.py, which had a full catalog and a working
-    install_cyberware long before anything could reach them. Clinics themselves were
-    never the missing piece — LocationKind.CYBER_CLINIC has been a fully generated
-    kind (name pools, owner roles, LOCATION_SKILL, gig templates, legwork text) all
-    along, so a runner could already case one or run a job against one. They just
-    couldn't walk in.
 
     Two panels, the same shape ShopScreen uses: #ripper_stock is what this doc will
     sell you (cybernetics.catalog_for_standing — rows above your standing with the
-    owner are hidden outright, exactly as ShopScreen hides them, not shown locked),
+    contact are hidden outright, exactly as ShopScreen hides them, not shown locked),
     and #ripper_installed is what's already in you, each row an extraction.
 
     Humanity is the second budget and the reason this isn't just another shop: the
@@ -977,26 +940,15 @@ class RipperdocScreen(PanelNav, BackScreen):
         )
         yield Footer()
 
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
-
     def _contact(self):
         """Whoever at this clinic vouches for you -- the character you stand best with,
-        not simply characters[0].
+        not simply characters[0] the way ShopScreen picks its owner.
 
-        ShopScreen can assume characters[0] is "the owner" because every SHOP_KINDS
-        location is generated with exactly one character. A clinic is not in
-        SHOP_KINDS (it sells cyberware, not Items), so corpmap_gen._make_characters
-        gives it 1-2 like any other non-shop kind -- and gigs.refresh_gigs assigns a
-        gig to a *random* one of a location's characters. Reading only the first would
-        mean roughly half a clinic's gigs moved a standing the shelf never looked at,
-        with nothing on screen to say which relationship was the one that mattered.
-
-        Best-of instead: knowing anyone at the clinic is what gets you served, and the
-        header names whoever that currently is. Ties break on list order."""
+        A clinic isn't in SHOP_KINDS, so corpmap_gen._make_characters gives it 1-2
+        characters rather than exactly one, and gigs.refresh_gigs assigns a gig to a
+        *random* one of them. Reading only the first would mean roughly half a clinic's
+        gigs moved a standing the shelf never looked at. Best-of instead: knowing anyone
+        at the clinic is what gets you served. Ties break on list order."""
         character = self.app.character
         if not self.location.characters:
             return None

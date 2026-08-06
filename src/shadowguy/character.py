@@ -260,7 +260,7 @@ class Character:
     arrested_runners: dict[str, int] = field(default_factory=dict)  # runner id -> day they're free
     accepted_jobs: list["JobOffer"] = field(default_factory=list)
     # Accepted multi-night guard contracts (security.py) — a standing engagement, not
-    # a Scene: resolved one night at a time by MainMenu's end-day handler while
+    # a Scene: resolved one night at a time by ShadowguyApp's day tick while
     # location_id matches a contract's territory_id, not by "running" it like a job.
     security_contracts: list["SecurityContract"] = field(default_factory=list)
     # Owned items, ids from shops.ITEMS_BY_ID. Duplicates allowed (same item bought twice).
@@ -325,7 +325,7 @@ class Character:
     fatigue: int = 0
     # A gang delivery in progress (jobs.SmugglingJob) -- one at a time. Picked up in
     # person at a gang's den (screens.GangDenScreen), delivered in person at
-    # smuggling_job.destination_territory_id (MainMenu's "Deliver" action). Missing
+    # smuggling_job.destination_territory_id (CorpMapScreen's "Deliver" action). Missing
     # the deadline (checked in app._apply_day_tick) clears it and costs gang standing
     # instead of gaining it.
     smuggling_job: "SmugglingJob | None" = None
@@ -746,7 +746,7 @@ class Character:
         """Complete the active smuggling_job on a successful delivery: pay out and
         raise gang standing by `standing_gain` (jobs.GANG_JOB_STANDING_GAIN, passed
         in rather than imported -- jobs.py already imports character.py). Caller
-        (MainMenu) has already checked location_id == destination_territory_id."""
+        (CorpMapScreen) has already checked location_id == destination_territory_id."""
         job = self.smuggling_job
         self.cash += job.reward_cash
         self.adjust_gang_standing(job.gang_id, standing_gain)

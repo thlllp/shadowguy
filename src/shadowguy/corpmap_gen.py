@@ -93,7 +93,7 @@ EXTRA_EDGE_CHANCE = 0.35
 # Must comfortably exceed TERRITORY_COUNT: names are sampled without replacement,
 # and the surplus is what keeps two runs from drawing the same district list.
 # Single words only — a territory's id is its lowercased name, and that id ends up
-# inside Textual widget ids (see MainMenu's "local_" rows), which cannot hold spaces.
+# inside Textual widget ids (see CorpMapScreen's "map_local_" rows), which cannot hold spaces.
 DISTRICT_NAMES = [
     "Kabuki", "Northside", "Watson", "Pacifica", "Heywood", "Westbrook",
     "Rancho", "Arroyo", "Coastview", "Glen", "Vista", "Charter",

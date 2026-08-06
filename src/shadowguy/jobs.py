@@ -944,7 +944,7 @@ class SmugglingJob:
     there's no staged approach/objective/complication/exfil to it (see the
     conversation this replaced: it used to be a JobArchetype). The runner picks
     it up in person at a gang's den (GangDenScreen) and delivers it in person at
-    the destination territory (MainMenu's "Deliver" action) -- nothing about it
+    the destination territory (CorpMapScreen's "Deliver" action) -- nothing about it
     resolves through checks."""
 
     gang_id: str
