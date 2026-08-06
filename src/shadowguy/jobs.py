@@ -148,13 +148,6 @@ FIGHT_PROMPT = "{faction} security comes down on you at {location}. No more talk
 # critical failure both point at fight_id); only what sits in the stage differs.
 MATRIX_FIGHT_PROMPT = "{faction}'s ICE closes on your signal in the {location} node. Breach or burn."
 
-# Some jobs play their fights out on a grid (tactical.TacticalStage) instead of the
-# abstract round-by-round Encounter — a whole job is one or the other, decided once, so a
-# job reads as either "a contract with muscle on standby" or "a set-piece infiltration"
-# rather than flip-flopping mid-run. The routing is identical either way (the ambush
-# choice and critical failures both point at fight_id); only what sits in that stage differs.
-TACTICAL_FIGHT_CHANCE = 0.35
-
 # A soft theming knob, not a table that must cover every kind: how much low cover a site's
 # fight map gets, by what kind of place it is. A depot is racking and crates; a data floor
 # is open sightlines. Anything unlisted gets the middling default — no import guard needed.
@@ -1050,11 +1043,6 @@ def generate_job(
     reward_base = int(REWARD_BASE[tier] * (1 + REWARD_PER_EXTRA_STAGE * extra_stages))
     stage_ids = [f"stage_{i}" for i in range(len(job_stages))]
     stages: dict[str, Stage] = {}
-    # Decided once for the whole job (see TACTICAL_FIGHT_CHANCE): every fight in it is
-    # either a grid set-piece or the abstract Encounter, not a mix. A matrix job (Data
-    # Heist) is neither — all its fights are ICE — so it doesn't roll this at all (and the
-    # short-circuit keeps it from consuming an rng draw a non-matrix job would).
-    is_tactical = not archetype.matrix and rng.random() < TACTICAL_FIGHT_CHANCE
 
     for i, job_stage in enumerate(job_stages):
         is_last = i == len(stage_ids) - 1
@@ -1228,10 +1216,10 @@ def generate_job(
                 choices=choices,
             )
         # The fight beside every stage, reached by the ambush choice or a critical
-        # failure. Both Outcomes are the same whether it's an abstract Encounter, a grid
-        # set-piece, or an ICE run — only where they're packaged (and who turns up)
-        # differs. A matrix job fields ICE and no gunmen, so roll_enemies isn't called
-        # for it (nobody's in the building), and its "escape" is being ejected.
+        # failure. Both Outcomes are the same whether it's a grid set-piece or an ICE
+        # run — only where they're packaged (and who turns up) differs. A matrix job
+        # fields ICE and no gunmen, so roll_enemies isn't called for it (nobody's in
+        # the building), and its "escape" is being ejected.
         fight_victory = _payout("They stop coming. You finish what you came for.", 1.0, 1, next_stage, is_last)
         fight_escape = Outcome(
             text="You get out with your skin. The job is blown.",
@@ -1254,34 +1242,21 @@ def generate_job(
             continue
         enemies = roll_enemies(tier, rng)
         fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
-        if is_tactical:
-            tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
-            fight = Stage(
-                id=fight_id,
-                prompt="",  # the TacticalStage carries the prose
-                choices=[],
-                tactical=TacticalStage(
-                    prompt=fight_prompt,
-                    grid=tac.grid,
-                    player_start=tac.player_start,
-                    enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
-                    victory=fight_victory,
-                    escape=fight_escape,
-                    exits=tac.exits,
-                ),
-            )
-        else:
-            fight = Stage(
-                id=fight_id,
-                prompt="",  # the Encounter carries the prose; a fight stage has no choices
-                choices=[],
-                combat=Encounter(
-                    prompt=fight_prompt,
-                    enemies=enemies,
-                    victory=fight_victory,
-                    escape=fight_escape,
-                ),
-            )
+        tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
+        fight = Stage(
+            id=fight_id,
+            prompt="",  # the TacticalStage carries the prose
+            choices=[],
+            tactical=TacticalStage(
+                prompt=fight_prompt,
+                grid=tac.grid,
+                player_start=tac.player_start,
+                enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
+                victory=fight_victory,
+                escape=fight_escape,
+                exits=tac.exits,
+            ),
+        )
         stages[fight_id] = fight
 
     scene = Scene(
