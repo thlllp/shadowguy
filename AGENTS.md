@@ -39,13 +39,15 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 | `combat.py` | Shared fight foundation: enemy roster (11, 3 tiers), `resolve_hit`, soak, weapon reach | `scene` |
 | `abstract_combat.py` | Fight surface 1: abstract rounds, no positions | `scene` |
 | `grid.py` | `Grid`/`Tile`, tcod FOV + A\*, distance — space itself, no game state | nothing from package |
-| `tactical.py` | Fight surface 2: grid fight + BSP `generate_map` | `scene` |
+| `tactical.py` | Fight surface 2: grid fight, turn engine, cover, AI phases | `scene` |
+| `tactical_gen.py` | `generate_map` — BSP fight map, laid out once per stage | `grid`/tcod only — never `tactical` |
+| `support.py` | Remote hacker backing a burglary/job — blinds cameras, marks `acted` | only `tactical` (imports it; must never be imported back) |
 | `matrix.py` | Fight surface 3: ICE, node networks, integrity, deck programs | `scene` |
 | `buildings.py` | Burglary targets: rooms, levels, links, locks, cameras | only `grid` |
 | `jobs.py` | Job generation (9 archetypes) + `JobTiming` + legwork + `SmugglingJob` | — |
 | `gigs.py` | Per-Location gig generation | — |
 | `fixer.py` | Fixer roster + job/security offers | — |
-| `runners.py` | Hireable-runner roster (3 guaranteed + 6 of a 9-strong pool) + remote-support programs | — |
+| `runners.py` | Hireable-runner roster (3 guaranteed + 6 of a 9-strong pool) + remote-support programs + runner progression (`complete_job`: experience→rating, cash→gear) | — |
 | `factions.py` | Corp Factions + HQ officer ladder | — |
 | `gangs.py` | Street Gangs + `GANG_RANKS` | — |
 | `relations.py` | Seeded corp↔gang standing; **read by `rivals._pick_attack_target`** | `factions`, `gangs` only |
@@ -85,6 +87,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 - `scene.py` owns *what an outcome is worth*; fight engines own *how it resolves*. The three fight surfaces **must never import `scene`**, and never each other.
 - `skills.py` and `grid.py` are leaves — import nothing from the package.
 - `grid.py` → `buildings.py` → `tactical.py` runs one direction; extracting `grid.py` is what removed the old cycle.
+- `support.py` is the one module that imports `tactical.py` rather than being imported by it — the fight only ever *carries* a `Support` behind a string-annotated `TYPE_CHECKING` import; keep it that way or the arrow becomes a cycle.
 - `corpmap.py` has no `scene` import → gigs live on `app.location_gigs`, not `Location`.
 - `corp_turn.py` imports `corpmap` only, never `scene`/`app`. `resolve_attack` takes a bare `Territory`, not a `CorpState`, so `rivals.py`'s AI (which has no `CorpState`) rolls the same dice.
 - `relations.py` imports only `factions.py`/`gangs.py`.
@@ -104,7 +107,7 @@ uv run ruff check src/        # lint (ruff pinned in dev group)
 
 ## Save versions
 
-Bump `saves.SAVE_VERSION` on any breaking state change. Current: **59** (cyberware tiers renamed from numeric to Deltaware/Trashware/Betaware/Alphaware — every non-Deltaware catalog id changed shape, breaking a pre-v59 `installed_cyberware` reference). Full version history in CLAUDE.md's "Save versions" section.
+Bump `saves.SAVE_VERSION` on any breaking state change. Current: **60** (`RivalRunner.experience`/`cash`/`gear` — runners now earn rating and buy gear in play; a pre-v60 pickled roster lacks all three fields). Full version history in CLAUDE.md's "Save versions" section.
 
 Note what does **not** need a bump: catalogs are keyed by id in save state (`Character.installed_cyberware` stores cyberware ids), so adding a field to a frozen catalog dataclass changes no pickled shape.
 
@@ -149,11 +152,11 @@ Note what does **not** need a bump: catalogs are keyed by id in save state (`Cha
 
 ## Known open threads
 
-Mechanisms built ahead of their drivers, as of save v58:
+Mechanisms built ahead of their drivers, as of save v60:
 
 - **`Medicine` / `Demolitions`** — in the 39-skill table, rolled by nothing. Hooks exist and are checkless today: `tactical.stabilize_ally`'s health kits, and grenade throws.
 - **`Gunnery`** — reached by nothing at all; no mounted weapon exists.
-- **`Character.crew_experience`** — a ledger with no spend path; `runners.RivalRunner` has no sheet.
+- **Runner progression's edges** — recruiting terms (`daily_cost`/`job_cut`) don't move with a hire's earned `rating`, and gear purchases (`runners.GEAR_LADDERS`) have no shop, location or standing behind them. Both deliberate for now (see DESIGN.md's Runner progression under Runners & crew).
 - **`CorpState.sightings`** — purely informational, no standing/rep/combat consequence.
 - **Matrix `CPU` node** — no reward wired, unlike `CACHE`.
 - **Balance simulation is one surface deep** — `tools/combat_sim.py` drives only the abstract fight. The matrix, tactical/crew, burglary, security contracts, the whole corp economy, experience, fatigue, the conflict layer and Humanity erosion are all hand-set. `SURGERY_SCARRING` and `HUMANITY_PENALTY_THRESHOLDS` in particular were tuned by hand against the catalog, and the threshold placement is load-bearing — an earlier band made a +1 implant a net stat *loss*.

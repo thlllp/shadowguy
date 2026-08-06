@@ -34,7 +34,7 @@ Death is permanent. No meta-progression between runs.
 | **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
 | **Corp map** | 65 districts, generated fresh each run and always connected. Four rival corps hold equal territory by construction. Each district has locations — shops, bars, data hubs, clinics, a corp HQ, a research facility, an academy — that jobs, gigs and legwork all hang off. |
 | **Standing** | Four separate relationships: street `rep`, per-corp `standing` (hit one corp and its rivals warm to you), per-fixer trust, and per-person local standing that bends shop prices and unlocks stock. |
-| **Crew** | Meet independent runners drinking at a bar, or pay an info-broker fixer to introduce one directly. Hire them indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. |
+| **Crew** | Meet independent runners drinking at a bar, or pay an info-broker fixer to introduce one directly. Hire them indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. The city's other runners aren't static either — every job they run, yours or their own off a fixer's board, earns them experience and cash they spend on rating and gear. |
 | **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
 | **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
 | **Gangs** | Four street gangs hold scattered turf (no contiguous territory, unlike the corps). Walk onto ground held by one you've crossed and you can be tolled or jumped outright, depending how badly. |
@@ -68,17 +68,21 @@ src/shadowguy/
   archetypes.py   Enforcer/Hacker/Infiltrator/Gunslinger/Fixer creation presets
   skills.py       Skill table (39 skills across 6 core stats); leaf module
   checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
-  combat.py       Round-based combat: enemy roster, the five-stat action set, shared resolve_hit
-  tactical.py     Grid combat: Grid/Tile, tcod FOV + A*, turn engine, BSP map generation
+  combat.py       Shared fight foundation: enemy roster, resolve_hit, weapon + consumable queries
+  abstract_combat.py Fight surface 1: round-based combat, the five-stat action set, no positions
+  grid.py         Grid/Tile, tcod FOV + A*, distance -- space itself, no game state
+  tactical.py     Fight surface 2: the grid fight -- turn engine, cover, aiming, AI phases
+  tactical_gen.py generate_map: the BSP fight map, laid out once per stage
+  support.py      The remote hacker backing a burglary/job; blinds cameras, marks units acted
   buildings.py    Burglary targets: rooms, levels and the links between them; job-scoped, built on
                   tactical's grid primitives
-  matrix.py       Matrix combat (Data Heist): ICE roster, integrity pool, jack-in actions; reuses resolve_hit
+  matrix.py       Fight surface 3 (Data Heist): ICE roster, integrity pool, jack-in actions; reuses resolve_hit
   scene.py        Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/MatrixStage data model
   jobs.py         Procedural job generation, stage templates, timing, per-job legwork
   gigs.py         Per-location gig generation from per-kind templates, spawned gradually over time
   fixer.py        Fixer roster, job offers, security offers, refresh/expiry
   security.py     Multi-night security contract generation and nightly resolution (not Scene-based)
-  runners.py      Hireable NPC runners (crew)
+  runners.py      Hireable NPC runners (crew) who earn rating and buy gear from the jobs they run
   factions.py     Rival corps, standing rules, HQ officer ladder
   gangs.py        Street gangs holding scattered turf (no territory); den staffing lives in corpmap.py
   relations.py    Seeded standing between every corp/gang pair, independent of the player
@@ -88,7 +92,10 @@ src/shadowguy/
                   research spent on a technology tree, Security/Surveillance/Development purchases
   surveillance.py Daily chance a corp spots the player or a rival runner on its own territory
   corpmap.py      Procedural territory map (65 nodes), ASCII renderer, locations, property/lodging
+  corpmap_gen.py  generate_corp_map: lays out one new territory map, run once per run
   shops.py        Item and consumable catalogs, buy/sell/equip, standing pricing, hospital care
+  inventory.py    Equip state, deck programs, and using a consumable -- what happens to an item after
+                  shops.py adds it to inventory
   cybernetics.py  Cyberware catalog and install/remove, bought at a Ripperdoc's Cyber Clinic; Humanity
                   erosion is the cost -- 0 free capacity ends the run (cyberpsychosis)
   saves.py        Pickle-based save/load
@@ -104,4 +111,4 @@ uv run pytest -q
 uvx ruff check src/
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the design rationale, invariants, and the balance numbers behind the tuning constants.
+See [DESIGN.md](DESIGN.md) for the design rationale, invariants, and the balance numbers behind the tuning constants — and [CLAUDE.md](CLAUDE.md) for the codebase map and behavioral guidelines.
