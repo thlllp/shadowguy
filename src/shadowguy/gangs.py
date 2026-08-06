@@ -1,6 +1,6 @@
 """Street gangs: criminal orgs that hold no territory outright, unlike the corp
 Factions in factions.py. A gang keeps a presence in a handful of unclaimed ground
-instead of owning a bloc — see corpmap.py for how that turf gets placed on the map.
+instead of owning a bloc — see corpmap_gen.py for how that turf gets placed on the map.
 
 Leaf module, like factions.py and skills.py: imports nothing from the package.
 """
