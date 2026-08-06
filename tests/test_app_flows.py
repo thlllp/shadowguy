@@ -79,8 +79,8 @@ from shadowguy.screens.creation_screen import CharacterCreationScreen, GearScree
 from shadowguy.screens.matrix_screen import MatrixScreen
 from shadowguy.screens.tactical_screen import HackerPickScreen, TacticalScreen
 from shadowguy.grid import Tile, parse_grid, step_neighbors, visible_tiles
+from shadowguy.support import TRACE_CAP
 from shadowguy.tactical import (
-    TRACE_CAP,
     AimKind,
     CrewFate,
     Side,
@@ -3256,7 +3256,7 @@ def _supported_burglary_stage(seed=3):
     """A burglary stage plus the Support a netrunner hire produces for it."""
     from shadowguy.buildings import BuildingKind, generate_building
     from shadowguy.combat import ENEMIES_BY_ID
-    from shadowguy.tactical import support_for
+    from shadowguy.support import support_for
 
     building = generate_building(random.Random(seed), entrance_count=2, kind=BuildingKind.OFFICE)
     character = Character(name="t")

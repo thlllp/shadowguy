@@ -1,50 +1,35 @@
 """Matrix combat: the netrunner's fight, against ICE instead of muscle.
 
-This is a *parallel* combat surface to combat.py, not a reskin of it. It shares the
-one thing the whole game shares — every roll goes through checks.resolve_check, and a
-landed intrusion is sized by combat.resolve_hit, the same public hit primitive
-tactical.py reuses (one hit formula, now three surfaces). What it deliberately does
-*not* share is the stakes and the state:
+A *parallel* combat surface to combat.py, not a reskin of it. It shares the one thing the
+whole game shares — every roll is checks.resolve_check, and a landed intrusion is sized by
+combat.resolve_hit, the same hit primitive tactical.py reuses. What it deliberately does
+not share is the stakes and the state:
 
-- **The runner's integrity is a separate pool from health.** ICE drains integrity, and
-  running it dry doesn't kill you — it ejects you (MatrixOutcome.EJECTED). A *remote*
-  Data Heist (the only kind today) is fought jacked in from outside, so losing blows the
-  contract but never the run; there is no death in the matrix. Integrity is per-fight,
-  rebuilt from Logic each time a MatrixScreen opens, so nothing here persists onto
-  the Character the way health does.
-- **The actions are Logic's, not the six-stat spread.** The matrix is the
-  Hacker's arena on purpose (unlike meat combat, which spans every stat so no build is
-  locked out of a round): you breach with Cybercombat, harden with Tinkering, analyze
-  with Infer, sleaze with Hack and pull files with Computer — five skills, split by
-  what you're doing on the wire, not one skill doing all of it. A non-hacker
-  can still fight here, but bleeds — the deckless/low-Cybercombat warning
-  (matrix_readiness) is the honest heads-up, not a lockout.
+- **Integrity is a separate pool from health.** ICE drains it, and running it dry ejects
+  you rather than killing you (MatrixOutcome.EJECTED) — a remote Data Heist blows the
+  contract but never the run. Per-fight, rebuilt from Logic, never persisted onto the
+  Character the way health is.
+- **The actions are Logic's, not the six-stat spread.** Breach with Cybercombat, harden
+  with Tinkering, analyze with Infer, sleaze with Hack, pull files with Computer. The
+  matrix is the Hacker's arena on purpose; a non-hacker can still fight here but bleeds,
+  and matrix_readiness is the honest heads-up rather than a lockout.
 
-Like combat.py, this module is a leaf on the scene graph: it imports character, checks,
-combat, shops and skills, and never scene — which is what lets scene.MatrixStage hold
-Ice without a cycle. combat owns *how a meat fight resolves*; this owns *how a matrix
-fight resolves*; scene.MatrixStage owns *what seizing the data or being ejected is
-worth*, through an ordinary Outcome, on the same reward path as every other stage.
+Like combat.py, a leaf on the scene graph: never imports scene, which lets
+scene.MatrixStage hold an Ice without a cycle. The `drop` a fight opens on is read off the
+routing check exactly as combat.drop_for_result does it.
 
-The `drop` a matrix fight opens on is read off the check that routed you in, exactly
-like combat (combat.drop_for_result): breaching cleanly (the ambush) buys a free round;
-tripping black ICE (a critical failure) hands one to the ICE.
+**Cyberdecks carry programs** (shops.Item.program_slots / Program) the way combat.py's
+weapons are the meat runner's loadout. Each installed Program is either a passive bonus
+(folded into player_integrity/firewall_defense/firewall_soak/player_attack_damage) or, if
+uses_per_fight > 0, a limited-use MatrixAction offered beside the four fixed ones —
+uses_per_fight alone tells them apart, so there's no separate kind field to drift out of
+sync. Only the active deck's programs count, and charges are per-fight.
 
-Left room, not built: an on-site variant (a hacker embedded with the muscle) that boots
-you out *painfully* — a health cost — instead of blowing the run. That's an EJECT_COST
-and a caller flag away, not a second engine, which is why loss is already funnelled
-through a single MatrixOutcome.EJECTED rather than a die-here branch.
+Left room, not built: an on-site variant that boots you out *painfully* (a health cost)
+instead of blowing the run. That's an EJECT_COST and a caller flag away, not a second
+engine, which is why loss already funnels through a single MatrixOutcome.EJECTED.
 
-**Cyberdecks carry programs** (shops.Item.program_slots / Program), the netrunner's
-loadout the way combat.py's weapons are the meat runner's: each installed Program is
-either a passive bonus (folded straight into player_integrity/firewall_defense/
-firewall_soak/player_attack_damage) or, if Program.uses_per_fight > 0, a limited-use
-MatrixAction (MatrixActionKind.PROGRAM) offered alongside the four fixed actions —
-uses_per_fight alone tells the two apart, so there's no separate kind field to drift
-out of sync with the bonus fields actually set. Only the *active* deck's programs count
-(inventory.active_deck_entry — the same one equipped_deck_rating already reads off), and
-charges (MatrixState.program_uses) are per-fight, seeded fresh in start_matrix like
-integrity itself.
+See DESIGN.md's Data Heist section for the design rationale in full.
 """
 
 import random
@@ -54,7 +39,7 @@ from enum import StrEnum
 
 from shadowguy.character import Character
 from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolve_check, resolve_rng
-from shadowguy.combat import Drop, resolve_hit
+from shadowguy.combat import FREE_ROUND, Drop, resolve_hit, roll_tier_pool
 from shadowguy.cybernetics import installed_matrix_action_bonus
 from shadowguy.inventory import active_deck_entry, equipped_deck_rating, installed_programs_for
 from shadowguy.shops import STOLEN_DATASHARD_ID, InventoryItem, Program
@@ -86,11 +71,6 @@ HARDEN_SOAK_ON_FAILURE = 1
 # Analyzing (Infer): read an ICE's shape to buy your *next* intrusion — combat's READ.
 ANALYZE_DIFFICULTY = 12
 ANALYZE_BONUS = 4
-
-# A landed clean breach (the ambush drop) buys a free round, same lever and same reason
-# as abstract_combat.FREE_ROUND: ICE *count* is the lethality knob, since every standing program
-# claws at your integrity every round.
-FREE_ROUND = 1
 
 # Which skill each matrix action rolls. Three of these are the matrix's own — Hack is
 # offensive work (the Sleaze bypass, and getting into a system in the first place),
@@ -196,8 +176,7 @@ if any(ice_id not in ICE_BY_ID for ids, _ in ICE_TIERS.values() for ice_id in id
 
 def roll_ice(tier: int, rng: random.Random) -> tuple[Ice, ...]:
     """The ICE a matrix fight at this tier fields."""
-    pool, (low, high) = ICE_TIERS[tier]
-    return tuple(ICE_BY_ID[rng.choice(pool)] for _ in range(rng.randint(low, high)))
+    return roll_tier_pool(ICE_TIERS, ICE_BY_ID, tier, rng)
 
 
 def _roll_one_ice(tier: int, rng: random.Random) -> Ice:
@@ -797,8 +776,10 @@ def _settle(state: MatrixState) -> None:
     that node; MatrixRunState reads state.standing itself to notice and move on."""
     if state.integrity <= 0:
         state.outcome = MatrixOutcome.EJECTED
-        if "jack" not in (state.log[-1] if state.log else ""):
-            state.log.append("Your integrity fails. You're forced out.")
+        # No "did we already log a jack-out?" check here: take_matrix_turn's JACK_OUT
+        # branch returns before _settle is ever reached, so this is the only place an
+        # ejection line is written.
+        state.log.append("Your integrity fails. You're forced out.")
     elif not state.standing and state.is_final_node:
         state.outcome = MatrixOutcome.SEIZED
 

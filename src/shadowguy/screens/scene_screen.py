@@ -13,7 +13,8 @@ from shadowguy.matrix import MatrixOutcome
 from shadowguy.runners import RUNNERS_BY_ID, recruit_cut
 from shadowguy.skills import skill_value
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
-from shadowguy.tactical import TacticalOutcome, support_for
+from shadowguy.support import support_for
+from shadowguy.tactical import TacticalOutcome
 
 from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
 from .burglary_screens import EntrancePickScreen

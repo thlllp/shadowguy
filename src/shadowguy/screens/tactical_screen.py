@@ -8,9 +8,9 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
 from shadowguy.grid import Tile, visible_tiles
+from shadowguy.support import TRACE_CAP, run_support_task, support_tasks
 from shadowguy.tactical import (
     GRENADE_RADIUS,
-    TRACE_CAP,
     AimKind,
     CrewFate,
     Side,
@@ -33,9 +33,7 @@ from shadowguy.tactical import (
     stabilize_ally,
     stairs_here,
     start_burglary,
-    run_support_task,
     start_tactical,
-    support_tasks,
     take_stairs,
     throw_grenade,
     weapon_for_target,

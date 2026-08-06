@@ -68,7 +68,7 @@ class Grid:
     """A rectangular tile map. The numpy/tcod arrays it feeds are built once and cached:
     only the *units* move, so the terrain is fixed for the fight and there's nothing to
     invalidate. That matters because has_line_of_sight runs an unlimited-radius FOV per
-    call and is hit hard — once per movement step per enemy in _enemy_phase, per guard
+    call and is hit hard — once per movement step per enemy in _take_unit_turn, per guard
     per keypress while sneaking — and rebuilding the array from `tiles` was ~70% of
     each call. Generation mutates `tiles` in place while carving (see generate_map), so
     the cache is keyed on the tile data's identity-and-contents via _invalidate below;
