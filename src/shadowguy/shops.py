@@ -372,11 +372,11 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
         # id, name, price, bonuses, slot(None=deck), defense, skill, damage, concealment,
         # two_handed, skill_bonuses, travel_reduction, min_standing, recharge_rounds,
         # stun_damage, tag, program_slots (a deck's matrix-program capacity).
-        ("burner_deck", "Burner Deck", 200, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
+        ("burner_deck", "Burner Deck", 350, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         (
             "cracked_cyberdeck",
             "Cracked Cyberdeck",
-            500,
+            900,
             {"logic": 2},
             None,
             0,
@@ -392,11 +392,11 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
             "",
             2,
         ),
-        ("zetatech_rig", "Zetatech Rig", 1000, {"logic": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
+        ("zetatech_rig", "Zetatech Rig", 1800, {"logic": 3}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 3),
     ],
     LocationKind.PAWN: [
         ("pawned_knuckles", "Pawned Knuckles", 80, {}, Slot.WEAPON, 0, "clubs", 4, 5),
-        ("pawned_deck", "Pawned Deck", 80, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
+        ("pawned_deck", "Pawned Deck", 150, {"logic": 1}, None, 0, None, 0, 0, False, {}, 0, 0, 0, 0, "", 1),
         ("pawned_charm", "Pawned Lucky Charm", 80, {"cool": 1}, Slot.ACCESSORY),
         # Tier 2 — the pawnbroker keeps the interesting finds under the counter.
         (
@@ -714,10 +714,10 @@ class Program:
 # see CLAUDE.md's convention for flagging that.
 _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.COMPUTER_STORE: [
-        ("sleaze", "Sleaze", 230, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, "2 uses"),
-        ("extract", "Extract", 260, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, "unlimited"),
-        ("analyze", "Analyze", 180, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, "3 uses"),
-        ("icebreaker", "Icebreaker", 240, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, "unlimited"),
+        ("sleaze", "Sleaze", 320, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, "2 uses"),
+        ("extract", "Extract", 360, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, "unlimited"),
+        ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, "3 uses"),
+        ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, "unlimited"),
     ],
 }
 

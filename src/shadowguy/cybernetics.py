@@ -5,7 +5,10 @@ screens/shop_screens.py's RipperdocScreen -- install_cyberware charges cash plus
 a piece of Character.humanity's capacity (below), gated on standing with the
 clinic's owner (Cyberware.min_standing). Clinics were already a fully generated
 location kind long before anything sold from one; all that was ever missing was
-the screen.
+the screen. character.Character.buy_creation_cyberware is the one exception:
+an Archetype (archetypes.py) can install an ungated (Deltaware/Trashware) piece
+straight into its preset, funded from gear_budget instead of cash, the same
+funding swap buy_creation_gear makes for a shops.Item.
 
 Load-bearing beyond the purchase: Character.stat()/skill_gear_bonus fold
 installed_bonus/installed_skill_bonus in alongside worn gear, so cyberware

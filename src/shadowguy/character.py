@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from shadowguy.cybernetics import (
+    CYBERWARE_BY_ID,
     CYBERWARE_CATALOG,
     CyberSlot,
     free_humanity,
@@ -59,7 +60,7 @@ STARTING_STAT_POINTS = 6
 STARTING_SKILL_POINTS = 20
 # What one creation skill point is worth as gear, via convert_skill_point_to_gear. A
 # build's third spend: ranks, stats, or walking in already equipped. The catalog runs
-# 80-1600 an item, so one point is roughly *one thing* -- a weapon or a torso piece, not
+# 80-1800 an item, so one point is roughly *one thing* -- a weapon or a torso piece, not
 # a whole kit. Deliberately that granular: at a coarser rate a single point covered a
 # runner head to toe and the choice stopped being a choice, and the leftover (which is
 # burned, not banked -- see discard_gear_budget) was large enough to feel like a penalty
@@ -661,6 +662,28 @@ class Character:
         self.inventory.remove(entry)
         self.creation_gear.remove(item_id)
         self.gear_budget += ITEMS_BY_ID[item_id].price
+        return True
+
+    def buy_creation_cyberware(self, cyberware_id: str) -> bool:
+        """Spend gear budget (never cash) installing one already-ungated piece of
+        cyberware at creation -- the cybernetics.install_cyberware counterpart to
+        buy_creation_gear, same swap of funding source. Standing gates don't apply
+        for the same reason buy_creation_gear's don't: nobody to have standing with
+        before the run starts, so a gated piece is simply never offered (only
+        Deltaware/Trashware -- min_standing 0 -- are ever reachable here). Still
+        scars Humanity like any other install: a preset spending points on chrome
+        pays exactly what installing it mid-run would cost.
+        """
+        cyberware = CYBERWARE_BY_ID[cyberware_id]
+        if cyberware.min_standing or cyberware.price > self.gear_budget:
+            return False
+        if cyberware.slot in self.installed_cyberware:
+            return False
+        if cyberware.humanity_cost > free_humanity(self):
+            return False
+        self.gear_budget -= cyberware.price
+        self.installed_cyberware[cyberware.slot] = cyberware_id
+        self.humanity = round(self.humanity - SURGERY_SCARRING, 2)
         return True
 
     def spend_experience_on_skill(self, skill_id: str) -> bool:
