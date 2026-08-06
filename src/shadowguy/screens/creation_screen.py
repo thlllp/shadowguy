@@ -22,10 +22,9 @@ class CharacterCreationScreen(PanelNav, BackScreen):
     with both pools full, or from ArchetypeSelectScreen with a preset already
     applied and nothing left to spend (r resets it back to a blank build).
 
-    A BackScreen since the presets moved off it: escape returns to whichever of
-    those pushed it, so picking the wrong one isn't a dead end. Every route in
+    A BackScreen so picking the wrong route in isn't a dead end: every way here
     (both of those, plus app.restart_run/load_state) puts BuildSelectScreen
-    underneath, so there is always somewhere to pop back to. The build is left
+    underneath, so escape always has somewhere to pop back to. The build is left
     alone on the way out -- r is what blanks it."""
 
     PANEL_IDS = (*(f"build_list_{stat}" for stat in CORE_STATS), "begin_row")
@@ -152,7 +151,7 @@ class CharacterCreationScreen(PanelNav, BackScreen):
         self.query_one(f"#build_head_{stat}", Static).update(f"{stat.capitalize()} — {character.stat(stat)}")
         items = [ListItem(Static(f"Raise {stat.capitalize()}\n  1 stat point"), id=f"stat_{stat}")]
         items += [
-            ListItem(Static(_compact_skill_label(character, skill, show_cost=True)), id=f"skill_{skill.id}")
+            ListItem(Static(_compact_skill_label(character, skill)), id=f"skill_{skill.id}")
             for skill in SKILLS
             if skill.stat == stat
         ]
@@ -205,8 +204,7 @@ class GearScreen(PanelNav, BackScreen):
     """Spend creation skill points on the gear you walk in carrying.
 
     Its own screen rather than a seventh column on the build grid: that grid is a fixed
-    3x2 of the six core stats, and the catalog is a list that wants room. Same shape as
-    ArchetypeSelectScreen -- a step off the creation screen that comes straight back.
+    3x2 of the six core stats, and the catalog is a list that wants room.
 
     Two lists. The left buys: one row converts a skill point into
     character.GEAR_EB_PER_POINT of budget, the rest are catalog items you can afford

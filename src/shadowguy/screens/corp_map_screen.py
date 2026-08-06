@@ -19,52 +19,17 @@ from shadowguy.corpmap import (
     Location,
     LocationKind,
     Territory,
-    TerritoryModifier,
     owner_label,
     render_ascii_map,
 )
-from shadowguy.corp_turn import (
-    ACADEMY_REBUILD_COST,
-    ACADEMY_TRAINING_COST,
-    DEVELOPMENT_BUMP_COST,
-    RESEARCH_FACILITY_REBUILD_COST,
-    SURVEILLANCE_BUMP_COST,
-    TRAINING_DAYS,
-    EmployeeCategory,
-    FactionEvent,
-    assistant_capacity,
-    assistant_rate,
-    build_efficiency_upgrade,
-    build_academy,
-    build_lab,
-    build_research_facility,
-    development_targets,
-    employee_plural,
-    expand_into,
-    expansion_cost,
-    expansion_candidates,
-    lab_capacity,
-    log_faction_event,
-    next_efficiency_cost,
-    next_lab_cost,
-    owned_research_facility,
-    raise_development,
-    raise_surveillance,
-    rebuild_academy_targets,
-    rebuild_facility_targets,
-    research_rate,
-    surveillance_targets,
-    train_employees,
-)
 from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
-from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.cybernetics import catalog_for_standing
 from shadowguy.rivals import RunnerActivity
-from shadowguy.runners import RUNNERS_BY_ID
 from shadowguy.scene import Scene
 from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG
 
@@ -77,7 +42,19 @@ from . import (
     matrix_warning,
 )
 from .combat_screen import CombatScreen
-from .corp_screen import CorpScreen, OperationsMixin, ResearchTreeScreen, operations_rows
+from .corp_screen import (
+    NO_CORP_TEXT,
+    CorpActionsMixin,
+    CorpScreen,
+    ResearchTreeScreen,
+    academy_rows,
+    corp_info_text,
+    operations_rows,
+    research_rows,
+    sighting_rows,
+    standing_rows,
+    territory_rows,
+)
 from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
 from .scene_screen import SceneScreen
 from .shop_screens import (
@@ -125,20 +102,17 @@ _CORP_CATEGORIES = [
 ]
 
 
-def _sighting_label(sighting, corp_map) -> str:
-    who = "You" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
-    territory_name = corp_map.territories[sighting.territory_id].name
-    return f"Day {sighting.day} — {who} spotted in {territory_name}"
-
-
-class CorpMapScreen(OperationsMixin, BackScreen):
+class CorpMapScreen(CorpActionsMixin, BackScreen):
     """The home screen for both a runner and a corp-only run, with a left-side
     category sidebar (hidden on the _FULL_WIDTH_CATEGORIES tabs, which take the whole
-    width). The main content area shows the map by default;
-    selecting an inline category (gigs, jobs, legwork, local, corp) replaces it with
-    that category's activity list. 'escape' returns to the map. Categories that push
-    their own screen (gear, cyberdeck, skills, phone, tech) do so on top of the map,
-    same as before."""
+    width). The main content area shows the map by default; selecting an inline
+    category (jobs, legwork, corp) replaces it with that category's activity list, and
+    'escape' returns to the map. Categories that push their own screen (gear,
+    cyberdeck, skills, phone, tech) do so on top of the map.
+
+    The corp categories render and resolve through corp_screen.py's shared row
+    builders and CorpActionsMixin, so a corp-only run's Corp tab and CorpScreen itself
+    can never drift apart."""
 
     BINDINGS = [
         *MENU_QUIT_BINDINGS,
@@ -207,7 +181,7 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         overflow-y: auto;
     }
 
-    #local_boxes, #map_local_boxes {
+    #map_local_boxes {
         /* Phone-tile look: a grid of bordered boxes, one per Location (plus a
         Fixers box). Each box's height is auto -- rows aren't fixed like
         #territory_summary since these only rebuild on an explicit refresh
@@ -282,17 +256,26 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         self.selected_id = self.app.character.location_id
         await self._refresh_categories()
         self.query_one("#categories", ListView).can_focus = False
-        self.query_one(CharacterSheet).refresh()
         if self.selected_category is None:
             self._refresh_map()
         else:
             await self._refresh_activities()
             self.focus_next()
 
-    def _refresh(self) -> None:
+    def refresh_map(self) -> None:
         """Public entry point for tests that manipulate selected_id/hovered_id
-        directly and need to re-render the map."""
+        directly and need to re-render the map.
+
+        Deliberately not named `_refresh`: CorpActionsMixin awaits an async refresh
+        hook, and a sync `_refresh` sitting where the mixin's contract could reach it
+        is exactly what once crashed every corp reinforce and attack on this screen.
+        The mixin's hook is _refresh_corp_view, below."""
         self._do_refresh_map()
+
+    async def _refresh_corp_view(self) -> None:
+        """CorpActionsMixin's refresh hook — the corp rows live in this screen's
+        activity list, so a resolved corp action redraws that."""
+        await self._refresh_activities()
 
     async def on_screen_resume(self) -> None:
         if self.selected_category is None:
@@ -340,10 +323,9 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         self.app.main_menu_category = key
         await self._refresh_activities()
         # #categories itself stays unfocusable (arrows drive the map while nothing's
-        # selected) -- focus the category's own list so up/down/enter work it, same
-        # as the old MainMenu/CorpMainMenu did via PanelNav. Tab/shift+tab (Textual's
-        # own default bindings) cycle to any other visible list a category shows
-        # (e.g. Local's location/fixer panels, Corp's academy/research/surveillance).
+        # selected) -- focus the category's own list so up/down/enter work it.
+        # Tab/shift+tab (Textual's own default bindings) cycle to any other visible
+        # list a category shows (e.g. Corp's academy/research/surveillance panels).
         self.focus_next()
 
     # ── quick keybindings ───────────────────────────────────────────────────
@@ -356,24 +338,23 @@ class CorpMapScreen(OperationsMixin, BackScreen):
             return False
         return True
 
+    # No corp_only guard on the four runner-only actions below: check_action above
+    # already reports them disabled, which Textual takes as "the key does not fire".
+
     def action_inventory(self) -> None:
-        if not self.app.corp_only:
-            self.app.push_screen(InventoryScreen())
+        self.app.push_screen(InventoryScreen())
 
     def action_cyberdeck(self) -> None:
-        if not self.app.corp_only:
-            self.app.push_screen(CyberdeckScreen())
+        self.app.push_screen(CyberdeckScreen())
 
     def action_skills(self) -> None:
-        if not self.app.corp_only:
-            self.app.push_screen(SkillsScreen())
+        self.app.push_screen(SkillsScreen())
 
     def action_phone(self) -> None:
         self.app.push_screen(PhoneScreen())
 
     def action_run_corp(self) -> None:
-        if not self.app.corp_only:
-            self.app.push_screen(CorpScreen())
+        self.app.push_screen(CorpScreen())
 
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
@@ -388,9 +369,6 @@ class CorpMapScreen(OperationsMixin, BackScreen):
 
         item_id = event.item.id
         character = self.app.character
-
-        if item_id.startswith("sighting_") or item_id == "no_sightings":
-            return
 
         if item_id == "rest":
             self.app.rest()
@@ -466,118 +444,7 @@ class CorpMapScreen(OperationsMixin, BackScreen):
             self._push_location_screen(location, here)
             return
 
-        if item_id.startswith("corpinfo_"):
-            faction = FACTIONS_BY_ID[item_id.removeprefix("corpinfo_")]
-            self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
-            return
-
-        if item_id.startswith("deploy_") or item_id.startswith("attack_"):
-            await self._commit_operatives(item_id)
-            return
-
-        if item_id.startswith("expand_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("expand_")
-            territory = self.app.corp_map.territories[territory_id]
-            if expand_into(corp_state, self.app.corp_map, territory_id, self.app.rng):
-                self.notify(f"Claimed {territory.name}.")
-                log_faction_event(
-                    self.app.faction_events,
-                    corp_state.faction_id,
-                    FactionEvent(kind="territory", day=self.app.character.day, territory_id=territory_id),
-                )
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
-            return
-
-        if item_id.startswith("surveil_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("surveil_")
-            territory = self.app.corp_map.territories[territory_id]
-            if raise_surveillance(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"Surveillance raised in {territory.name}.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
-            return
-
-        if item_id.startswith("develop_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("develop_")
-            territory = self.app.corp_map.territories[territory_id]
-            if raise_development(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"{territory.name} builds up. Development raised.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
-            return
-
-        if item_id.startswith("train_"):
-            corp_state = self.app.corp_state
-            category = EmployeeCategory(item_id.removeprefix("train_"))
-            if train_employees(corp_state, self.app.corp_map, category, self.app.character.day):
-                self.notify(
-                    f"Training a batch of {employee_plural(category)} — "
-                    f"ready in {TRAINING_DAYS[category]} days."
-                )
-            elif corp_state.pending_recruit is not None:
-                self.notify("The Academy's already training a batch.", severity="warning")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
-            return
-
-        if item_id.startswith("newacademy_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("newacademy_")
-            territory = self.app.corp_map.territories[territory_id]
-            if build_academy(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"New Academy standing in {territory.name}.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("rebuild_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("rebuild_")
-            territory = self.app.corp_map.territories[territory_id]
-            if build_research_facility(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"New Research Facility standing in {territory.name}.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id == "build_lab":
-            corp_state = self.app.corp_state
-            if build_lab(corp_state, self.app.corp_map):
-                self.notify("Built a new lab at the Research Facility.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
-            return
-
-        if item_id == "build_efficiency":
-            corp_state = self.app.corp_state
-            if build_efficiency_upgrade(corp_state, self.app.corp_map):
-                self.notify("Upgraded the Research Facility's efficiency.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh_activities()
+        await self._handle_corp_selection(item_id)
 
     # ── content visibility ──────────────────────────────────────────────────
 
@@ -600,7 +467,6 @@ class CorpMapScreen(OperationsMixin, BackScreen):
 
     def _refresh_map(self) -> None:
         self._set_content_visibility()
-        self.query_one(CharacterSheet).refresh()
         self._do_refresh_map()
 
     def _do_refresh_map(self) -> None:
@@ -625,6 +491,7 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         corp_map = self.app.corp_map
         character = self.app.character
         discover_fixers_here(self.app.fixers, character)
+        self.query_one(CharacterSheet).refresh()
 
         key = (self.selected_id, character.location_id)
         if self.rendered is None or key != self._render_key:
@@ -645,23 +512,20 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         t = corp_map.territories[focus_id]
         here = corp_map.territories[character.location_id]
         self.query_one("#territory_summary", Static).update(self._territory_summary_text(t, here, character))
-        self.query_one(CharacterSheet).refresh()
 
     def _schedule_map_local_boxes(self) -> None:
         """Queue a Locals-panel rebuild for the territory the runner is standing in.
 
         Always that one — the panel is not a preview of wherever the cursor happens to
-        be. So the pending id is really just "a rebuild is wanted"; it stays an id
-        because _drain_map_local_boxes resolves it at the moment it runs, which is what
-        keeps a rebuild queued behind a travel from using the pre-travel territory.
+        be. The pending id is therefore really just "a rebuild is wanted"; it stays an
+        id because _drain_map_local_boxes resolves it at the moment it runs, which is
+        what keeps a rebuild queued behind a travel from using the pre-travel territory.
 
-        Avoid spawning overlapping tasks for the same grid — cancel() + immediate
-        create_task() races where the old task might still be mutating widget state
-        during the new task's remove_children/mount_all, which can cause native
-        crashes. Instead, remember the pending territory and let a single draining task
-        work through it once the in-flight one finishes, rather than dropping the
-        refresh outright (which could strand the boxes on a stale territory if nothing
-        else refreshes before the in-flight task completes).
+        Never two tasks over the same grid: cancel() + an immediate create_task() races
+        the old task's widget mutations against the new one's remove_children/mount_all,
+        which can crash natively. A single draining task works through the pending id
+        instead — dropping the refresh outright could strand the boxes on a stale
+        territory if nothing else refreshed before the in-flight task finished.
         """
         self._map_locals_pending_id = self.app.character.location_id
         if self._map_locals_task is None or self._map_locals_task.done():
@@ -873,9 +737,6 @@ class CorpMapScreen(OperationsMixin, BackScreen):
             await self._refresh_corp()
         elif self.selected_category is not None:
             await self._refresh_runner_activities()
-        elif self.app.corp_only:
-            # Map mode in corp-only: hide corp panels
-            pass
 
     async def _refresh_runner_activities(self) -> None:
         character = self.app.character
@@ -1028,205 +889,56 @@ class CorpMapScreen(OperationsMixin, BackScreen):
         )
 
     def on_collapsible_expanded(self, event: Collapsible.Expanded) -> None:
-        """Accordion behavior for both box grids: opening one box closes any other box
-        in that same grid, so at most one is expanded at a time.
+        """Accordion behavior for the Locals grid: opening one box closes any other, so
+        at most one is expanded at a time.
 
-        No travel gate any more. #map_local_boxes used to double as a preview of a
-        hovered territory, so opening a box for somewhere the runner wasn't standing had
-        to be vetoed; the panel now only ever lists the runner's own territory (see
-        _schedule_map_local_boxes), so every box in it is already somewhere they can
-        act."""
-        box_id = event.collapsible.id or ""
-        if box_id.startswith("map_local_box"):
-            group_selector = "#map_local_boxes Collapsible"
-        elif box_id.startswith("local_box"):
-            group_selector = "#local_boxes Collapsible"
-        else:
+        Ungated on travel: #map_local_boxes only ever lists the territory the runner is
+        standing in (see _schedule_map_local_boxes), so every box in it is already
+        somewhere they can act."""
+        if not (event.collapsible.id or "").startswith("map_local_box"):
             return
-        for box in self.query(group_selector):
+        for box in self.query("#map_local_boxes Collapsible"):
             if box is not event.collapsible:
                 box.collapsed = True
 
     async def _refresh_corp(self) -> None:
         corp_state = self.app.corp_state
+        corp_map = self.app.corp_map
         info = self.query_one("#corp_info", Static)
         activities = self.query_one("#activities", ListView)
-        academy_list = self.query_one("#academy_list", ListView)
-        research_list = self.query_one("#research_list", ListView)
-        surveillance_list = self.query_one("#surveillance_list", ListView)
+        panels = ("academy", "research", "surveillance")
 
         if corp_state is None:
-            character = self.app.character
-            info.update(
-                "You aren't running a corp.\n"
-                "Corps are taken, not chosen — go see one in person, at its HQ."
-            )
-            items = [
-                ListItem(
-                    Static(
-                        f"{faction.name} ({faction.specialty}) — "
-                        f"standing {character.standing_with(faction.id):+d}"
-                    ),
-                    id=f"corpinfo_{faction.id}",
-                )
-                for faction in FACTIONS
-            ]
-            await _replace_items(activities, items)
-            await _replace_items(academy_list, [])
-            await _replace_items(research_list, [])
-            await _replace_items(surveillance_list, [])
-            self.query_one("#academy_panel").display = False
-            self.query_one("#research_panel").display = False
-            self.query_one("#surveillance_panel").display = False
+            info.update(NO_CORP_TEXT)
+            await _replace_items(activities, standing_rows(self.app.character))
+            for name in panels:
+                await _replace_items(self.query_one(f"#{name}_list", ListView), [])
+                self.query_one(f"#{name}_panel").display = False
             return
 
-        self.query_one("#academy_panel").display = True
-        self.query_one("#research_panel").display = True
-        self.query_one("#surveillance_panel").display = True
+        for name in panels:
+            self.query_one(f"#{name}_panel").display = True
 
-        corp_map = self.app.corp_map
-        faction = FACTIONS_BY_ID[corp_state.faction_id]
-        owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
-        candidates = expansion_candidates(corp_map, corp_state.faction_id)
-        territory_names = ", ".join(t.name for t in owned) or "none"
-        facility = owned_research_facility(corp_state, self.app.corp_map)
-        facility_line = ""
-        if facility is not None:
-            capacity = lab_capacity(facility)
-            working = min(corp_state.scientists, capacity)
-            assist_capacity = assistant_capacity(facility)
-            working_assistants = min(corp_state.research_assistants, assist_capacity)
-            facility_line = (
-                f"\nResearch Facility: tier {facility.research_tier}, "
-                f"{working}/{capacity} scientists at work "
-                f"({research_rate(corp_state, facility):g}rp/scientist), "
-                f"{working_assistants}/{assist_capacity} assistants at work "
-                f"({assistant_rate(corp_state):g}rp/assistant)"
-            )
-        info.update(
-            f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
-            f"{corp_state.scientists} scientists — {corp_state.operatives} operatives — "
-            f"{corp_state.research_assistants} research assistants — "
-            f"Day {self.app.character.day}\n"
-            f"Territories ({len(owned)}): {territory_names}"
-            f"{facility_line}"
-        )
+        day = self.app.character.day
+        info.update(corp_info_text(corp_state, corp_map, day))
 
-        items = []
-        for territory_id in candidates:
-            territory = corp_map.territories[territory_id]
-            cost = expansion_cost(territory)
-            label = f"Expand into {territory.name} — {cost}eb"
-            if corp_state.daily_action_used:
-                label += " (already acted today)"
-            elif cost > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"expand_{territory_id}"))
-        if not candidates:
-            items.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
-
-        for territory in surveillance_targets(corp_state, corp_map):
-            level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
-            label = (
-                f"Raise Surveillance in {territory.name} "
-                f"({level}→{level + 1}) — {SURVEILLANCE_BUMP_COST}eb"
-            )
-            if SURVEILLANCE_BUMP_COST > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"surveil_{territory.id}"))
-
-        for territory in development_targets(corp_state, corp_map):
-            level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
-            label = f"Develop {territory.name} ({level}→{level + 1}) — {DEVELOPMENT_BUMP_COST}eb"
-            if DEVELOPMENT_BUMP_COST > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
-
-        # The corp's operative moves, folded into the same flat list — a corp_only
-        # run never opens CorpScreen, so this is where its Operations rows live.
+        items = territory_rows(corp_state, corp_map)
+        # The corp's operative moves, folded into the same flat list rather than a
+        # panel of their own -- a corp_only run never opens CorpScreen, so this is
+        # where its Operations rows live.
         items.extend(operations_rows(corp_state, corp_map))
-
         items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(activities, items)
 
-        academy_items = []
-        rebuild_sites = rebuild_academy_targets(corp_state, corp_map)
-        pending = corp_state.pending_recruit
-        if rebuild_sites:
-            # No Academy at all: it was captured with the district under it, so the only
-            # move left here is standing a new one up. Nothing trains until one does.
-            for territory in rebuild_sites:
-                label = f"Build an Academy in {territory.name} — {ACADEMY_REBUILD_COST}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif ACADEMY_REBUILD_COST > corp_state.cash:
-                    label += " (can't afford)"
-                academy_items.append(ListItem(Static(label), id=f"newacademy_{territory.id}"))
-        elif pending is not None:
-            days_left = pending.ready_day - self.app.character.day
-            academy_items.append(
-                ListItem(
-                    Static(
-                        f"Training {employee_plural(pending.category)} — "
-                        f"ready in {days_left} day{'s' if days_left != 1 else ''}"
-                    ),
-                    id="pending_recruit",
-                )
-            )
-        else:
-            for category in EmployeeCategory:
-                cost = ACADEMY_TRAINING_COST[category]
-                label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif cost > corp_state.cash:
-                    label += " (can't afford)"
-                academy_items.append(ListItem(Static(label), id=f"train_{category}"))
-        await _replace_items(academy_list, academy_items)
-
-        research_items = []
-        if facility is None:
-            # Nothing to upgrade: the corp's labs were captured with the district under
-            # them, so the only research move left is standing a new one up.
-            for territory in rebuild_facility_targets(corp_state, corp_map):
-                label = f"Build a Research Facility in {territory.name} — {RESEARCH_FACILITY_REBUILD_COST}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif RESEARCH_FACILITY_REBUILD_COST > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id=f"rebuild_{territory.id}"))
-        else:
-            cost = next_lab_cost(facility)
-            if cost is None:
-                research_items.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))
-            else:
-                label = f"Build a lab — {cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif cost > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id="build_lab"))
-
-            efficiency_cost = next_efficiency_cost(facility)
-            if efficiency_cost is None:
-                research_items.append(ListItem(Static("Efficiency fully upgraded"), id="efficiency_maxed"))
-            else:
-                label = f"Upgrade efficiency — {efficiency_cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif efficiency_cost > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id="build_efficiency"))
-        await _replace_items(research_list, research_items)
-
-        if corp_state.sightings:
-            sighting_items = [
-                ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
-                for i, sighting in enumerate(corp_state.sightings)
-            ]
-        else:
-            sighting_items = [ListItem(Static("No sightings yet."), id="no_sightings")]
-        await _replace_items(surveillance_list, sighting_items)
+        await _replace_items(
+            self.query_one("#academy_list", ListView), academy_rows(corp_state, corp_map, day)
+        )
+        await _replace_items(
+            self.query_one("#research_list", ListView), research_rows(corp_state, corp_map)
+        )
+        await _replace_items(
+            self.query_one("#surveillance_list", ListView), sighting_rows(corp_state, corp_map)
+        )
 
 
 class GangTollScreen(ModalScreen):

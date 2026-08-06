@@ -97,7 +97,7 @@ class SecurityContract:
 
 @dataclass
 class NightResult:
-    """What one resolve_security_night() call did, so the caller (MainMenu) can build
+    """What one resolve_security_night() call did, so the caller (ShadowguyApp's day tick) can build
     its notification from data rather than re-deriving it from contract state after
     mutation (e.g. after nights_completed has already moved and the contract may have
     been removed)."""

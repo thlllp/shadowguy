@@ -103,7 +103,7 @@ def _seat(
 
 def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[Fixer]:
     """Seat every fixer in a distinct district on this run's map, so 'a fixer is in
-    the area' (app.MainMenu's Local tab) means something different every run.
+    the area' (CorpMapScreen's Locals panel) means something different every run.
 
     A street-level fixer (faction_id None) is seeded on neutral ground, never the
     player's own start tile — the start tile is guaranteed reachable day one either

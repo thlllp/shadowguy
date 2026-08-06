@@ -33,7 +33,7 @@ class MatrixScreen(Screen):
     time) and fighting a node's guardian (the same action-list/log shape every
     other fight screen uses). Dismisses with a matrix.MatrixOutcome (SEIZED /
     EJECTED); SceneScreen maps those onto the MatrixStage's victory/escape
-    Outcomes — unchanged from before this screen went node-based."""
+    Outcomes."""
 
     BINDINGS = MENU_QUIT_BINDINGS
 

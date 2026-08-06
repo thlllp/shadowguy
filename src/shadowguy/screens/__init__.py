@@ -11,11 +11,9 @@ from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
 from shadowguy.skills import skill_value
 
-# Terrain glyph/style, shared by TacticalScreen and BurglaryWalkScreen so the two grid
-# renderers (same grid.Grid/Tile underneath) look like one visual language. Wall and
-# low cover previously rendered as flat "#"/"%" in the same grey -- indistinguishable at
-# a glance. Solid vs. shaded blocks plus a distinct color for cover reads as "hide here",
-# without changing any grid.py data.
+# Terrain glyph/style for anything drawn over a grid.Grid. Solid vs. shaded blocks plus
+# a distinct color for cover reads as "hide here" at a glance, without changing any
+# grid.py data.
 
 # Bitmask of which cardinal neighbors are also wall -- N/S/E/W as bits 1/2/4/8 -- mapped
 # to the box-drawing glyph that connects in those directions, so a wall reads as an actual
@@ -61,9 +59,10 @@ def _terrain_glyph(grid: Grid, x: int, y: int) -> tuple[str, str]:
     return "·", "grey50"
 
 
-# Combat/matrix Action labels follow "Title (detail)" — split it so a fight action can
-# render as a boxed RPG-style button (bold title, dim detail on its own line) instead of
-# a flat text row, shared by CombatScreen/MatrixScreen/TacticalScreen alike.
+# Matrix Action labels follow "Title (detail)" — split it so a fight action can render
+# as a boxed RPG-style button (bold title, dim detail on its own line) instead of a flat
+# text row. CombatScreen boxes only its highlighted row and keeps the raw label;
+# TacticalScreen builds its status tiles from _boxed_text directly.
 _ACTION_LABEL_RE = re.compile(r"^(.*) \(([^)]*)\)$")
 
 
@@ -176,6 +175,22 @@ class BackScreen(Screen):
         self.app.pop_screen()
 
 
+class RefreshOnResume:
+    """Mount and re-entry both redraw, for a screen whose content can go stale while a
+    pushed screen sits on top of it (buying at a shop, spending xp, a day ticking over).
+
+    Mixed in rather than folded into BackScreen: the pair is only correct for a screen
+    whose whole content comes from one `_refresh()`, which is most of them but not
+    CorpMapScreen (map mode and a category tab redraw differently) or FixerOffersScreen
+    (nothing pushes over it)."""
+
+    async def on_mount(self) -> None:
+        await self._refresh()
+
+    async def on_screen_resume(self) -> None:
+        await self._refresh()
+
+
 def _in_collapsed_section(widget) -> bool:
     """True if `widget` sits inside a collapsed Collapsible (so it's hidden and can't take
     focus). Screens with no Collapsible ancestor never report True, so PanelNav is unchanged
@@ -205,14 +220,15 @@ class PanelNav:
                 return
 
 
-def _compact_skill_label(character: Character, skill, show_cost: bool = False) -> str:
+def _compact_skill_label(character: Character, skill) -> str:
+    """One skill row, shared by CharacterCreationScreen's build columns and
+    SkillsScreen's: current rank and value, plus what the next rank costs. The two
+    screens fund that cost from different pools, but the row reads the same."""
     rank = character.skill_rank(skill.id)
     value = skill_value(character, skill.id)
-    detail = f"  rank {rank}/{MAX_SKILL_RANK}  value {value}"
-    if show_cost:
-        cost = character.next_rank_cost(skill.id)
-        detail += "  MAX" if cost is None else f"  next +{cost}"
-    return f"{skill.name}\n{detail}"
+    cost = character.next_rank_cost(skill.id)
+    next_up = "  MAX" if cost is None else f"  next +{cost}"
+    return f"{skill.name}\n  rank {rank}/{MAX_SKILL_RANK}  value {value}{next_up}"
 
 
 _MENU_CSS = """

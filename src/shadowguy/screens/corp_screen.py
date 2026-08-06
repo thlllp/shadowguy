@@ -59,10 +59,27 @@ from . import (
 )
 
 
+NO_CORP_TEXT = (
+    "You aren't running a corp.\n"
+    "Corps are taken, not chosen — go see one in person, at its HQ."
+)
+
+
 def _sighting_label(sighting, corp_map) -> str:
     who = "You" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
     territory_name = corp_map.territories[sighting.territory_id].name
     return f"Day {sighting.day} — {who} spotted in {territory_name}"
+
+
+def _gate(label: str, corp_state: CorpState, cost: int, *, daily: bool = True) -> str:
+    """Why picking this row would fail, appended to its own label -- the day's directed
+    move first, then the price, which is the order the corp_turn call itself checks them
+    in. `daily=False` for the repeatable bumps, which cost cash but not the day's move."""
+    if daily and corp_state.daily_action_used:
+        return f"{label} (already acted today)"
+    if cost > corp_state.cash:
+        return f"{label} (can't afford)"
+    return label
 
 
 def force_options(available: int) -> list[int]:
@@ -150,14 +167,295 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
     return rows
 
 
-class OperationsMixin:
-    """The deploy/attack flow, shared by CorpScreen and CorpMapScreen.
+def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
+    """The corp's status header: cash, research, headcount, what it holds, and how
+    much of the Research Facility is actually staffed."""
+    faction = FACTIONS_BY_ID[corp_state.faction_id]
+    owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
+    facility = owned_research_facility(corp_state, corp_map)
+    facility_line = ""
+    if facility is not None:
+        capacity = lab_capacity(facility)
+        assist_capacity = assistant_capacity(facility)
+        facility_line = (
+            f"\nResearch Facility: tier {facility.research_tier}, "
+            f"{min(corp_state.scientists, capacity)}/{capacity} scientists at work "
+            f"({research_rate(corp_state, facility):g}rp/scientist), "
+            f"{min(corp_state.research_assistants, assist_capacity)}/{assist_capacity} "
+            f"assistants at work ({assistant_rate(corp_state):g}rp/assistant)"
+        )
+    return (
+        f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
+        f"{corp_state.scientists} scientists — {corp_state.operatives} operatives — "
+        f"{corp_state.research_assistants} research assistants — "
+        f"Day {day}\n"
+        f"Territories ({len(owned)}): {', '.join(t.name for t in owned) or 'none'}"
+        f"{facility_line}"
+    )
 
-    A mixin rather than duplicated handlers because this one is two screens long
-    and genuinely stateful — it spans a pushed ForcePickScreen and back — unlike
-    the one-liner expand/train/build handlers the two screens do just repeat.
-    Requires the host to provide `_refresh()`.
+
+def standing_rows(character) -> list[ListItem]:
+    """What a corp screen shows with no corp yet: where each Faction stands with you.
+    Read-only — a corp is taken from inside its own HQ (shop_screens.CorpHQScreen), by
+    a runner the executive will see and who can cover factions.TAKEOVER_COST. Standing
+    is the gate that moves slowest, so it's the one worth showing."""
+    return [
+        ListItem(
+            Static(
+                f"{faction.name} ({faction.specialty}) — "
+                f"standing {character.standing_with(faction.id):+d}"
+            ),
+            id=f"corpinfo_{faction.id}",
+        )
+        for faction in FACTIONS
+    ]
+
+
+def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
+    """Expansion onto neutral ground, plus the two repeatable modifier bumps."""
+    rows = []
+    candidates = expansion_candidates(corp_map, corp_state.faction_id)
+    for territory_id in candidates:
+        territory = corp_map.territories[territory_id]
+        cost = expansion_cost(territory)
+        label = _gate(f"Expand into {territory.name} — {cost}eb", corp_state, cost)
+        rows.append(ListItem(Static(label), id=f"expand_{territory_id}"))
+    if not candidates:
+        rows.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
+
+    for territory in surveillance_targets(corp_state, corp_map):
+        level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+        label = (
+            f"Raise Surveillance in {territory.name} "
+            f"({level}→{level + 1}) — {SURVEILLANCE_BUMP_COST}eb"
+        )
+        rows.append(
+            ListItem(
+                Static(_gate(label, corp_state, SURVEILLANCE_BUMP_COST, daily=False)),
+                id=f"surveil_{territory.id}",
+            )
+        )
+
+    for territory in development_targets(corp_state, corp_map):
+        level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+        label = f"Develop {territory.name} ({level}→{level + 1}) — {DEVELOPMENT_BUMP_COST}eb"
+        rows.append(
+            ListItem(
+                Static(_gate(label, corp_state, DEVELOPMENT_BUMP_COST, daily=False)),
+                id=f"develop_{territory.id}",
+            )
+        )
+    return rows
+
+
+def academy_rows(corp_state: CorpState, corp_map, day: int) -> list[ListItem]:
+    """The Academy panel: stand a new one up if the old one was captured with the
+    district under it, wait out a batch already in training, or start one."""
+    rebuild_sites = rebuild_academy_targets(corp_state, corp_map)
+    if rebuild_sites:
+        return [
+            ListItem(
+                Static(
+                    _gate(
+                        f"Build an Academy in {territory.name} — {ACADEMY_REBUILD_COST}eb",
+                        corp_state,
+                        ACADEMY_REBUILD_COST,
+                    )
+                ),
+                id=f"newacademy_{territory.id}",
+            )
+            for territory in rebuild_sites
+        ]
+
+    pending = corp_state.pending_recruit
+    if pending is not None:
+        days_left = pending.ready_day - day
+        return [
+            ListItem(
+                Static(
+                    f"Training {employee_plural(pending.category)} — "
+                    f"ready in {days_left} day{'s' if days_left != 1 else ''}"
+                ),
+                id="pending_recruit",
+            )
+        ]
+
+    rows = []
+    for category in EmployeeCategory:
+        cost = ACADEMY_TRAINING_COST[category]
+        label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {cost}eb"
+        rows.append(ListItem(Static(_gate(label, corp_state, cost)), id=f"train_{category}"))
+    return rows
+
+
+def research_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
+    """The Research Facility panel: the two upgrade tracks, or -- once the labs have
+    been captured with the district under them -- the rebuild rows instead."""
+    facility = owned_research_facility(corp_state, corp_map)
+    if facility is None:
+        return [
+            ListItem(
+                Static(
+                    _gate(
+                        f"Build a Research Facility in {territory.name} — "
+                        f"{RESEARCH_FACILITY_REBUILD_COST}eb",
+                        corp_state,
+                        RESEARCH_FACILITY_REBUILD_COST,
+                    )
+                ),
+                id=f"rebuild_{territory.id}",
+            )
+            for territory in rebuild_facility_targets(corp_state, corp_map)
+        ]
+
+    rows = []
+    cost = next_lab_cost(facility)
+    if cost is None:
+        rows.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))
+    else:
+        rows.append(
+            ListItem(Static(_gate(f"Build a lab — {cost}eb", corp_state, cost)), id="build_lab")
+        )
+
+    efficiency_cost = next_efficiency_cost(facility)
+    if efficiency_cost is None:
+        rows.append(ListItem(Static("Efficiency fully upgraded"), id="efficiency_maxed"))
+    else:
+        rows.append(
+            ListItem(
+                Static(_gate(f"Upgrade efficiency — {efficiency_cost}eb", corp_state, efficiency_cost)),
+                id="build_efficiency",
+            )
+        )
+    return rows
+
+
+def sighting_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
+    if not corp_state.sightings:
+        return [ListItem(Static("No sightings yet."), id="no_sightings")]
+    return [
+        ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
+        for i, sighting in enumerate(corp_state.sightings)
+    ]
+
+
+class CorpActionsMixin:
+    """Every corp row's behaviour, shared by CorpScreen and CorpMapScreen — which show
+    the same corp in two layouts (its own screen, and the corp-only run's Corp tab) and
+    so must resolve a pick identically.
+
+    A mixin rather than duplicated handlers because the deploy/attack half is two
+    screens long and genuinely stateful — it spans a pushed ForcePickScreen and back.
+    The rest joined it after the copies drifted: two of them kept calling the host's
+    `_refresh`, which is async on one screen and sync on the other, and crashed.
+
+    Requires the host to provide an async `_refresh_corp_view()`.
     """
+
+    def _notify_refusal(self) -> None:
+        """Why the corp_turn call just failed closed. Cash is the fallback: every daily
+        action checks the day's directed move first and its own price second."""
+        if self.app.corp_state.daily_action_used:
+            self.notify("Already made your move today.", severity="warning")
+        else:
+            self.notify("Can't afford it.", severity="warning")
+
+    async def _handle_corp_selection(self, item_id: str) -> bool:
+        """Resolve `item_id` if it's a corp row, and report whether it was one — so a
+        host carrying rows of its own (CorpMapScreen's gigs, jobs, locations) can fall
+        through to them. Read-only rows count as handled: there's nothing to do, but
+        nothing else should try either."""
+        if item_id.startswith("sighting_") or item_id in ("no_sightings", "no_operations"):
+            return True
+
+        if item_id.startswith("corpinfo_"):
+            # Read-only rows: the takeover lives at the corp's HQ, not here.
+            faction = FACTIONS_BY_ID[item_id.removeprefix("corpinfo_")]
+            self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
+            return True
+
+        if item_id.startswith("deploy_") or item_id.startswith("attack_"):
+            await self._commit_operatives(item_id)
+            return True
+
+        corp_state = self.app.corp_state
+        corp_map = self.app.corp_map
+
+        if item_id.startswith("expand_"):
+            territory_id = item_id.removeprefix("expand_")
+            if expand_into(corp_state, corp_map, territory_id, self.app.rng):
+                self.notify(f"Claimed {corp_map.territories[territory_id].name}.")
+                log_faction_event(
+                    self.app.faction_events,
+                    corp_state.faction_id,
+                    FactionEvent(
+                        kind="territory", day=self.app.character.day, territory_id=territory_id
+                    ),
+                )
+            else:
+                self._notify_refusal()
+
+        elif item_id.startswith("surveil_"):
+            territory_id = item_id.removeprefix("surveil_")
+            if raise_surveillance(corp_state, corp_map, territory_id):
+                self.notify(f"Surveillance raised in {corp_map.territories[territory_id].name}.")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+
+        elif item_id.startswith("develop_"):
+            territory_id = item_id.removeprefix("develop_")
+            if raise_development(corp_state, corp_map, territory_id):
+                self.notify(
+                    f"{corp_map.territories[territory_id].name} builds up. Development raised."
+                )
+            else:
+                self.notify("Can't afford it.", severity="warning")
+
+        elif item_id.startswith("train_"):
+            category = EmployeeCategory(item_id.removeprefix("train_"))
+            if train_employees(corp_state, corp_map, category, self.app.character.day):
+                self.notify(
+                    f"Training a batch of {employee_plural(category)} — "
+                    f"ready in {TRAINING_DAYS[category]} days."
+                )
+            elif corp_state.pending_recruit is not None:
+                self.notify("The Academy's already training a batch.", severity="warning")
+            else:
+                self._notify_refusal()
+
+        elif item_id.startswith("newacademy_"):
+            territory_id = item_id.removeprefix("newacademy_")
+            if build_academy(corp_state, corp_map, territory_id):
+                self.notify(f"New Academy standing in {corp_map.territories[territory_id].name}.")
+            else:
+                self._notify_refusal()
+
+        elif item_id.startswith("rebuild_"):
+            territory_id = item_id.removeprefix("rebuild_")
+            if build_research_facility(corp_state, corp_map, territory_id):
+                self.notify(
+                    f"New Research Facility standing in {corp_map.territories[territory_id].name}."
+                )
+            else:
+                self._notify_refusal()
+
+        elif item_id == "build_lab":
+            if build_lab(corp_state, corp_map):
+                self.notify("Built a new lab at the Research Facility.")
+            else:
+                self._notify_refusal()
+
+        elif item_id == "build_efficiency":
+            if build_efficiency_upgrade(corp_state, corp_map):
+                self.notify("Upgraded the Research Facility's efficiency.")
+            else:
+                self._notify_refusal()
+
+        else:
+            return False
+
+        await self._refresh_corp_view()
+        return True
 
     async def _commit_operatives(self, item_id: str) -> None:
         """Check the two gates that make the pick pointless *before* asking anything,
@@ -198,13 +496,13 @@ class OperationsMixin:
         if not is_attack:
             deploy_operatives(corp_state, self.app.corp_map, territory_id, committed)
             self.notify(f"{committed} operative(s) now hold {territory.name}.")
-            await self._refresh()
+            await self._refresh_corp_view()
             return
 
         result = attack_territory(corp_state, self.app.corp_map, territory_id, committed, self.app.rng)
         if result is None:
             self.notify("That attack can't go in.", severity="warning")
-            await self._refresh()
+            await self._refresh_corp_view()
             return
         if result.captured:
             self.notify(
@@ -227,10 +525,10 @@ class OperationsMixin:
                 f"{result.defender_losses} of theirs down.",
                 severity="warning",
             )
-        await self._refresh()
+        await self._refresh_corp_view()
 
 
-class CorpScreen(OperationsMixin, BackScreen):
+class CorpScreen(CorpActionsMixin, BackScreen):
     """Play as a corp instead of the runner. Getting one is not a choice made here:
     a runner takes a corp from inside its own HQ (shop_screens.CorpHQScreen), by
     reaching the executive and buying a controlling stake — see factions.can_take_over.
@@ -259,8 +557,8 @@ class CorpScreen(OperationsMixin, BackScreen):
     # ListView defaults to height: 1fr, which -- with three of them stacked as
     # siblings (corp_list plus the Collapsible-wrapped ones) -- squashes each
     # to a sliver and lets the Collapsibles overlap on top of it. height: auto
-    # (the same fix MainMenu applies to its own Collapsible-wrapped lists) sizes
-    # each to its actual item count instead.
+    # (the same fix CorpMapScreen applies to its own Collapsible-wrapped lists)
+    # sizes each to its actual item count instead.
     CSS = """
     #corp_list, #academy_list, #research_list, #operations_list, #surveillance_list {
         height: auto;
@@ -299,323 +597,62 @@ class CorpScreen(OperationsMixin, BackScreen):
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state
+        corp_map = self.app.corp_map
         info = self.query_one("#corp_info", Static)
-        list_view = self.query_one("#corp_list", ListView)
-        academy_list = self.query_one("#academy_list", ListView)
-        research_list = self.query_one("#research_list", ListView)
+        panels = ("academy", "research", "operations", "surveillance")
 
         if corp_state is None:
-            # No picker here any more: a corp is taken from inside its own HQ
-            # (shop_screens.CorpHQScreen), by a runner the executive will see and who can
-            # cover factions.TAKEOVER_COST. This screen just says where to go and how
-            # each corp currently feels about you, since standing is the gate that moves
-            # slowest.
-            character = self.app.character
-            info.update(
-                "You aren't running a corp.\n"
-                "Corps are taken, not chosen — go see one in person, at its HQ."
+            info.update(NO_CORP_TEXT)
+            await _replace_items(
+                self.query_one("#corp_list", ListView), standing_rows(self.app.character)
             )
-            items = [
-                ListItem(
-                    Static(
-                        f"{faction.name} ({faction.specialty}) — "
-                        f"standing {character.standing_with(faction.id):+d}"
-                    ),
-                    id=f"corpinfo_{faction.id}",
-                )
-                for faction in FACTIONS
-            ]
-            await _replace_items(list_view, items)
-            await _replace_items(academy_list, [])
-            await _replace_items(research_list, [])
-            await _replace_items(self.query_one("#operations_list", ListView), [])
-            await _replace_items(self.query_one("#surveillance_list", ListView), [])
-            self.query_one("#academy_panel").display = False
-            self.query_one("#research_panel").display = False
-            self.query_one("#operations_panel").display = False
-            self.query_one("#surveillance_panel").display = False
+            for name in panels:
+                await _replace_items(self.query_one(f"#{name}_list", ListView), [])
+                self.query_one(f"#{name}_panel").display = False
             return
 
-        self.query_one("#academy_panel").display = True
-        self.query_one("#research_panel").display = True
-        self.query_one("#operations_panel").display = True
-        self.query_one("#surveillance_panel").display = True
+        for name in panels:
+            self.query_one(f"#{name}_panel").display = True
 
-        corp_map = self.app.corp_map
-        faction = FACTIONS_BY_ID[corp_state.faction_id]
-        owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
-        candidates = expansion_candidates(corp_map, corp_state.faction_id)
-        territory_names = ", ".join(t.name for t in owned) or "none"
-        facility = owned_research_facility(corp_state, self.app.corp_map)
-        facility_line = ""
-        if facility is not None:
-            capacity = lab_capacity(facility)
-            working = min(corp_state.scientists, capacity)
-            assist_capacity = assistant_capacity(facility)
-            working_assistants = min(corp_state.research_assistants, assist_capacity)
-            facility_line = (
-                f"\nResearch Facility: tier {facility.research_tier}, "
-                f"{working}/{capacity} scientists at work "
-                f"({research_rate(corp_state, facility):g}rp/scientist), "
-                f"{working_assistants}/{assist_capacity} assistants at work "
-                f"({assistant_rate(corp_state):g}rp/assistant)"
-            )
-        info.update(
-            f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
-            f"{corp_state.scientists} scientists — {corp_state.operatives} operatives — "
-            f"{corp_state.research_assistants} research assistants — "
-            f"Day {self.app.character.day}\n"
-            f"Territories ({len(owned)}): {territory_names}"
-            f"{facility_line}"
+        day = self.app.character.day
+        info.update(corp_info_text(corp_state, corp_map, day))
+
+        items = territory_rows(corp_state, corp_map)
+        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
+        await _replace_items(self.query_one("#corp_list", ListView), items)
+
+        await _replace_items(
+            self.query_one("#academy_list", ListView), academy_rows(corp_state, corp_map, day)
+        )
+        await _replace_items(
+            self.query_one("#research_list", ListView), research_rows(corp_state, corp_map)
+        )
+        await _replace_items(
+            self.query_one("#operations_list", ListView),
+            operations_rows(corp_state, corp_map)
+            or [ListItem(Static("No territory to hold and nobody bordering you."), id="no_operations")],
+        )
+        await _replace_items(
+            self.query_one("#surveillance_list", ListView), sighting_rows(corp_state, corp_map)
         )
 
-        items = []
-        for territory_id in candidates:
-            territory = corp_map.territories[territory_id]
-            cost = expansion_cost(territory)
-            label = f"Expand into {territory.name} — {cost}eb"
-            if corp_state.daily_action_used:
-                label += " (already acted today)"
-            elif cost > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"expand_{territory_id}"))
-        if not candidates:
-            items.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
-
-        # The two modifier bumps are cash-gated and repeatable, so they never
-        # carry the "already acted today" note the expansion rows above do.
-        for territory in surveillance_targets(corp_state, corp_map):
-            level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
-            label = (
-                f"Raise Surveillance in {territory.name} "
-                f"({level}→{level + 1}) — {SURVEILLANCE_BUMP_COST}eb"
-            )
-            if SURVEILLANCE_BUMP_COST > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"surveil_{territory.id}"))
-
-        for territory in development_targets(corp_state, corp_map):
-            level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
-            label = f"Develop {territory.name} ({level}→{level + 1}) — {DEVELOPMENT_BUMP_COST}eb"
-            if DEVELOPMENT_BUMP_COST > corp_state.cash:
-                label += " (can't afford)"
-            items.append(ListItem(Static(label), id=f"develop_{territory.id}"))
-
-        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
-        await _replace_items(list_view, items)
-
-        academy_items = []
-        rebuild_sites = rebuild_academy_targets(corp_state, corp_map)
-        pending = corp_state.pending_recruit
-        if rebuild_sites:
-            # No Academy at all: it was captured with the district under it, so the only
-            # move left here is standing a new one up. Nothing trains until one does.
-            for territory in rebuild_sites:
-                label = f"Build an Academy in {territory.name} — {ACADEMY_REBUILD_COST}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif ACADEMY_REBUILD_COST > corp_state.cash:
-                    label += " (can't afford)"
-                academy_items.append(ListItem(Static(label), id=f"newacademy_{territory.id}"))
-        elif pending is not None:
-            days_left = pending.ready_day - self.app.character.day
-            academy_items.append(
-                ListItem(
-                    Static(
-                        f"Training {employee_plural(pending.category)} — "
-                        f"ready in {days_left} day{'s' if days_left != 1 else ''}"
-                    ),
-                    id="pending_recruit",
-                )
-            )
-        else:
-            for category in EmployeeCategory:
-                cost = ACADEMY_TRAINING_COST[category]
-                label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif cost > corp_state.cash:
-                    label += " (can't afford)"
-                academy_items.append(ListItem(Static(label), id=f"train_{category}"))
-        await _replace_items(academy_list, academy_items)
-
-        research_items = []
-        if facility is None:
-            # Nothing to upgrade: the corp's labs were captured with the district under
-            # them, so the only research move left is standing a new one up.
-            for territory in rebuild_facility_targets(corp_state, corp_map):
-                label = f"Build a Research Facility in {territory.name} — {RESEARCH_FACILITY_REBUILD_COST}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif RESEARCH_FACILITY_REBUILD_COST > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id=f"rebuild_{territory.id}"))
-        else:
-            cost = next_lab_cost(facility)
-            if cost is None:
-                research_items.append(ListItem(Static("Labs fully upgraded"), id="labs_maxed"))
-            else:
-                label = f"Build a lab — {cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif cost > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id="build_lab"))
-
-            efficiency_cost = next_efficiency_cost(facility)
-            if efficiency_cost is None:
-                research_items.append(ListItem(Static("Efficiency fully upgraded"), id="efficiency_maxed"))
-            else:
-                label = f"Upgrade efficiency — {efficiency_cost}eb"
-                if corp_state.daily_action_used:
-                    label += " (already acted today)"
-                elif efficiency_cost > corp_state.cash:
-                    label += " (can't afford)"
-                research_items.append(ListItem(Static(label), id="build_efficiency"))
-        await _replace_items(research_list, research_items)
-
-        operations_items = operations_rows(corp_state, corp_map) or [
-            ListItem(Static("No territory to hold and nobody bordering you."), id="no_operations")
-        ]
-        await _replace_items(self.query_one("#operations_list", ListView), operations_items)
-
-        if corp_state.sightings:
-            sighting_items = [
-                ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
-                for i, sighting in enumerate(corp_state.sightings)
-            ]
-        else:
-            sighting_items = [ListItem(Static("No sightings yet."), id="no_sightings")]
-        await _replace_items(self.query_one("#surveillance_list", ListView), sighting_items)
+    async def _refresh_corp_view(self) -> None:
+        """CorpActionsMixin's refresh hook — every row on this screen is a corp row, so
+        it redraws the lot."""
+        await self._refresh()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
-        if item_id.startswith("sighting_") or item_id in ("no_sightings", "no_operations"):
-            return
-
-        if item_id.startswith("deploy_") or item_id.startswith("attack_"):
-            await self._commit_operatives(item_id)
-            return
-
-        if item_id.startswith("corpinfo_"):
-            # Read-only rows: the takeover lives at the corp's HQ, not here.
-            faction = FACTIONS_BY_ID[item_id.removeprefix("corpinfo_")]
-            self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
-            return
-
         if item_id == "rest":
             self.app.rest()
             await self._refresh()
             return
-
-        if item_id.startswith("expand_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("expand_")
-            territory = self.app.corp_map.territories[territory_id]
-            if expand_into(corp_state, self.app.corp_map, territory_id, self.app.rng):
-                self.notify(f"Claimed {territory.name}.")
-                log_faction_event(
-                    self.app.faction_events,
-                    corp_state.faction_id,
-                    FactionEvent(kind="territory", day=self.app.character.day, territory_id=territory_id),
-                )
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("surveil_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("surveil_")
-            territory = self.app.corp_map.territories[territory_id]
-            if raise_surveillance(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"Surveillance raised in {territory.name}.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("develop_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("develop_")
-            territory = self.app.corp_map.territories[territory_id]
-            if raise_development(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"{territory.name} builds up. Development raised.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("train_"):
-            corp_state = self.app.corp_state
-            category = EmployeeCategory(item_id.removeprefix("train_"))
-            if train_employees(corp_state, self.app.corp_map, category, self.app.character.day):
-                self.notify(
-                    f"Training a batch of {employee_plural(category)} — "
-                    f"ready in {TRAINING_DAYS[category]} days."
-                )
-            elif corp_state.pending_recruit is not None:
-                self.notify("The Academy's already training a batch.", severity="warning")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("newacademy_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("newacademy_")
-            territory = self.app.corp_map.territories[territory_id]
-            if build_academy(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"New Academy standing in {territory.name}.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id.startswith("rebuild_"):
-            corp_state = self.app.corp_state
-            territory_id = item_id.removeprefix("rebuild_")
-            territory = self.app.corp_map.territories[territory_id]
-            if build_research_facility(corp_state, self.app.corp_map, territory_id):
-                self.notify(f"New Research Facility standing in {territory.name}.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id == "build_lab":
-            corp_state = self.app.corp_state
-            if build_lab(corp_state, self.app.corp_map):
-                self.notify("Built a new lab at the Research Facility.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
-            return
-
-        if item_id == "build_efficiency":
-            corp_state = self.app.corp_state
-            if build_efficiency_upgrade(corp_state, self.app.corp_map):
-                self.notify("Upgraded the Research Facility's efficiency.")
-            elif corp_state.daily_action_used:
-                self.notify("Already made your move today.", severity="warning")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-            await self._refresh()
+        await self._handle_corp_selection(item_id)
 
 
 class ResearchTreeScreen(BackScreen):
     """The corp's Technology tree (see corp_turn.TECHNOLOGIES/technology_tree_layout),
-    reached from CorpScreen/CorpMainMenu with 't'. One Collapsible per prereq-chain
+    reached from CorpScreen/CorpMapScreen with 't'. One Collapsible per prereq-chain
     depth ("Tier 0", "Tier 1", ...) rather than a single flat list, so the tree reads
     top-to-bottom as it deepens; each box's own "Requires: ..." line is what shows the
     edge back to its prereq — with two independent chains today that's always exactly

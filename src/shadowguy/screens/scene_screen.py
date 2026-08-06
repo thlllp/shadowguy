@@ -73,14 +73,23 @@ class SceneScreen(Screen):
         index = int(event.item.id.removeprefix("choice_"))
         choice = stage.choices[index]
 
+        result, outcome = resolve_choice(
+            self.app.character, self.scene, choice, self.app.corp_map
+        )
+        if not self._show_resolved(result, outcome):
+            return
+        await self._await_continue(outcome.next_stage, result)
+
+    def _show_resolved(self, result: CheckResult, outcome) -> bool:
+        """Report an already-applied check: bank the crew's cut, redraw, and flash the
+        prompt on a critical. Returns whether the runner is still alive to go on —
+        False means the run is over and the caller must stop."""
         character = self.app.character
-        result, outcome = resolve_choice(character, self.scene, choice, self.app.corp_map)
         self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()
 
         prompt = self.query_one("#prompt", Static)
         prompt.update(f"{result.name}: {outcome.text}")
-
         if result in (CheckResult.CRITICAL_SUCCESS, CheckResult.CRITICAL_FAILURE):
             flash = "green" if result is CheckResult.CRITICAL_SUCCESS else "red"
             prompt.styles.background = Color.parse(flash)
@@ -88,9 +97,8 @@ class SceneScreen(Screen):
 
         if not character.is_alive:
             self.app.exit(message=f"{character.name} has died. Game over.")
-            return
-
-        await self._await_continue(outcome.next_stage, result)
+            return False
+        return True
 
     async def _await_continue(self, next_stage: str | None, result: CheckResult | None) -> None:
         self._pending_next_stage = next_stage
@@ -168,20 +176,10 @@ class SceneScreen(Screen):
     async def _on_entrance_picked(self, chosen_index: int) -> None:
         stage = self._current_stage()
         entrance = stage.burglary.entrances[chosen_index]
-        character = self.app.character
-        result, outcome = resolve_entrance(character, self.scene, entrance, self.app.corp_map)
-        self._take_crew_cut(outcome)
-        self.query_one(CharacterSheet).refresh()
-
-        prompt = self.query_one("#prompt", Static)
-        prompt.update(f"{result.name}: {outcome.text}")
-        if result in (CheckResult.CRITICAL_SUCCESS, CheckResult.CRITICAL_FAILURE):
-            flash = "green" if result is CheckResult.CRITICAL_SUCCESS else "red"
-            prompt.styles.background = Color.parse(flash)
-            prompt.styles.animate("background", value=Color(0, 0, 0, 0), duration=0.6)
-
-        if not character.is_alive:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+        result, outcome = resolve_entrance(
+            self.app.character, self.scene, entrance, self.app.corp_map
+        )
+        if not self._show_resolved(result, outcome):
             return
 
         # An entrance's check resolves (and applies, via resolve_entrance above)

@@ -25,6 +25,7 @@ from . import (
     PANEL_NAV_BINDINGS,
     BackScreen,
     CharacterSheet,
+    RefreshOnResume,
     PanelNav,
     _compact_skill_label,
     _populate_list,
@@ -38,7 +39,19 @@ from .shop_screens import FixerOffersScreen, offer_label
 ALARM_HOUR_CHOICES = tuple(range(0, HOURS_PER_DAY, 3))
 
 
-class InventoryScreen(BackScreen):
+class EquipToggleMixin:
+    """The `toggle_<index>` row both gear screens carry: a deck is an ordinary Item on
+    InventoryScreen and the thing active_deck_entry reads on CyberdeckScreen, so both
+    list it and both have to be able to equip it."""
+
+    def _toggle_equip(self, index: int) -> None:
+        character = self.app.character
+        item = ITEMS_BY_ID[character.inventory[index].item_id]
+        if not toggle_equip(character, index):
+            self.notify(f"No free {item.slot.value} slot.", severity="warning")
+
+
+class InventoryScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
     BINDINGS = MENU_BACK_BINDINGS
 
     def compose(self) -> ComposeResult:
@@ -46,12 +59,6 @@ class InventoryScreen(BackScreen):
         yield CharacterSheet(self.app.character)
         yield ListView(id="inventory_items")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         items = []
@@ -73,10 +80,7 @@ class InventoryScreen(BackScreen):
         item_id = event.item.id
 
         if item_id.startswith("toggle_"):
-            index = int(item_id.removeprefix("toggle_"))
-            item = ITEMS_BY_ID[character.inventory[index].item_id]
-            if not toggle_equip(character, index):
-                self.notify(f"No free {item.slot.value} slot.", severity="warning")
+            self._toggle_equip(int(item_id.removeprefix("toggle_")))
         elif item_id.startswith("use_"):
             index = int(item_id.removeprefix("use_"))
             self.notify(use_consumable(character, index))
@@ -85,7 +89,7 @@ class InventoryScreen(BackScreen):
         await self._refresh()
 
 
-class CyberdeckScreen(BackScreen):
+class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
     """Deck + Program management, split out of InventoryScreen: a deck's
     installed_programs and which deck is Character.stat()'s and matrix.py's
     active one (inventory.active_deck_entry -- the equipped deck with the best
@@ -101,12 +105,6 @@ class CyberdeckScreen(BackScreen):
         yield CharacterSheet(self.app.character)
         yield ListView(id="cyberdeck_items")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -162,10 +160,7 @@ class CyberdeckScreen(BackScreen):
         character = self.app.character
 
         if item_id.startswith("toggle_"):
-            index = int(item_id.removeprefix("toggle_"))
-            item = ITEMS_BY_ID[character.inventory[index].item_id]
-            if not toggle_equip(character, index):
-                self.notify(f"No free {item.slot.value} slot.", severity="warning")
+            self._toggle_equip(int(item_id.removeprefix("toggle_")))
         elif item_id.startswith("install_"):
             index_str, program_id = item_id.removeprefix("install_").split("_", 1)
             self.notify(install_program(character, int(index_str), program_id))
@@ -177,7 +172,7 @@ class CyberdeckScreen(BackScreen):
         await self._refresh()
 
 
-class ContactsScreen(PanelNav, BackScreen):
+class ContactsScreen(PanelNav, RefreshOnResume, BackScreen):
     PANEL_IDS = ("fixers_list", "locals_list", "runners_list")
     BINDINGS = [*MENU_BACK_BINDINGS, *PANEL_NAV_BINDINGS]
 
@@ -204,12 +199,6 @@ class ContactsScreen(PanelNav, BackScreen):
             ListView(id="runners_list"), title="Runners", collapsed=False, id="runners_panel"
         )
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -287,7 +276,7 @@ class ContactsScreen(PanelNav, BackScreen):
                 self.app.push_screen(FixerOffersScreen(fixer))
 
 
-class WebScreen(BackScreen):
+class WebScreen(RefreshOnResume, BackScreen):
     """A browser: each megacorp's own site listed like an app shortcut (opens
     CorpWebsiteScreen), above a Search section that's the real cross-fixer job
     board — every open offer from every fixer established trust reaches,
@@ -301,12 +290,6 @@ class WebScreen(BackScreen):
         yield CharacterSheet(self.app.character)
         yield ListView(id="web_list")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -352,7 +335,7 @@ class WebScreen(BackScreen):
             await self._refresh()
 
 
-class CorpWebsiteScreen(BackScreen):
+class CorpWebsiteScreen(RefreshOnResume, BackScreen):
     """One megacorp's own site, reached by tapping its row in WebScreen: a
     one-line masthead plus a blog of recent corp_turn.FactionEvents (territory
     claimed, technology researched) for that faction — most-recent-first,
@@ -371,12 +354,6 @@ class CorpWebsiteScreen(BackScreen):
         yield Static(f"{self.faction.name}.net — {self.faction.specialty.value}\n{self.faction.description}")
         yield ListView(id="blog_list")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     def _post_label(self, event: FactionEvent) -> str:
         if event.kind == "territory":
@@ -399,7 +376,7 @@ class CorpWebsiteScreen(BackScreen):
         await _replace_items(self.query_one("#blog_list", ListView), blog_items)
 
 
-class AlarmClockScreen(BackScreen):
+class AlarmClockScreen(RefreshOnResume, BackScreen):
     """Sets Character.alarm_hour, read by app.rest() to cut a Rest short instead
     of the flat REST_HOURS_COST."""
 
@@ -410,12 +387,6 @@ class AlarmClockScreen(BackScreen):
         yield CharacterSheet(self.app.character)
         yield ListView(id="alarm_list")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     async def _refresh(self) -> None:
         character = self.app.character
@@ -440,7 +411,7 @@ class AlarmClockScreen(BackScreen):
         await self._refresh()
 
 
-class MessagesScreen(BackScreen):
+class MessagesScreen(RefreshOnResume, BackScreen):
     """A read-only recap of what Contacts/Web already show, reframed as texts —
     no state of its own, so there's nothing here to persist or expire."""
 
@@ -451,12 +422,6 @@ class MessagesScreen(BackScreen):
         yield CharacterSheet(self.app.character)
         yield ListView(id="messages_list")
         yield Footer()
-
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
 
     def _messages(self, character: Character) -> list[str]:
         lines = []
@@ -548,7 +513,7 @@ class PhoneScreen(BackScreen):
         self.app.push_screen(screen_cls())
 
 
-class SkillsScreen(PanelNav, BackScreen):
+class SkillsScreen(PanelNav, RefreshOnResume, BackScreen):
     """Read-only for skill *values* (gear bonuses included), but spendable for
     Character.experience: a "Raise <Stat>" row atop each column plus every skill
     row, both showing next-purchase cost the same way CharacterCreationScreen's
@@ -611,12 +576,6 @@ class SkillsScreen(PanelNav, BackScreen):
         )
         yield Footer()
 
-    async def on_mount(self) -> None:
-        await self._refresh()
-
-    async def on_screen_resume(self) -> None:
-        await self._refresh()
-
     async def _refresh(self, stat: str | None = None, index: int = 0) -> None:
         character = self.app.character
         for s in CORE_STATS if stat is None else (stat,):
@@ -624,7 +583,7 @@ class SkillsScreen(PanelNav, BackScreen):
             cost = character.next_stat_cost(s)
             items = [ListItem(Static(f"Raise {s.capitalize()}\n  {cost}xp"), id=f"stat_{s}")]
             items += [
-                ListItem(Static(_compact_skill_label(character, skill, show_cost=True)), id=f"skill_{skill.id}")
+                ListItem(Static(_compact_skill_label(character, skill)), id=f"skill_{skill.id}")
                 for skill in SKILLS
                 if skill.stat == s
             ]
