@@ -620,23 +620,33 @@ def raise_alarm(state: TacticalState, reason: str) -> None:
     """It's gone loud. Every guard on this level drops their post and fights, and the
     ones elsewhere are alert by the time you reach them.
 
-    Also catches every newly-alerted unit's next_turn up to *now* (state.player.
+    Also catches every *newly*-alerted unit's next_turn up to now (state.player.
     next_turn) rather than leaving it at its construction-time 0: a sneak can run for
     many player turns before the alarm fires, and without this a guard who's been
     frozen at time-zero the whole while would flood the scheduler with catch-up turns
-    the instant it's alerted -- see enter_level for the matching fix one hop later."""
+    the instant it's alerted -- see enter_level for the matching fix one hop later.
+
+    The `not unit.alerted` guard matters beyond burglaries: an ordinary tactical fight
+    starts every enemy already alerted (Unit.alerted defaults True), so raise_alarm
+    still fires there too (player_attack calls it unconditionally, "going loud" applies
+    regardless of whether anyone was hiding) but with `state.alarm` starting False all
+    the same. Without the guard, that first call would snap an already-active enemy's
+    legitimately-earned schedule lead back down to the player's, handing it a free
+    bonus action it hadn't earned -- catching up is only ever correct for a unit that
+    was actually just alerted this call, not one that already had a turn order."""
     if state.alarm:
         return
     state.alarm = True
     state.log.append(reason)
     for unit in state.units:
-        if unit.is_enemy:
+        if unit.is_enemy and not unit.alerted:
             unit.alerted = True
             unit.next_turn = state.player.next_turn
     for waiting in state.off_level_units.values():
         for unit in waiting:
-            unit.alerted = True
-            unit.next_turn = state.player.next_turn
+            if not unit.alerted:
+                unit.alerted = True
+                unit.next_turn = state.player.next_turn
 
 
 def reached_score(state: TacticalState) -> bool:
