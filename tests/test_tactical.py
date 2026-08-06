@@ -705,6 +705,29 @@ def test_raise_alarm_catches_every_newly_alerted_guard_up_to_the_players_current
     assert all(g.next_turn == 500 for g in guards)
 
 
+def test_raise_alarm_does_not_reset_an_already_alerted_units_earned_schedule_lead():
+    """An ordinary tactical fight starts every enemy already alerted (unlike a
+    burglary's guards), so raise_alarm still fires the first time the player attacks
+    (player_attack calls it unconditionally) even though nothing needed spotting. The
+    catch-up above must only apply to a unit that's *newly* alerted this call -- an
+    already-active enemy that's banked a legitimate lead from being quicker than the
+    player must not have that lead erased just because the alarm happened to trip on
+    this exact turn, or it's handed a free bonus action it never earned."""
+    grid = parse_grid(["." * 12 for _ in range(3)])
+    state = start_tactical(
+        Character(name="t"), grid, player_start=(0, 0),
+        # Razorgirl (agility 3, quickness 13) outpaces a default player (quickness 11),
+        # so a few quiet End Turns bank it a real lead ahead of the player's next_turn.
+        enemy_placements=[(ENEMIES_BY_ID["razorgirl"], (11, 2))], exits=frozenset(),
+    )
+    for _ in range(3):
+        end_turn(state, AlwaysOne())
+    assert state.enemies[0].next_turn > state.player.next_turn
+    earned_lead = state.enemies[0].next_turn
+    raise_alarm(state, "going loud")
+    assert state.enemies[0].next_turn == earned_lead
+
+
 def test_enter_level_catches_up_an_already_alerted_arriving_guard():
     """The same pile-on raise_alarm guards against can recur one hop later: a guard
     caught up to the alarm's moment can go stale again if several more player turns
