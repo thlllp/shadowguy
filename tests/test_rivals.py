@@ -1,6 +1,7 @@
 """Tests for rivals.py: the daily-action pipeline for rival Factions (territory
-expansion) and independent Runners (a per-day RunnerActivity, one branch of
-which takes a real job off a fixer's board).
+expansion) and independent Runners (a three-block RunnerActivity day, two of
+whose branches -- WORKING and SHOPPING -- touch something outside this
+module).
 
 Both halves are gated on flat chances (rivals.EXPANSION_CHANCE,
 RUNNER_WORK_CHANCE, JOB_INJURY_CHANCE) plus a weighted idle table, so they're
@@ -34,6 +35,7 @@ from shadowguy.rivals import (
     MIN_AI_ATTACK_FORCE,
     RECOVERY_DAYS,
     RIVAL_RESEARCH_CHANCE,
+    RUNNER_BLOCK_HOURS,
     RUNNER_JOB_PAY,
     RUNNER_JOB_XP,
     RunnerActivity,
@@ -279,10 +281,11 @@ def _pair_map(locations=()):
 
 
 def test_runner_states_persist_and_wander_across_days():
-    """A runner is placed somewhere on the first call, stays put when the idle
-    roll lands on something sedentary, and hops to a connection when it lands
-    on LEGWORK -- with rival_runner_states (the caller-owned persistence dict)
-    reflecting exactly that across three days."""
+    """A runner is placed somewhere on the first call, stays put when block 0's
+    idle roll lands on something sedentary, and hops to a connection when it
+    lands on LEGWORK -- with rival_runner_states (the caller-owned persistence
+    dict) reflecting exactly that across three days. Block 2 is always
+    RESTING regardless."""
     corp_map = _pair_map()
     runner_id = RIVAL_RUNNERS[0].id
     states: dict[str, RunnerState] = {}
@@ -290,15 +293,19 @@ def test_runner_states_persist_and_wander_across_days():
     resolve_rival_day(Character(name="t"), corp_map, day=1, rng=MISS, rival_runner_states=states)
     first_location = states[runner_id].territory_id
     assert first_location in corp_map.territories
-    # MISS lands on the idle table's last bucket, DRINKING -- with no bar on
-    # this map that degrades to LAYING_LOW, which doesn't move them.
-    assert states[runner_id].activity is RunnerActivity.LAYING_LOW
+    # MISS lands on BLOCK0_IDLE_WEIGHTS' last bucket, SHOPPING, which doesn't
+    # move them; block 1 then lands on BLOCK1_IDLE_WEIGHTS' last bucket,
+    # DRINKING, which degrades to LAYING_LOW without a bar on this map.
+    assert states[runner_id].activities == (
+        RunnerActivity.SHOPPING, RunnerActivity.LAYING_LOW, RunnerActivity.RESTING,
+    )
 
     resolve_rival_day(Character(name="t"), corp_map, day=2, rng=MISS, rival_runner_states=states)
     assert states[runner_id].territory_id == first_location
 
     resolve_rival_day(Character(name="t"), corp_map, day=3, rng=HIT, rival_runner_states=states)
-    assert states[runner_id].activity is RunnerActivity.LEGWORK
+    assert states[runner_id].activities[0] is RunnerActivity.LEGWORK
+    assert states[runner_id].activities[2] is RunnerActivity.RESTING
     assert states[runner_id].territory_id in corp_map.territories[first_location].connections
 
 
@@ -311,14 +318,43 @@ def test_omitted_rival_runner_states_defaults_to_a_fresh_dict():
 
 
 def test_drinking_only_happens_where_there_is_a_bar():
-    """The idle table\'s last bucket is DRINKING; without a bar in the territory
-    it degrades to LAYING_LOW (asserted above) rather than describing a drink
-    with nowhere to happen -- ContactsScreen names the bar at display time."""
+    """BLOCK1_IDLE_WEIGHTS' last bucket is DRINKING; without a bar in the
+    territory it degrades to LAYING_LOW (asserted in the wander test above)
+    rather than describing a drink with nowhere to happen -- ContactsScreen
+    names the bar at display time."""
     bar = Location(id="loc_bar", name="The Rusted Halo", kind=LocationKind.BAR)
     actions = resolve_rival_day(
         Character(name="t"), _pair_map([bar]), day=1, rng=MISS, rival_runner_states={}
     )
-    assert _runner_action(actions).activity is RunnerActivity.DRINKING
+    assert _runner_action(actions).activities[1] is RunnerActivity.DRINKING
+
+
+def test_shopping_spends_the_runners_own_cash():
+    """Block 0's SHOPPING branch (BLOCK0_IDLE_WEIGHTS' last bucket) spends a
+    runner's own cash through runners.buy_gear -- the same ladder a completed
+    job already pays into, but reachable on a day they never worked."""
+    runner = copy.deepcopy(RIVAL_RUNNERS[1])  # Juncture: Solo, no gear yet
+    runner.cash = ITEMS_BY_ID["kevlar_vest"].price
+    actions = resolve_rival_day(
+        Character(name="t"), _map(), day=1, rng=MISS, rival_runner_states={}, runners=[runner],
+    )
+    assert _runner_action(actions, runner.id).activities[0] is RunnerActivity.SHOPPING
+    assert runner.cash == 0
+    assert runner.gear == ["kevlar_vest"]
+
+
+def test_current_reads_the_block_matching_the_hour():
+    """RunnerState.current is how every "is this runner here right now" check
+    (BarScreen, ContactsScreen, CorpMapScreen's bar box) reads the day."""
+    state = RunnerState(
+        territory_id="a",
+        activities=(RunnerActivity.LEGWORK, RunnerActivity.DRINKING, RunnerActivity.RESTING),
+    )
+    assert state.current(0) is RunnerActivity.LEGWORK
+    assert state.current(RUNNER_BLOCK_HOURS - 1) is RunnerActivity.LEGWORK
+    assert state.current(RUNNER_BLOCK_HOURS) is RunnerActivity.DRINKING
+    assert state.current(2 * RUNNER_BLOCK_HOURS) is RunnerActivity.RESTING
+    assert state.current(23) is RunnerActivity.RESTING
 
 
 def test_runner_takes_a_job_off_the_board_and_moves_to_the_job_site():
@@ -328,7 +364,10 @@ def test_runner_takes_a_job_off_the_board_and_moves_to_the_job_site():
         Character(name="t"), corp_map, day=2, rng=HIT, rival_runner_states={}, fixers=[fixer]
     )
     action = _runner_action(actions)
-    assert action.activity is RunnerActivity.WORKING
+    assert action.activities[0] is RunnerActivity.WORKING
+    # A job carries straight through to block 1 -- it can run into the
+    # evening -- and block 2 is always rest.
+    assert action.activities == (RunnerActivity.WORKING, RunnerActivity.WORKING, RunnerActivity.RESTING)
     assert action.job_title == "Server Pull"
     assert action.territory_id == "neutral_a"
     assert offer.taken_by == RIVAL_RUNNERS[0].id
@@ -350,7 +389,7 @@ def test_only_one_runner_can_take_the_same_offer():
     actions = resolve_rival_day(
         Character(name="t"), _map(), day=2, rng=HIT, rival_runner_states={}, fixers=[fixer]
     )
-    working = [a for a in actions if a.activity is RunnerActivity.WORKING]
+    working = [a for a in actions if a.activities and RunnerActivity.WORKING in a.activities]
     assert len(working) == 1
     assert offer.taken_by == working[0].actor_id
 
@@ -360,7 +399,7 @@ def test_no_runner_takes_work_on_a_missed_work_roll():
     actions = resolve_rival_day(
         Character(name="t"), _map(), day=2, rng=MISS, rival_runner_states={}, fixers=[fixer]
     )
-    assert not any(a.activity is RunnerActivity.WORKING for a in actions)
+    assert not any(a.activities and RunnerActivity.WORKING in a.activities for a in actions)
     assert offer.taken_by is None
 
 
@@ -372,15 +411,15 @@ def test_a_job_not_runnable_today_is_not_takeable():
     actions = resolve_rival_day(
         Character(name="t"), _map(), day=5, rng=HIT, rival_runner_states={}, fixers=[later, expired]
     )
-    assert not any(a.activity is RunnerActivity.WORKING for a in actions)
+    assert not any(a.activities and RunnerActivity.WORKING in a.activities for a in actions)
     assert later.offers[0].taken_by is None
     assert expired.offers[0].taken_by is None
 
 
 def test_a_bad_job_lays_a_runner_up_the_next_day():
     """RECOVERING is only ever caused by a WORKING day that failed the injury
-    roll, and while it lasts it pre-empts the whole activity roll -- the runner
-    doesn\'t move and can\'t pick up new work."""
+    roll, and while it lasts it pre-empts the whole day, all three blocks --
+    the runner doesn\'t move and can\'t pick up new work."""
     corp_map = _map()
     fixer, _ = _fixer_with_offer(territory_id="neutral_a")
     states: dict[str, RunnerState] = {}
@@ -388,14 +427,14 @@ def test_a_bad_job_lays_a_runner_up_the_next_day():
         Character(name="t"), corp_map, day=2, rng=HIT, rival_runner_states=states, fixers=[fixer]
     )
     state = states[RIVAL_RUNNERS[0].id]
-    assert state.activity is RunnerActivity.WORKING
+    assert state.activities[0] is RunnerActivity.WORKING
     assert RECOVERY_DAYS[0] <= state.recovery_days <= RECOVERY_DAYS[1]
 
     second, _ = _fixer_with_offer(offer_id="offer_2")
     resolve_rival_day(
         Character(name="t"), corp_map, day=3, rng=HIT, rival_runner_states=states, fixers=[second]
     )
-    assert state.activity is RunnerActivity.RECOVERING
+    assert state.activities == (RunnerActivity.RECOVERING,) * 3
     assert state.territory_id == "neutral_a"  # laid up where the job left them
     assert state.job_title is None
     assert second.offers[0].taken_by != RIVAL_RUNNERS[0].id
@@ -427,7 +466,7 @@ def test_a_job_posted_today_cannot_be_stolen_before_the_player_sees_it():
     actions = resolve_rival_day(
         Character(name="t"), _map(), day=1, rng=HIT, rival_runner_states={}, fixers=[fixer]
     )
-    assert not any(a.activity is RunnerActivity.WORKING for a in actions)
+    assert not any(a.activities and RunnerActivity.WORKING in a.activities for a in actions)
     assert offer.taken_by is None
 
     # ...but it is fair game the next day.
@@ -633,7 +672,7 @@ def test_a_job_that_went_well_pays_the_runner_who_ran_it():
         Character(name="t"), _map(), day=2, rng=PAID, rival_runner_states={},
         fixers=[fixer], runners=roster,
     )
-    worked = next(a.actor_id for a in actions if a.activity is RunnerActivity.WORKING)
+    worked = next(a.actor_id for a in actions if a.activities and RunnerActivity.WORKING in a.activities)
     paid = next(r for r in roster if r.id == worked)
     assert paid.cash + sum(ITEMS_BY_ID[i].price for i in paid.gear) == RUNNER_JOB_PAY
     assert paid.experience == RUNNER_JOB_XP

@@ -34,21 +34,32 @@ from this AI loop via player_faction_id — its daily move becomes the player's
 own decision instead. Note the exclusion is only on *acting*: the player's
 territory is still ordinary attack_candidates ground for everyone else.
 
-RivalRunners now make a real choice each day rather than only drifting. An
-independent (not-hired) runner picks one RunnerActivity per turn, and the
-activity is what decides whether they move: only LEGWORK wanders, WORKING
-relocates them to the job site, and the rest keep them where they are. State
-lives in a caller-owned `rival_runner_states` dict of RunnerState (persisted on
-ShadowguyApp, not here — rivals.py stays leaf-ish), which is what gives
-RivalAction.territory_id its content and lets surveillance.py's Surveillance
-checks have somewhere real to catch them.
+RivalRunners now make a real choice each day rather than only drifting, and
+that day is split into three fixed RUNNER_BLOCK_HOURS blocks matching
+Character.hour_of_day rather than one activity for the whole day: block 0 is
+their productive time (a job, legwork, or shopping), block 1 is next (the
+bar, or laying low), block 2 is always RESTING. What a runner is doing now
+depends on when you look, via RunnerState.activities (one RunnerActivity per
+block) and RunnerState.current(hour_of_day). Only block 0 can move them
+(LEGWORK wanders one hop, WORKING relocates to the job site) or touch
+anything outside this module; block 1 carries block 0's activity over
+unchanged when it was WORKING — a job can run long — otherwise rolls the bar
+against laying low. State lives in a caller-owned
+`rival_runner_states` dict of RunnerState (persisted on ShadowguyApp, not
+here — rivals.py stays leaf-ish), which is what gives RivalAction.territory_id
+its content and lets surveillance.py's Surveillance checks have somewhere
+real to catch them.
 
-Exactly one activity bites the player: WORKING takes a real JobOffer off a
-real fixer's board (marking it fixer.JobOffer.taken_by), so a job you sat on is
-a job you can lose. The others — LEGWORK, LAYING_LOW, DRINKING, RECOVERING —
-are informational: they drive movement and give PhoneScreen something true
-to show, but nothing rolls against them yet. RECOVERING is the one with a
-cause: it only ever follows a WORKING day that went badly.
+Two activities bite the player: WORKING takes a real JobOffer off a real
+fixer's board (marking it fixer.JobOffer.taken_by), so a job you sat on is a
+job you can lose. SHOPPING spends a runner's own cash via runners.buy_gear —
+the same ladder a completed job already pays into, so the world's other
+runners keep gearing up even on a day they didn't work. The rest — LEGWORK,
+LAYING_LOW, DRINKING, RESTING, RECOVERING — are informational: they drive
+movement and give PhoneScreen something true to show, but nothing rolls
+against them yet. RECOVERING is the one with a cause, and the one activity
+that still pre-empts the whole day (all three blocks alike): it only ever
+follows a WORKING day that went badly.
 
 WORKING is also how the city's runners get *better*: a job that doesn't hurt
 them pays RUNNER_JOB_PAY and RUNNER_JOB_XP through runners.complete_job, which
@@ -76,7 +87,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
-from shadowguy.character import Character
+from shadowguy.character import HOURS_PER_DAY, Character
 from shadowguy.corp_turn import (
     TECHNOLOGIES,
     AttackResult,
@@ -93,7 +104,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.factions import FACTIONS
 from shadowguy.relations import Relations, relation
-from shadowguy.runners import RIVAL_RUNNERS, RivalRunner, complete_job
+from shadowguy.runners import RIVAL_RUNNERS, RivalRunner, buy_gear, complete_job
 
 if TYPE_CHECKING:
     from shadowguy.fixer import Fixer, JobOffer
@@ -141,14 +152,17 @@ RIVAL_RESEARCH_CHANCE = 0.15
 
 
 class RunnerActivity(StrEnum):
-    """How an independent runner spent a day. Also the movement rule: LEGWORK
-    is the only activity that wanders, WORKING relocates to the job site, and
-    the rest stay put."""
+    """What an independent runner is doing in one of their day's three
+    blocks (see RUNNER_BLOCK_HOURS). Also the movement rule: LEGWORK is the
+    only activity that wanders, WORKING relocates to the job site, and the
+    rest stay put."""
 
     WORKING = "working"  # took a job off a fixer's board and is running it
     LEGWORK = "legwork"  # asking around, casing ground — the old blind wander
-    LAYING_LOW = "laying_low"  # off the grid for a day
+    SHOPPING = "shopping"  # spending their own cash up the runners.GEAR_LADDERS
+    LAYING_LOW = "laying_low"  # off the grid for a block
     DRINKING = "drinking"  # at a bar in their current territory
+    RESTING = "resting"  # block 2, always — the day's last block is always rest
     RECOVERING = "recovering"  # laid up after a job that went badly
 
 
@@ -158,20 +172,37 @@ class RunnerActivity(StrEnum):
 ACTIVITY_LABELS = {
     RunnerActivity.WORKING: "out on a job",
     RunnerActivity.LEGWORK: "asking around",
+    RunnerActivity.SHOPPING: "out shopping",
     RunnerActivity.LAYING_LOW: "laying low",
     RunnerActivity.DRINKING: "drinking",
+    RunnerActivity.RESTING: "resting",
     RunnerActivity.RECOVERING: "laid up, took a bad hit",
 }
+
+# A runner's day is three fixed blocks of Character.hour_of_day (0-23, the same
+# literal clock AlarmClockScreen renders as HH:00): block 0 (00:00-08:00) is
+# theirs to work with, block 1 (08:00-16:00) is next, block 2 (16:00-24:00) is
+# always rest. Derived from HOURS_PER_DAY rather than a bare 8 so the three
+# stay in lockstep with it.
+RUNNER_BLOCK_HOURS = HOURS_PER_DAY // 3
 
 
 @dataclass
 class RunnerState:
     """One independent runner's persistent day-to-day state. Replaces the bare
     territory id the wander used to track, since an activity has to survive to
-    the next turn (recovery) and to display time (job_title)."""
+    the next turn (recovery) and to display time (job_title).
+
+    `activities` holds today's three block outcomes — replaces the old single
+    day-long `activity`, since a runner's block 1 can diverge from their
+    block 0 (still on the job) while block 2 never does (always RESTING).
+    `current` is how a caller reads "right now" (BarScreen's DRINKING check,
+    ContactsScreen's status line) rather than "today"."""
 
     territory_id: str
-    activity: RunnerActivity = RunnerActivity.LEGWORK
+    activities: tuple[RunnerActivity, RunnerActivity, RunnerActivity] = (
+        RunnerActivity.LEGWORK, RunnerActivity.LAYING_LOW, RunnerActivity.RESTING,
+    )
     # WORKING only: the Scene.title of the offer they pulled, so a surface can
     # name the job without holding a reference to the offer itself (which
     # expire_offers drops the day after).
@@ -180,22 +211,36 @@ class RunnerState:
     # day; 0 means they roll freely next turn.
     recovery_days: int = 0
 
+    def current(self, hour_of_day: int) -> RunnerActivity:
+        """Which of today's three blocks is happening right now, from
+        Character.hour_of_day."""
+        return self.activities[hour_of_day // RUNNER_BLOCK_HOURS]
+
 
 # Per independent runner, per free day: the odds they go looking for work
-# rather than idle. Only reached when a takeable offer actually exists, so the
-# real rate is lower early in a run.
+# rather than idle in block 0. Only reached when a takeable offer actually
+# exists, so the real rate is lower early in a run.
 RUNNER_WORK_CHANCE = 0.35
 
-# The idle table, rolled when a runner doesn't work. LEGWORK's share is what
-# replaces the old flat RUNNER_MOVE_CHANCE (0.3): (1 - RUNNER_WORK_CHANCE) *
-# 0.45 ≈ 0.29, so a runner still wanders at roughly the old rate on top of
-# whatever job-site relocation adds. DRINKING needs a bar in the territory and
-# falls back to LAYING_LOW without one. First-slice numbers, not
+# Block 0's idle table, rolled when a runner doesn't work: legwork (the old
+# blind wander, and still the majority share — the old IDLE_ACTIVITY_WEIGHTS'
+# LEGWORK share was tuned to reproduce a pre-block RUNNER_MOVE_CHANCE that no
+# longer applies once SHOPPING and the bar/laying-low roll are split across
+# two separate blocks, so this is a fresh first-slice number, not a carried-
+# over one) or spending their own cash (runners.buy_gear). Not
 # balance-simulated.
-IDLE_ACTIVITY_WEIGHTS = {
-    RunnerActivity.LEGWORK: 0.45,
-    RunnerActivity.LAYING_LOW: 0.35,
-    RunnerActivity.DRINKING: 0.20,
+BLOCK0_IDLE_WEIGHTS = {
+    RunnerActivity.LEGWORK: 0.7,
+    RunnerActivity.SHOPPING: 0.3,
+}
+
+# Block 1's idle table, rolled when block 0 wasn't WORKING (a working block 0
+# carries straight through instead — see _runner_turn). DRINKING needs a bar
+# in the territory and falls back to LAYING_LOW without one. First-slice
+# numbers, not balance-simulated.
+BLOCK1_IDLE_WEIGHTS = {
+    RunnerActivity.LAYING_LOW: 0.65,
+    RunnerActivity.DRINKING: 0.35,
 }
 
 # Per WORKING day: the odds the job went badly enough to lay them up, and for
@@ -225,18 +270,19 @@ RUNNER_JOB_XP = 15
 @dataclass
 class RivalAction:
     """One actor's turn on a given day. For a faction, territory_id is set only
-    when it claimed neutral ground that day, and activity/job_title stay None.
+    when it claimed neutral ground that day, and activities/job_title stay None.
     For a runner, territory_id is always set — their territory after today's
-    turn, whether or not they moved — and activity is what they did with the
-    day. job_title/fixer_id are set only on the turn they took a job, which is
-    the one thing here a caller currently reports — app notifies on it, but only
-    for a fixer the player has actually met, which is what fixer_id is for."""
+    turn, whether or not they moved — and activities holds all three of
+    today's blocks (RunnerState.activities). job_title/fixer_id are set only
+    on a day they took a job (always block 0), which is the one thing here a
+    caller currently reports — app notifies on it, but only for a fixer the
+    player has actually met, which is what fixer_id is for."""
 
     kind: Literal["faction", "runner"]
     actor_id: str
     day: int
     territory_id: str | None = None
-    activity: RunnerActivity | None = None
+    activities: tuple[RunnerActivity, RunnerActivity, RunnerActivity] | None = None
     job_title: str | None = None
     fixer_id: str | None = None
     # Faction only: the attack this faction made on a rival today, if it made one.
@@ -335,6 +381,11 @@ def _takeable_offers(fixers: list["Fixer"], day: int) -> list["JobOffer"]:
     ]
 
 
+def _weighted_roll(rng: random.Random, weights: dict[RunnerActivity, float]) -> RunnerActivity:
+    """One draw from a block's idle table (BLOCK0_IDLE_WEIGHTS / BLOCK1_IDLE_WEIGHTS)."""
+    return rng.choices(list(weights), weights=list(weights.values()))[0]
+
+
 def _runner_turn(
     runner: RivalRunner,
     state: RunnerState,
@@ -343,30 +394,34 @@ def _runner_turn(
     day: int,
     rng: random.Random,
 ) -> "JobOffer | None":
-    """Resolve one runner's day, mutating `state` in place and returning the
-    offer they took, if any — the caller needs the offer's fixer, which isn't
-    worth persisting on the state past the day it was taken.
+    """Resolve one runner's day across its three blocks, mutating `state` in
+    place and returning the offer they took, if any — the caller needs the
+    offer's fixer, which isn't worth persisting on the state past the day it
+    was taken.
 
-    Takes the RivalRunner itself, not just their id: a day's work also pays
-    them (runners.complete_job), and that lands on the runner rather than on
-    their RunnerState — a hire earns the same way from the player's jobs, where
-    there is no RunnerState in sight.
+    Takes the RivalRunner itself, not just their id: a day's work or a day's
+    shopping also spends/pays them (runners.complete_job / buy_gear), and that
+    lands on the runner rather than on their RunnerState — a hire earns the
+    same way from the player's jobs, where there is no RunnerState in sight.
 
-    Recovery pre-empts everything (they don't get a choice). Otherwise they try
-    for work first — the only branch that touches anything outside this module
-    — and fall back to the idle table, which is also what decides whether they
-    move."""
+    Recovery pre-empts everything (all three blocks, no choice). Otherwise
+    block 0 tries for work first — the only branch besides SHOPPING that
+    touches anything outside this module — and falls back to legwork or
+    shopping, which is also what decides whether they move. Block 1 carries a
+    WORKING block 0 straight through (a job can run long) or rolls the bar
+    against laying low. Block 2 is always RESTING."""
     state.job_title = None
     if state.recovery_days > 0:
         state.recovery_days -= 1
-        state.activity = RunnerActivity.RECOVERING
+        state.activities = (RunnerActivity.RECOVERING,) * 3
         return None
 
+    offer = None
     offers = _takeable_offers(fixers, day)
     if offers and rng.random() < RUNNER_WORK_CHANCE:
         offer = rng.choice(offers)
         offer.taken_by = runner.id
-        state.activity = RunnerActivity.WORKING
+        block0 = RunnerActivity.WORKING
         state.job_title = offer.scene.title
         # A job whose target territory isn't on this map (or isn't set at all)
         # leaves them where they are rather than guessing at a destination.
@@ -376,19 +431,25 @@ def _runner_turn(
             state.recovery_days = rng.randint(*RECOVERY_DAYS)
         else:
             complete_job(runner, RUNNER_JOB_PAY, RUNNER_JOB_XP)
-        return offer
+    else:
+        block0 = _weighted_roll(rng, BLOCK0_IDLE_WEIGHTS)
+        if block0 is RunnerActivity.SHOPPING:
+            buy_gear(runner)
+        elif block0 is RunnerActivity.LEGWORK:
+            connections = corp_map.territories[state.territory_id].connections
+            if connections:
+                state.territory_id = rng.choice(connections)
 
-    activity = rng.choices(
-        list(IDLE_ACTIVITY_WEIGHTS), weights=list(IDLE_ACTIVITY_WEIGHTS.values())
-    )[0]
-    if activity is RunnerActivity.DRINKING and not _has_bar(corp_map, state.territory_id):
-        activity = RunnerActivity.LAYING_LOW
-    if activity is RunnerActivity.LEGWORK:
-        connections = corp_map.territories[state.territory_id].connections
-        if connections:
-            state.territory_id = rng.choice(connections)
-    state.activity = activity
-    return None
+    if block0 is RunnerActivity.WORKING:
+        block1 = RunnerActivity.WORKING
+    else:
+        block1 = _weighted_roll(rng, BLOCK1_IDLE_WEIGHTS)
+        if block1 is RunnerActivity.DRINKING and not _has_bar(corp_map, state.territory_id):
+            block1 = RunnerActivity.LAYING_LOW
+
+    block2 = RunnerActivity.RESTING
+    state.activities = (block0, block1, block2)
+    return offer
 
 
 def resolve_rival_day(
@@ -407,7 +468,7 @@ def resolve_rival_day(
     RivalRunner acts only while independent — excluded the moment they're on the
     player's crew, indefinite or for-job alike, since either engagement means
     they're working for the player that day, not freelancing on their own — and
-    otherwise takes one RunnerActivity turn via _runner_turn.
+    otherwise takes one three-block turn via _runner_turn.
 
     player_faction_id skips that faction entirely (no RivalAction recorded) once
     the player has taken it over via corp_turn.py — its move is the player's own
@@ -515,7 +576,7 @@ def resolve_rival_day(
                 actor_id=runner.id,
                 day=day,
                 territory_id=state.territory_id,
-                activity=state.activity,
+                activities=state.activities,
                 job_title=state.job_title,
                 fixer_id=taken.fixer_id if taken else None,
             )
