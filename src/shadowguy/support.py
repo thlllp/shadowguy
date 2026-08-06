@@ -27,7 +27,7 @@ from enum import StrEnum
 from shadowguy.buildings import ROOM_LABELS
 from shadowguy.checks import resolve_check, resolve_rng
 from shadowguy.grid import Coord, chebyshev
-from shadowguy.runners import RUNNERS_BY_ID, SUPPORT_PROGRAMS, SupportProgram, support_programs_for
+from shadowguy.runners import SUPPORT_PROGRAMS, SupportProgram, live_runner, support_programs_for
 from shadowguy.tactical import TacticalState, raise_alarm
 
 TRACE_CAP = 10
@@ -79,7 +79,7 @@ class Support:
         return not self.offline and not self.acted
 
 
-def support_for(hires) -> "Support | None":
+def support_for(hires, roster=None) -> "Support | None":
     """Build the Support a fight opens with from this job's support hires
     (Character.crew_support), or None if nobody is backing it.
 
@@ -87,10 +87,16 @@ def support_for(hires) -> "Support | None":
     a second feature (whose trace? whose turn?), and only one of them can be told what to
     do on a turn anyway. Anyone whose archetype can't work support has no programs at all
     (runners.support_programs_for), so they can't be the pick.
+
+    `roster` is the run's own runner list (ShadowguyApp.runners), and it matters: both
+    numbers read here move in play. A hacker's rating is earned and their deck is bought,
+    so resolving a hire against runners.RUNNERS_BY_ID would staff the comm link with the
+    person they were on day one.
     """
     candidates = [
-        (RUNNERS_BY_ID[hire.runner_id], support_programs_for(RUNNERS_BY_ID[hire.runner_id]))
-        for hire in hires
+        (runner, support_programs_for(runner))
+        for runner in (live_runner(hire.runner_id, roster) for hire in hires)
+        if runner is not None
     ]
     staffed = [(runner, programs) for runner, programs in candidates if programs]
     if not staffed:

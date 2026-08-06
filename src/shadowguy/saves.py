@@ -222,7 +222,7 @@ SAVE_SUFFIX = ".save"
 # (e.g. `reflex_coprocessor_t2` -> `reflex_coprocessor_betaware`), so a pre-v59
 # Character.installed_cyberware referencing an old id would KeyError against
 # CYBERWARE_BY_ID the first time anything read it.
-SAVE_VERSION = 59
+SAVE_VERSION = 60
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

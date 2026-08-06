@@ -10,7 +10,7 @@ from shadowguy.combat import crew_stats, drop_for_result
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.matrix import MatrixOutcome
-from shadowguy.runners import RUNNERS_BY_ID, recruit_cut
+from shadowguy.runners import complete_job, recruit_cut
 from shadowguy.skills import skill_value
 from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.support import support_for
@@ -122,7 +122,7 @@ class SceneScreen(Screen):
         when-the-fight-opens rule as _crew_units, and None for anything that isn't a job."""
         if self.scene.kind is not SceneKind.JOB:
             return None
-        return support_for(self.app.character.crew_support(self.scene.id))
+        return support_for(self.app.character.crew_support(self.scene.id), self.app.runners)
 
     def _crew_units(self) -> list:
         """The hired runners who fight this stage beside the player, as stat blocks. Read
@@ -136,7 +136,7 @@ class SceneScreen(Screen):
         if self.scene.kind is not SceneKind.JOB:
             return []
         character = self.app.character
-        return [crew_stats(RUNNERS_BY_ID[hire.runner_id]) for hire in character.crew_on_site(self.scene.id)]
+        return [crew_stats(self.app.runner(hire.runner_id)) for hire in character.crew_on_site(self.scene.id)]
 
     async def _on_tactical_end(self, result: TacticalOutcome) -> None:
         character = self.app.character
@@ -275,7 +275,7 @@ class SceneScreen(Screen):
         character = self.app.character
         leadership = skill_value(character, "leadership")
         for hire in character.crew_for_job(self.scene.id):
-            runner = RUNNERS_BY_ID[hire.runner_id]
+            runner = self.app.runner(hire.runner_id)
             cut = min(int(recruit_cut(runner, leadership) * outcome.cash_delta), character.cash)
             character.cash -= cut
             self.notify(f"{runner.name} takes {cut}eb — their cut of the job.")
@@ -283,6 +283,13 @@ class SceneScreen(Screen):
             # credited the full amount via apply_outcome) — a crew member earns the
             # same job the same way the player did, in parallel, not out of a shared pot.
             character.grant_crew_experience(hire.runner_id, outcome.experience_delta)
+            # And the same again on the runner's own sheet, which is where it does
+            # something: crew_experience is the player's ledger of what a hire earned
+            # working for them, complete_job is the hire getting better for it. Their cut
+            # is the pay, so the money they spend on gear is money you handed them.
+            bought = complete_job(runner, cut, outcome.experience_delta)
+            if bought is not None:
+                self.notify(f"{runner.name} spends their cut on {bought.name}.")
 
     async def _advance(self) -> None:
         if self._pending_next_stage is None:

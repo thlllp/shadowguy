@@ -16,6 +16,7 @@ lightweight-fixture style), not a full generate_corp_map — none of this cares
 about the rest of a real map's generated content.
 """
 
+import copy
 import random
 
 import pytest
@@ -33,6 +34,8 @@ from shadowguy.rivals import (
     MIN_AI_ATTACK_FORCE,
     RECOVERY_DAYS,
     RIVAL_RESEARCH_CHANCE,
+    RUNNER_JOB_PAY,
+    RUNNER_JOB_XP,
     RunnerActivity,
     RunnerState,
     _attack_force,
@@ -40,8 +43,9 @@ from shadowguy.rivals import (
     _reinforce,
     resolve_rival_day,
 )
-from shadowguy.runners import RIVAL_RUNNERS
+from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
 from shadowguy.scene import Scene, Stage
+from shadowguy.shops import ITEMS_BY_ID
 
 from helpers import ForcedChance
 
@@ -590,3 +594,92 @@ def test_a_rival_day_never_leaves_a_negative_garrison_or_orphan_owner(seed):
             assert territory.owner in valid
             if territory.owner == "neutral":
                 assert territory.garrison == 0
+
+
+# What a day of work does to the runner who did it: runners.complete_job, driven
+# from _runner_turn. The rivals half is only "who worked today" -- what a job is
+# worth lives in runners.py, so these tests assert the coupling, not the curve.
+
+
+# 0.3 < RUNNER_WORK_CHANCE (they work) and 0.3 >= JOB_INJURY_CHANCE (it went
+# fine), which is the one combination that pays. HIT works *and* is injured.
+PAID = ForcedChance(0.3)
+
+
+def _busy_board(count: int = 40) -> Fixer:
+    """One fixer with more open jobs than the roster can take in the days a test
+    runs -- a paid day needs a takeable offer, and every runner takes one each day."""
+    return Fixer(
+        id="fixer_rook",
+        name="Rook",
+        specialty="s",
+        offers=[
+            JobOffer(
+                id=f"offer_{i}",
+                fixer_id="fixer_rook",
+                scene=_scene(f"Job {i}"),
+                timing=JobTiming(),
+                offered_day=1,
+            )
+            for i in range(count)
+        ],
+    )
+
+
+def test_a_job_that_went_well_pays_the_runner_who_ran_it():
+    roster = copy.deepcopy(RIVAL_RUNNERS)
+    fixer, _ = _fixer_with_offer()
+    actions = resolve_rival_day(
+        Character(name="t"), _map(), day=2, rng=PAID, rival_runner_states={},
+        fixers=[fixer], runners=roster,
+    )
+    worked = next(a.actor_id for a in actions if a.activity is RunnerActivity.WORKING)
+    paid = next(r for r in roster if r.id == worked)
+    assert paid.cash + sum(ITEMS_BY_ID[i].price for i in paid.gear) == RUNNER_JOB_PAY
+    assert paid.experience == RUNNER_JOB_XP
+    # Nobody who sat the day out earned anything.
+    assert all(r.experience == 0 for r in roster if r.id != worked)
+
+
+def test_a_job_that_went_badly_pays_nothing_at_all():
+    """JOB_INJURY_CHANCE costs them the fee as well as the days -- the recovery is
+    the visible half, the empty pocket is the other."""
+    roster = copy.deepcopy(RIVAL_RUNNERS)
+    fixer, offer = _fixer_with_offer()
+    resolve_rival_day(
+        Character(name="t"), _map(), day=2, rng=HIT, rival_runner_states={},
+        fixers=[fixer], runners=roster,
+    )
+    hurt = next(r for r in roster if r.id == offer.taken_by)
+    assert hurt.cash == 0 and hurt.experience == 0 and hurt.gear == []
+
+
+def test_a_run_of_paid_work_turns_into_rating_and_gear():
+    """The whole point, end to end: keep working and a runner is measurably better
+    and better equipped than the roster you met them on."""
+    roster = copy.deepcopy(RIVAL_RUNNERS)
+    specter = next(r for r in roster if r.id == "runner_specter")
+    authored = RUNNERS_BY_ID["runner_specter"]
+    corp_map = _map()
+    board = _busy_board()
+    states: dict[str, RunnerState] = {}
+    for day in range(2, 12):
+        resolve_rival_day(
+            Character(name="t"), corp_map, day=day, rng=PAID, rival_runner_states=states,
+            fixers=[board], runners=roster,
+        )
+    assert specter.rating > authored.rating
+    assert specter.gear  # a Netrunner already on the best deck buys worn gear instead
+    assert authored.rating == RIVAL_RUNNERS[0].rating  # and the table is untouched
+
+
+def test_the_default_roster_is_a_copy_so_a_test_cannot_level_the_module_table():
+    """resolve_rival_day's `runners` default is a throwaway copy of RIVAL_RUNNERS.
+    Without that, any test that happened to roll a paid day would quietly move the
+    numbers every other suite reads off the roster table."""
+    before = [(r.rating, r.experience, r.cash, list(r.gear)) for r in RIVAL_RUNNERS]
+    resolve_rival_day(
+        Character(name="t"), _map(), day=2, rng=PAID, rival_runner_states={},
+        fixers=[_busy_board()],
+    )
+    assert [(r.rating, r.experience, r.cash, list(r.gear)) for r in RIVAL_RUNNERS] == before

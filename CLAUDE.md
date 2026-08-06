@@ -122,7 +122,8 @@ src/shadowguy/
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
   fixer.py       the Fixer roster holding job and security offers
-  runners.py     the hireable-runner roster + the remote-support programs a hire runs
+  runners.py     the hireable-runner roster + the remote-support programs a hire runs,
+                 and what a run's work does to one: rating earned, gear bought
 
   factions.py    corp Factions + the HQ officer ladder
   gangs.py       street Gangs + GANG_RANKS
@@ -183,6 +184,7 @@ Leaf modules, and why each has to stay one:
 - **`skills.py`** — imports nothing from the package; `character.py → shops.py → corpmap.py` all import it. The "every `Skill.stat` is a real core stat" guard therefore lives in `character.py`, the one module seeing both tables. A runtime `character` import here is a cycle.
 - **`combat.py`** — the shared fight foundation, no `scene`. All three fight surfaces (`abstract_combat.py` / `tactical.py` / `matrix.py`) import *it* and never each other; `soak_damage` is public (not `_soak_damage`) because `abstract_combat`'s flee resolves a parting shot through it. `Enemy` stays here rather than moving to `abstract_combat.py` — a pickled `scene.Encounter` holds one, so the move would cost a save version for nothing.
 - **`abstract_combat.py` / `tactical.py` / `matrix.py`** — the three fight surfaces, no `scene`.
+- **`runners.py`** — imports `shops.py` only (item prices for the gear ladder, `program_slots` for decks). `combat.py`/`character.py`/`support.py`/`rivals.py` all import *it*. It owns runner progression outright: `rivals.py` decides who worked today, `runners.complete_job` decides what that was worth.
 - **`tactical_gen.py`** — imports `grid` and tcod, nothing else from the package, and pointedly not `tactical`: a generated map has no units or turns in it, which is what lets it be built ahead of the fight and pickled onto a `scene.TacticalStage`. Same split as `corpmap`/`corpmap_gen`.
 - **`support.py`** — the one module that imports `tactical` rather than being imported by it. The fight only ever *carries* a `Support` (a string-annotated field plus a `TYPE_CHECKING` import) and touches `acted`/`blinded_cameras`; every entry point here is called by a screen, never by the engine mid-turn. Keep it that way or the arrow becomes a cycle.
 - **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
@@ -244,6 +246,7 @@ Leaf modules, and why each has to stay one:
 | 57 | the workshop system: `corpmap.Location.workshop_built` (free on the injected apartment, built at a safehouse for `WORKSHOP_BUILD_COST`) and `shops.InventoryItem.mods` (per-instance mod ids, folded into combat/inventory stats by `shops.effective_item`) |
 | 58 | the corp conflict layer: `corpmap.Territory.garrison`, `scene.Outcome.security_delta`, and `corp_turn.FactionEvent.from_faction_id` + its new `"seizure"` kind. `rivals.RivalAction.attack` holds a `corp_turn.AttackResult`, and `apply_outcome`/`resolve_choice`/`resolve_entrance` all take a `CorpMap` now |
 | 59 | `cybernetics.py`'s quality tiers renamed from numeric (Tier 1-4) to named grades (Deltaware/Trashware/Betaware/Alphaware) with new price/humanity multipliers; every non-Deltaware catalog id changed shape (`reflex_coprocessor_t2` → `reflex_coprocessor_betaware`), so a pre-v59 `Character.installed_cyberware` referencing an old id would `KeyError` against `CYBERWARE_BY_ID` |
+| 60 | runner progression: `RivalRunner.experience`/`cash`/`gear`. A pre-v60 pickled roster (`ShadowguyApp.runners`, pickled instance-by-instance like v55's `deck_id`) lacks all three attributes. Also the reason `select_active_runners` now hands a run **deep copies** — the roster tables are templates, and `runners.live_runner`/`ShadowguyApp.runner` is now the only correct way from an id to a live runner |
 
 ### Verifying changes
 

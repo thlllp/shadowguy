@@ -10,7 +10,7 @@ from shadowguy.cybernetics import (
     installed_skill_bonus,
 )
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
-from shadowguy.runners import RUNNERS_BY_ID, can_work_support, recruit_wage
+from shadowguy.runners import RUNNERS_BY_ID, can_work_support, live_runner, recruit_wage
 from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
@@ -391,7 +391,7 @@ class Character:
         if not self.on_crew(runner_id):
             self.crew.append(CrewHire(runner_id=runner_id))
 
-    def hire_for_job(self, runner_id: str, job_id: str, on_site: bool = True) -> bool:
+    def hire_for_job(self, runner_id: str, job_id: str, on_site: bool = True, roster=None) -> bool:
         """Sign a runner on for a single job, on-site or as support. Returns whether the
         hire actually went through -- False if already on the crew, if that job's roster
         (Scene.max_on_site/max_support) has no room left for that posture, or if they
@@ -399,10 +399,15 @@ class Character:
 
         Support is a *role*, not merely a placement: a solo across the street does
         nothing, so runners.can_work_support gates it (Netrunners today, Riggers when
-        they exist) rather than letting the player pay a cut for an empty comm link."""
+        they exist) rather than letting the player pay a cut for an empty comm link.
+
+        `roster` is the run's runner list (ShadowguyApp.runners), and the support gate is
+        why it's here: a runner who has *bought* a deck since the run started
+        (runners.buy_gear) can work support, and the roster table they were authored in
+        still says they own nothing. Omitted falls back to those templates."""
         if self.on_crew(runner_id) or not self.job_roster_has_room(job_id, on_site):
             return False
-        runner = RUNNERS_BY_ID.get(runner_id)
+        runner = live_runner(runner_id, roster)
         if not on_site and not (runner and can_work_support(runner)):
             return False
         self.crew.append(CrewHire(runner_id=runner_id, job_id=job_id, on_site=on_site))

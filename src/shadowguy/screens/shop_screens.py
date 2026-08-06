@@ -183,7 +183,7 @@ class FixerOffersScreen(BackScreen):
             return
         if item_id.startswith("intro_"):
             character = self.app.character
-            runner = RUNNERS_BY_ID[item_id.removeprefix("intro_")]
+            runner = self.app.runner(item_id.removeprefix("intro_"))
             cost = intro_cost(runner)
             if character.cash < cost:
                 self.notify(f"Can't afford the introduction ({cost}eb).", severity="warning")
@@ -196,7 +196,7 @@ class FixerOffersScreen(BackScreen):
         offer = next(offer for offer in self.fixer.offers if offer.id == item_id)
         if offer.taken_by is not None:
             self.notify(
-                f"{RUNNERS_BY_ID[offer.taken_by].name} already took that one.", severity="warning"
+                f"{self.app.runner(offer.taken_by).name} already took that one.", severity="warning"
             )
             return
         self.app.character.accept_job(offer)
@@ -346,7 +346,7 @@ class BarScreen(BackScreen):
             info.update(f"{self.location.name} — ask around for runners looking for work")
             items = self._roster_items()
         else:
-            runner = RUNNERS_BY_ID[self.chosen_runner]
+            runner = self.app.runner(self.chosen_runner)
             info.update(f"Bring {runner.name} on — on what terms?")
             items = self._terms_items(runner)
         await _replace_items(self.query_one("#bar_runners", ListView), items)
@@ -422,28 +422,28 @@ class BarScreen(BackScreen):
         item_id = event.item.id
         if self.chosen_runner is None:
             if item_id.startswith("meet_"):
-                runner = RUNNERS_BY_ID[item_id.removeprefix("meet_")]
+                runner = self.app.runner(item_id.removeprefix("meet_"))
                 character.meet_runner(runner.id)
                 self.notify(f"You exchange numbers with {runner.name}.")
                 await self._refresh()
                 return
-            runner = RUNNERS_BY_ID[item_id.removeprefix("runner_")]
+            runner = self.app.runner(item_id.removeprefix("runner_"))
             if not character.on_crew(runner.id):
                 self.chosen_runner = runner.id
                 await self._refresh()
             return
 
-        runner = RUNNERS_BY_ID[self.chosen_runner]
+        runner = self.app.runner(self.chosen_runner)
         if item_id == "opt_indef":
             character.hire_indefinite(runner.id)
             self.notify(f"{runner.name} is on the crew ({runner.daily_cost}eb/day).")
         elif item_id.startswith("opt_job_onsite_"):
             job_scene_id = item_id.removeprefix("opt_job_onsite_")
-            if character.hire_for_job(runner.id, job_scene_id, on_site=True):
+            if character.hire_for_job(runner.id, job_scene_id, on_site=True, roster=self.app.runners):
                 self.notify(f"{runner.name} signed on for the job, on-site.")
         elif item_id.startswith("opt_job_support_"):
             job_scene_id = item_id.removeprefix("opt_job_support_")
-            if character.hire_for_job(runner.id, job_scene_id, on_site=False):
+            if character.hire_for_job(runner.id, job_scene_id, on_site=False, roster=self.app.runners):
                 self.notify(f"{runner.name} signed on for the job, in support.")
         self.chosen_runner = None
         await self._refresh()

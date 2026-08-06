@@ -36,7 +36,7 @@ from shadowguy.checks import (
 )
 from shadowguy.cybernetics import has_smartlink, installed_defense
 from shadowguy.inventory import equipped_defense
-from shadowguy.runners import RivalRunner
+from shadowguy.runners import RivalRunner, best_weapon_id, gear_defense
 from shadowguy.shops import (
     COMBAT_ONLY_EFFECTS,
     CONSUMABLES_BY_ID,
@@ -177,6 +177,15 @@ NPC_WEAPONS = {
     )
     for row in _NPC_WEAPON_ROWS
 }
+
+
+def weapon_item(weapon_id: str) -> Item:
+    """The Item behind a weapon id an NPC is holding: the rows above first, then the
+    retail catalog. Two tables rather than one because they're priced differently (an NPC
+    weapon costs 0 and sits under the catalog's damage floor), but a hire who has spent a
+    run's earnings on a gun (runners.buy_gear) carries a real shops.Item, and a fight
+    shouldn't care which table a weapon came out of."""
+    return NPC_WEAPONS.get(weapon_id) or ITEMS_BY_ID[weapon_id]
 
 # shops.py's CATALOG bounds, re-applied to the NPC gear it never sees — minus the damage
 # floor these rows exist to sit under. Same reasoning as UNARMED: fail at import.
@@ -377,7 +386,7 @@ def _enemy(
         perception=perception,
         logic=logic,
         cool=cool,
-        weapon=NPC_WEAPONS[weapon_id],
+        weapon=weapon_item(weapon_id),
         ranks=ranks or {},
         armor=armor,
     )
@@ -490,11 +499,19 @@ def crew_stats(runner: RivalRunner) -> Enemy:
     Their `rating` reaches the attack pool by *buying rank* in their weapon's skill
     rather than being assigned to `attack` directly, so a better-rated hire is a
     better-trained one. It lands at `rating - combat_gap`: see _CREW_PROFILES.
+
+    Both halves of that move over a run. `rating` is earned (runners.gain_experience), and
+    **anything the runner has bought for themselves beats the profile's issued kit**: a
+    solo who has spent a season's fees on a rifle turns up carrying it, and the vest they
+    bought is worn over the 0 armor the profile hands out. The profile is what a hire owns
+    when you meet them, not a cap on what they can ever bring.
     """
-    stats, weapon_id, armor, combat_gap = _CREW_PROFILES.get(
+    stats, profile_weapon_id, profile_armor, combat_gap = _CREW_PROFILES.get(
         runner.archetype, _CREW_DEFAULT_PROFILE
     )
-    weapon = NPC_WEAPONS[weapon_id]
+    weapon_id = best_weapon_id(runner) or profile_weapon_id
+    armor = max(profile_armor, gear_defense(runner))
+    weapon = weapon_item(weapon_id)
     skill = weapon.skill
     # rank = the gun half of rating, less the skill's own stat, so skill_value comes out
     # at rating - combat_gap on the nose.
