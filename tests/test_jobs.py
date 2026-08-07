@@ -61,10 +61,15 @@ def test_every_archetype_specific_seed_pool_is_non_empty():
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_generated_job_runs_three_or_four_stages(corp_map, seed):
+    archetype = random.Random(seed).choice(ARCHETYPES)
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
     fight_stages = {sid for sid in scene.stages if sid.endswith("_fight")}
     non_fight = len(scene.stages) - len(fight_stages)
-    assert non_fight in (3, 4)
+    if archetype.name in ("Burglary", "Wetwork"):
+        # Their only stage is the interior walk itself -- see their ARCHETYPES row.
+        assert non_fight == 1
+    else:
+        assert non_fight in (3, 4)
     # A narration stage (see JobStage.vigilance) never rolls, so nothing can ever
     # route into a fight beside it -- generate_job doesn't build one. Every other
     # non-fight stage still has exactly one.
@@ -88,8 +93,10 @@ def test_generated_job_last_non_fight_stage_carries_the_payout(corp_map, seed):
         assert last.narration.standing_delta == JOB_STANDING_HIT
         assert last.narration.experience_delta > 0
         return
-    # The last stage's success outcome must actually pay cash/rep/standing.
-    non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
+    # The last stage's success outcome must actually pay cash/rep/standing. Whichever
+    # mode it's in -- a plain Choice list or a BurglaryStage's Entrances (Burglary/
+    # Wetwork's only stage, and so always their last one now).
+    non_ambush = [c for c in _stage_options(last) if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
     assert non_ambush, "last stage must have at least one non-ambush choice"
     for choice in non_ambush:
         assert choice.success.cash_delta > 0
@@ -108,7 +115,7 @@ def test_generated_job_critical_success_pays_more_experience_than_plain_success(
         key=lambda sid: int(sid.removeprefix("stage_")),
     )
     last = scene.stages[stage_ids[-1]]
-    non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
+    non_ambush = [c for c in _stage_options(last) if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
     for choice in non_ambush:
         assert choice.critical_success.experience_delta > choice.success.experience_delta
 
@@ -123,7 +130,7 @@ def test_generated_job_plain_success_pays_exactly_tier_zero_xp_on_day_one(corp_m
         key=lambda sid: int(sid.removeprefix("stage_")),
     )
     last = scene.stages[stage_ids[-1]]
-    non_ambush = [c for c in last.choices if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
+    non_ambush = [c for c in _stage_options(last) if c.label != f"{AMBUSH_LABEL} ({skill_for('tactics').name})"]
     for choice in non_ambush:
         assert choice.success.experience_delta == JOB_XP_BASE[0]
 
@@ -235,11 +242,31 @@ def test_specialist_job_keeps_its_lead_approach_through_the_partial_draw(corp_ma
 
 
 @pytest.mark.parametrize("seed", BURGLARY_SEEDS)
-def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(corp_map, seed):
+def test_burglary_entrance_plain_failure_still_pays_a_reduced_reward(corp_map, seed):
+    """APPROACH is Burglary/Wetwork's only stage, so a plain entrance failure is
+    always its 'last stage' failure too -- paying nothing there (the ordinary rule)
+    would make the interior walk that follows pointless regardless of how it goes,
+    on the very first roll every time. A critical failure is still the real botched
+    case: no reward, straight to the fight (see jobs._entrance_failure)."""
+    scene, _timing = generate_job(day=10, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+    approach = scene.stages["stage_0"]
+    for entrance in approach.burglary.entrances:
+        if entrance.label.startswith(AMBUSH_LABEL):
+            continue
+        assert 0 < entrance.failure.cash_delta < entrance.success.cash_delta
+        assert entrance.failure.experience_delta > 0
+        assert entrance.critical_failure.cash_delta == 0
+
+
+@pytest.mark.parametrize("seed", BURGLARY_SEEDS)
+def test_burglary_job_is_a_single_burglary_stage_with_its_own_fight(corp_map, seed):
+    """Burglary/Wetwork's only stage is the interior walk -- there is no separate
+    objective/complication/exfil beat after it any more (see their ARCHETYPES rows):
+    the vault, the sensor, and getting out are the building's own guards, cameras and
+    guarded exits, not a second round of disconnected abstract choices."""
     archetype = random.Random(seed).choice(ARCHETYPES)
     scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
-    # APPROACH is always the first stage kept (only COMPLICATION can be dropped),
-    # so it's always stage_0.
+    assert set(scene.stages) == {"stage_0", "stage_0_fight"}
     approach = scene.stages["stage_0"]
     assert approach.burglary is not None
     assert approach.choices == []
@@ -249,11 +276,6 @@ def test_burglary_job_approach_is_a_burglary_stage_and_every_other_stage_is_not(
     # kind (BURGLARY_STRUCTURE).
     if archetype.name == "Wetwork":
         assert approach.burglary.building.kind == WETWORK_STRUCTURE
-    for sid, stage in scene.stages.items():
-        if sid in ("stage_0", "stage_0_fight") or sid.endswith("_fight"):
-            continue
-        assert stage.burglary is None
-        assert stage.choices
 
 
 @pytest.mark.parametrize("seed", DATA_HEIST_SEEDS)
