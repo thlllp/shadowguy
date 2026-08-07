@@ -234,7 +234,16 @@ SAVE_SUFFIX = ".save"
 # slot rather than appending to it. A pre-v62 pistol's `mods` is still the old empty
 # (or flat, unslotted) list, so install_mod's `entry.mods[slot_index]` would IndexError
 # the first time anything tried to mod one.
-SAVE_VERSION = 62
+# v63 -- no shape change, but jobs.generate_job no longer ever builds a fight stage's
+# Outcome-adjacent Stage with `combat=Encounter(...)`: every non-matrix job fight
+# (burglary included) is unconditionally `tactical=TacticalStage(...)` (see 3d2d25f,
+# which fixed this without bumping SAVE_VERSION). A pre-v63 accepted job generated
+# under the old coin flip can still carry a `combat=Encounter` fight stage baked at
+# generation time, which would drop a tactical/burglary fight into the old abstract
+# CombatScreen the moment that stage is reached -- surprising since every other job
+# fight on the same save plays tactical. Bumping forces those stale accepted jobs to
+# be abandoned with a fresh save rather than keep resolving on their old surface.
+SAVE_VERSION = 63
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
