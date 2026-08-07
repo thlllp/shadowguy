@@ -42,7 +42,7 @@ from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolv
 from shadowguy.combat import FREE_ROUND, Drop, resolve_hit, roll_tier_pool
 from shadowguy.cybernetics import installed_matrix_action_bonus
 from shadowguy.inventory import active_deck_entry, equipped_deck_rating, installed_programs_for
-from shadowguy.shops import STOLEN_DATASHARD_ID, InventoryItem, Program
+from shadowguy.shops import ITEMS_BY_ID, STOLEN_DATASHARD_ID, Program, grant_item
 from shadowguy.skills import skill_value
 
 # The runner's matrix hit points, rebuilt each fight from Logic (gear included,
@@ -1027,7 +1027,7 @@ def _settle_run(run: MatrixRunState) -> None:
         run.cleared_node_ids.add(run.current_node_id)
         node = run.network.nodes[run.current_node_id]
         if node.role is MatrixNodeRole.CACHE:
-            run.character.inventory.append(InventoryItem(STOLEN_DATASHARD_ID, equipped=False))
+            grant_item(run.character, ITEMS_BY_ID[STOLEN_DATASHARD_ID], equipped=False)
             run.run_log.append("You skim a stray cache of corp data — worth selling later.")
 
 

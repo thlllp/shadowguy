@@ -12,6 +12,7 @@ from shadowguy.character import Character
 from shadowguy.checks import pool_for_difficulty
 from shadowguy.character import CrewHire
 from shadowguy.combat import (
+    UNARMED,
     FIREARM_RANGE,
     MELEE_RANGE,
     THROWN_RANGE,
@@ -28,7 +29,7 @@ from shadowguy.grid import (
     path_between,
     visible_tiles,
 )
-from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, RANGED_SKILLS, AmmoKind, InventoryItem, loaded_rounds
 from shadowguy.support import (
     support_for,
     support_tasks,
@@ -84,8 +85,11 @@ from shadowguy.tactical import (
     lock_at,
     move_aim_cursor,
     move_player,
+    can_hit,
     player_attack,
     player_weapons,
+    reload_weapon,
+    reloadable,
     raise_alarm,
     resolve_downed_crew,
     snap_aim_to_next_target,
@@ -1711,3 +1715,86 @@ def test_a_fight_nobody_is_backing_has_no_hacker_at_all():
     # And directing one is a no-op rather than a crash.
     run_support_task(state, SUPPORT_PROGRAMS[0], rng=AlwaysSix())
     assert not state.log or "Probe" not in state.log[-1]
+
+
+# --- Ammo and the Reload action on the grid ---
+
+
+def test_an_empty_gun_cannot_hit_anything():
+    """Same gate as a cooldown, one row down in can_hit — an empty gun stops being a
+    weapon that reaches, so the knife takes over at knife range and nothing at gun range."""
+    state = _armed_state([(6, 0)])
+    gun = next(w for w in player_weapons(state) if w.id == "pipe_pistol")
+    assert can_hit(state, gun, state.enemies[0])
+    state.character.loaded["pipe_pistol"] = 0
+    assert not can_hit(state, gun, state.enemies[0])
+    assert weapon_for_target(state, state.enemies[0]) is None
+
+
+def test_firing_on_the_grid_spends_a_round():
+    state = _armed_state([(6, 0)], agility=6)
+    gun = next(w for w in player_weapons(state) if w.id == "pipe_pistol")
+    before = loaded_rounds(state.character, gun)
+    player_attack(state, state.enemies[0], gun, rng=AlwaysSix())
+    assert state.character.loaded["pipe_pistol"] == before - 1
+
+
+def test_reloadable_lists_only_guns_with_reserve_and_room():
+    state = _armed_state([(6, 0)])
+    assert reloadable(state) == []  # full magazine, no reserve
+    state.character.loaded["pipe_pistol"] = 0
+    assert reloadable(state) == []  # empty, but nothing to load
+    state.character.ammo[AmmoKind.PISTOL.value] = 10
+    assert [w.id for w in reloadable(state)] == ["pipe_pistol"]
+
+
+def test_reload_weapon_spends_the_turns_action():
+    state = _armed_state([(6, 0)])
+    state.character.loaded["pipe_pistol"] = 0
+    state.character.ammo[AmmoKind.PISTOL.value] = 10
+    gun = next(w for w in reloadable(state) if w.id == "pipe_pistol")
+    assert reload_weapon(state, gun) is None
+    assert state.acted is True
+    assert state.character.loaded["pipe_pistol"] == ITEMS_BY_ID["pipe_pistol"].magazine
+
+
+def test_reload_weapon_does_nothing_once_the_action_is_spent():
+    state = _armed_state([(6, 0)])
+    state.character.loaded["pipe_pistol"] = 0
+    state.character.ammo[AmmoKind.PISTOL.value] = 10
+    gun = next(w for w in reloadable(state) if w.id == "pipe_pistol")
+    state.acted = True
+    assert "already acted" in reload_weapon(state, gun)
+    assert state.character.loaded["pipe_pistol"] == 0
+
+
+def test_reloading_never_raises_the_alarm():
+    """Unlike a shot, feeding a magazine is quiet — the one action on this surface that
+    spends the turn without giving you away."""
+    state = _armed_state([(6, 0)])
+    state.alarm = False
+    state.character.loaded["pipe_pistol"] = 0
+    state.character.ammo[AmmoKind.PISTOL.value] = 10
+    gun = next(w for w in reloadable(state) if w.id == "pipe_pistol")
+    reload_weapon(state, gun)
+    assert state.alarm is False
+
+
+def test_a_dry_gun_falls_back_to_fists_rather_than_leaving_you_defenceless():
+    """equipped_weapons only substitutes UNARMED when *nothing* is equipped, so without
+    player_weapons' own fallback a runner holding one empty pistol could not even swing
+    at an adjacent enemy — strictly worse than carrying no weapon at all."""
+    state = _armed_state([(1, 0)], weapons=("pipe_pistol",))
+    assert attack_targets(state)
+    state.character.loaded["pipe_pistol"] = 0
+    assert [w.id for w in player_weapons(state)] == [UNARMED.id]
+    assert attack_targets(state), "an adjacent enemy must still be punchable"
+
+
+def test_reload_weapon_on_a_dry_reserve_refuses_without_spending_the_turn():
+    state = _armed_state([(6, 0)])
+    state.character.loaded["pipe_pistol"] = 0
+    gun = ITEMS_BY_ID["pipe_pistol"]
+    message = reload_weapon(state, gun)
+    assert "Out of pistol rounds" in message
+    assert state.acted is False

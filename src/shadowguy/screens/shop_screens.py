@@ -43,6 +43,9 @@ from shadowguy.cybernetics import (
 )
 from shadowguy.skills import skill_for, skill_value
 from shadowguy.shops import (
+    AMMO_BY_KIND,
+    AMMO_CATALOG,
+    AmmoKind,
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
@@ -50,7 +53,6 @@ from shadowguy.shops import (
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     MOD_CATALOG,
-    MOD_SLOTS_PER_ITEM,
     MODS_BY_ID,
     PROGRAM_CATALOG,
     SCAVENGE_HOURS_COST,
@@ -58,12 +60,14 @@ from shadowguy.shops import (
     WORKSHOP_HOURS_COST,
     bonus_text,
     buy_consumable,
+    buy_ammo,
     buy_item,
     buy_price,
     buy_program,
     craft_consumable,
     hospital_stay,
     install_mod,
+    install_refusal,
     remove_mod,
     scavenge,
     sell_item,
@@ -272,6 +276,16 @@ class ShopScreen(PanelNav, BackScreen):
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"buyc_{consumable.id}"))
 
+        # Ammo is its own catalog (not an Item, not a Consumable). The reserve count rides
+        # on the label so a runner can see what they already have without leaving the shop.
+        for ammo in AMMO_CATALOG.get(self.location.kind, []):
+            price = buy_price(ammo.price, standing)
+            held = character.ammo.get(ammo.kind.value, 0)
+            label = f"Buy {ammo.name} ({ammo.rounds}) — {price}eb — {held} held"
+            if character.cash < price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buya_{ammo.kind.value}"))
+
         if self.location.kind == LocationKind.PAWN:
             for index, entry in enumerate(character.inventory):
                 item = ITEMS_BY_ID[entry.item_id]
@@ -309,6 +323,10 @@ class ShopScreen(PanelNav, BackScreen):
             consumable = CONSUMABLES_BY_ID[item_id.removeprefix("buyc_")]
             if not buy_consumable(character, consumable, standing):
                 self.notify(f"Can't afford {consumable.name}.", severity="warning")
+        elif item_id.startswith("buya_"):
+            ammo = AMMO_BY_KIND[AmmoKind(item_id.removeprefix("buya_"))]
+            if not buy_ammo(character, ammo.kind, standing):
+                self.notify(f"Can't afford {ammo.name}.", severity="warning")
         elif item_id.startswith("buyp_"):
             self.notify(buy_program(character, item_id.removeprefix("buyp_"), standing))
         elif item_id.startswith("sell_"):
@@ -486,30 +504,24 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
 
         for index, entry in enumerate(character.inventory):
             item = ITEMS_BY_ID[entry.item_id]
-            weapon_slots = WEAPON_MOD_SLOTS.get(item.skill, ())
-            if weapon_slots:
-                # Every named slot always holds something (a stock part or an
-                # upgrade) — installing is the only action, and it always replaces
-                # whatever's currently in that slot, stock part included.
-                for slot_index, slot_type in enumerate(weapon_slots):
-                    current_mod_id = entry.mods[slot_index]
-                    for mod in MOD_CATALOG:
-                        if mod.weapon_slot is not slot_type or mod.id == current_mod_id:
-                            continue
-                        label = f"Install {mod.name} ({slot_type.value}) on {item.name} — {mod.price}eb"
-                        if character.cash < mod.price:
-                            label += " — can't afford"
-                        items.append(ListItem(Static(label), id=f"mod_{index}_{mod.id}"))
-                continue
+            named_layout = bool(WEAPON_MOD_SLOTS.get(item.skill, ()))
+            # One filter for both layouts: shops.install_refusal owns every rule about
+            # what fits where, so a new slot type is taught to it alone. Affording it
+            # is deliberately not one of those rules — an unaffordable row is shown
+            # and labelled, the way every other shop row is.
             for mod in MOD_CATALOG:
-                if item.slot not in mod.applies_to or mod.id in entry.mods:
+                if install_refusal(entry, mod) is not None:
                     continue
-                if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
-                    continue
-                label = f"Install {mod.name} on {item.name} — {mod.price}eb"
+                where = f" ({mod.weapon_slot.value})" if named_layout and mod.weapon_slot else ""
+                label = f"Install {mod.name}{where} on {item.name} — {mod.price}eb"
                 if character.cash < mod.price:
                     label += " — can't afford"
                 items.append(ListItem(Static(label), id=f"mod_{index}_{mod.id}"))
+            # Named slots are never empty, so there is nothing to remove from one — the
+            # way to undo an upgrade there is to fit the stock part back over it
+            # (remove_mod refuses outright).
+            if named_layout:
+                continue
             for mod_id in entry.mods:
                 label = f"Remove {MODS_BY_ID[mod_id].name} from {item.name}"
                 items.append(ListItem(Static(label), id=f"unmod_{index}_{mod_id}"))

@@ -13,7 +13,7 @@ from shadowguy.abstract_combat import (
 )
 from shadowguy.character import Character
 from shadowguy.combat import ENEMIES_BY_ID, UNARMED, Drop, Enemy, equipped_weapons
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem
+from shadowguy.shops import ITEMS_BY_ID, AmmoKind, InventoryItem
 
 from helpers import AlwaysOne, AlwaysSix, npc_weapon, synthetic_enemy
 
@@ -221,3 +221,94 @@ def test_strength_does_not_reach_a_gun():
         return enemy.health - state.fighters[0].health
 
     assert one_shot(1) == one_shot(9)
+
+
+# --- Ammo and the Reload action ---
+
+
+def _gunfighter(loaded: int | None = None, reserve: int = 0) -> Character:
+    """A runner holding a pipe pistol, with the magazine and reserve set explicitly.
+    `loaded=None` leaves Character.loaded untouched — the "never fired" state."""
+    character = Character(
+        name="t", agility=6, inventory=[InventoryItem(item_id="pipe_pistol", equipped=True)]
+    )
+    if loaded is not None:
+        character.loaded["pipe_pistol"] = loaded
+    if reserve:
+        character.ammo[AmmoKind.PISTOL.value] = reserve
+    return character
+
+
+def _attack_labels(character: Character) -> list[str]:
+    return [
+        a.weapon.id
+        for a in available_actions(character)
+        if a.kind is ActionKind.ATTACK and a.weapon
+    ]
+
+
+def test_an_empty_gun_is_not_offered_as_an_attack():
+    assert "pipe_pistol" not in _attack_labels(_gunfighter(loaded=0))
+
+
+def test_a_loaded_gun_is_offered():
+    assert "pipe_pistol" in _attack_labels(_gunfighter(loaded=1))
+
+
+def test_running_dry_falls_back_to_bare_hands_rather_than_an_empty_action_list():
+    """The invariant available_actions has always carried: a round can never present
+    nothing to do. An empty gun is the newest way to reach that branch."""
+    actions = available_actions(_gunfighter(loaded=0))
+    assert actions
+    assert UNARMED.id in _attack_labels(_gunfighter(loaded=0))
+
+
+def test_firing_spends_a_round_even_on_a_miss():
+    character = _gunfighter(loaded=6)
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1), body=4, id="d", name="D")
+    state = start_combat(character, (enemy,), rng=AlwaysOne())
+    shot = next(
+        a for a in available_actions(character, state.weapon_cooldowns)
+        if a.kind is ActionKind.ATTACK and a.weapon and a.weapon.id == "pipe_pistol"
+    )
+    take_turn(state, shot, rng=AlwaysOne())
+    assert character.loaded["pipe_pistol"] == 5
+
+
+def test_reload_is_offered_only_when_there_are_rounds_to_load():
+    assert not [a for a in available_actions(_gunfighter(loaded=0)) if a.kind is ActionKind.RELOAD]
+    with_reserve = _gunfighter(loaded=0, reserve=10)
+    assert [a for a in available_actions(with_reserve) if a.kind is ActionKind.RELOAD]
+
+
+def test_reload_is_not_offered_for_a_full_gun():
+    full = _gunfighter(reserve=10)
+    assert not [a for a in available_actions(full) if a.kind is ActionKind.RELOAD]
+
+
+def test_reloading_spends_the_round_and_refills_from_the_reserve():
+    character = _gunfighter(loaded=0, reserve=10)
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1), body=4, id="d", name="D")
+    state = start_combat(character, (enemy,), rng=AlwaysSix())
+    reload_action = next(
+        a for a in available_actions(character, state.weapon_cooldowns)
+        if a.kind is ActionKind.RELOAD
+    )
+    take_turn(state, reload_action, rng=AlwaysSix())
+    magazine = ITEMS_BY_ID["pipe_pistol"].magazine
+    assert character.loaded["pipe_pistol"] == magazine
+    assert character.ammo[AmmoKind.PISTOL.value] == 10 - magazine
+    # The round was spent: the enemy took its turn, exactly as after any other action.
+    assert any("fresh magazine" in line for line in state.log)
+    assert any(enemy.name in line for line in state.log)
+
+
+def test_a_reload_action_carrying_a_melee_weapon_is_a_no_op_not_a_crash():
+    """available_actions only ever builds a RELOAD around a gun, so this guards the
+    public take_turn against a hand-built Action — the same case tactical.reload_weapon
+    refuses, so the two surfaces agree."""
+    character = _gunfighter(loaded=6)
+    enemy = synthetic_enemy(npc_weapon("clubs", damage=1), body=4, id="d", name="D")
+    state = start_combat(character, (enemy,), rng=AlwaysSix())
+    take_turn(state, Action(kind=ActionKind.RELOAD, label="x", weapon=UNARMED), rng=AlwaysSix())
+    assert character.loaded["pipe_pistol"] == 6

@@ -11,7 +11,13 @@ from shadowguy.cybernetics import (
 )
 from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, can_work_support, live_runner, recruit_wage
-from shadowguy.shops import ITEMS_BY_ID, InventoryItem, Item, fits_in_slot, stock_mod_ids
+from shadowguy.shops import (
+    ITEMS_BY_ID,
+    InventoryItem,
+    Item,
+    grant_item,
+    unload_on_disposal,
+)
 from shadowguy.skills import SKILLS, skill_for, skill_value
 
 if TYPE_CHECKING:
@@ -276,6 +282,17 @@ class Character:
     # Owned consumables, ids from shops.CONSUMABLES_BY_ID. Duplicates allowed.
     # Removed (via inventory.use_consumable) once used, unlike persistent gear.
     consumables: list[str] = field(default_factory=list)
+    # Spare rounds in the runner's pockets: shops.AmmoKind value -> how many. Keyed by
+    # kind rather than by weapon, so two pistols draw on one stock. Bought a box at a
+    # time (shops.buy_ammo) and drawn down by inventory.reload_weapon, never by firing --
+    # firing empties `loaded` below, and reloading is what moves rounds between the two.
+    ammo: dict[str, int] = field(default_factory=dict)
+    # What's actually in each gun right now: weapon id (shops.ITEMS_BY_ID) -> rounds
+    # chambered. Keyed by weapon *id*, matching how both fight surfaces already identify
+    # a weapon in their weapon_cooldowns dicts -- so, exactly like a cooldown, two copies
+    # of the same gun share one magazine. Persists between fights: walking out of a
+    # firefight on an empty gun and into the next one is the point.
+    loaded: dict[str, int] = field(default_factory=dict)
     # Program ids (shops.PROGRAMS_BY_ID) bought into the runner's owned pool. Not
     # installed on any deck by itself — see inventory.install_program/InventoryItem.
     # installed_programs. Mirrors discovered_fixers' shape: a set of owned ids.
@@ -647,11 +664,7 @@ class Character:
         if item.min_standing or item.price > self.gear_budget:
             return False
         self.gear_budget -= item.price
-        self.inventory.append(
-            InventoryItem(
-                item.id, equipped=fits_in_slot(self.inventory, item), mods=stock_mod_ids(item)
-            )
-        )
+        grant_item(self, item)
         self.creation_gear.append(item.id)
         return True
 
@@ -669,6 +682,7 @@ class Character:
         if entry is None:
             return False
         self.inventory.remove(entry)
+        unload_on_disposal(self, ITEMS_BY_ID[item_id])
         self.creation_gear.remove(item_id)
         self.gear_budget += ITEMS_BY_ID[item_id].price
         return True

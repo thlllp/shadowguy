@@ -243,7 +243,22 @@ SAVE_SUFFIX = ".save"
 # CombatScreen the moment that stage is reached -- surprising since every other job
 # fight on the same save plays tactical. Bumping forces those stale accepted jobs to
 # be abandoned with a fresh save rather than keep resolving on their old surface.
-SAVE_VERSION = 63
+# v64 extended the v62 named-layout treatment to the other two carried gun skills:
+# shops.WEAPON_MOD_SLOTS now covers longarms (5 slots) and automatics (6) alongside
+# pistols (4), on two new WeaponModSlot types (BUTTSTOCK/MAGAZINE) with stock parts of
+# their own. Exactly the v62 hazard, one skill wider: a pre-v64 shotgun or automatic
+# carries the old flat, unslotted `mods` list -- empty, or holding whatever
+# sharpened_edge/hollow_points were appended to it -- so both install_mod and
+# SafehouseScreen's slot listing would IndexError on `entry.mods[slot_index]` the first
+# time the workshop looked at one.
+# v65 added ammo: Character.ammo (the reserve pool, keyed by shops.AmmoKind value) and
+# Character.loaded (weapon id -> rounds chambered), plus Item.ammo/Item.magazine on every
+# RANGED_SKILLS weapon and a Mod.magazine that extended_magazine now grants instead of
+# the +1 damage it carried in v64. A pre-v65 Character has neither dict, so every read
+# through shops.loaded_rounds would AttributeError on the first fight; the weapon rows
+# themselves are rebuilt from the catalog on import, but a pickled InventoryItem carrying
+# extended_magazine would silently keep scoring it as damage against the new fold.
+SAVE_VERSION = 65
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

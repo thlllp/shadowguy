@@ -11,13 +11,23 @@ from shadowguy.inventory import (
     free_program_slots,
     install_program,
     installed_programs_for,
+    reload_weapon,
+    rounds_needed,
     toggle_equip,
     uninstall_program,
     use_consumable,
 )
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
 from shadowguy.runners import RivalRunner
-from shadowguy.shops import CONSUMABLES_BY_ID, ITEMS_BY_ID, PROGRAMS_BY_ID, bonus_text, effective_item
+from shadowguy.shops import (
+    AmmoKind,
+    CONSUMABLES_BY_ID,
+    ITEMS_BY_ID,
+    PROGRAMS_BY_ID,
+    bonus_text,
+    effective_item,
+    loaded_rounds,
+)
 from shadowguy.skills import SKILLS, skill_for
 
 from . import (
@@ -66,8 +76,22 @@ class InventoryScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
             item = effective_item(entry)
             state = "Equipped" if entry.equipped else "Stowed"
             parts = [p for p in (bonus_text(item), item.slot.value if item.slot else None) if p]
+            if item.ammo is not None:
+                parts.append(f"{loaded_rounds(self.app.character, item)}/{item.magazine} loaded")
             label = f"{state} — {item.name}" + (f" ({', '.join(parts)})" if parts else "")
             items.append(ListItem(Static(label), id=f"toggle_{index}"))
+            # Free out of combat, and offered only when it would actually do something:
+            # room in the magazine *and* rounds in the reserve to put there. The in-fight
+            # reload is the one that costs a round.
+            reserve = item.ammo and self.app.character.ammo.get(item.ammo.value, 0)
+            if rounds_needed(self.app.character, item) and reserve:
+                label = f"Reload {item.name} — {reserve} {item.ammo.label} held"
+                items.append(ListItem(Static(label), id=f"reload_{index}"))
+
+        for kind_value, count in sorted(self.app.character.ammo.items()):
+            if count:
+                label = f"{count} {AmmoKind(kind_value).label}"
+                items.append(ListItem(Static(label), id=f"ammo_{kind_value}"))
 
         for index, item_id in enumerate(self.app.character.consumables):
             consumable = CONSUMABLES_BY_ID[item_id]
@@ -81,6 +105,8 @@ class InventoryScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
 
         if item_id.startswith("toggle_"):
             self._toggle_equip(int(item_id.removeprefix("toggle_")))
+        elif item_id.startswith("reload_"):
+            self.notify(reload_weapon(character, int(item_id.removeprefix("reload_"))))
         elif item_id.startswith("use_"):
             index = int(item_id.removeprefix("use_"))
             self.notify(use_consumable(character, index))

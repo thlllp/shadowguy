@@ -50,6 +50,7 @@ from shadowguy.shops import (
     Item,
     Slot,
     effective_item,
+    loaded_rounds,
 )
 from shadowguy.skills import skill_for, skill_value
 
@@ -599,6 +600,46 @@ def equipped_weapons(character: Character) -> list[Item]:
         if entry.equipped and ITEMS_BY_ID[entry.item_id].slot is Slot.WEAPON
     ]
     return weapons or [UNARMED]
+
+
+def has_ammo(character: Character, weapon: Item) -> bool:
+    """Whether this weapon has a round in it right now. Always True for anything that
+    doesn't take ammo, so melee never has to special-case itself. The one place both
+    fight surfaces ask the question — they read Character.loaded rather than tracking
+    ammo per fight, because a magazine emptied on one job is still empty on the next."""
+    return weapon.ammo is None or loaded_rounds(character, weapon) > 0
+
+
+def spend_round(character: Character, weapon: Item) -> None:
+    """Take one round out of the weapon that just fired. No-op for melee."""
+    if weapon.ammo is not None:
+        character.loaded[weapon.id] = max(0, loaded_rounds(character, weapon) - 1)
+
+
+def reload_in_fight(character: Character, weapon: Item) -> int:
+    """The in-fight reload: same reserve-to-magazine move inventory.reload_weapon makes,
+    but the caller has already spent the round on it. Returns how many rounds went in (0
+    if the reserve is dry, which is the caller's cue to say so)."""
+    if weapon.ammo is None:
+        return 0
+    needed = max(0, weapon.magazine - loaded_rounds(character, weapon))
+    loading = min(needed, character.ammo.get(weapon.ammo.value, 0))
+    if loading:
+        character.ammo[weapon.ammo.value] -= loading
+        character.loaded[weapon.id] = loaded_rounds(character, weapon) + loading
+    return loading
+
+
+def reloadable_weapons(character: Character) -> list[Item]:
+    """Equipped guns that are not full and have reserve rounds to draw on — exactly the
+    ones worth offering a Reload action for."""
+    return [
+        weapon
+        for weapon in equipped_weapons(character)
+        if weapon.ammo is not None
+        and loaded_rounds(character, weapon) < weapon.magazine
+        and character.ammo.get(weapon.ammo.value, 0) > 0
+    ]
 
 
 def consumables_with(character: Character, effects) -> list[tuple[int, Consumable]]:

@@ -6,7 +6,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
-from shadowguy.shops import CONSUMABLES_BY_ID, Consumable
+from shadowguy.shops import CONSUMABLES_BY_ID, Consumable, loaded_rounds
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.support import TRACE_CAP, run_support_task, support_tasks
 from shadowguy.tactical import (
@@ -29,6 +29,9 @@ from shadowguy.tactical import (
     leave,
     move_aim_cursor,
     move_player,
+    player_weapons,
+    reload_weapon,
+    reloadable,
     snap_aim_to_next_target,
     stabilize_ally,
     stairs_here,
@@ -171,6 +174,7 @@ class TacticalScreen(Screen):
         # Priority so the aim cursor's target-cycling wins over Screen's own default
         # tab -> focus_next binding, which would otherwise eat the key.
         Binding("tab", "next_target", "Next target", priority=True),
+        ("r", "reload", "Reload"),
         ("s", "stabilize", "Stabilize crew"),
         ("x", "look", "Look"),
         ("e", "end_turn", "End turn"),
@@ -230,6 +234,7 @@ class TacticalScreen(Screen):
             Static(id="tac_box_move", classes="tac_box"),
             Static(id="tac_box_attack", classes="tac_box"),
             Static(id="tac_box_grenade", classes="tac_box"),
+            Static(id="tac_box_ammo", classes="tac_box"),
             Static(id="tac_box_end", classes="tac_box"),
             Static(id="tac_box_leave", classes="tac_box"),
             Static(id="tac_box_enemies", classes="tac_box"),
@@ -411,6 +416,23 @@ class TacticalScreen(Screen):
         if self.state.is_over or self.state.aim_cursor is not None:
             return
         refused = stabilize_ally(self.state)
+        if refused is not None:
+            self.notify(refused)
+        self._refresh()
+
+    def action_reload(self) -> None:
+        """Reload the emptiest gun worth reloading, spending the turn's one action.
+        No pick screen: unlike grenades there's rarely more than one candidate, and the
+        emptiest is what you'd choose anyway."""
+        if self.state.is_over or self.state.aim_cursor is not None:
+            return
+        candidates = reloadable(self.state)
+        if not candidates:
+            self.notify("Nothing to reload — magazines full, or no rounds left.")
+            return
+        refused = reload_weapon(
+            self.state, min(candidates, key=lambda w: loaded_rounds(self.app.character, w))
+        )
         if refused is not None:
             self.notify(refused)
         self._refresh()
@@ -624,6 +646,17 @@ class TacticalScreen(Screen):
         self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows/numpad)", move_detail))
         self.query_one("#tac_box_attack", Static).update(_boxed_text("Attack (f)", attack_detail))
         self.query_one("#tac_box_grenade", Static).update(_boxed_text("Grenade (g)", grenade_detail))
+        # Ammo tile, same "only there when it applies" rule as the crew and hacker tiles:
+        # a runner carrying nothing but a blade has nothing to count. Shows every gun in
+        # hand, because which one is dry is exactly what decides the next move.
+        guns = [weapon for weapon in player_weapons(self.state) if weapon.ammo is not None]
+        ammo_box = self.query_one("#tac_box_ammo", Static)
+        ammo_box.display = bool(guns)
+        if ammo_box.display:
+            detail = ", ".join(
+                f"{gun.name} {loaded_rounds(self.app.character, gun)}/{gun.magazine}" for gun in guns
+            )
+            ammo_box.update(_boxed_text("Ammo (r to reload)", detail))
         self.query_one("#tac_box_end", Static).update(_boxed_text("End turn (e)", "advance the round"))
         self.query_one("#tac_box_leave", Static).update(
             _boxed_text("Leave (l)", "on exit" if on_exit else "not here")
