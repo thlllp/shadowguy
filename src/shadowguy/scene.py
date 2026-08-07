@@ -17,6 +17,7 @@ class SceneKind(StrEnum):
     JOB = "job"
     GIG = "gig"
     LEGWORK = "legwork"
+    FISHING = "fishing"
 
 
 class Posture(StrEnum):

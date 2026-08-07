@@ -86,6 +86,10 @@ HOSPITAL_COUNT = round(TERRITORY_COUNT / TILES_PER_HOSPITAL)
 # rolls one no matter how this ratio is tuned.
 TILES_PER_JUNKYARD = 10
 
+# Docks are the same rarity band as junkyards, and neutral-only for the same reason
+# (see _plan_injections) -- a corp block doesn't get a fishing spot either.
+TILES_PER_DOCKS = 10
+
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
@@ -150,6 +154,7 @@ LOCATION_SUFFIXES = {
     LocationKind.REAL_ESTATE: ["Realty", "Properties", "Holdings", "Estate Agency"],
     LocationKind.CYBER_CLINIC: ["Augment Clinic", "Chrome Den", "Grafting Parlor", "Wetware Bazaar"],
     LocationKind.JUNKYARD: ["Junkyard", "Scrapyard", "Wrecking Yard", "Salvage Yard"],
+    LocationKind.DOCKS: ["Docks", "Pier", "Wharf", "Boat Launch"],
 }
 
 LOCATION_PREFIXES = [
@@ -389,6 +394,22 @@ def _make_junkyard(territory_id: str, rng: random.Random, used_names: set[str]) 
     )
 
 
+DOCKS_ROLE = "angler"
+
+
+def _make_docks(territory_id: str, rng: random.Random, used_names: set[str]) -> Location:
+    """A rare fishing spot on unclaimed ground — one angler, no shop, no gig/job/legwork
+    surface (see fishing.generate_fishing_trip for its one activity). Placed out of band
+    like the junkyard (see TILES_PER_DOCKS / _plan_injections), never rolled as filler."""
+    location_id = f"{territory_id}_docks"
+    return Location(
+        id=location_id,
+        name=_unique_location_name(LocationKind.DOCKS, rng, used_names),
+        kind=LocationKind.DOCKS,
+        characters=_characters_for_roles(location_id, [DOCKS_ROLE], rng),
+    )
+
+
 
 def _neighbors(cell: Cell) -> list[Cell]:
     x, y = cell
@@ -543,6 +564,7 @@ class _InjectionPlan:
     den_ids: dict[str, str]
     gang_ids: dict[str, str]
     junkyard_ids: set[str]
+    docks_ids: set[str]
 
 
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
@@ -568,6 +590,15 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
     junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
 
+    # Same neutral-only, out-of-band placement as junkyards (reuses junkyard_candidates
+    # rather than re-deriving the hospital/den exclusion), plus mutually exclusive with
+    # junkyards too — a neutral tile already tops out at 2 stacked reservations (see the
+    # junkyard_candidates comment above); a docks would be the third if it could land on
+    # a junkyard tile.
+    docks_candidates = [tid for tid in junkyard_candidates if tid not in junkyard_ids]
+    docks_count = min(len(docks_candidates), max(1, round(len(neutral_ids) / TILES_PER_DOCKS)))
+    docks_ids = set(rng.sample(docks_candidates, docks_count))
+
     top_value = max(FACTION_VALUE_SPREAD)
     hq_ids: dict[str, str] = {}
     research_ids: dict[str, str] = {}
@@ -592,6 +623,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         den_ids=den_ids,
         gang_ids=gang_ids,
         junkyard_ids=junkyard_ids,
+        docks_ids=docks_ids,
     )
 
 
@@ -633,6 +665,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid in plan.research_ids)
             + (tid in plan.academy_ids)
             + (tid in plan.junkyard_ids)
+            + (tid in plan.docks_ids)
         )
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
@@ -658,6 +691,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         territories[tid].locations.append(_make_hospital(tid, rng, used_names))
     for tid in plan.junkyard_ids:
         territories[tid].locations.append(_make_junkyard(tid, rng, used_names))
+    for tid in plan.docks_ids:
+        territories[tid].locations.append(_make_docks(tid, rng, used_names))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
     for tid, faction_id in plan.research_ids.items():

@@ -121,6 +121,7 @@ src/shadowguy/
 
   jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
+  fishing.py     the Docks' one activity: generate_fishing_trip's cast/wait/reel Scene
   fixer.py       the Fixer roster holding job and security offers
   runners.py     the hireable-runner roster + the remote-support programs a hire runs,
                  and what a run's work does to one: rating earned, gear bought
@@ -168,7 +169,7 @@ src/shadowguy/
                          runner and a corp-only run; no separate MainMenu any more
     corp_screen.py       CorpScreen + ResearchTreeScreen + ForcePickScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
-                         Safehouse + Junkyard + GangDen + Ripperdoc
+                         Safehouse + Junkyard + Docks + GangDen + Ripperdoc
     info_screens.py      Phone (home grid) + its apps: Contacts + Web + CorpWebsite +
                          AlarmClock + Messages; plus Inventory + Cyberdeck + Skills
 ```

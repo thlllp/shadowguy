@@ -18,6 +18,7 @@ from shadowguy.corpmap import (
     has_home,
 )
 from shadowguy.corpmap_gen import (
+    DOCKS_ROLE,
     FACTION_VALUE_SPREAD,
     GANG_TURF_MAX,
     GANG_TURF_MIN,
@@ -25,6 +26,7 @@ from shadowguy.corpmap_gen import (
     MIN_START_DEGREE,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
+    TILES_PER_DOCKS,
     TILES_PER_JUNKYARD,
     generate_corp_map,
 )
@@ -201,6 +203,59 @@ def test_every_junkyard_has_exactly_one_scrapper(seed):
     assert junkyards
     for _territory, location in junkyards:
         assert [c.role for c in location.characters] == [JUNKYARD_ROLE]
+
+
+def _docks(corp_map):
+    return [
+        (territory, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.DOCKS
+    ]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_docks_are_neutral_and_never_the_start(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for territory, _location in _docks(corp_map):
+        assert territory.owner == "neutral"
+        assert territory.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_docks_count_matches_neutral_density(seed):
+    """Same reasoning as test_junkyard_count_matches_neutral_density: checked against
+    the map's own neutral, non-start territory count rather than a hardcoded number."""
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    neutral_count = sum(
+        1
+        for t in corp_map.territories.values()
+        if t.owner == "neutral" and t.id != corp_map.player_start_id
+    )
+    expected = max(1, round(neutral_count / TILES_PER_DOCKS))
+    assert len(_docks(corp_map)) == expected
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_docks_has_exactly_one_angler(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    docks = _docks(corp_map)
+    assert docks
+    for _territory, location in docks:
+        assert [c.role for c in location.characters] == [DOCKS_ROLE]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_docks_never_share_a_tile_with_a_junkyard_hospital_or_gang_den(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    docks_ids = {territory.id for territory, _location in _docks(corp_map)}
+    junkyard_ids = {territory.id for territory, _location in _junkyards(corp_map)}
+    assert not docks_ids & junkyard_ids
+    for territory_id in docks_ids:
+        territory = corp_map.territories[territory_id]
+        kinds = {loc.kind for loc in territory.locations}
+        assert LocationKind.HOSPITAL not in kinds
+        assert LocationKind.GANG_DEN not in kinds
 
 
 @pytest.mark.parametrize("seed", SEEDS)

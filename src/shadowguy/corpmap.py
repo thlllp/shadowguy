@@ -61,6 +61,7 @@ class LocationKind(StrEnum):
     RESEARCH_FACILITY = "research_facility"
     ACADEMY = "academy"
     JUNKYARD = "junkyard"
+    DOCKS = "docks"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -74,9 +75,10 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 # runner's own places, each corp's HQ (which has its own officers and screen — see
 # _make_hq / app.CorpHQScreen), each gang's den (see _make_gang_den), each corp's
 # research facility (see add_research_facility / corp_turn.collect_research), each
-# corp's academy (see _make_academy / corp_turn.train_employees), and a rare scavenging
-# spot on unclaimed ground (see _make_junkyard / shops.scavenge). None of these is
-# player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
+# corp's academy (see _make_academy / corp_turn.train_employees), a rare scavenging
+# spot on unclaimed ground (see _make_junkyard / shops.scavenge), and a rare fishing
+# spot on unclaimed ground (see _make_docks / fishing.generate_fishing_trip). None of
+# these is player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
 UNROLLED_KINDS = (
     *PLAYER_OWNED_KINDS,
     LocationKind.CORP_HQ,
@@ -84,6 +86,7 @@ UNROLLED_KINDS = (
     LocationKind.RESEARCH_FACILITY,
     LocationKind.ACADEMY,
     LocationKind.JUNKYARD,
+    LocationKind.DOCKS,
 )
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
