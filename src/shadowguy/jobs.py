@@ -227,6 +227,11 @@ if sorted(DAMAGE_FOR_DELTA, reverse=True) != sorted(
 # the health cost alone shouldn't also be as steep as a doubled entrance failure would be.
 BURGLARY_SPOTTED_DAMAGE = 2
 
+# A burglary/wetwork entrance's plain failure still pays, at this cut of the full
+# reward (see jobs.generate_job's _entrance_failure) -- half of what a clean success
+# pays, for getting in messily rather than cleanly.
+MESSY_ENTRY_MULTIPLIER = 0.5
+
 
 @dataclass(frozen=True)
 class Approach:
@@ -319,9 +324,12 @@ class JobArchetype:
 # next may not. Pools therefore want to stay wider than PARTIAL_POOL_SIZE — a pool of
 # exactly two never varies.
 #
-# Every archetype walks APPROACH -> OBJECTIVE -> (COMPLICATION) -> EXFIL. The
-# complication is optional (OPTIONAL_STAGE_CHANCE), so a job is 3 or 4 stages, and it
-# is where the job turns on you rather than merely resisting you.
+# Every archetype walks APPROACH -> OBJECTIVE -> (COMPLICATION) -> EXFIL, except
+# Burglary and Wetwork, whose only stage is APPROACH: the rest of the beat (the
+# vault, the sensor, getting out) plays out inside the BurglaryStage's own building
+# instead of as separate Choice stages after it (see their own rows' comments). The
+# complication is optional (OPTIONAL_STAGE_CHANCE), so an ordinary job is 3 or 4
+# stages, and it is where the job turns on you rather than merely resisting you.
 _ARCHETYPE_ROWS = (
     (
         "Heist",
@@ -497,19 +505,22 @@ _ARCHETYPE_ROWS = (
         ),
     ),
     (
-        # A second specialist job: every beat leads with a strength or body skill —
-        # both map to Solo in SPECIALIST_FOR_STAT, so archetype_specialist() still
-        # reads it as one archetype's contract even though the lead skill itself
-        # varies stage to stage. Where Intrusion is the Netrunner's quiet way through
-        # a system, Wetwork is the Solo's loud way through people. Its APPROACH gets
-        # the same treatment as Burglary's own (the `burglary` flag below, set at
-        # ARCHETYPES construction) -- the target is always holed up in a private
-        # COMPOUND regardless of the job site's own kind (WETWORK_STRUCTURE), so this
-        # stage's flavor strings are short entrance captions, not sentences, same as
-        # Burglary's. The other two approaches on each beat still sit on different
-        # stats, same as every other archetype, so it's a job a Netrunner or
-        # Infiltrator can take and bleed through rather than one they're locked out
-        # of.
+        # A second specialist job, and (like Burglary) a single-stage one: its only
+        # beat is the APPROACH, played out as a BurglaryStage (the `burglary` flag
+        # below, set at ARCHETYPES construction) -- entrance diagram, then an
+        # interior walk to the target, always inside a private COMPOUND regardless
+        # of the job site's own kind (WETWORK_STRUCTURE), so this stage's flavor
+        # strings are short entrance captions, not sentences, same as Burglary's.
+        # Reaching the target *is* the whole job -- there is no separate
+        # objective/complication/exfil beat once you're in, the way there used to
+        # be: the building's own guards, cameras and locked doors already carry
+        # that risk, and a second helping of abstract choices after the walk read
+        # as unrelated to the building you just broke into. Where Intrusion is the
+        # Netrunner's quiet way through a system, Wetwork is the Solo's loud way
+        # through people -- grapple's lead (strength) is what archetype_specialist()
+        # reads as this job's contract. The other two approaches sit on different
+        # stats, so it's a job a Netrunner or Infiltrator can take and bleed through
+        # rather than one they're locked out of.
         "Wetwork",
         "strong-arm",
         (
@@ -522,45 +533,27 @@ _ARCHETYPE_ROWS = (
                     ("intimidation", -2, "Front Gate"),
                 ),
             ),
-            (
-                StageType.OBJECTIVE,
-                "You're standing between {target} and everyone paid to keep you from it.",
-                (
-                    ("toughness", 1, "Put them down before they finish reaching for the alarm"),
-                    ("tactics", 0, "Time it to the gap in their coverage"),
-                    ("pistols", -2, "Put them down loud and don't wait to see who noticed"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "The muscle they kept in reserve finally shows up.",
-                (
-                    ("lift", 1, "Put them through whatever's nearest and keep moving"),
-                    ("negotiations", 0, "Buy the two seconds you need with a lie"),
-                    ("dodge", -2, "Take the hit meant for you and keep going"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have {target}, and the whole floor knows it now.",
-                (
-                    ("toughness", 1, "Walk out the way you came in, like nothing happened"),
-                    ("recon", 0, "You mapped three ways out before you went in; take the second"),
-                    ("dodge", -2, "Break into a dead run and don't look back"),
-                ),
-            ),
         ),
     ),
     (
         # A generic archetype, same as Heist/Extraction/Sabotage (mixed stat leads,
-        # no specialist). What's actually different is structural, not thematic: the
-        # ARCHETYPES comprehension below flags this row's APPROACH stage burglary=True,
+        # no specialist) and, like Wetwork, a single-stage archetype: the ARCHETYPES
+        # comprehension below flags this row's lone APPROACH stage burglary=True,
         # which tells generate_job to build it as a scene.BurglaryStage (an entrance
         # diagram, then an interior walk) instead of a Choice list -- see jobs.py's
-        # generate_job and screens/burglary_screens.py. The APPROACH row's flavor
-        # strings are deliberately short node captions ("Front Door"), not sentences
-        # like every other row's -- they become the diagram's labels, not a line in a
-        # list, and that's the one place this table departs from the others' voice.
+        # generate_job and screens/burglary_screens.py. Reaching the target inside
+        # is the whole job; there is deliberately no separate objective/complication/
+        # exfil beat after the walk (there used to be one of each) -- the vault lock,
+        # the motion sensor, and getting back out are already what the building's
+        # locked doors, cameras and guarded exits *are*, so a second round of
+        # abstract choices once you're already inside just read as disconnected from
+        # the building you broke into. archetype_specialist() special-cases this row
+        # (see its own docstring): with only one stage left, its lead alone would
+        # otherwise misread as a specialist's contract, when the pool is deliberately
+        # mixed-stat. The APPROACH row's flavor strings are deliberately short node
+        # captions ("Front Door"), not sentences like every other row's -- they
+        # become the diagram's labels, not a line in a list, and that's the one place
+        # this table departs from the others' voice.
         "Burglary",
         "burgle",
         (
@@ -571,33 +564,6 @@ _ARCHETYPE_ROWS = (
                     ("forgery", 1, "Front Door"),
                     ("stealth", 0, "Back Window"),
                     ("lift", -2, "Loading Dock"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You're inside. {target} sits behind the vault's last lock.",
-                (
-                    ("hack", 1, "Crack the electronic lock before it screams"),
-                    ("infiltration", 0, "Pick the mechanical backup by hand"),
-                    ("lift", -2, "Break the vault open with a crowbar"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "A motion sensor you missed trips somewhere in the building.",
-                (
-                    ("pattern_seeking", 1, "Spot the sensor's blind arc and thread it"),
-                    ("tinkering", 0, "Kill the sensor's feed before it reports"),
-                    ("grapple", -2, "Catch whoever comes to check it"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have {target}. Now you have to be somewhere else.",
-                (
-                    ("dodge", 1, "Slip out the way you came before anyone's the wiser"),
-                    ("deception", 0, "Walk out like you belong there"),
-                    ("grapple", -2, "Put down whoever's between you and the street"),
                 ),
             ),
         ),
@@ -864,7 +830,16 @@ def archetype_specialist(archetype: JobArchetype) -> str | None:
     "which ways in this job happens to have" is the point, but it would make a Netrunner
     job that offers no netrunning. generate_job keeps the lead for these; the rest of the
     pool is drawn as normal, so two Intrusions still aren't the same Intrusion.
+
+    Burglary is special-cased ahead of the derivation below: it's down to a single
+    stage (see its own row's comment), so "every stage's lead agrees" would otherwise
+    trivially agree with itself and misread deliberately mixed-stat work (forgery's
+    lead is on `cool`) as an Infiltrator contract. Wetwork needs no such carve-out —
+    its own lone stage's lead (`grapple`, strength) already agrees with what every one
+    of its stages led with before this collapsed to one.
     """
+    if archetype.name == "Burglary":
+        return None
     specialists = {
         SPECIALIST_FOR_STAT[skill_for(stage.approaches[0].skill).stat]
         for stage in archetype.stages
@@ -1107,6 +1082,21 @@ def generate_job(
                 rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
             )
 
+        def _entrance_failure(approach: Approach, text: str) -> Outcome:
+            """A burglary/wetwork Entrance's plain failure -- unlike _approach_failure,
+            this still pays out (at a reduced rate), because APPROACH is this job's
+            *only* stage: it's simultaneously the first check and the one _payout()
+            calls "last", and every other archetype's last-stage plain failure paying
+            nothing is fine *because* it only happens after several earlier stages
+            already went well. Here it would happen on the very first roll every time,
+            making the walk that follows pointless regardless of how it goes -- and the
+            text itself ("you're in") already says the break-in still succeeds, just
+            messily, not that the job is blown. A critical failure is still the real
+            botched case (_approach_critical_failure): no reward, straight to the fight."""
+            outcome = _payout(text, MESSY_ENTRY_MULTIPLIER, 0, next_stage, is_last)
+            outcome.health_delta = -approach.failure_damage
+            return outcome
+
         def _approach_critical_failure(approach: Approach) -> Outcome:
             # The one branch that doesn't just cost health and carry on: you're
             # made, and they arrive holding the initiative. Note it deals the
@@ -1155,7 +1145,7 @@ def generate_job(
                     difficulty=difficulty + approach.difficulty_delta,
                     spawn=spawn,
                     success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
-                    failure=_approach_failure(approach, "It gets messy, but you're in."),
+                    failure=_entrance_failure(approach, "It gets messy, but you're in."),
                     critical_success=_payout(
                         "Flawless. Nobody even looks up.", 1.5, 2, next_stage, is_last,
                     ),

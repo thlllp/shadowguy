@@ -187,9 +187,13 @@ class SceneScreen(Screen):
         # always-fights ambush routes straight to the fight, skipping the walk
         # entirely, the same door every other stage's critical failure uses.
         # outcome is already applied, so this is a plain advance (_await_continue),
-        # not a re-apply (_finish_stage_outcome would double-apply it).
-        target = self.scene.stages[outcome.next_stage]
-        if target.combat is not None or target.tactical is not None or target.matrix is not None:
+        # not a re-apply (_finish_stage_outcome would double-apply it). next_stage is
+        # None for a Burglary/Wetwork job (the walk is its only stage, so a plain
+        # success/failure just ends the job once the walk itself ends) -- that's
+        # never a fight route, only ever the walk below, so it must not index into
+        # scene.stages.
+        target = self.scene.stages[outcome.next_stage] if outcome.next_stage is not None else None
+        if target is not None and (target.combat is not None or target.tactical is not None or target.matrix is not None):
             await self._await_continue(outcome.next_stage, result)
             return
 

@@ -88,6 +88,9 @@ from shadowguy.tactical import (
     Unit,
     enter_level,
 )
+from shadowguy.tactical import _settle as _settle_tactical_state
+from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.skills import skill_value
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
@@ -792,6 +795,84 @@ def test_test_menu_wetwork_reaches_a_live_infiltration_of_a_compound():
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def test_burglary_job_reaching_the_objective_completes_the_whole_job():
+    """Burglary/Wetwork's APPROACH is now their only stage (see jobs.py) -- a plain
+    entrance success carries next_stage=None straight from resolve_entrance, so
+    reaching the objective must pay out and remove the job directly rather than try
+    to advance into an OBJECTIVE/COMPLICATION/EXFIL stage that no longer exists.
+    Also the regression test for SceneScreen._on_entrance_picked's None guard: before
+    it, indexing scene.stages[None] on the way into the walk raised a KeyError."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, TitleMenu)
+
+            scene = None
+            for seed in range(150):
+                candidate, _timing = generate_job(
+                    day=1, corp_map=app.corp_map, fixer_id="fx", rng=random.Random(seed)
+                )
+                if candidate.title.startswith("Burglary"):
+                    scene = candidate
+                    break
+            assert scene is not None, "no Burglary job turned up in 150 seeds"
+
+            stage = scene.stages[scene.start_stage]
+            entrance = stage.burglary.entrances[0]  # a real entrance -- the ambush is always last
+
+            # resolve_entrance never threads an rng through (it always rolls off the
+            # real global `random` module), so force a clean success by seeding it --
+            # a plain failure would still complete the job (next_stage=None either
+            # way) but pays no cash, same as any other stage's plain failure, and a
+            # critical failure routes straight to the fight, skipping the walk this
+            # test means to exercise. Computed the same way resolve_check would
+            # rather than guessed at.
+            stat_value = skill_value(app.character, entrance.skill)
+            seed = next(
+                k
+                for k in range(200)
+                if resolve_check(
+                    stat_value=stat_value, difficulty=entrance.difficulty, rng=random.Random(k)
+                ).result
+                in (CheckResult.SUCCESS, CheckResult.CRITICAL_SUCCESS)
+            )
+
+            cash_before = app.character.cash
+            app.push_screen(SceneScreen(scene))
+            await pilot.pause()
+            assert isinstance(app.screen, EntrancePickScreen)
+
+            random.seed(seed)
+            await pilot.click("#entrance_0")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            # Same trick the plain tactical/burglary tests above use for ESCAPED: jump
+            # the player straight to the objective rather than pathing there, then
+            # settle the board the way any ordinary move already would.
+            tac_screen = app.screen
+            state = tac_screen.state
+            assert not state.is_over
+            state.level_index, state.player.coord = state.objective
+            _settle_tactical_state(state)
+            assert state.is_over
+            assert state.outcome is TacticalOutcome.SECURED
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, SceneScreen)
+
+            await pilot.click("#continue")
+            await pilot.pause()
+            assert isinstance(app.screen, TitleMenu)
+            assert scene.id not in [job.scene.id for job in app.character.accepted_jobs]
+            assert app.character.cash > cash_before
 
     run(body())
 
