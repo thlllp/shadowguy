@@ -24,6 +24,7 @@ from shadowguy.factions import (
     officer_unlocked,
     takeover_gate,
 )
+from shadowguy.fishing import FISHING_HOURS_COST, generate_fishing_trip
 from shadowguy.fixer import RUNNER_BROKER_FIXER_IDS, Fixer, JobOffer
 from shadowguy.gangs import Gang
 from shadowguy.jobs import generate_smuggling_job
@@ -80,6 +81,7 @@ from . import (
     _replace_items,
     matrix_warning,
 )
+from .scene_screen import SceneScreen
 
 
 def offer_label(character: Character, offer: JobOffer) -> str:
@@ -749,6 +751,41 @@ class JunkyardScreen(RefreshOnResume, BackScreen):
         self.notify(message)
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
+
+
+class DocksScreen(RefreshOnResume, BackScreen):
+    """A rare fishing spot (corpmap.LocationKind.DOCKS). One action, same shape as
+    Junkyard's Scavenge: pushes a fresh fishing.generate_fishing_trip() Scene onto
+    SceneScreen rather than resolving in place, since a fishing trip is a three-stage
+    cast/wait/reel Scene, not a single check."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+
+    def __init__(self, location: Location) -> None:
+        super().__init__()
+        self.location = location
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield Static(self.location.name, id="docks_info")
+        yield ListView(id="docks_actions")
+        yield Footer()
+
+    async def _refresh(self) -> None:
+        # RefreshOnResume fires this on mount *and* when SceneScreen pops back after a
+        # trip -- unlike every other shop screen here, this one navigates away rather
+        # than resolving in place, so the CharacterSheet refresh (cash/hours changed by
+        # the trip) has to live on the resume path rather than right after the click.
+        self.query_one(CharacterSheet).refresh()
+        row = ListItem(Static(f"Cast a line ({FISHING_HOURS_COST} hours)"), id="fish")
+        await _replace_items(self.query_one("#docks_actions", ListView), [row])
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item.id != "fish":
+            return
+        self.app.spend_time(FISHING_HOURS_COST)
+        self.app.push_screen(SceneScreen(generate_fishing_trip()))
 
 
 class GangDenScreen(RefreshOnResume, BackScreen):

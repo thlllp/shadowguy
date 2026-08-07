@@ -60,6 +60,7 @@ from .scene_screen import SceneScreen
 from .shop_screens import (
     BarScreen,
     CorpHQScreen,
+    DocksScreen,
     FixerOffersScreen,
     GangDenScreen,
     HospitalScreen,
@@ -706,6 +707,8 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             self.app.push_screen(HospitalScreen(location))
         elif location.kind == LocationKind.JUNKYARD:
             self.app.push_screen(JunkyardScreen(location))
+        elif location.kind == LocationKind.DOCKS:
+            self.app.push_screen(DocksScreen(location))
         elif location.kind == LocationKind.REAL_ESTATE:
             self.app.push_screen(RealEstateScreen(location))
         elif location.kind == LocationKind.CORP_HQ:

@@ -101,7 +101,8 @@ from shadowguy.screens.menu_screens import (
 )
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.screens.corp_map_screen import GangTollScreen
-from shadowguy.scene import BurglaryStage, Outcome, TacticalStage
+from shadowguy.fishing import FISHING_HOURS_COST
+from shadowguy.scene import BurglaryStage, Outcome, SceneKind, TacticalStage
 from shadowguy.screens.info_screens import (
     AlarmClockScreen,
     ContactsScreen,
@@ -117,6 +118,7 @@ from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.shop_screens import (
     BarScreen,
     CorpHQScreen,
+    DocksScreen,
     GangDenScreen,
     HospitalScreen,
     JunkyardScreen,
@@ -1695,6 +1697,83 @@ def test_scavenging_a_junkyard_spends_hours_not_a_day_and_grants_loot():
             assert app.character.elapsed_hours == hours_before + SCAVENGE_HOURS_COST
             assert app.character.inventory
             assert all(entry.item_id in SCAVENGE_MATERIALS for entry in app.character.inventory)
+
+    run(body())
+
+
+def test_docks_screen_casting_a_line_spends_hours_and_reaches_a_live_fishing_scene():
+    """A Docks' one action costs FISHING_HOURS_COST, not a full day, and pushes a real
+    SceneScreen playing fishing.generate_fishing_trip() -- same "reaches a live X"
+    shape as the burglary/matrix/tactical flow tests, not a full cast/wait/reel
+    playthrough (the dice themselves are scene.py's own, already covered)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            hours_before = app.character.elapsed_hours
+
+            docks_location = Location(id="test_docks", name="Test Pier", kind=LocationKind.DOCKS)
+            app.push_screen(DocksScreen(docks_location))
+            await pilot.pause()
+            await pilot.click("#fish")
+            await pilot.pause()
+
+            assert app.character.elapsed_hours == hours_before + FISHING_HOURS_COST
+            assert isinstance(app.screen, SceneScreen)
+            assert app.screen.scene.kind is SceneKind.FISHING
+            assert app.screen.scene.title == "Fishing at the Docks"
+
+    run(body())
+
+
+def test_docks_screen_character_sheet_reflects_cash_after_a_fishing_trip():
+    """DocksScreen is the one RefreshOnResume shop screen that navigates away (to
+    SceneScreen) instead of resolving its action in place, so its CharacterSheet
+    can't refresh at click time the way JunkyardScreen/HospitalScreen/RealEstateScreen
+    do -- it has to refresh on the way back in, via _refresh() (RefreshOnResume's
+    on_screen_resume hook), or the panel would show stale cash after a paying trip.
+
+    CharacterSheet.render() always reads Character live regardless of whether the
+    widget was ever told to repaint (it's a plain computed method, not a cache), so
+    asserting on it directly can't tell stale paint from fresh data -- this checks
+    the actual composited frame (export_screenshot) instead, which only shows what
+    Textual last painted."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+
+            character = app.character
+            character.perception = 20  # guarantees the first cast approach (Pattern Seeking)
+            character.body = 20  # guarantees the first reel approach (Sturdy)
+            cash_before = character.cash
+
+            docks_location = Location(id="test_docks", name="Test Pier", kind=LocationKind.DOCKS)
+            app.push_screen(DocksScreen(docks_location))
+            await pilot.pause()
+            await pilot.click("#fish")
+            await pilot.pause()
+
+            await pilot.click("#choices ListItem")  # cast
+            await pilot.pause()
+            await pilot.click("ListView ListItem")  # continue past the resolved cast
+            await pilot.pause()
+            await pilot.click("ListView ListItem")  # continue past wait's narration
+            await pilot.pause()
+            await pilot.click("#choices ListItem")  # reel
+            await pilot.pause()
+            await pilot.click("ListView ListItem")  # continue past the resolved reel -- pops back
+            await pilot.pause()
+
+            assert isinstance(app.screen, DocksScreen)
+            assert character.cash > cash_before
+            # export_screenshot renders spaces as the &#160; entity, not a literal space.
+            painted = app.export_screenshot()
+            assert f"Cash:&#160;{cash_before}eb" not in painted
+            assert f"Cash:&#160;{character.cash}eb" in painted
 
     run(body())
 
