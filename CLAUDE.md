@@ -144,10 +144,10 @@ src/shadowguy/
   corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action,
                  and the corp-vs-corp contest (resolve_attack) both sides settle through
 
-  shops.py       the retail catalogs (items, consumables, programs) + pricing +
+  shops.py       the retail catalogs (items, consumables, programs, ammo) + pricing +
                  buy/sell transactions
-  inventory.py   equip state, deck programs and using a consumable -- what happens to
-                 a Character's inventory *after* shops.py adds something to it
+  inventory.py   equip state, deck programs, reloading a gun and using a consumable --
+                 what happens to a Character's inventory *after* shops.py adds to it
   cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC;
                  owns Humanity erosion (every operation scars, 0 free = run over)
   saves.py       pickle-based whole-run save/load
@@ -251,6 +251,8 @@ Leaf modules, and why each has to stay one:
 | 61 | an independent runner's day split into three 8-hour blocks: `rivals.RunnerState.activity` (one `RunnerActivity` for the whole day) **replaced** by `activities` (a 3-tuple, one per block) plus a `current(hour_of_day)` reader every "what are they doing *right now*" call site (`BarScreen`, `ContactsScreen`, `CorpMapScreen`'s bar box) now goes through instead. A pre-v61 pickled `RunnerState` (`ShadowguyApp.rival_runner_states`) carries the old `activity` attribute, not `activities` |
 | 62 | pistols gained a named 4-slot mod layout (`shops.WeaponModSlot` Grip/Sight/Barrel/Underbarrel, `WEAPON_MOD_SLOTS`): `buy_item` seeds a bought pistol's `InventoryItem.mods` with one stock-part id per slot (`STOCK_MOD_IDS`), and `install_mod` indexes that list positionally by slot instead of appending. A pre-v62 pistol's `mods` is the old empty/flat list, so `install_mod`'s positional index would `IndexError` the first time anything modded one |
 | 63 | no shape change, but `jobs.generate_job` no longer ever builds a fight stage as `combat=Encounter(...)` — every non-matrix job fight (burglary included) is unconditionally `tactical=TacticalStage(...)` (the `3d2d25f` fix, which didn't bump `SAVE_VERSION` when it landed). A pre-v63 accepted job generated under the old coin flip can still carry a stale `combat=Encounter` fight stage, dropping a tactical/burglary fight into the old abstract `CombatScreen` when reached |
+| 64 | the named mod layout extended from pistols to the other two carried gun skills: `shops.WEAPON_MOD_SLOTS` now covers `longarms` (5 slots) and `automatics` (6) as well, on two new `WeaponModSlot` types (`BUTTSTOCK`/`MAGAZINE`) with stock parts of their own, plus four upgrades (`machined_grip`/`reflex_sight`/`recoil_stock`/`extended_magazine`) for the slots that had nothing to install. Exactly the v62 hazard one skill wider — a pre-v64 shotgun or automatic carries the old flat, unslotted `mods` list, so `install_mod` and `SafehouseScreen`'s slot listing would both `IndexError` on `entry.mods[slot_index]` |
+| 65 | the ammo system: `Character.ammo` (reserve pool keyed by the new `shops.AmmoKind`) and `Character.loaded` (weapon id -> rounds chambered), `Item.ammo`/`Item.magazine` on every `RANGED_SKILLS` weapon (set from the `_WEAPON_AMMO` side table when `CATALOG` is built), a `shops.Ammo`/`AMMO_CATALOG` catalog sold at `WEAPON_SHOP`, and `Mod.magazine` — which `extended_magazine` now grants **instead of** the +1 damage it carried in v64. A pre-v65 `Character` has neither dict, so `shops.loaded_rounds` would `AttributeError` on the first fight; a pickled `InventoryItem` carrying `extended_magazine` would also keep scoring it as damage |
 
 ### Verifying changes
 

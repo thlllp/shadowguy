@@ -127,6 +127,8 @@ from shadowguy.screens.shop_screens import (
     ShopScreen,
 )
 from shadowguy.shops import (
+    AMMO_BY_KIND,
+    AmmoKind,
     CATALOG,
     CRAFT_RECIPES,
     HOSPITAL_STAY_COST,
@@ -3999,5 +4001,49 @@ def test_ripperdoc_removal_rebounds_humanity_and_lifts_the_penalty():
             assert free_humanity(character) > sunk
             assert character.humanity_penalty == 0
             assert CyberSlot.ARMS not in character.installed_cyberware
+
+    run(body())
+
+
+def test_ammo_can_be_bought_at_a_weapon_shop_and_loaded_from_the_inventory_screen():
+    """The whole persistent-ammo loop through the real screens: a gun runs dry, the
+    weapon shop sells a box into the reserve, and the Inventory screen's free reload
+    moves it into the magazine."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(100, 60)) as pilot:
+            await _settle(pilot)
+            character = app.character
+            character.cash = 1_000_000
+            buy_item(character, ITEMS_BY_ID["pipe_pistol"])
+            magazine = ITEMS_BY_ID["pipe_pistol"].magazine
+
+            shop_location = next(
+                location
+                for territory in app.corp_map.territories.values()
+                for location in territory.locations
+                if location.kind == LocationKind.WEAPON_SHOP
+            )
+            # Fire it dry, then buy a box through the shop's own row.
+            character.loaded["pipe_pistol"] = 0
+            app.push_screen(ShopScreen(shop_location))
+            await _settle(pilot)
+            row = app.screen.query_one(f"#buya_{AmmoKind.PISTOL.value}", ListItem)
+            await pilot.click(row)
+            await _settle(pilot)
+            reserve = character.ammo[AmmoKind.PISTOL.value]
+            assert reserve == AMMO_BY_KIND[AmmoKind.PISTOL].rounds
+            assert character.loaded["pipe_pistol"] == 0, "buying ammo must not load it"
+
+            app.pop_screen()
+            app.push_screen(InventoryScreen())
+            await _settle(pilot)
+            index = next(
+                i for i, e in enumerate(character.inventory) if e.item_id == "pipe_pistol"
+            )
+            await pilot.click(app.screen.query_one(f"#reload_{index}", ListItem))
+            await _settle(pilot)
+            assert character.loaded["pipe_pistol"] == magazine
+            assert character.ammo[AmmoKind.PISTOL.value] == reserve - magazine
 
     run(body())

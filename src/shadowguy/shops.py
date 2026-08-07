@@ -16,7 +16,7 @@ every SHOP_KINDS member to cover that.
 import random
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import TYPE_CHECKING
 
 from shadowguy.checks import CheckResult, resolve_check, resolve_rng
@@ -112,6 +112,27 @@ for _skill_id in RANGED_SKILLS:
     skill_for(_skill_id)
 
 
+class AmmoKind(StrEnum):
+    """What a ranged weapon feeds on. Shared across weapons rather than per-weapon, so
+    a runner carrying two pistols draws both from one stock of rounds — the reserve pool
+    (Character.ammo) is keyed by these, not by weapon id. Tasers get their own kind
+    because a cartridge is nothing like a bullet, which is also what stops the two
+    stun-only pistols drinking from the same box as the Pipe Pistol."""
+
+    PISTOL = "pistol_rounds"
+    RIFLE = "rifle_rounds"
+    SHOTGUN = "shotgun_shells"
+    TASER = "taser_cartridges"
+    ARROW = "arrows"
+
+    @property
+    def label(self) -> str:
+        """Human-readable form, for log lines and shop rows. The value itself has to
+        stay an id — it keys Character.ammo (pickled) and ends up in Textual widget
+        ids, neither of which can carry a space."""
+        return self.value.replace("_", " ")
+
+
 @dataclass(frozen=True)
 class Item:
     id: str
@@ -175,6 +196,15 @@ class Item:
     # unlinked gun gets nothing from the cyberware, and the cyberware does
     # nothing for an unlinked one.
     smartlinked: bool = False
+    # What this weapon feeds on and how many rounds a full magazine holds. Set from
+    # the _WEAPON_AMMO side table when CATALOG is built, never written in a
+    # _CATALOG_ROWS tuple — those already run 18 positions deep. The two are all-or-
+    # nothing and belong to exactly the RANGED_SKILLS weapons, both enforced at import:
+    # melee has nothing to load, and a gun with no magazine size could never fire.
+    # effective_item folds a MAGAZINE-slot mod's capacity into `magazine`, the way it
+    # already folds damage — so read the effective item, not the catalog one.
+    ammo: AmmoKind | None = None
+    magazine: int = 0
 
 
 @dataclass
@@ -420,8 +450,30 @@ _CATALOG_ROWS: dict[LocationKind, list[tuple]] = {
     ],
 }
 
+# Weapon id -> (what it feeds on, rounds in a full magazine). A side table rather than
+# two more trailing fields on _CATALOG_ROWS, whose tuples already run 18 positions deep
+# for a single weapon. Every RANGED_SKILLS weapon must appear here and nothing else may
+# (both guarded at import). The Compound Bow is a quiver rather than a nocked arrow —
+# it already pays for its rate of fire through recharge_rounds, and a magazine of 1 on
+# top of that would make the cheapest ranged weapon reload every single shot.
+_WEAPON_AMMO: dict[str, tuple[AmmoKind, int]] = {
+    "pipe_pistol": (AmmoKind.PISTOL, 6),
+    "taser_m5": (AmmoKind.TASER, 2),
+    "taser_h6": (AmmoKind.TASER, 2),
+    "machine_pistol": (AmmoKind.PISTOL, 20),
+    "assault_rifle": (AmmoKind.RIFLE, 30),
+    "pump_shotgun": (AmmoKind.SHOTGUN, 5),
+    "compound_bow": (AmmoKind.ARROW, 12),
+}
+
+
+def _with_ammo(item: Item) -> Item:
+    loading = _WEAPON_AMMO.get(item.id)
+    return item if loading is None else replace(item, ammo=loading[0], magazine=loading[1])
+
+
 CATALOG: dict[LocationKind, list[Item]] = {
-    kind: [Item(*row) for row in rows] for kind, rows in _CATALOG_ROWS.items()
+    kind: [_with_ammo(Item(*row)) for row in rows] for kind, rows in _CATALOG_ROWS.items()
 }
 
 # Loot-only items: never stocked in any shop's buy catalog (ShopScreen only ever
@@ -459,6 +511,15 @@ SCAVENGE_MATERIALS = tuple(row[0] for row in _SCAVENGE_ROWS)
 
 ITEMS_BY_ID = {item.id: item for items in (*CATALOG.values(), LOOT_ITEMS) for item in items}
 
+# The other half of _WEAPON_AMMO's contract. The "every ranged weapon takes ammo"
+# direction is checked per-item below; this is the reverse — a key naming no real item
+# would be a dead row _with_ammo's .get() swallows in silence, the same failure mode the
+# `for _skill_id in RANGED_SKILLS: skill_for(...)` chokepoint above exists to prevent.
+if set(_WEAPON_AMMO) - set(ITEMS_BY_ID):
+    raise ValueError(
+        f"_WEAPON_AMMO names unknown items: {sorted(set(_WEAPON_AMMO) - set(ITEMS_BY_ID))}"
+    )
+
 
 class WeaponModSlot(Enum):
     """A named part slot on a weapon whose skill carries a fixed layout
@@ -471,22 +532,49 @@ class WeaponModSlot(Enum):
     SIGHT = "sight"
     BARREL = "barrel"
     UNDERBARREL = "underbarrel"
+    BUTTSTOCK = "buttstock"
+    MAGAZINE = "magazine"
 
 
 # Which weapon skills carry a named mod-slot layout, and in what order —
 # InventoryItem.mods is seeded (buy_item) and indexed (install_mod) positionally
 # against this tuple rather than appended/removed like the old flat list. A weapon
-# skill absent here keeps that old flat MOD_SLOTS_PER_ITEM-capped list untouched, so
-# extending this to e.g. automatics later is a one-line addition here, not a new
-# mechanism. Only pistols populated today.
+# skill absent here keeps that old flat MOD_SLOTS_PER_ITEM-capped list untouched.
+#
+# The three gun skills carry a deliberate ladder — pistols 4, longarms 5, automatics
+# 6 — so the bigger the gun, the more of it there is to replace. Longarms stop at
+# BUTTSTOCK: a pump shotgun's tube isn't a detachable box mag, so MAGAZINE is what
+# separates a longarm from an automatic. Gunnery is left off entirely, since there
+# is no mounted weapon in the catalog to hang slots on.
+# Each rung extends the one below rather than restating it, so a slot index means the
+# same thing on every gun and there is only one place to edit to move the ladder.
+_PISTOL_SLOTS = (
+    WeaponModSlot.GRIP,
+    WeaponModSlot.SIGHT,
+    WeaponModSlot.BARREL,
+    WeaponModSlot.UNDERBARREL,
+)
+_LONGARM_SLOTS = (*_PISTOL_SLOTS, WeaponModSlot.BUTTSTOCK)
+_AUTOMATIC_SLOTS = (*_LONGARM_SLOTS, WeaponModSlot.MAGAZINE)
+
 WEAPON_MOD_SLOTS: dict[str, tuple[WeaponModSlot, ...]] = {
-    "pistols": (
+    "pistols": _PISTOL_SLOTS,
+    "longarms": _LONGARM_SLOTS,
+    "automatics": _AUTOMATIC_SLOTS,
+}
+
+# The WeaponModSlot types that only exist on a gun. A Mod tagged with one is firearm
+# furniture, so install_mod's flat-list fallback refuses it outright rather than
+# letting an Extended Magazine onto a katana. BARREL/UNDERBARREL stay open on purpose:
+# sharpened_edge/hollow_points predate the layouts and are all the fallback path has.
+GUN_ONLY_MOD_SLOTS = frozenset(
+    {
         WeaponModSlot.GRIP,
         WeaponModSlot.SIGHT,
-        WeaponModSlot.BARREL,
-        WeaponModSlot.UNDERBARREL,
-    ),
-}
+        WeaponModSlot.BUTTSTOCK,
+        WeaponModSlot.MAGAZINE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -506,6 +594,11 @@ class Mod:
     applies_to: frozenset[Slot]
     damage: int = 0
     defense: int = 0
+    # Extra rounds this mod adds to the weapon's magazine, folded in by effective_item
+    # alongside damage. Weapon-only, same as damage (enforced at import), and the only
+    # thing a Mod can grant that isn't a combat number — which is what makes the
+    # MAGAZINE slot mean something other than "one more damage".
+    magazine: int = 0
     # Which WeaponModSlot this mod occupies on a weapon whose skill has a named
     # layout (WEAPON_MOD_SLOTS) — e.g. Hollow Points is a BARREL part. Only valid
     # (and only meaningful) on a weapon-only mod (applies_to == {Slot.WEAPON});
@@ -539,6 +632,53 @@ MOD_CATALOG: list[Mod] = [
         damage=2,
         weapon_slot=WeaponModSlot.BARREL,
     ),
+    # The GRIP/SIGHT/BUTTSTOCK/MAGAZINE upgrades. Every one carries damage because
+    # damage is the only thing a weapon Mod can carry — Item.skill_bonuses is
+    # wearable-only (enforced at import below), so there is no to-hit or handling
+    # dial to hang a grip or a sight on. Deliberately worse eb-per-damage than
+    # sharpened_edge/hollow_points (60eb per point) rather than priced off that
+    # ladder: these are the slots that push a gun past MAX_WEAPON_DAMAGE, and cash
+    # is the only lever holding that ceiling down (see Workshop in DESIGN.md).
+    Mod(
+        "machined_grip",
+        "Machined Grip",
+        90,
+        {"rubber": 1, "screws": 1},
+        frozenset({Slot.WEAPON}),
+        damage=1,
+        weapon_slot=WeaponModSlot.GRIP,
+    ),
+    Mod(
+        "reflex_sight",
+        "Reflex Sight",
+        160,
+        {"salvaged_optics": 1},
+        frozenset({Slot.WEAPON}),
+        damage=1,
+        weapon_slot=WeaponModSlot.SIGHT,
+    ),
+    Mod(
+        "recoil_stock",
+        "Recoil Stock",
+        130,
+        {"armor_plating": 1, "screws": 1},
+        frozenset({Slot.WEAPON}),
+        damage=1,
+        weapon_slot=WeaponModSlot.BUTTSTOCK,
+    ),
+    # The one upgrade that buys capacity instead of damage, and the reason the MAGAZINE
+    # slot exists at all: only automatics carry that slot, so this is what a long
+    # firefight rewards an automatic for. Its +10 is worth more than the +1 damage it
+    # used to grant precisely because reloading costs a whole round.
+    Mod(
+        "extended_magazine",
+        "Extended Magazine",
+        200,
+        {"wire": 1, "screws": 1},
+        frozenset({Slot.WEAPON}),
+        magazine=10,
+        weapon_slot=WeaponModSlot.MAGAZINE,
+    ),
     Mod("scrap_plating", "Scrap Plating", 80, {"armor_plating": 1}, WEARABLE_SLOTS, defense=1),
     Mod(
         "padded_lining",
@@ -562,6 +702,22 @@ MOD_CATALOG: list[Mod] = [
         frozenset({Slot.WEAPON}),
         weapon_slot=WeaponModSlot.UNDERBARREL,
     ),
+    Mod(
+        "stock_buttstock",
+        "Stock Buttstock",
+        0,
+        {},
+        frozenset({Slot.WEAPON}),
+        weapon_slot=WeaponModSlot.BUTTSTOCK,
+    ),
+    Mod(
+        "stock_magazine",
+        "Stock Magazine",
+        0,
+        {},
+        frozenset({Slot.WEAPON}),
+        weapon_slot=WeaponModSlot.MAGAZINE,
+    ),
 ]
 MODS_BY_ID = {mod.id: mod for mod in MOD_CATALOG}
 
@@ -573,13 +729,21 @@ STOCK_MOD_IDS: dict[WeaponModSlot, str] = {
     WeaponModSlot.SIGHT: "stock_sight",
     WeaponModSlot.BARREL: "stock_barrel",
     WeaponModSlot.UNDERBARREL: "stock_underbarrel",
+    WeaponModSlot.BUTTSTOCK: "stock_buttstock",
+    WeaponModSlot.MAGAZINE: "stock_magazine",
 }
+
+# Every stock part by id. Only meaningful *inside* a named layout, where a slot is
+# never empty — install_mod's flat-list fallback refuses them, since spending one of
+# a katana's two MOD_SLOTS_PER_ITEM slots and a workshop trip on a zero-bonus part is
+# a trap rather than a choice.
+STOCK_MOD_ID_SET = frozenset(STOCK_MOD_IDS.values())
 
 for _mod in MODS_BY_ID.values():
     if _mod.applies_to == frozenset({Slot.WEAPON}) and _mod.defense:
         raise ValueError(f"{_mod.id}: a weapon mod can't carry defense")
-    if _mod.applies_to == WEARABLE_SLOTS and _mod.damage:
-        raise ValueError(f"{_mod.id}: a wearable mod can't carry damage")
+    if _mod.applies_to == WEARABLE_SLOTS and (_mod.damage or _mod.magazine):
+        raise ValueError(f"{_mod.id}: a wearable mod can't carry damage or magazine")
     if _mod.weapon_slot is not None and _mod.applies_to != frozenset({Slot.WEAPON}):
         raise ValueError(f"{_mod.id}: weapon_slot is only valid on a weapon-only mod")
     for _material_id in _mod.materials:
@@ -609,11 +773,13 @@ def effective_item(entry: InventoryItem) -> Item:
         return item
     damage = item.damage
     defense = item.defense
+    magazine = item.magazine
     for mod_id in entry.mods:
         mod = MODS_BY_ID[mod_id]
         damage += mod.damage
         defense += mod.defense
-    return replace(item, damage=damage, defense=defense)
+        magazine += mod.magazine
+    return replace(item, damage=damage, defense=defense, magazine=magazine)
 
 
 # Weapon-profile bounds. Shared with combat.py (via import) so the hand-built UNARMED
@@ -701,6 +867,17 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: program_slots must be >= 0")
     if _item.smartlinked and _item.skill not in FIREARM_SKILLS:
         raise ValueError(f"{_item.id}: smartlinked is only valid on a gun ({sorted(FIREARM_SKILLS)})")
+    # Ammo and magazine are all-or-nothing, and belong to exactly the ranged weapons.
+    # A ranged weapon missing them could fire forever; a melee one carrying them would
+    # grow a Reload action nothing could ever feed.
+    if (_item.ammo is None) != (_item.magazine == 0):
+        raise ValueError(f"{_item.id}: ammo and magazine must be set together or not at all")
+    if bool(_item.ammo) != (_item.skill in RANGED_SKILLS):
+        raise ValueError(
+            f"{_item.id}: exactly the {sorted(RANGED_SKILLS)} weapons take ammo"
+        )
+    if _item.magazine < 0:
+        raise ValueError(f"{_item.id}: magazine must be >= 0")
 
 
 # id, name, price, effect, amount, stat, min_standing
@@ -907,10 +1084,128 @@ def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
     character.cash -= price
     # Auto-equip only if there's room; otherwise it's bought stowed and the
     # player equips it manually (swapping out whatever's occupying the slot).
+    grant_item(character, item)
+    return True
+
+
+def grant_item(
+    character: "Character", item: Item, *, equipped: bool | None = None
+) -> InventoryItem:
+    """The one way an Item enters an inventory. Owns all three things acquiring one has
+    to do — decide equip state, seed a named layout's stock parts, and load a gun —
+    because each was added separately and every direct `InventoryItem(...)` build has
+    silently skipped whichever came later. A pistol granted without stock_mod_ids gives
+    SafehouseScreen an IndexError on `entry.mods[slot_index]`, the exact failure the v62
+    and v64 save-version notes describe.
+
+    `equipped=None` means the auto rule buy_item has always used (equipped if the slot
+    has room, stowed otherwise); pass it explicitly for loot, which arrives stowed no
+    matter what room there is."""
     entry = InventoryItem(
-        item.id, equipped=fits_in_slot(character.inventory, item), mods=stock_mod_ids(item)
+        item.id,
+        equipped=fits_in_slot(character.inventory, item) if equipped is None else equipped,
+        mods=stock_mod_ids(item),
     )
     character.inventory.append(entry)
+    load_on_acquire(character, item)
+    return entry
+
+
+def loaded_rounds(character: "Character", item: Item) -> int:
+    """How many rounds are in this weapon right now, 0 for anything that takes no ammo.
+
+    An id *absent* from Character.loaded means "as it came" — a full magazine — not
+    "empty". A weapon can enter the inventory by routes that never touch buy_item (a
+    creation preset, a fixture, anything a future drop table adds), and those should
+    arrive ready to fire rather than silently dead. Firing writes the key, so a gun that
+    is genuinely empty reads 0 and stays distinguishable from one nobody has fired.
+
+    Pass the *effective* item (shops.effective_item): an Extended Magazine's capacity is
+    folded in there, so a modded gun's "as it came" is the bigger number.
+
+    Clamped to the weapon's current capacity, because capacity can *shrink*: fitting the
+    stock magazine back over an Extended Magazine is free and is the documented way to
+    undo a named-slot upgrade, and without the clamp a gun loaded to 30 would keep
+    reporting (and firing) 30 rounds out of a 20-round magazine."""
+    if item.ammo is None:
+        return 0
+    return min(character.loaded.get(item.id, item.magazine), item.magazine)
+
+
+def load_on_acquire(character: "Character", item: Item) -> None:
+    """Top a newly acquired gun up to a full magazine, free. A gun comes off the rack
+    with one mag in it; spare rounds are what you pay for. No-op on anything that
+    doesn't take ammo, and never *lowers* a magazine, so buying a second copy of a gun
+    you're already carrying can't unload the one in your hands."""
+    if item.ammo is None:
+        return
+    character.loaded[item.id] = max(character.loaded.get(item.id, 0), item.magazine)
+
+
+def unload_on_disposal(character: "Character", item: Item) -> None:
+    """Strip a gun that's leaving the inventory, keeping its rounds. Call *after* the
+    entry is removed: the rounds go back to the reserve (nobody pawns a loaded gun) and
+    the id is dropped, which is what restores loaded_rounds' "absent means as it came"
+    invariant for the next one bought.
+
+    Skipped while another copy is still owned — Character.loaded is keyed by weapon id,
+    so two copies share a magazine, and clearing it here would unload the gun still in
+    the runner's hands."""
+    if item.ammo is None or item.id not in character.loaded:
+        return
+    if any(entry.item_id == item.id for entry in character.inventory):
+        return
+    rounds = character.loaded.pop(item.id)
+    if rounds:
+        character.ammo[item.ammo.value] = character.ammo.get(item.ammo.value, 0) + rounds
+
+
+@dataclass(frozen=True)
+class Ammo:
+    """A box of rounds, sold at a WEAPON_SHOP. Its own small catalog rather than an Item
+    (ammo is never equipped and takes no slot) or a Consumable (it isn't used in a single
+    beat — it drains a round at a time across a whole fight), the same way Program is its
+    own catalog. Bought into Character.ammo, a reserve pool keyed by AmmoKind."""
+
+    kind: AmmoKind
+    name: str
+    price: int
+    rounds: int
+
+
+# Priced per box, roughly against how much a full magazine of each is worth in a fight:
+# taser cartridges are the dearest per round (two shots knock most things out), rifle
+# rounds the dearest per box. One box is always at least a couple of reloads for the
+# weapon that eats it, so a shop trip is worth making.
+# Keyed by LocationKind like CATALOG/CONSUMABLE_CATALOG/PROGRAM_CATALOG, so ShopScreen
+# renders it through the same `.get(location.kind, [])` loop the other three use and
+# stocking ammo somewhere else is a dict key rather than a branch in the screen.
+AMMO_CATALOG: dict[LocationKind, list[Ammo]] = {
+    LocationKind.WEAPON_SHOP: [
+        Ammo(AmmoKind.PISTOL, "Box of Pistol Rounds", 40, 50),
+        Ammo(AmmoKind.RIFLE, "Box of Rifle Rounds", 70, 30),
+        Ammo(AmmoKind.SHOTGUN, "Box of Shotgun Shells", 50, 25),
+        Ammo(AmmoKind.TASER, "Taser Cartridges", 80, 6),
+        Ammo(AmmoKind.ARROW, "Bundle of Arrows", 45, 24),
+    ],
+}
+AMMO_BY_KIND: dict[AmmoKind, Ammo] = {
+    ammo.kind: ammo for stock in AMMO_CATALOG.values() for ammo in stock
+}
+
+if set(AMMO_BY_KIND) != set(AmmoKind):
+    raise ValueError("AMMO_CATALOG must stock exactly one box per AmmoKind")
+
+
+def buy_ammo(character: "Character", kind: AmmoKind, standing: int = 0) -> bool:
+    """Buy one box, into the reserve pool. Nothing is loaded by this — the rounds go in
+    the runner's pockets, and inventory.reload_weapon is what puts them in a gun."""
+    ammo = AMMO_BY_KIND[kind]
+    price = buy_price(ammo.price, standing)
+    if character.cash < price:
+        return False
+    character.cash -= price
+    character.ammo[kind.value] = character.ammo.get(kind.value, 0) + ammo.rounds
     return True
 
 
@@ -961,7 +1256,7 @@ def scavenge(character: "Character", rng: random.Random | None = None) -> str:
     count = SCAVENGE_CRITICAL_FINDS if roll.result is CheckResult.CRITICAL_SUCCESS else 1
     found = rng.sample(SCAVENGE_MATERIALS, count)
     for item_id in found:
-        character.inventory.append(InventoryItem(item_id, equipped=False))
+        grant_item(character, ITEMS_BY_ID[item_id], equipped=False)
     names = ", ".join(ITEMS_BY_ID[item_id].name for item_id in found)
     return f"You scavenge up: {names}."
 
@@ -1000,6 +1295,45 @@ WORKSHOP_CHEMISTRY_DIFFICULTY = 11
 WORKSHOP_HOURS_COST = 2
 
 
+def mod_slot_index(item: Item, mod: Mod) -> int | None:
+    """Which position in InventoryItem.mods this mod occupies on this item, or None when
+    the item has no named layout (the old flat, append-only list)."""
+    weapon_slots = WEAPON_MOD_SLOTS.get(item.skill, ())
+    if not weapon_slots or mod.weapon_slot not in weapon_slots:
+        return None
+    return weapon_slots.index(mod.weapon_slot)
+
+
+def install_refusal(entry: InventoryItem, mod: Mod) -> str | None:
+    """Why this mod can't go on this item, or None if it can — everything *except*
+    affording it, which is a "you could, later" the workshop shows rather than hides.
+
+    The single source for these rules. install_mod gates on it and SafehouseScreen
+    filters its rows with it; when the two kept separate copies they drifted (the
+    screen's named-layout branch never checked applies_to at all), and every new slot
+    type had to be taught to both."""
+    item = ITEMS_BY_ID[entry.item_id]
+    if item.slot not in mod.applies_to:
+        return f"{mod.name} doesn't fit {item.name}."
+    if WEAPON_MOD_SLOTS.get(item.skill, ()):
+        slot_index = mod_slot_index(item, mod)
+        if slot_index is None:
+            return f"{mod.name} doesn't fit {item.name}."
+        if entry.mods[slot_index] == mod.id:
+            return f"{item.name} already has {mod.name}."
+        return None
+    # No named layout, so nothing here has a slot to occupy: a stock part would burn a
+    # capped slot for zero bonus, and gun furniture has no business on a blade or a bow.
+    # Both would otherwise pass on applies_to alone.
+    if mod.id in STOCK_MOD_ID_SET or mod.weapon_slot in GUN_ONLY_MOD_SLOTS:
+        return f"{mod.name} doesn't fit {item.name}."
+    if mod.id in entry.mods:
+        return f"{item.name} already has {mod.name}."
+    if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
+        return f"{item.name} has no free mod slots."
+    return None
+
+
 def install_mod(
     character: "Character", inventory_index: int, mod_id: str, rng: random.Random | None = None
 ) -> tuple[bool, str]:
@@ -1021,21 +1355,10 @@ def install_mod(
     entry = character.inventory[inventory_index]
     item = ITEMS_BY_ID[entry.item_id]
     mod = MODS_BY_ID[mod_id]
-    if item.slot not in mod.applies_to:
-        return False, f"{mod.name} doesn't fit {item.name}."
-    weapon_slots = WEAPON_MOD_SLOTS.get(item.skill, ())
-    slot_index: int | None = None
-    if weapon_slots:
-        if mod.weapon_slot not in weapon_slots:
-            return False, f"{mod.name} doesn't fit {item.name}."
-        slot_index = weapon_slots.index(mod.weapon_slot)
-        if entry.mods[slot_index] == mod_id:
-            return False, f"{item.name} already has {mod.name}."
-    else:
-        if mod_id in entry.mods:
-            return False, f"{item.name} already has {mod.name}."
-        if len(entry.mods) >= MOD_SLOTS_PER_ITEM:
-            return False, f"{item.name} has no free mod slots."
+    refusal = install_refusal(entry, mod)
+    if refusal is not None:
+        return False, refusal
+    slot_index = mod_slot_index(item, mod)
     if character.cash < mod.price:
         return False, f"Can't afford {mod.name} ({mod.price}eb)."
     if not _has_materials(character, mod.materials):
@@ -1058,12 +1381,19 @@ def install_mod(
 
 def remove_mod(character: "Character", inventory_index: int, mod_id: str) -> str:
     """Pull a Mod off character.inventory[inventory_index]. Free either way — same as
-    uninstall_program — it's just labor, no skill check and nothing to lose."""
+    uninstall_program — it's just labor, no skill check and nothing to lose.
+
+    Refused outright on a weapon with a named layout: a named slot is never empty, so
+    the way to undo an upgrade there is to install the matching stock part back over
+    it. Shortening that list instead would leave every later slot index off by one and
+    IndexError the next install (and SafehouseScreen's slot listing with it)."""
     entry = character.inventory[inventory_index]
+    item = ITEMS_BY_ID[entry.item_id]
+    if WEAPON_MOD_SLOTS.get(item.skill):
+        return f"{item.name}'s slots are fixed — fit the stock part back instead."
     if mod_id not in entry.mods:
         return "Not installed there."
     entry.mods.remove(mod_id)
-    item = ITEMS_BY_ID[entry.item_id]
     return f"Removed {MODS_BY_ID[mod_id].name} from {item.name}."
 
 
@@ -1117,6 +1447,8 @@ def craft_consumable(
 def sell_item(character: "Character", index: int, standing: int = 0) -> int:
     # By index, not id: the same item id can be owned more than once.
     entry = character.inventory.pop(index)
-    proceeds = sell_price(ITEMS_BY_ID[entry.item_id].price, standing)
+    item = ITEMS_BY_ID[entry.item_id]
+    unload_on_disposal(character, item)
+    proceeds = sell_price(item.price, standing)
     character.cash += proceeds
     return proceeds

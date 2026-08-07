@@ -38,13 +38,17 @@ from shadowguy.combat import (
     melee_damage_bonus,
     combat_consumables,
     equipped_weapons,
+    has_ammo,
     player_defense,
     player_soak,
+    reload_in_fight,
+    reloadable_weapons,
     resolve_hit,
     smartlink_bonus,
     soak_damage,
+    spend_round,
 )
-from shadowguy.shops import CONSUMABLES_BY_ID, EffectKind, Item
+from shadowguy.shops import CONSUMABLES_BY_ID, EffectKind, Item, loaded_rounds
 from shadowguy.skills import skill_for, skill_value
 
 # Bracing (Toughness) adds this much to the soak roll for *every* hit you take that
@@ -110,6 +114,7 @@ class ActionKind(StrEnum):
     INTIMIDATE = "intimidate"
     FLEE = "flee"
     CONSUMABLE = "consumable"
+    RELOAD = "reload"
 
 
 @dataclass(frozen=True)
@@ -141,9 +146,9 @@ def available_actions(
     weapons = [
         weapon
         for weapon in equipped_weapons(character)
-        if not (cooldowns and cooldowns.get(weapon.id, 0) > 0)
+        if not (cooldowns and cooldowns.get(weapon.id, 0) > 0) and has_ammo(character, weapon)
     ]
-    # If every weapon is on cooldown, you can still use your fists.
+    # If every weapon is on cooldown or empty, you can still use your fists.
     if not weapons:
         weapons = [UNARMED]
     actions = [
@@ -161,6 +166,14 @@ def available_actions(
     actions.append(Action(kind=ActionKind.READ, label="Read the fight (Tactics)", skill="tactics"))
     actions.append(
         Action(kind=ActionKind.INTIMIDATE, label="Face them down (Intimidation)", skill="intimidation")
+    )
+    actions.extend(
+        Action(
+            kind=ActionKind.RELOAD,
+            label=f"Reload {weapon.name} ({loaded_rounds(character, weapon)}/{weapon.magazine})",
+            weapon=weapon,
+        )
+        for weapon in reloadable_weapons(character)
     )
     actions.extend(
         Action(
@@ -305,6 +318,8 @@ def _attack(state: CombatState, action: Action, rng: random.Random) -> None:
     weapon = action.weapon
     bonus = state.next_attack_bonus + smartlink_bonus(state.character, weapon)
     state.next_attack_bonus = 0
+    # Spent before the roll resolves: a miss burns the round just as a hit does.
+    spend_round(state.character, weapon)
 
     roll, damage = resolve_hit(
         rng,
@@ -403,6 +418,23 @@ def _throw(state: CombatState, action: Action) -> None:
         raise ValueError(f"consumable effect not handled in combat: {consumable.effect}")
 
 
+def _reload(state: CombatState, action: Action) -> None:
+    # available_actions only ever builds a RELOAD around a gun, so this is a guard on
+    # a hand-built Action rather than a reachable branch — but take_turn is public and
+    # tactical.reload_weapon guards the same case, so the two surfaces agree.
+    weapon = action.weapon
+    if weapon is None or weapon.ammo is None:
+        return
+    loaded = reload_in_fight(state.character, weapon)
+    if loaded:
+        state.log.append(
+            f"You slam a fresh magazine into {weapon.name}"
+            f" ({state.character.loaded[weapon.id]}/{weapon.magazine})."
+        )
+    else:
+        state.log.append(f"You reach for {weapon.ammo.label} and come up empty.")
+
+
 def _flee(state: CombatState, rng: random.Random) -> None:
     difficulty = FLEE_DIFFICULTY + FLEE_DIFFICULTY_PER_ENEMY * len(state.standing)
     roll = resolve_check(
@@ -488,6 +520,8 @@ def _perform_action(state: CombatState, action: Action, rng: random.Random) -> N
         _intimidate(state, rng)
     elif action.kind is ActionKind.CONSUMABLE:
         _throw(state, action)
+    elif action.kind is ActionKind.RELOAD:
+        _reload(state, action)
     elif action.kind is ActionKind.FLEE:
         _flee(state, rng)
 

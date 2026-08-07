@@ -22,7 +22,9 @@ from shadowguy.shops import (
     InventoryItem,
     Program,
     PROGRAMS_BY_ID,
+    effective_item,
     equipped_items,
+    loaded_rounds,
     fits_in_slot,
 )
 
@@ -118,6 +120,40 @@ def uninstall_program(character: "Character", inventory_index: int, program_id: 
     entry.installed_programs.remove(program_id)
     item = ITEMS_BY_ID[entry.item_id]
     return f"Uninstalled {PROGRAMS_BY_ID[program_id].name} from {item.name}."
+
+
+def rounds_needed(character: "Character", item: Item) -> int:
+    """How many rounds it would take to top this weapon up. `item` must be the
+    *effective* item (shops.effective_item) — an Extended Magazine's capacity is folded
+    in there, not on the catalog entry."""
+    if item.ammo is None:
+        return 0
+    return max(0, item.magazine - loaded_rounds(character, item))
+
+
+def reload_weapon(character: "Character", inventory_index: int) -> str:
+    """Move rounds from the reserve pool into one gun, out of combat. Free and instant —
+    it's the same labor remove_mod is, and the runner is standing in a shop or a
+    safehouse doing it, not in a firefight. The in-fight version costs a whole round;
+    this one exists so walking into a job on an empty gun is a choice rather than an
+    ambush by the UI.
+
+    Partial fills are allowed and are the normal case late in a run: whatever reserve is
+    left goes in, and the message says how short it came up."""
+    entry = character.inventory[inventory_index]
+    item = effective_item(entry)
+    if item.ammo is None:
+        return f"{item.name} doesn't take ammo."
+    needed = rounds_needed(character, item)
+    if not needed:
+        return f"{item.name} is already full ({item.magazine})."
+    reserve = character.ammo.get(item.ammo.value, 0)
+    if not reserve:
+        return f"No {item.ammo.label} left."
+    loading = min(needed, reserve)
+    character.ammo[item.ammo.value] = reserve - loading
+    character.loaded[item.id] = loaded_rounds(character, item) + loading
+    return f"Loaded {loading} into {item.name} ({character.loaded[item.id]}/{item.magazine})."
 
 
 def toggle_equip(character: "Character", index: int) -> bool:

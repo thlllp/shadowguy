@@ -39,17 +39,22 @@ from shadowguy.checks import CheckResult, resolve_check, resolve_rng
 from shadowguy.combat import (
     MELEE_RANGE,
     QUICKNESS_BASE,
+    UNARMED,
     Enemy,
     attack_verbs,
     combat_consumables,
     consumables_with,
     equipped_weapons,
+    has_ammo,
     melee_damage_bonus,
     player_defense,
     player_quickness,
     player_soak,
+    reload_in_fight,
+    reloadable_weapons,
     resolve_hit,
     smartlink_bonus,
+    spend_round,
     weapon_range,
 )
 from shadowguy.grid import (
@@ -777,6 +782,7 @@ def can_hit(state: TacticalState, weapon: Item, target: Unit) -> bool:
     return (
         target.health > 0
         and not state.weapon_cooldowns.get(weapon.id)
+        and has_ammo(state.character, weapon)
         and in_reach(state.grid, state.player.coord, target.coord, weapon_range(weapon))
     )
 
@@ -815,6 +821,8 @@ def player_attack(state: TacticalState, target: Unit, weapon: Item, rng: random.
     state.acted = True
     if weapon.recharge_rounds:
         state.weapon_cooldowns[weapon.id] = weapon.recharge_rounds
+    # Before the roll: a miss costs the round the same as a hit does.
+    spend_round(state.character, weapon)
     raise_alarm(state, "The noise carries. They know you're here.")
     difficulty = target.stats.defense + cover_bonus(state.grid, target.coord, state.player.coord)
     roll, damage = resolve_hit(
@@ -1068,6 +1076,31 @@ def _blast_targets(state: TacticalState, target: Coord) -> list[Unit]:
     """Every standing enemy inside a grenade's blast — a GRENADE_RADIUS chebyshev square
     centered on where it landed, so radius 1 is a literal 3x3."""
     return [enemy for enemy in state.enemies if chebyshev(target, enemy.coord) <= GRENADE_RADIUS]
+
+
+def reload_weapon(state: TacticalState, weapon: Item) -> str | None:
+    """Resolve the player's one action as a reload. Spends the turn exactly the way
+    player_attack and throw_grenade do — that cost *is* the mechanic, since standing in
+    the open feeding a magazine is what makes running dry matter. Unlike a shot it makes
+    no noise, so it never raises the alarm.
+
+    Returns a refusal string, or None once the reload actually happens — same shape as
+    stabilize_ally, the other turn-spending action here. Every refusal is checked
+    *before* state.acted is set: a reload that loads nothing must not eat the turn."""
+    if state.is_over:
+        return None
+    if state.acted:
+        return "You've already acted this turn."
+    if weapon.ammo is None:
+        return f"{weapon.name} doesn't take ammo."
+    if not state.character.ammo.get(weapon.ammo.value, 0):
+        return f"Out of {weapon.ammo.label}."
+    state.acted = True
+    reload_in_fight(state.character, weapon)
+    state.log.append(
+        f"Reloaded {weapon.name} ({state.character.loaded[weapon.id]}/{weapon.magazine})."
+    )
+    return None
 
 
 def throw_grenade(state: TacticalState, consumable_index: int, target: Coord | None = None) -> None:
@@ -1337,8 +1370,23 @@ def resolve_downed_crew(
 
 
 def player_weapons(state: TacticalState) -> list[Item]:
-    """The weapons the player can attack with this fight — their equipped gear, or fists."""
-    return equipped_weapons(state.character)
+    """The weapons the player can attack with this fight — their equipped gear, or fists.
+
+    An empty gun drops out, and if that empties the list the player falls back to
+    UNARMED, exactly as abstract_combat.available_actions does. Without that fallback,
+    carrying a dry gun would be strictly *worse* than carrying nothing at all:
+    equipped_weapons only substitutes fists when the runner has no weapon equipped, so
+    one empty pistol would leave them unable to swing at someone standing next to them.
+    """
+    usable = [weapon for weapon in equipped_weapons(state.character) if has_ammo(state.character, weapon)]
+    return usable or [UNARMED]
+
+
+def reloadable(state: TacticalState) -> list[Item]:
+    """Equipped guns worth spending this turn reloading — not full, and with rounds in
+    reserve to put in them. State-shaped wrapper, same as player_weapons, so the screen
+    asks the fight rather than reaching past it into combat.py."""
+    return reloadable_weapons(state.character)
 
 
 def best_shot(state: TacticalState) -> Unit | None:
