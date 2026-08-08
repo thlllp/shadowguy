@@ -16,29 +16,41 @@ from shadowguy.corp_turn import (
     BRAINS_2_ID,
     BRAINS_2_RESEARCH_PER_ASSISTANT,
     BRAINS_2_RESEARCH_PER_SCIENTIST,
+    COUNTER_INTELLIGENCE_ID,
+    COUNTERINTEL_SIGHTINGS_LOG,
+    COUNTERINTEL_SURVEILLANCE_COST,
+    DEEP_SURVEILLANCE_ID,
     DEVELOPMENT_BUMP_COST,
     DEVELOPMENT_MIN_SECURITY,
     DEVELOPMENT_MIN_SURVEILLANCE,
     EFFICIENCY_UPGRADE_COSTS,
     EXPANSION_COST_BASE,
     EXPANSION_COST_PER_VALUE,
+    EXTENDED_SURVEILLANCE_COST,
+    EXTENDED_SURVEILLANCE_MAX,
+    HARDENED_GARRISON_ID,
+    INVESTIGATION_COST,
     LAB_UPGRADE_COSTS,
     MAX_EFFICIENCY_UPGRADES,
     MAX_LABS_BUILT,
+    MAX_SIGHTINGS_LOG,
     RESEARCH_ASSISTANTS_PER_LAB,
     RESEARCH_FACILITY_REBUILD_COST,
     RESEARCH_PER_ASSISTANT,
     RESEARCH_PER_SCIENTIST,
+    SIGHTING_RESEARCH_BONUS,
     STARTING_CASH,
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
     TERRITORY_INCOME_PER_VALUE,
+    TOTAL_INFORMATION_AWARENESS_ID,
     TRAINING_DAYS,
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     CorpState,
     EmployeeCategory,
+    Sighting,
     advance_training,
     assistant_capacity,
     assistant_rate,
@@ -53,12 +65,17 @@ from shadowguy.corp_turn import (
     defense_strength,
     deploy_operatives,
     development_targets,
+    effective_surveillance_max,
     expand_into,
     expansion_cost,
     has_technology,
+    investigate_sighting,
+    investigate_sighting_targets,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
+    operative_training_cost,
+    operative_training_days,
     owned_research_facilities,
     owned_research_facility,
     raise_development,
@@ -67,7 +84,10 @@ from shadowguy.corp_turn import (
     rebuild_facility_targets,
     research_rate,
     research_technology,
+    resolve_attack,
     scientist_base_rate,
+    sightings_log_cap,
+    surveillance_bump_cost,
     surveillance_targets,
     train_employees,
 )
@@ -1266,3 +1286,378 @@ def test_rebuilding_an_academy_cannot_collide_with_an_existing_id():
     assert build_academy(corp_state, corp_map, "iron_home") is False
     ids = [loc.id for loc in corp_map.territories["iron_home"].locations]
     assert len(ids) == len(set(ids))
+
+
+# --- Counter-Intelligence chain tests ---------------------------------------
+
+
+def test_counter_intelligence_is_a_root_technology():
+    assert TECHNOLOGIES_BY_ID[COUNTER_INTELLIGENCE_ID].prereqs == ()
+
+
+def test_deep_surveillance_requires_counter_intelligence():
+    assert COUNTER_INTELLIGENCE_ID in TECHNOLOGIES_BY_ID[DEEP_SURVEILLANCE_ID].prereqs
+
+
+def test_total_information_awareness_follows_shadow_economy():
+    from shadowguy.corp_turn import SHADOW_ECONOMY_ID
+    assert TECHNOLOGIES_BY_ID[TOTAL_INFORMATION_AWARENESS_ID].prereqs == (SHADOW_ECONOMY_ID,)
+
+
+def test_operation_intercept_requires_deep_surveillance():
+    from shadowguy.corp_turn import OPERATION_INTERCEPT_ID
+    assert TECHNOLOGIES_BY_ID[OPERATION_INTERCEPT_ID].prereqs == (DEEP_SURVEILLANCE_ID,)
+
+
+def test_effective_surveillance_max_defaults_to_modifier_max():
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert effective_surveillance_max(corp_state) == MODIFIER_MAX
+
+
+def test_effective_surveillance_max_rises_with_deep_surveillance():
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID, DEEP_SURVEILLANCE_ID})
+    assert effective_surveillance_max(corp_state) == EXTENDED_SURVEILLANCE_MAX
+
+
+def test_surveillance_targets_respects_extended_max_without_deep_surveillance():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", surveillance=MODIFIER_MAX)
+    _corp_territory(corp_map, "iron_second", surveillance=MODIFIER_MAX)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
+    assert surveillance_targets(corp_state, corp_map) == []
+
+
+def test_surveillance_targets_opens_level_6_with_deep_surveillance():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", surveillance=MODIFIER_MAX)
+    _corp_territory(corp_map, "iron_second", surveillance=MODIFIER_MAX)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={WORKER_SURVEILLANCE_ID, COUNTER_INTELLIGENCE_ID, DEEP_SURVEILLANCE_ID},
+    )
+    targets = surveillance_targets(corp_state, corp_map)
+    assert len(targets) == 2
+    target_ids = {t.id for t in targets}
+    assert target_ids == {"iron_home", "iron_second"}
+
+
+def test_surveillance_targets_closes_at_extended_max():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", surveillance=EXTENDED_SURVEILLANCE_MAX)
+    _corp_territory(corp_map, "iron_second", surveillance=EXTENDED_SURVEILLANCE_MAX)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={WORKER_SURVEILLANCE_ID, COUNTER_INTELLIGENCE_ID, DEEP_SURVEILLANCE_ID},
+    )
+    assert surveillance_targets(corp_state, corp_map) == []
+
+
+def test_surveillance_bump_cost_defaults_to_base():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert surveillance_bump_cost(corp_state, territory) == SURVEILLANCE_BUMP_COST
+
+
+def test_surveillance_bump_cost_drops_with_counter_intelligence():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID})
+    assert surveillance_bump_cost(corp_state, territory) == COUNTERINTEL_SURVEILLANCE_COST
+
+
+def test_surveillance_bump_cost_is_premium_at_the_extended_level():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=MODIFIER_MAX)
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert surveillance_bump_cost(corp_state, territory) == EXTENDED_SURVEILLANCE_COST
+
+
+def test_raise_surveillance_uses_discounted_cost_with_counter_intelligence():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={WORKER_SURVEILLANCE_ID, COUNTER_INTELLIGENCE_ID},
+    )
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 2
+    assert corp_state.cash == 10_000 - COUNTERINTEL_SURVEILLANCE_COST
+
+
+def test_raise_surveillance_into_extended_level_charges_premium():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", surveillance=MODIFIER_MAX)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={WORKER_SURVEILLANCE_ID, COUNTER_INTELLIGENCE_ID, DEEP_SURVEILLANCE_ID},
+    )
+    assert raise_surveillance(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == EXTENDED_SURVEILLANCE_MAX
+    assert corp_state.cash == 10_000 - EXTENDED_SURVEILLANCE_COST
+
+
+def test_sightings_log_cap_defaults_to_base():
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert sightings_log_cap(corp_state) == MAX_SIGHTINGS_LOG
+
+
+def test_sightings_log_cap_doubles_with_counter_intelligence():
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID})
+    assert sightings_log_cap(corp_state) == COUNTERINTEL_SIGHTINGS_LOG
+
+
+def test_investigate_sighting_targets_empty_without_tech():
+    corp_state = CorpState(faction_id=IRONCLAD)
+    corp_map = _map()
+    assert investigate_sighting_targets(corp_state, corp_map) == []
+
+
+def test_investigate_sighting_targets_empty_when_daily_action_used():
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000, daily_action_used=True,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)],
+    )
+    corp_map = _map()
+    assert investigate_sighting_targets(corp_state, corp_map) == []
+
+
+def test_investigate_sighting_targets_empty_when_short_on_cash():
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=INVESTIGATION_COST - 1,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)],
+    )
+    corp_map = _map()
+    assert investigate_sighting_targets(corp_state, corp_map) == []
+
+
+def test_investigate_sighting_targets_returns_sightings_when_ready():
+    sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[sighting],
+    )
+    corp_map = _map()
+    targets = investigate_sighting_targets(corp_state, corp_map)
+    assert len(targets) == 1
+    assert targets[0] is sighting
+
+
+def test_investigate_sighting_spends_cash_and_marks_the_day():
+    sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[sighting],
+    )
+    assert investigate_sighting(corp_state, sighting, random.Random()) is True
+    assert corp_state.cash == 10_000 - INVESTIGATION_COST
+    assert corp_state.daily_action_used is True
+
+
+def test_investigate_sighting_fails_when_already_acted():
+    sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000, daily_action_used=True,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[sighting],
+    )
+    assert investigate_sighting(corp_state, sighting, random.Random()) is False
+    assert corp_state.cash == 10_000
+
+
+def test_investigate_sighting_fails_without_tech():
+    sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        sightings=[sighting],
+    )
+    assert investigate_sighting(corp_state, sighting, random.Random()) is False
+
+
+def test_investigate_sighting_fails_when_unaffordable():
+    sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=INVESTIGATION_COST - 1,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[sighting],
+    )
+    assert investigate_sighting(corp_state, sighting, random.Random()) is False
+    assert corp_state.cash == INVESTIGATION_COST - 1
+
+
+def test_collect_research_adds_sighting_rp_with_total_information_awareness():
+    corp_map = _map()
+    _facility(corp_map, territory_id="iron_home")
+    corp_state = CorpState(
+        faction_id=IRONCLAD, scientists=0, research_assistants=0,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[
+            Sighting(kind="runner", actor_id="some_runner", territory_id="iron_home", day=1),
+            Sighting(kind="runner", actor_id="other_runner", territory_id="iron_home", day=2),
+        ],
+    )
+    base = collect_research(corp_state, corp_map)
+    # Remove tech: collect just the facility tier.
+    corp_state.researched.discard(TOTAL_INFORMATION_AWARENESS_ID)
+    without = collect_research(corp_state, corp_map)
+    assert base - without == SIGHTING_RESEARCH_BONUS * 2
+
+
+def test_sighting_rp_bonus_is_zero_with_no_sightings():
+    corp_map = _map()
+    _facility(corp_map, territory_id="iron_home")
+    corp_state = CorpState(
+        faction_id=IRONCLAD, scientists=0, research_assistants=0,
+        researched={TOTAL_INFORMATION_AWARENESS_ID},
+        sightings=[],
+    )
+    rp = collect_research(corp_state, corp_map)
+    corp_state.researched.discard(TOTAL_INFORMATION_AWARENESS_ID)
+    assert collect_research(corp_state, corp_map) == rp
+
+
+def test_technology_tree_layout_includes_new_chains():
+    from shadowguy.corp_turn import (
+        OPERATION_INTERCEPT_ID,
+        technology_tree_layout,
+    )
+    layout = technology_tree_layout()
+    assert TOTAL_INFORMATION_AWARENESS_ID in layout
+    assert COUNTER_INTELLIGENCE_ID in layout
+    assert DEEP_SURVEILLANCE_ID in layout
+    assert OPERATION_INTERCEPT_ID in layout
+    # Counter-Intelligence is a root (depth 0).
+    assert layout[COUNTER_INTELLIGENCE_ID][0] == 0
+    # Deep Surveillance is tier 1.
+    assert layout[DEEP_SURVEILLANCE_ID][0] == 1
+    # Operation Intercept is tier 2.
+    assert layout[OPERATION_INTERCEPT_ID][0] == 2
+    # Total Information Awareness is tier 3 (after Shadow Economy at tier 2).
+    assert layout[TOTAL_INFORMATION_AWARENESS_ID][0] == 3
+    # Total Information Awareness is in the same row as its chain (Worker Surveillance row).
+    from shadowguy.corp_turn import WORKER_SURVEILLANCE_ID as WS_ID
+    assert layout[TOTAL_INFORMATION_AWARENESS_ID][1] == layout[WS_ID][1]
+
+
+# --- Faction-gating tests ---------------------------------------------------
+
+
+def test_faction_tech_refuses_wrong_corp():
+    """Hardened Garrison is Ironclad-only; Meridian can't research it."""
+    corp_state = CorpState(faction_id="faction_meridian", research_points=100)
+    assert research_technology(corp_state, HARDENED_GARRISON_ID) is False
+    assert not has_technology(corp_state, HARDENED_GARRISON_ID)
+
+
+def test_faction_tech_accepts_correct_corp():
+    corp_state = CorpState(faction_id="faction_ironclad", research_points=100)
+    assert research_technology(corp_state, HARDENED_GARRISON_ID) is True
+    assert has_technology(corp_state, HARDENED_GARRISON_ID)
+
+
+def test_hardened_garrison_doubles_garrison_in_defense_strength():
+    from shadowguy.corp_turn import HARDENED_GARRISON_ID, HARDENED_GARRISON_MULTIPLIER
+    territory = _territory("home", owner=IRONCLAD)
+    territory.garrison = 3
+    base = defense_strength(territory)
+    corp_state = CorpState(faction_id=IRONCLAD, researched={HARDENED_GARRISON_ID})
+    boosted = defense_strength(territory, corp_state)
+    assert base == 3
+    assert boosted == 3 * HARDENED_GARRISON_MULTIPLIER
+
+
+def test_shock_assault_adds_bonus_to_attack_roll():
+    from shadowguy.corp_turn import SHOCK_ASSAULT_BONUS
+    # With AlwaysSix both sides roll 6 → tie. Without bonus, defender holds.
+    rng_no_bonus = AlwaysSix()
+    territory = _territory("rival", owner=GHOSTWIRE)
+    result = resolve_attack(territory, IRONCLAD, 5, rng_no_bonus)
+    # attack=5+6=11, defense=0+6=6, attacker wins
+    assert result.captured
+    # Now with a tiny force: 1+6=7 vs 0+6=6, attacker wins
+    territory2 = _territory("rival2", owner=GHOSTWIRE)
+    result2 = resolve_attack(territory2, IRONCLAD, 1, rng_no_bonus)
+    assert result2.captured
+    # Without bonus: 1+6=7 vs 3+6=9, defender wins
+    territory3 = _territory("rival3", owner=GHOSTWIRE)
+    territory3.garrison = 3
+    result3 = resolve_attack(territory3, IRONCLAD, 1, rng_no_bonus)
+    assert not result3.captured
+    # With bonus: 1+6+1=8 vs 3+6=9, still defender wins
+    rival4 = _territory("rival4", owner=GHOSTWIRE)
+    rival4.garrison = 3
+    result4 = resolve_attack(
+        rival4, IRONCLAD, 1, rng_no_bonus,
+        attack_bonus=SHOCK_ASSAULT_BONUS,
+    )
+    assert not result4.captured
+
+
+def test_signal_intercept_adds_rp_per_sighting():
+    from shadowguy.corp_turn import SIGNAL_INTERCEPT_ID, SIGNAL_INTERCEPT_RP
+    corp_map = _map()
+    _facility(corp_map, territory_id="iron_home")
+    corp_state = CorpState(
+        faction_id=IRONCLAD, scientists=0, research_assistants=0,
+        researched={SIGNAL_INTERCEPT_ID},
+        sightings=[Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)],
+    )
+    with_si = collect_research(corp_state, corp_map)
+    corp_state.researched.discard(SIGNAL_INTERCEPT_ID)
+    without = collect_research(corp_state, corp_map)
+    assert with_si - without == SIGNAL_INTERCEPT_RP
+
+
+def test_signal_intercept_stacks_with_total_information_awareness():
+    from shadowguy.corp_turn import SIGNAL_INTERCEPT_ID, SIGNAL_INTERCEPT_RP
+    corp_map = _map()
+    _facility(corp_map, territory_id="iron_home")
+    corp_state = CorpState(
+        faction_id=IRONCLAD, scientists=0, research_assistants=0,
+        researched={TOTAL_INFORMATION_AWARENESS_ID, SIGNAL_INTERCEPT_ID},
+        sightings=[Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)],
+    )
+    both = collect_research(corp_state, corp_map)
+    corp_state.researched = set()
+    neither = collect_research(corp_state, corp_map)
+    assert both - neither == SIGHTING_RESEARCH_BONUS + SIGNAL_INTERCEPT_RP
+
+
+def test_optimized_workforce_adds_income_bonus():
+    from shadowguy.corp_turn import OPTIMIZED_WORKFORCE_ID, WORKFORCE_INCOME_BONUS
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+    owned = [t for t in corp_map.territories.values() if t.owner == IRONCLAD]
+    base = collect_income(corp_state, corp_map)
+    corp_state.researched.add(OPTIMIZED_WORKFORCE_ID)
+    assert collect_income(corp_state, corp_map) - base == WORKFORCE_INCOME_BONUS * len(owned)
+
+
+def test_supply_chain_halves_expansion_base_cost():
+    from shadowguy.corp_turn import SUPPLY_CHAIN_ID, SUPPLY_CHAIN_EXPANSION_BASE
+    territory = _territory("neutral", value=1)
+    base = expansion_cost(territory)
+    corp_state = CorpState(faction_id=IRONCLAD, researched={SUPPLY_CHAIN_ID})
+    discounted = expansion_cost(territory, corp_state)
+    assert discounted == SUPPLY_CHAIN_EXPANSION_BASE + EXPANSION_COST_PER_VALUE
+    assert discounted < base
+
+
+def test_combat_stims_reduces_operative_training_cost():
+    from shadowguy.corp_turn import COMBAT_STIMS_ID, STIMS_OPERATIVE_COST
+    corp_state = CorpState(faction_id="faction_meridian")
+    assert operative_training_cost(corp_state) == ACADEMY_TRAINING_COST[EmployeeCategory.OPERATIVE]
+    corp_state.researched.add(COMBAT_STIMS_ID)
+    assert operative_training_cost(corp_state) == STIMS_OPERATIVE_COST
+
+
+def test_rapid_deployment_reduces_operative_training_days():
+    from shadowguy.corp_turn import RAPID_DEPLOYMENT_ID, STIMS_OPERATIVE_DAYS
+    corp_state = CorpState(faction_id="faction_meridian")
+    assert operative_training_days(corp_state) == TRAINING_DAYS[EmployeeCategory.OPERATIVE]
+    corp_state.researched.add(RAPID_DEPLOYMENT_ID)
+    assert operative_training_days(corp_state) == STIMS_OPERATIVE_DAYS

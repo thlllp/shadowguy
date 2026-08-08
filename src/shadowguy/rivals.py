@@ -107,6 +107,7 @@ from shadowguy.relations import Relations, relation
 from shadowguy.runners import RIVAL_RUNNERS, RivalRunner, buy_gear, complete_job
 
 if TYPE_CHECKING:
+    from shadowguy.corp_turn import CorpState
     from shadowguy.fixer import Fixer, JobOffer
 
 # Per faction, per day; only rolled when the faction has an eligible neutral
@@ -344,17 +345,35 @@ def _pick_attack_target(
 
 
 def _faction_attack(
-    corp_map: CorpMap, faction_id: str, relations: Relations | None, rng: random.Random
+    corp_map: CorpMap,
+    faction_id: str,
+    relations: Relations | None,
+    rng: random.Random,
+    player_faction_id: str | None = None,
+    player_corp_state: "CorpState | None" = None,
 ) -> AttackResult | None:
     """One AI faction's shot at taking ground off a rival. Rolls ATTACK_CHANCE
     only when it actually borders one, picks a target by relations, and settles it
     through corp_turn.resolve_attack — the same dice the player's own
-    attack_territory rolls, so the AI can't be fighting a different war."""
+    attack_territory rolls, so the AI can't be fighting a different war.
+
+    player_faction_id/player_corp_state feed resolve_attack's Hardened Garrison
+    bonus when the target happens to be the player's own ground — an AI faction
+    has no CorpState to research the tech into, so it's only ever the defender's
+    side that can carry one."""
     candidates = attack_candidates(corp_map, faction_id)
     if not candidates or rng.random() >= ATTACK_CHANCE:
         return None
     target_id = _pick_attack_target(corp_map, faction_id, candidates, relations, rng)
-    return resolve_attack(corp_map.territories[target_id], faction_id, _attack_force(corp_map, faction_id), rng)
+    target = corp_map.territories[target_id]
+    defender_corp_state = player_corp_state if target.owner == player_faction_id else None
+    return resolve_attack(
+        target,
+        faction_id,
+        _attack_force(corp_map, faction_id),
+        rng,
+        defender_corp_state=defender_corp_state,
+    )
 
 
 def _takeable_offers(fixers: list["Fixer"], day: int) -> list["JobOffer"]:
@@ -463,6 +482,7 @@ def resolve_rival_day(
     rival_researched: dict[str, set[str]] | None = None,
     faction_events: dict[str, list[FactionEvent]] | None = None,
     runners: list[RivalRunner] | None = None,
+    corp_state: "CorpState | None" = None,
 ) -> list[RivalAction]:
     """Every Faction gets a shot at expanding into bordering neutral ground. A
     RivalRunner acts only while independent — excluded the moment they're on the
@@ -506,7 +526,12 @@ def resolve_rival_day(
     (mostly tests) that don't care about the extras — the copy is because a day
     of work now mutates the runner who did it, and handing out the roster table
     itself would leave that progress sitting in a module constant for everything
-    that reads one afterwards."""
+    that reads one afterwards.
+
+    corp_state is the player's own CorpState (ShadowguyApp.corp_state in
+    production), read only so an AI attack on the player's ground applies the
+    player's Hardened Garrison bonus (see _faction_attack) — omitted (the
+    default) when there's no player corp yet to defend anything."""
     if rival_runner_states is None:
         rival_runner_states = {}
     if fixers is None:
@@ -529,7 +554,9 @@ def resolve_rival_day(
                     faction_events, faction.id, FactionEvent(kind="territory", day=day, territory_id=target_id)
                 )
         _reinforce(corp_map, faction.id, rng)
-        attack = _faction_attack(corp_map, faction.id, corp_map.relations or None, rng)
+        attack = _faction_attack(
+            corp_map, faction.id, corp_map.relations or None, rng, player_faction_id, corp_state
+        )
         if attack is not None and attack.captured and faction_events is not None:
             log_faction_event(
                 faction_events,
