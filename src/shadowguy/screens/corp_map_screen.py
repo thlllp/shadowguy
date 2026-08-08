@@ -6,7 +6,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
+from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
 from shadowguy.abstract_combat import CombatOutcome
@@ -136,6 +136,19 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
     CSS = """
+    #top_bar {
+        height: auto;
+    }
+
+    #top_bar CharacterSheet {
+        width: 1fr;
+    }
+
+    #rest_button {
+        width: auto;
+        dock: right;
+    }
+
     #sidebar {
         width: 20;
         border: solid $accent;
@@ -175,10 +188,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     #map_local_boxes_scroll, #map_corp_actions_scroll {
         /* Bounded, not 1fr -- these are a preview strip, not the main event (the
-        map above needs most of the vertical room in map mode; #activities' Rest
-        row needs the room in the Local category). An expanded box (stock lists,
-        NPC rosters, ...) can still run taller than this, so scroll internally
-        instead of pushing lower boxes off-screen with no way to reach them.
+        map above needs most of the vertical room in map mode). An expanded box
+        (stock lists, NPC rosters, ...) can still run taller than this, so scroll
+        internally instead of pushing lower boxes off-screen with no way to reach
+        them.
         #map_corp_actions_scroll is corp_only's map-mode replacement for
         #map_local_boxes_scroll -- same bounded strip, same reason. */
         height: 14;
@@ -240,7 +253,11 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield CharacterSheet(self.app.character)
+        with Horizontal(id="top_bar"):
+            yield CharacterSheet(self.app.character)
+            rest_button = Button(self.app.rest_label(), id="rest_button")
+            rest_button.can_focus = False
+            yield rest_button
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield ListView(id="categories")
@@ -273,6 +290,17 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         else:
             await self._refresh_activities()
             self.focus_next()
+
+    def _refresh_rest_button(self) -> None:
+        self.query_one("#rest_button", Button).label = self.app.rest_label()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "rest_button":
+            self.app.rest()
+            if self.selected_category is None:
+                self._do_refresh_map()
+            else:
+                await self._refresh_activities()
 
     def refresh_map(self) -> None:
         """Public entry point for tests that manipulate selected_id/hovered_id
@@ -399,15 +427,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         item_id = event.item.id
         character = self.app.character
 
-        if item_id == "rest":
-            self.app.rest()
-            if self.selected_category is None:
-                self._do_refresh_map()
-            else:
-                await self._refresh_activities()
-            self.query_one(CharacterSheet).refresh()
-            return
-
         if item_id == "deliver_package":
             if character.smuggling_job is None:
                 await self._refresh_activities()
@@ -512,6 +531,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self._refresh_map_view()
         if not self.app.corp_only:
             self._schedule_map_local_boxes()
+        self._refresh_rest_button()
 
     def _refresh_map_view(self) -> None:
         """The map text and the territory summary bar — the two things that do follow
@@ -603,15 +623,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         ]
         boxes = [self._location_box(location, t) for location in t.locations]
         boxes.append(self._fixers_box(fixers_here))
-        boxes.append(
-            Collapsible(
-                ListView(ListItem(Static(self.app.rest_label()), id="rest")),
-                title="Rest",
-                collapsed=True,
-                id="map_local_box_rest",
-                classes="local_box",
-            )
-        )
 
         container = self.query_one("#map_local_boxes", Grid)
         await container.remove_children()
@@ -685,10 +696,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
         if not filtered:
             filtered.append(ListItem(Static("No actions available here."), id="no_territory_actions"))
-        # Always present, not filtered by territory -- Rest was unconditional on the
-        # Locals panel this replaces, and corp_only's action_travel spends no time on
-        # its own, so this is the map screen's one way to advance the day.
-        filtered.insert(0, ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(self.query_one("#map_corp_actions", ListView), filtered)
 
     def _territory_summary_text(self, t: Territory, here: Territory, character: Character) -> str:
@@ -875,6 +882,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     async def _refresh_activities(self) -> None:
         self._set_content_visibility()
         self.query_one(CharacterSheet).refresh()
+        self._refresh_rest_button()
 
         if self.selected_category == "corp":
             await self._refresh_corp()
@@ -926,7 +934,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 label = f"Deliver the package — travel to {destination.name} (due by day {job.deadline_day})"
             items.append(ListItem(Static(label), id="deliver_package"))
 
-        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(self.query_one("#activities", ListView), items)
 
     # ── local view (phone-style boxes) ────────────────────────────────────────
@@ -1070,7 +1077,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         # panel of their own -- a corp_only run never opens CorpScreen, so this is
         # where its Operations rows live.
         items.extend(operations_rows(corp_state, corp_map))
-        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(activities, items)
 
         await _replace_items(

@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
+from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
@@ -690,6 +690,15 @@ class CorpScreen(CorpActionsMixin, BackScreen):
     # (the same fix CorpMapScreen applies to its own Collapsible-wrapped lists)
     # sizes each to its actual item count instead.
     CSS = """
+    #top_bar {
+        height: auto;
+    }
+
+    #rest_button {
+        width: auto;
+        dock: right;
+    }
+
     #corp_list, #academy_list, #research_list, #operations_list, #surveillance_list {
         height: auto;
     }
@@ -701,6 +710,10 @@ class CorpScreen(CorpActionsMixin, BackScreen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        with Horizontal(id="top_bar"):
+            rest_button = Button(self.app.rest_label(), id="rest_button")
+            rest_button.can_focus = False
+            yield rest_button
         yield Static(id="corp_info")
         yield ListView(id="corp_list")
         yield Collapsible(ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel")
@@ -721,6 +734,15 @@ class CorpScreen(CorpActionsMixin, BackScreen):
     async def on_mount(self) -> None:
         await self._refresh()
 
+    def _refresh_rest_button(self) -> None:
+        self.query_one("#rest_button", Button).label = self.app.rest_label()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "rest_button":
+            self.app.rest()
+            await self._refresh()
+            self._refresh_rest_button()
+
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
             self.app.push_screen(ResearchTreeScreen())
@@ -739,6 +761,7 @@ class CorpScreen(CorpActionsMixin, BackScreen):
             for name in panels:
                 await _replace_items(self.query_one(f"#{name}_list", ListView), [])
                 self.query_one(f"#{name}_panel").display = False
+            self._refresh_rest_button()
             return
 
         for name in panels:
@@ -748,7 +771,6 @@ class CorpScreen(CorpActionsMixin, BackScreen):
         info.update(corp_info_text(corp_state, corp_map, day))
 
         items = territory_rows(corp_state, corp_map)
-        items.append(ListItem(Static(self.app.rest_label()), id="rest"))
         await _replace_items(self.query_one("#corp_list", ListView), items)
 
         await _replace_items(
@@ -765,6 +787,7 @@ class CorpScreen(CorpActionsMixin, BackScreen):
         await _replace_items(
             self.query_one("#surveillance_list", ListView), sighting_rows(corp_state, corp_map)
         )
+        self._refresh_rest_button()
 
     async def _refresh_corp_view(self) -> None:
         """CorpActionsMixin's refresh hook — every row on this screen is a corp row, so
@@ -773,10 +796,6 @@ class CorpScreen(CorpActionsMixin, BackScreen):
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
-        if item_id == "rest":
-            self.app.rest()
-            await self._refresh()
-            return
         await self._handle_corp_selection(item_id)
 
 
