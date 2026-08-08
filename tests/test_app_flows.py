@@ -27,6 +27,7 @@ from shadowguy.character import (
 from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
+    OWNER_TAGS,
     WORKSHOP_BUILD_COST,
     Location,
     LocationKind,
@@ -206,6 +207,17 @@ async def _settle_map_boxes(pilot, screen) -> None:
     two _settle()s alone)."""
     if screen._map_locals_task is not None:
         await screen._map_locals_task
+    await _settle(pilot)
+
+
+async def _settle_map_corp_actions(pilot, screen) -> None:
+    """corp_only's counterpart to _settle_map_boxes, for #map_corp_actions'
+    background-task rebuild (_schedule_map_corp_actions/_drain_map_corp_actions) --
+    same reasoning: awaiting the task directly is the only way to know the panel
+    reflects the latest territory rather than a stale one a fixed pilot.pause()
+    count might still be racing."""
+    if screen._map_corp_actions_task is not None:
+        await screen._map_corp_actions_task
     await _settle(pilot)
 
 
@@ -3824,6 +3836,110 @@ def test_corp_only_attack_flow_resolves_on_the_map_screen():
             assert isinstance(app.screen, CorpMapScreen)
             rows = [item.id for item in screen.query_one("#activities", ListView).children]
             assert f"deploy_{target}" in rows, "the captured district is ours to garrison now"
+
+    run(body())
+
+
+def test_corp_only_map_mode_shows_territory_actions_instead_of_locals():
+    """The bug this guards: a corp-only run's default map view (no sidebar category
+    selected) used to render the same runner-oriented Locals panel a runner sees --
+    shop stock, gigs, fixers, "Enter" -- keyed off a Character a corp-only run never
+    actually plays. It should show what the corp can do in whichever territory is
+    under the cursor instead, reusing corp_screen.py's own row builders filtered to
+    that one district, and resolving a pick the same way the Corp tab's rows do."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            assert isinstance(screen, CorpMapScreen)
+            assert screen.selected_category is None
+            assert screen.query_one("#map_corp_actions_scroll").display is True
+            assert screen.query_one("#map_local_boxes_scroll").display is False
+
+            ours = app.corp_state.faction_id
+            target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
+            app.corp_state.operatives = 4
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            rows = [item.id for item in screen.query_one("#map_corp_actions", ListView).children]
+            assert "rest" in rows, "Rest must stay reachable from the map screen regardless of district"
+            assert f"deploy_{target}" in rows
+
+            await pilot.click(f"#deploy_{target}")
+            await _settle(pilot)
+            assert isinstance(app.screen, ForcePickScreen)
+            await pilot.click("#force_4")
+            await _settle(pilot)
+
+            assert app.corp_map.territories[target].garrison == 4
+            assert app.corp_state.operatives == 0
+            # Survived the callback and redrew from the map panel, rather than dying
+            # inside it -- _refresh_corp_view's map-mode branch is what this covers.
+            assert isinstance(app.screen, CorpMapScreen)
+
+    run(body())
+
+
+def test_corp_only_map_mode_expand_refreshes_the_stale_owner_tag():
+    """Regression: render_ascii_map bakes each territory's owner tag straight into
+    _refresh_map_view's cached text (corpmap._label), keyed only on
+    (selected_id, character.location_id). Resolving an Expand from the new
+    per-territory map panel changes ownership without changing either of those, so
+    without _refresh_corp_view clearing the cache first, the glyph would keep
+    showing the old (blank, for neutral) tag under the now-correct color."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            ours = app.corp_state.faction_id
+            # Force a bordering district neutral (real maps vary run to run and don't
+            # guarantee one), the same way the attack-flow test above forces a rival
+            # neighbour rather than skipping.
+            target = next(
+                c
+                for t in app.corp_map.territories.values()
+                if t.owner == ours
+                for c in t.connections
+                if c != app.corp_map.player_start_id
+            )
+            territory = app.corp_map.territories[target]
+            territory.owner = "neutral"
+            territory.gang_id = None
+            app.corp_state.cash = 1_000_000
+
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            await pilot.click(f"#expand_{target}")
+            await _settle(pilot)
+
+            assert app.corp_map.territories[target].owner == ours
+            span = next(s for s in screen.rendered.spans if s.territory_id == target)
+            label_text = screen.rendered.text[span.offset : span.offset + (span.end - span.start)]
+            assert OWNER_TAGS[ours] in label_text
 
     run(body())
 

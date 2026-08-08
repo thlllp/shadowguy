@@ -915,7 +915,7 @@ def corp_defeated(corp_state: CorpState, corp_map: CorpMap) -> bool:
     return not any(t.owner == corp_state.faction_id for t in corp_map.territories.values())
 
 
-def _owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
+def owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
     for territory in corp_map.territories.values():
         if territory.owner != corp_state.faction_id:
             continue
@@ -937,7 +937,7 @@ def train_employees(
     the one it was seeded — see build_academy), or can't afford it."""
     if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
-    academy = _owned_academy(corp_state, corp_map)
+    academy = owned_academy(corp_state, corp_map)
     if academy is None or ACADEMY_TRAINING_COST[category] > corp_state.cash:
         return False
     corp_state.cash -= ACADEMY_TRAINING_COST[category]
@@ -977,7 +977,7 @@ def rebuild_academy_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Te
     operatives are the only way to attack *or* garrison, it has no counterplay left
     against the loss condition at all — just a slow slide. That's why this exists.
     """
-    if _owned_academy(corp_state, corp_map) is not None:
+    if owned_academy(corp_state, corp_map) is not None:
         return []
     return _owned_territories(corp_state, corp_map)
 
