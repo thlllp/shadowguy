@@ -18,6 +18,8 @@ from shadowguy.corpmap import (
     build_workshop,
     capture_territory,
     claim_territory,
+    territory_distance,
+    travel_path,
 )
 
 
@@ -124,3 +126,36 @@ def test_attack_candidates_excludes_your_own_ground():
     _linked(a, b)
     corp_map = CorpMap(territories={t.id: t for t in (a, b)}, player_start_id="a")
     assert attack_candidates(corp_map, "faction_ironclad") == []
+
+
+def _chain(*ids: str) -> CorpMap:
+    """A straight line a-b-c-d..., the shape CorpMapScreen's fast travel has to
+    route across rather than just checking one bordering hop."""
+    territories = [Territory(id=i, name=i, x=n, y=0) for n, i in enumerate(ids)]
+    for left, right in zip(territories, territories[1:]):
+        _linked(left, right)
+    return CorpMap(territories={t.id: t for t in territories}, player_start_id=ids[0])
+
+
+def test_travel_path_same_territory_is_empty():
+    corp_map = _chain("a", "b", "c")
+    assert travel_path(corp_map, "a", "a") == []
+
+
+def test_travel_path_walks_the_shortest_route():
+    corp_map = _chain("a", "b", "c", "d")
+    assert travel_path(corp_map, "a", "d") == ["b", "c", "d"]
+
+
+def test_travel_path_length_matches_territory_distance():
+    corp_map = _chain("a", "b", "c", "d")
+    assert len(travel_path(corp_map, "a", "d")) == territory_distance(corp_map, "a", "d")
+
+
+def test_travel_path_hops_are_each_actually_connected():
+    corp_map = _chain("a", "b", "c", "d")
+    path = travel_path(corp_map, "a", "d")
+    previous = "a"
+    for step in path:
+        assert step in corp_map.territories[previous].connections
+        previous = step

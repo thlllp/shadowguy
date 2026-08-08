@@ -22,6 +22,7 @@ from shadowguy.corpmap import (
     Territory,
     owner_label,
     render_ascii_map,
+    travel_path,
 )
 from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
 from shadowguy.factions import FACTIONS_BY_ID
@@ -718,9 +719,11 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
         if t.id == here.id:
             return f"You are here. Day {character.day}."
-        if t.id not in here.connections:
-            return f"No route from {here.name} — travel is only to a bordering district."
-        return f"enter: travel here ({_travel_hours(character):.1f}h)"
+        hops = len(travel_path(self.app.corp_map, here.id, t.id))
+        hours = hops * _travel_hours(character)
+        if hops == 1:
+            return f"enter: travel here ({hours:.1f}h)"
+        return f"enter: fast travel here ({hops} hops, {hours:.1f}h)"
 
     # ── map movement / travel ───────────────────────────────────────────────
 
@@ -743,18 +746,32 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         # (ListView handles this natively — no extra wiring needed here)
 
     def action_travel(self) -> None:
+        """Fast travel to the selected district: walks the shortest route to it one
+        hop at a time (travel_path), same as manually selecting and entering each
+        bordering district in turn -- same time spent per hop, same gang-encounter
+        roll per hop, just without the repeated clicking to get there."""
         character = self.app.character
-        here = self.app.corp_map.territories[character.location_id]
-        if self.selected_id not in here.connections:
+        if self.selected_id == character.location_id:
             return
-        if self.app.corp_only:
-            character.location_id = self.selected_id
+        path = travel_path(self.app.corp_map, character.location_id, self.selected_id)
+        self._walk_travel_path(path)
+
+    def _walk_travel_path(self, path: list[str]) -> None:
+        """Advance the character one hop at a time along `path`, stopping the
+        moment a hop rolls a gang encounter -- the player is already at that hop's
+        district, and anything further down the route needs another fast-travel
+        pick once the encounter's resolved."""
+        character = self.app.character
+        for next_id in path:
+            if self.app.corp_only:
+                character.location_id = next_id
+                self._do_refresh_map()
+                continue
+            self.app.spend_time(_travel_hours(character))
+            character.location_id = next_id
             self._do_refresh_map()
-            return
-        self.app.spend_time(_travel_hours(character))
-        character.location_id = self.selected_id
-        self._do_refresh_map()
-        self._maybe_gang_encounter()
+            if self._maybe_gang_encounter():
+                return
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
         offset = event.get_content_offset(self.query_one("#map", Static))
@@ -774,17 +791,21 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     # ── gang encounters ─────────────────────────────────────────────────────
 
-    def _maybe_gang_encounter(self) -> None:
+    def _maybe_gang_encounter(self) -> bool:
+        """Roll for a gang encounter at the character's current district. Returns
+        whether one fired, so _walk_travel_path knows to stop there rather than
+        carry on to the next hop."""
         character = self.app.character
         territory = self.app.corp_map.territories[character.location_id]
         encounter = roll_gang_encounter(character, territory, self.app.rng)
         if encounter is None:
-            return
+            return False
         self._pending_gang = encounter.gang
         if encounter.toll is None:
             self._start_gang_fight(encounter.gang)
         else:
             self.app.push_screen(GangTollScreen(encounter), self._on_toll)
+        return True
 
     def _on_toll(self, paid: bool) -> None:
         if paid:

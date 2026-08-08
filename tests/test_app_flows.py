@@ -38,6 +38,7 @@ from shadowguy.corpmap import (
     expansion_candidates,
     has_home,
     lodging_cost,
+    travel_path,
 )
 from shadowguy.factions import (
     FACTIONS,
@@ -52,7 +53,7 @@ from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet
 from shadowguy.screens.burglary_screens import EntrancePickScreen
 from shadowguy.screens.combat_screen import CombatScreen
-from shadowguy.screens.corp_map_screen import CorpMapScreen
+from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     RESEARCH_FACILITY_REBUILD_COST,
@@ -1517,6 +1518,41 @@ def test_corp_map_screen_travel_moves_the_runner_to_a_bordering_territory():
             await pilot.press("enter")
             await pilot.pause()
             assert app.character.location_id == neighbor_id
+
+    run(body())
+
+
+def test_corp_map_screen_fast_travel_walks_a_multi_hop_route_in_one_confirm():
+    """Selecting a district that isn't a direct neighbor and confirming still moves
+    the runner there, spending the same per-hop time travel_path's whole route
+    would cost hopping one district at a time -- the point of fast travel is
+    fewer clicks, not a shortcut through the clock."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            screen = app.screen
+
+            start_id = app.character.location_id
+            target_id = next(
+                t.id
+                for t in app.corp_map.territories.values()
+                if len(travel_path(app.corp_map, start_id, t.id)) >= 2
+            )
+            hops = len(travel_path(app.corp_map, start_id, target_id))
+
+            screen.selected_id = target_id
+            screen.refresh_map()
+            await pilot.pause()
+            elapsed_before = app.character.elapsed_hours
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.character.location_id == target_id
+            assert app.character.elapsed_hours == elapsed_before + hops * TRAVEL_HOURS_COST
 
     run(body())
 

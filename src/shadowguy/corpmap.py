@@ -468,24 +468,40 @@ def attack_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
     )
 
 
-def territory_distance(corp_map: CorpMap, from_id: str, to_id: str) -> int:
-    """Hop count between two territories over the connection graph (BFS), 0 if
-    they're the same one. The map is fully connected by construction (every
-    territory reaches every other), so a path always exists. Used by jobs.py to
-    price a Smuggling job's travel by how far apart its pickup and drop actually are."""
+def travel_path(corp_map: CorpMap, from_id: str, to_id: str) -> list[str]:
+    """Territory ids from from_id to to_id, shortest route over the connection
+    graph (BFS) — from_id excluded, to_id included, so the result is exactly
+    the hop sequence CorpMapScreen's fast travel walks one at a time. Empty
+    list if from_id == to_id. The map is fully connected by construction
+    (every territory reaches every other), so a path always exists."""
     if from_id == to_id:
-        return 0
+        return []
     visited = {from_id}
-    frontier = deque([(from_id, 0)])
+    parents: dict[str, str] = {}
+    frontier = deque([from_id])
     while frontier:
-        territory_id, distance = frontier.popleft()
+        territory_id = frontier.popleft()
         for neighbor_id in corp_map.territories[territory_id].connections:
+            if neighbor_id in visited:
+                continue
+            visited.add(neighbor_id)
+            parents[neighbor_id] = territory_id
             if neighbor_id == to_id:
-                return distance + 1
-            if neighbor_id not in visited:
-                visited.add(neighbor_id)
-                frontier.append((neighbor_id, distance + 1))
+                path = [to_id]
+                while path[-1] != from_id:
+                    path.append(parents[path[-1]])
+                path.pop()
+                path.reverse()
+                return path
+            frontier.append(neighbor_id)
     raise ValueError(f"no path between {from_id!r} and {to_id!r}")
+
+
+def territory_distance(corp_map: CorpMap, from_id: str, to_id: str) -> int:
+    """Hop count between two territories over the connection graph, 0 if
+    they're the same one. Used by jobs.py to price a Smuggling job's travel by
+    how far apart its pickup and drop actually are."""
+    return len(travel_path(corp_map, from_id, to_id))
 
 
 def _owner_tag(owner: str) -> str:
