@@ -258,7 +258,10 @@ SAVE_SUFFIX = ".save"
 # through shops.loaded_rounds would AttributeError on the first fight; the weapon rows
 # themselves are rebuilt from the catalog on import, but a pickled InventoryItem carrying
 # extended_magazine would silently keep scoring it as damage against the new fold.
-SAVE_VERSION = 65
+# v66 added CorpState.tasking_operatives -- operatives out on tail_runner/gather_intel/
+# sabotage, tracked separately from the capped operatives pool so a corp at
+# operative_max can still dispatch them (see corp_turn.return_tasking_operatives).
+SAVE_VERSION = 66
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

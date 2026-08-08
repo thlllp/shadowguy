@@ -40,6 +40,7 @@ from shadowguy.corp_turn import (
     RESEARCH_PER_SCIENTIST,
     SIGHTING_RESEARCH_BONUS,
     STARTING_CASH,
+    STARTING_OPERATIVE_MAX,
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
@@ -68,12 +69,15 @@ from shadowguy.corp_turn import (
     effective_surveillance_max,
     expand_into,
     expansion_cost,
+    gather_intel,
     has_technology,
+    intel_targets,
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
     next_efficiency_cost,
     next_lab_cost,
+    operative_max,
     operative_training_cost,
     operative_training_days,
     owned_research_facilities,
@@ -85,10 +89,15 @@ from shadowguy.corp_turn import (
     research_rate,
     research_technology,
     resolve_attack,
+    return_tasking_operatives,
+    sabotage,
+    sabotage_targets,
     scientist_base_rate,
     sightings_log_cap,
     surveillance_bump_cost,
     surveillance_targets,
+    tail_runner,
+    tail_runner_targets,
     train_employees,
 )
 from shadowguy.corpmap import (
@@ -1541,6 +1550,271 @@ def test_technology_tree_layout_includes_new_chains():
     # Total Information Awareness is in the same row as its chain (Worker Surveillance row).
     from shadowguy.corp_turn import WORKER_SURVEILLANCE_ID as WS_ID
     assert layout[TOTAL_INFORMATION_AWARENESS_ID][1] == layout[WS_ID][1]
+
+
+# --- Operative cap tests -----------------------------------------------------
+
+
+def test_operative_max_starts_at_two():
+    assert operative_max(CorpState(faction_id=IRONCLAD)) == STARTING_OPERATIVE_MAX
+
+
+def test_train_employees_refuses_operative_batch_when_at_cap():
+    corp_map = _map()
+    _academy(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, operatives=STARTING_OPERATIVE_MAX)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0) is False
+    assert corp_state.cash == 10_000  # no charge
+
+
+def test_train_employees_refuses_operative_batch_that_would_exceed_cap():
+    corp_map = _map()
+    _academy(corp_map)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        operatives=STARTING_OPERATIVE_MAX - 1,  # 1 spare slot
+    )
+    # Academy tier is 1, so 1+1=2 — fits exactly.
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0) is True
+
+
+def test_advance_training_clips_operatives_at_cap():
+    corp_map = _map()
+    _academy(corp_map)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000,
+        operatives=STARTING_OPERATIVE_MAX - 1,
+    )
+    train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0)
+    # Manually bump operatives past cap before batch completes.
+    corp_state.operatives = STARTING_OPERATIVE_MAX + 10
+    advance_training(corp_state, TRAINING_DAYS[EmployeeCategory.OPERATIVE])
+    assert corp_state.operatives == min(
+        STARTING_OPERATIVE_MAX + 10 + 1, STARTING_OPERATIVE_MAX,
+    )
+
+
+def test_train_operatives_below_cap_succeeds():
+    corp_map = _map()
+    _academy(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, operatives=0)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=0) is True
+    assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST[EmployeeCategory.OPERATIVE]
+
+
+# --- Operative tasking tests -------------------------------------------------
+
+
+def test_return_tasking_operatives_adds_back_to_pool():
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=0, tasking_operatives=1)
+    assert return_tasking_operatives(corp_state) == 1
+    assert corp_state.operatives == 1
+    assert corp_state.tasking_operatives == 0
+
+
+def test_return_tasking_operatives_clips_at_cap():
+    corp_state = CorpState(
+        faction_id=IRONCLAD,
+        operatives=STARTING_OPERATIVE_MAX,
+        tasking_operatives=2,
+    )
+    returned = return_tasking_operatives(corp_state)
+    assert returned == 0  # pool already at cap, all lost
+    assert corp_state.operatives == STARTING_OPERATIVE_MAX
+
+
+def test_return_tasking_operatives_zero_when_none_out():
+    corp_state = CorpState(faction_id=IRONCLAD, tasking_operatives=0)
+    assert return_tasking_operatives(corp_state) == 0
+
+
+def test_tail_runner_targets_empty_without_sightings():
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    assert tail_runner_targets(corp_state) == []
+
+
+def test_tail_runner_targets_empty_when_no_operatives():
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=0, sightings=[sighting])
+    assert tail_runner_targets(corp_state) == []
+
+
+def test_tail_runner_targets_empty_when_acted_today():
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, operatives=1, daily_action_used=True,
+        sightings=[sighting],
+    )
+    assert tail_runner_targets(corp_state) == []
+
+
+def test_tail_runner_targets_skips_player_sightings():
+    player_sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
+    runner_sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=2)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, operatives=1,
+        sightings=[player_sighting, runner_sighting],
+    )
+    targets = tail_runner_targets(corp_state)
+    assert len(targets) == 1
+    assert targets[0].kind == "runner"
+
+
+def test_tail_runner_dispatches_operative_on_hit():
+    import random
+    class HitChance(random.Random):
+        def random(self):
+            return 0.0
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1, sightings=[sighting])
+    assert tail_runner(corp_state, sighting, HitChance()) is True
+    assert corp_state.operatives == 0
+    assert corp_state.tasking_operatives == 1
+    assert corp_state.daily_action_used is True
+
+
+def test_tail_runner_marks_day_even_on_miss():
+    import random
+    class MissChance(random.Random):
+        def random(self):
+            return 0.99
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1, sightings=[sighting])
+    assert tail_runner(corp_state, sighting, MissChance()) is False
+    assert corp_state.operatives == 0
+    assert corp_state.tasking_operatives == 1
+    assert corp_state.daily_action_used is True
+
+
+def test_tail_runner_fails_without_operatives():
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=0, sightings=[sighting])
+    assert tail_runner(corp_state, sighting, random.Random()) is False
+
+
+def test_tail_runner_fails_when_acted_today():
+    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, operatives=1, daily_action_used=True,
+        sightings=[sighting],
+    )
+    assert tail_runner(corp_state, sighting, random.Random()) is False
+
+
+def test_gather_intel_dispatches_operative_on_hit():
+    import random
+    class HitChance(random.Random):
+        def random(self):
+            return 0.0
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    assert gather_intel(corp_state, corp_map, "neutral_a", HitChance()) is True
+    assert corp_state.operatives == 0
+    assert corp_state.tasking_operatives == 1
+    assert corp_state.daily_action_used is True
+
+
+def test_gather_intel_refuses_own_territory():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    assert gather_intel(corp_state, corp_map, "iron_home", random.Random()) is False
+    assert corp_state.operatives == 1  # no charge
+
+
+def test_intel_targets_lists_rival_and_neutral_territories():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    targets = intel_targets(corp_state, corp_map)
+    target_ids = {t.id for t in targets}
+    assert "start" in target_ids  # neutral
+    assert "neutral_a" in target_ids  # neutral
+    assert "neutral_gang" in target_ids  # neutral
+    assert "iron_home" not in target_ids  # own
+    assert "iron_second" not in target_ids  # own
+
+
+def test_intel_targets_empty_when_no_operatives():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=0)
+    assert intel_targets(corp_state, corp_map) == []
+
+
+# --- Sabotage tests ----------------------------------------------------------
+
+
+def test_sabotage_targets_includes_rivals_excludes_self_and_neutral():
+    corp_map = CorpMap(
+        territories={
+            "home": _territory("home", owner=IRONCLAD),
+            "rival": _territory("rival", owner=GHOSTWIRE),
+            "neutral": _territory("neutral"),
+        },
+        player_start_id="neutral",
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    targets = sabotage_targets(corp_state, corp_map)
+    assert len(targets) == 1
+    assert targets[0].id == "rival"
+
+
+def test_sabotage_reduces_security_on_hit():
+    class HitChance(random.Random):
+        def random(self):
+            return 0.0
+
+    corp_map = CorpMap(
+        territories={
+            "home": _territory("home", owner=IRONCLAD),
+            "rival": _territory("rival", owner=GHOSTWIRE),
+        },
+        player_start_id="home",
+    )
+    corp_map.territories["rival"].modifiers[TerritoryModifier.SECURITY] = 3
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    result = sabotage(corp_state, corp_map, "rival", HitChance())
+    assert result == "rival"
+    assert corp_map.territories["rival"].modifiers[TerritoryModifier.SECURITY] == 2
+    assert corp_state.operatives == 0
+    assert corp_state.tasking_operatives == 1
+    assert corp_state.daily_action_used is True
+
+
+def test_sabotage_loses_operative_on_miss():
+    class MissChance(random.Random):
+        def random(self):
+            return 0.99
+
+    corp_map = CorpMap(
+        territories={
+            "home": _territory("home", owner=IRONCLAD),
+            "rival": _territory("rival", owner=GHOSTWIRE),
+        },
+        player_start_id="home",
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    result = sabotage(corp_state, corp_map, "rival", MissChance())
+    assert result is None
+    assert corp_state.operatives == 0
+    assert corp_state.tasking_operatives == 0  # lost, not returning
+    assert corp_state.daily_action_used is True
+
+
+def test_sabotage_security_cannot_go_below_zero():
+    class HitChance(random.Random):
+        def random(self):
+            return 0.0
+
+    corp_map = CorpMap(
+        territories={
+            "home": _territory("home", owner=IRONCLAD),
+            "rival": _territory("rival", owner=GHOSTWIRE),
+        },
+        player_start_id="home",
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    result = sabotage(corp_state, corp_map, "rival", HitChance())
+    assert result == "rival"
+    assert corp_map.territories["rival"].modifiers.get(TerritoryModifier.SECURITY, 0) == 0
 
 
 # --- Faction-gating tests ---------------------------------------------------
