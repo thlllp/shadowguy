@@ -11,6 +11,7 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 from shadowguy.character import Character
 from shadowguy.abstract_combat import CombatOutcome
 from shadowguy.combat import Drop
+from shadowguy.corp_turn import owned_academy, owned_research_facility
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     OWNER_COLORS,
@@ -171,15 +172,21 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         height: auto;
     }
 
-    #map_local_boxes_scroll {
+    #map_local_boxes_scroll, #map_corp_actions_scroll {
         /* Bounded, not 1fr -- these are a preview strip, not the main event (the
         map above needs most of the vertical room in map mode; #activities' Rest
         row needs the room in the Local category). An expanded box (stock lists,
         NPC rosters, ...) can still run taller than this, so scroll internally
-        instead of pushing lower boxes off-screen with no way to reach them. */
+        instead of pushing lower boxes off-screen with no way to reach them.
+        #map_corp_actions_scroll is corp_only's map-mode replacement for
+        #map_local_boxes_scroll -- same bounded strip, same reason. */
         height: 14;
         border-top: solid $accent;
         overflow-y: auto;
+    }
+
+    #map_corp_actions {
+        height: auto;
     }
 
     #map_local_boxes {
@@ -217,6 +224,8 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self._render_key: tuple[str, str] | None = None
         self._map_locals_task: asyncio.Task | None = None
         self._map_locals_pending_id: str | None = None
+        self._map_corp_actions_task: asyncio.Task | None = None
+        self._map_corp_actions_pending_id: str | None = None
         # Restore the last-viewed category (app.main_menu_category) across a full
         # screen rebuild (load_state/restart_run) -- but only if it's one of this
         # game's own categories, since a runner game and a corp-only game don't
@@ -239,6 +248,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 yield Static(markup=False, id="territory_summary")
                 yield ListView(id="activities")
                 yield ScrollableContainer(Grid(id="map_local_boxes"), id="map_local_boxes_scroll")
+                yield ScrollableContainer(ListView(id="map_corp_actions"), id="map_corp_actions_scroll")
                 yield Static(id="corp_info")
                 yield Collapsible(
                     ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
@@ -274,8 +284,25 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self._do_refresh_map()
 
     async def _refresh_corp_view(self) -> None:
-        """CorpActionsMixin's refresh hook — the corp rows live in this screen's
-        activity list, so a resolved corp action redraws that."""
+        """CorpActionsMixin's refresh hook. In map mode (corp_only, acting from the
+        per-territory panel) a resolved action can change the map's ownership and the
+        panel's own rows, so redraw via _refresh_map_view. self.rendered is cleared
+        first because render_ascii_map bakes each territory's owner tag straight into
+        the cached text (corpmap._label) -- only the per-span *color* re-derives live
+        from _refresh_map_view's own loop, so an Expand/Attack resolved from this
+        panel would otherwise leave the stale owner tag on screen until selected_id or
+        hovered_id happened to change. _refresh_map_view only *schedules* the panel
+        rebuild (fire-and-forget, so hovering stays cheap) -- awaited here too so this
+        method still redraws before returning, the contract _on_force_picked and
+        _handle_corp_selection's other callers rely on.
+
+        Otherwise the corp rows live in this screen's activity list, so redraw that."""
+        if self.selected_category is None:
+            self.rendered = None
+            self._refresh_map_view()
+            if self._map_corp_actions_task is not None:
+                await self._map_corp_actions_task
+            return
         await self._refresh_activities()
 
     async def on_screen_resume(self) -> None:
@@ -453,12 +480,14 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         """Show/hide widgets based on self.selected_category."""
         in_map = self.selected_category is None
         is_corp = self.selected_category == "corp"
+        corp_only = self.app.corp_only
 
         self.query_one("#sidebar").display = self.selected_category not in _FULL_WIDTH_CATEGORIES
         self.query_one("#map_scroll").display = in_map
         self.query_one("#territory_summary").display = in_map
         self.query_one("#activities").display = not in_map
-        self.query_one("#map_local_boxes_scroll").display = in_map
+        self.query_one("#map_local_boxes_scroll").display = in_map and not corp_only
+        self.query_one("#map_corp_actions_scroll").display = in_map and corp_only
         self.query_one("#corp_info").display = is_corp
         self.query_one("#academy_panel").display = is_corp
         self.query_one("#research_panel").display = is_corp
@@ -471,17 +500,25 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self._do_refresh_map()
 
     def _do_refresh_map(self) -> None:
-        """A full map-mode refresh: the map view *and* the Locals panel.
+        """A full map-mode refresh: the map view, plus whichever per-territory panel
+        this mode uses — the Locals panel for a runner, the corp actions panel for
+        corp_only (that one already follows the cursor, so _refresh_map_view schedules
+        it below; only the Locals panel needs a separate call here).
 
         Anything that only moves the cursor or the mouse must call _refresh_map_view
         instead — see its docstring for why the Locals panel is not part of that.
         """
         self._refresh_map_view()
-        self._schedule_map_local_boxes()
+        if not self.app.corp_only:
+            self._schedule_map_local_boxes()
 
     def _refresh_map_view(self) -> None:
         """The map text and the territory summary bar — the two things that do follow
-        the cursor and the mouse.
+        the cursor and the mouse. For corp_only, also the corp actions panel, which
+        (unlike the Locals panel) describes whatever territory is under the cursor
+        rather than where the corp is "standing" — corp actions like expand/attack
+        already aren't gated on physical position, so there's no reason to make the
+        player travel there first just to see them.
 
         Deliberately leaves #map_local_boxes alone. The Locals panel shows where the
         runner is *standing*, not what they're looking at, so hovering or arrowing over
@@ -513,6 +550,14 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         t = corp_map.territories[focus_id]
         here = corp_map.territories[character.location_id]
         self.query_one("#territory_summary", Static).update(self._territory_summary_text(t, here, character))
+
+        # selected_category is always None here in practice (nothing else calls
+        # _refresh_map_view while a category tab is showing) except a stray
+        # on_mouse_move/on_click after switching tabs -- #map is hidden then, so the
+        # hover target usually collapses to None anyway, but guard explicitly rather
+        # than spawn a background task _refresh_map_corp_actions would just discard.
+        if self.app.corp_only and self.selected_category is None:
+            self._schedule_map_corp_actions(focus_id)
 
     def _schedule_map_local_boxes(self) -> None:
         """Queue a Locals-panel rebuild for the territory the runner is standing in.
@@ -570,6 +615,80 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         container = self.query_one("#map_local_boxes", Grid)
         await container.remove_children()
         await container.mount_all(boxes)
+
+    def _schedule_map_corp_actions(self, territory_id: str) -> None:
+        """corp_only's counterpart to _schedule_map_local_boxes — same pending-id/
+        draining-task shape (cancel()-then-create_task() would race widget mutations
+        the same way), but keyed on the territory under the cursor rather than where
+        the corp is standing, since _refresh_map_view is what calls this."""
+        self._map_corp_actions_pending_id = territory_id
+        if self._map_corp_actions_task is None or self._map_corp_actions_task.done():
+            self._map_corp_actions_task = asyncio.create_task(self._drain_map_corp_actions())
+
+    async def _drain_map_corp_actions(self) -> None:
+        while self._map_corp_actions_pending_id is not None:
+            pending_id = self._map_corp_actions_pending_id
+            self._map_corp_actions_pending_id = None
+            await self._refresh_map_corp_actions(pending_id)
+
+    # Every row id from territory_rows/operations_rows that's actually scoped to one
+    # territory has exactly this shape: f"{prefix}_{territory_id}". Matched by exact
+    # id, not endswith(f"_{territory_id}") -- a suffix check would also catch
+    # academy_rows' train_research_assistant (EmployeeCategory.RESEARCH_ASSISTANT
+    # has an internal underscore) if a district were ever named e.g. "Assistant".
+    _TERRITORY_ACTION_PREFIXES = ("expand", "surveil", "develop", "deploy", "attack", "newacademy", "rebuild")
+
+    async def _refresh_map_corp_actions(self, territory_id: str) -> None:
+        """Populate the corp actions panel for `territory_id` — whatever's under the
+        cursor. Reuses corp_screen.py's own row builders (territory/operations/academy/
+        research) rather than re-deriving the gating logic.
+
+        territory_rows/operations_rows' rows are filtered down to the ones naming this
+        territory (see _TERRITORY_ACTION_PREFIXES). academy_rows/research_rows are
+        different: train_/pending_recruit/build_lab/build_efficiency/labs_maxed/
+        efficiency_maxed apply to wherever the corp's *one* Academy/Research Facility
+        already stands, not to whichever territory they're filtered against -- so
+        those are included whole when `territory_id` is the one hosting that building,
+        not by id shape at all. (Their rebuild_/newacademy_ rows, offered on a
+        *different* held district after the original was captured, are still plain
+        territory-scoped rows and go through the normal id filter.)
+
+        Selecting a row resolves through CorpActionsMixin exactly like the Corp tab's
+        rows do — on_list_view_selected's catch-all already calls
+        _handle_corp_selection for any id it doesn't recognize itself.
+        """
+        if self.selected_category is not None:
+            return
+        corp_state = self.app.corp_state
+        corp_map = self.app.corp_map
+        territory = corp_map.territories[territory_id]
+        day = self.app.character.day
+
+        ids = {f"{prefix}_{territory_id}" for prefix in self._TERRITORY_ACTION_PREFIXES}
+        filtered = [row for row in territory_rows(corp_state, corp_map) if row.id in ids]
+        filtered += [row for row in operations_rows(corp_state, corp_map) if row.id in ids]
+
+        academy_all = academy_rows(corp_state, corp_map, day)
+        academy = owned_academy(corp_state, corp_map)
+        if academy is not None and any(loc.id == academy.id for loc in territory.locations):
+            filtered += academy_all
+        else:
+            filtered += [row for row in academy_all if row.id in ids]
+
+        research_all = research_rows(corp_state, corp_map)
+        facility = owned_research_facility(corp_state, corp_map)
+        if facility is not None and any(loc.id == facility.id for loc in territory.locations):
+            filtered += research_all
+        else:
+            filtered += [row for row in research_all if row.id in ids]
+
+        if not filtered:
+            filtered.append(ListItem(Static("No actions available here."), id="no_territory_actions"))
+        # Always present, not filtered by territory -- Rest was unconditional on the
+        # Locals panel this replaces, and corp_only's action_travel spends no time on
+        # its own, so this is the map screen's one way to advance the day.
+        filtered.insert(0, ListItem(Static(self.app.rest_label()), id="rest"))
+        await _replace_items(self.query_one("#map_corp_actions", ListView), filtered)
 
     def _territory_summary_text(self, t: Territory, here: Territory, character: Character) -> str:
         """Always exactly 4 lines -- #territory_summary is a fixed-height panel (see
