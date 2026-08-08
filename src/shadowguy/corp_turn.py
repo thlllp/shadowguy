@@ -75,8 +75,47 @@ TERRITORY_INCOME_PER_VALUE = 15
 EXPANSION_COST_BASE = 150
 EXPANSION_COST_PER_VALUE = 100
 
-# ACADEMY_TRAINING_COST is defined further down, once EmployeeCategory/TRAINING_DAYS
-# exist to key it by.
+
+class EmployeeCategory(StrEnum):
+    """What a training session at the Academy produces. All three now have a
+    consumer: scientists and research assistants staff the research facility
+    (collect_research), and operatives are the corp's field force — deployed onto
+    a district as its garrison, or committed to an attack on a rival's
+    (deploy_operatives / attack_territory). They are tracked as three pools rather
+    than one because they aren't fungible: an operative can't staff a lab and a
+    scientist can't hold a block."""
+
+    SCIENTIST = "scientist"
+    OPERATIVE = "operative"
+    RESEARCH_ASSISTANT = "research_assistant"
+
+
+# Days a batch spends at the Academy before the hires land in the pool. Training
+# is no longer instant: train_employees queues the batch and advance_training
+# completes it on the day tick this many days later. Different roles take
+# different amounts of time to train up. Not balance-simulated.
+TRAINING_DAYS = {
+    EmployeeCategory.SCIENTIST: 9,
+    EmployeeCategory.OPERATIVE: 6,
+    EmployeeCategory.RESEARCH_ASSISTANT: 3,
+}
+
+# Cash cost of one training batch, per category. Used to be a single flat 200 --
+# same cost regardless of category made Research Assistants a dead pick once a
+# game runs long enough for the training slot's opportunity cost to matter: same
+# price as a Scientist, a third of the training time, but half the RP/day, so a
+# Scientist trained back-to-back always overtakes an Assistant trained in the same
+# stretch of slot-time (crossover ~day 15, and it never comes back). Pricing each
+# category off its own RESEARCH_PER_SCIENTIST/RESEARCH_PER_ASSISTANT rate keeps
+# cash-per-RP even across the two, so the real choice is capacity (lab_capacity vs
+# assistant_capacity) and how soon you want the hire, not a strictly dominated
+# option. An Operative produces no RP at all, so there's no rate to peg its price
+# to -- it keeps the original flat price. Not balance-simulated.
+ACADEMY_TRAINING_COST = {
+    EmployeeCategory.SCIENTIST: 200,
+    EmployeeCategory.OPERATIVE: 200,
+    EmployeeCategory.RESEARCH_ASSISTANT: 100,
+}
 
 # A research facility seats this many working scientists for free, before any
 # lab is built.
@@ -118,6 +157,12 @@ RESEARCH_ASSISTANTS_PER_LAB = 2
 # efficiency upgrades boost scientists only.
 RESEARCH_PER_ASSISTANT = 0.5
 
+# CorpState.sightings is capped at this many entries (most-recent-first) —
+# an unbounded log would grow for the life of a run for no read anything
+# further back than a handful of days actually wants. Also imported by
+# surveillance.py.
+MAX_SIGHTINGS_LOG = 10
+
 # --- Conflict ---------------------------------------------------------------
 # Both sides of a contest add one die of this size to their strength, so a
 # defended district is never a foregone conclusion in either direction: a d6
@@ -152,6 +197,10 @@ class Technology:
     cost: int  # research points
     prereqs: tuple[str, ...]
     description: str
+    # When set, only this Faction (factions.Faction.id) can research this
+    # technology. None means any faction can. The ResearchTreeScreen hides
+    # faction-gated techs that don't match the player's corp.
+    faction_id: str | None = None
 
 
 WORKER_SURVEILLANCE_ID = "worker_surveillance"
@@ -160,11 +209,26 @@ SHADOW_ECONOMY_ID = "shadow_economy"
 BRAINS_2_ID = "brains_2"
 BRAINS_3_ID = "brains_3"
 COGNITIVE_UPLINK_ID = "cognitive_uplink"
+TOTAL_INFORMATION_AWARENESS_ID = "total_information_awareness"
+COUNTER_INTELLIGENCE_ID = "counter_intelligence"
+DEEP_SURVEILLANCE_ID = "deep_surveillance"
+OPERATION_INTERCEPT_ID = "operation_intercept"
+HARDENED_GARRISON_ID = "hardened_garrison"
+SHOCK_ASSAULT_ID = "shock_assault"
+SIGNAL_INTERCEPT_ID = "signal_intercept"
+ICE_CRACKED_NETWORKS_ID = "ice_cracked_networks"
+COMBAT_STIMS_ID = "combat_stims"
+RAPID_DEPLOYMENT_ID = "rapid_deployment"
+OPTIMIZED_WORKFORCE_ID = "optimized_workforce"
+SUPPLY_CHAIN_ID = "supply_chain"
 
-# id, name, cost (RP), prereqs, description — two independent chains (income via
-# surveillance, research rate via "brains"), each 3 deep. Worker Surveillance and
-# Brains 2 are the two roots (empty prereqs, researchable from day one); every
-# other row names the one tech directly below it in its own chain. A row's
+# id, name, cost (RP), prereqs, description — three chains: income/surveillance
+# (4 deep, Worker Surveillance → Panopticon Grid → Shadow Economy → Total
+# Information Awareness), research-rate (3 deep, Brains 2 → Brains 3 → Cognitive
+# Uplink), counter-intel (3 deep, Counter-Intelligence → Deep Surveillance →
+# Operation Intercept). Worker Surveillance, Brains 2, and Counter-Intelligence
+# are the three roots (empty prereqs, researchable from day one); every other row
+# names the tech directly below it in its own chain. A row's
 # prereqs must already have appeared earlier in this tuple — enforced below,
 # because technology_tree_layout() (and the topological loop that builds
 # TECHNOLOGIES itself) both assume a prereq's own row is already processed by
@@ -178,6 +242,7 @@ _TECHNOLOGY_ROWS = (
         "Every territory you hold earns +{income}/day, and you can pay {bump}eb "
         "to raise Surveillance by 1 in any district you hold that isn't already at "
         f"{MODIFIER_MAX}.",
+        None,
     ),
     (
         PANOPTICON_GRID_ID,
@@ -186,6 +251,7 @@ _TECHNOLOGY_ROWS = (
         (WORKER_SURVEILLANCE_ID,),
         "Every territory you hold earns another +{panopticon_income}/day on top "
         "of Worker Surveillance's bonus.",
+        None,
     ),
     (
         SHADOW_ECONOMY_ID,
@@ -194,6 +260,7 @@ _TECHNOLOGY_ROWS = (
         (PANOPTICON_GRID_ID,),
         "Every territory you hold earns another +{shadow_income}/day on top of "
         "Worker Surveillance and Panopticon Grid's bonuses.",
+        None,
     ),
     (
         BRAINS_2_ID,
@@ -203,6 +270,7 @@ _TECHNOLOGY_ROWS = (
         "Every working scientist produces {scientist2}rp/day instead of "
         "{base_scientist}, and every working research assistant {assistant2}rp/day "
         "instead of {base_assistant}.",
+        None,
     ),
     (
         BRAINS_3_ID,
@@ -211,6 +279,7 @@ _TECHNOLOGY_ROWS = (
         (BRAINS_2_ID,),
         "Every working scientist produces {scientist3}rp/day and every working "
         "research assistant {assistant3}rp/day, replacing Brains 2's rates.",
+        None,
     ),
     (
         COGNITIVE_UPLINK_ID,
@@ -219,6 +288,125 @@ _TECHNOLOGY_ROWS = (
         (BRAINS_3_ID,),
         "Every working scientist produces {scientist4}rp/day and every working "
         "research assistant {assistant4}rp/day, replacing Brains 3's rates.",
+        None,
+    ),
+    (
+        TOTAL_INFORMATION_AWARENESS_ID,
+        "Total Information Awareness",
+        50,
+        (SHADOW_ECONOMY_ID,),
+        "Every sighting your Surveillance network catches generates {sighting_rp}rp, "
+        "detection chance rises by {detection_bonus_pct} at every level, and you "
+        "can spend {investigation_cost}eb to investigate a sighting (uses your "
+        "day's directed move).",
+        None,
+    ),
+    (
+        COUNTER_INTELLIGENCE_ID,
+        "Counter-Intelligence",
+        20,
+        (),
+        "Raising Surveillance costs {discounted_surveillance_cost}eb instead of "
+        "{base_surveillance_cost}, your sightings log holds "
+        "{extended_sightings} entries instead of {base_sightings}, and "
+        "sightings name the detected runner's faction.",
+        None,
+    ),
+    (
+        DEEP_SURVEILLANCE_ID,
+        "Deep Surveillance",
+        30,
+        (COUNTER_INTELLIGENCE_ID,),
+        "You can raise Surveillance one level beyond the normal cap (to "
+        "{extended_max}), costing {extended_surveillance_cost}eb for that final "
+        "level. Detection chance at that level: {extended_detection_pct}.",
+        None,
+    ),
+    (
+        OPERATION_INTERCEPT_ID,
+        "Operation Intercept",
+        45,
+        (DEEP_SURVEILLANCE_ID,),
+        "When your Surveillance network detects a runner, there is a "
+        "{interception_pct} chance their current activity is disrupted "
+        "(they go to ground).",
+        None,
+    ),
+    # --- Ironclad Dynamics (WEAPONS) -------------------------------------------
+    (
+        "hardened_garrison",
+        "Hardened Garrison",
+        25,
+        (),
+        "Each operative garrisoned in a district you hold counts as 2 operatives "
+        "for defense strength (garrison × 2 + Security).",
+        "faction_ironclad",
+    ),
+    (
+        "shock_assault",
+        "Shock Assault",
+        40,
+        ("hardened_garrison",),
+        "Your attack rolls get +1 on the contest die, making every assault hit "
+        "harder.",
+        "faction_ironclad",
+    ),
+    # --- Ghostwire Collective (HACKING) ----------------------------------------
+    (
+        "signal_intercept",
+        "Signal Intercept",
+        25,
+        (),
+        "Every sighting in your Surveillance log generates {sighting_rp}rp/day "
+        "on its own (stacks with Total Information Awareness when both are "
+        "researched).",
+        "faction_ghostwire",
+    ),
+    (
+        "ice_cracked_networks",
+        "ICE-Cracked Networks",
+        40,
+        ("signal_intercept",),
+        "Surveillance detection chance rises by {ghostwire_detection_bonus_pct} "
+        "at every level (stacks with Total Information Awareness).",
+        "faction_ghostwire",
+    ),
+    # --- Meridian Biochem (PHARMA) ---------------------------------------------
+    (
+        "combat_stims",
+        "Combat Stims",
+        25,
+        (),
+        "Training a batch of operatives costs {stims_operative_cost}eb instead of "
+        "{base_operative_cost}eb.",
+        "faction_meridian",
+    ),
+    (
+        "rapid_deployment",
+        "Rapid Deployment",
+        35,
+        ("combat_stims",),
+        "Operative training completes in {stims_operative_days} days instead of "
+        "{base_operative_days}.",
+        "faction_meridian",
+    ),
+    # --- Prometheus Cybernetics (CYBERNETICS) ----------------------------------
+    (
+        "optimized_workforce",
+        "Optimized Workforce",
+        20,
+        (),
+        "Every territory you hold earns +{workforce_income}/day in base income.",
+        "faction_prometheus",
+    ),
+    (
+        "supply_chain",
+        "Supply Chain",
+        35,
+        ("optimized_workforce",),
+        "Expanding into neutral territory costs half as much (base cost "
+        "{base_expansion}eb → {supply_chain_expansion}eb).",
+        "faction_prometheus",
     ),
 )
 
@@ -265,6 +453,71 @@ BRAINS_3_RESEARCH_PER_ASSISTANT = 0.9
 COGNITIVE_UPLINK_RESEARCH_PER_SCIENTIST = 2.0
 COGNITIVE_UPLINK_RESEARCH_PER_ASSISTANT = 1.2
 
+# --- Total Information Awareness (tier 4 of income/surveillance chain) ---------
+# RP generated per sighting caught in the corp's own territory, added by
+# collect_research alongside the facility output. Flat rather than scaled so a
+# heavily-watched corp in a busy territory (many rival runners passing through)
+# gets a steady trickle, not a fountain, from a source that already feeds
+# informational pressure.
+SIGHTING_RESEARCH_BONUS = 5
+# Flat detection-chance bonus applied at every Surveillance level — stacks on
+# top of SURVEILLANCE_DETECTION_CHANCE in surveillance.py.
+DETECTION_CHANCE_BONUS = 0.05
+# Cost in eb to investigate a single sighting. On the daily_action_used slot
+# (unlike raise_surveillance), so it competes with expand/attack/train.
+INVESTIGATION_COST = 600
+
+# --- Counter-Intelligence chain -------------------------------------------------
+# Discounted Surveillance bump cost. Worker Surveillance still gates the ability
+# itself; this is purely the price break.
+COUNTERINTEL_SURVEILLANCE_COST = 250
+# Extended sightings-log cap. Still pruned most-recent-first; just holds more.
+COUNTERINTEL_SIGHTINGS_LOG = 20
+
+# --- Deep Surveillance ----------------------------------------------------------
+# One level beyond MODIFIER_MAX, gated behind the Deep Surveillance technology.
+EXTENDED_SURVEILLANCE_MAX = 6
+# Cost of the final bump (level 5→6), steeper because it's beyond the normal cap.
+EXTENDED_SURVEILLANCE_COST = 800
+# Detection chance at the extended level. Indexed directly rather than extending
+# the SURVEILLANCE_DETECTION_CHANCE tuple (which is sized to MODIFIER_MAX).
+EXTENDED_SURVEILLANCE_DETECTION = 0.80
+
+# --- Operation Intercept --------------------------------------------------------
+# Chance that a successful detection disrupts the target's current activity.
+INTERCEPTION_CHANCE = 0.25
+
+# --- Ironclad Dynamics: Hardened Garrison / Shock Assault --------------------
+# Multiplier applied to garrison in defense_strength when Hardened Garrison is
+# researched. Normally garrison counts 1:1; this makes garrisoned operatives
+# worth double.
+HARDENED_GARRISON_MULTIPLIER = 2
+# Bonus added to the attacker's contest die in attack_territory when Shock
+# Assault is researched. Makes a 1-oper assault still win vs defense of 1
+# (1+d6+1 > 1+d6 on ties goes to attacker).
+SHOCK_ASSAULT_BONUS = 1
+
+# --- Ghostwire Collective: Signal Intercept / ICE-Cracked Networks ------------
+# RP per sighting when Signal Intercept is researched, independent of Total
+# Information Awareness. Same value as SIGHTING_RESEARCH_BONUS — the two stack,
+# so a corp with both earns 10 RP per sighting.
+SIGNAL_INTERCEPT_RP = 5
+# Additional detection chance bonus from ICE-Cracked Networks, stacking with
+# Total Information Awareness's DETECTION_CHANCE_BONUS.
+GHOSTWIRE_DETECTION_BONUS = 0.10
+
+# --- Meridian Biochem: Combat Stims / Rapid Deployment ------------------------
+# Discounted operative training cost with Combat Stims researched.
+STIMS_OPERATIVE_COST = 100
+# Shortened operative training days with Rapid Deployment researched.
+STIMS_OPERATIVE_DAYS = 3
+
+# --- Prometheus Cybernetics: Optimized Workforce / Supply Chain ----------------
+# Extra base income per territory with Optimized Workforce researched.
+WORKFORCE_INCOME_BONUS = 5
+# Halved expansion base cost with Supply Chain researched.
+SUPPLY_CHAIN_EXPANSION_BASE = EXPANSION_COST_BASE // 2
+
 # Descriptions are filled in from the constants above rather than repeating the
 # numbers as prose, so a retune can't leave the shop text lying about the effect.
 _TECHNOLOGY_DESCRIPTION_ARGS = dict(
@@ -280,6 +533,25 @@ _TECHNOLOGY_DESCRIPTION_ARGS = dict(
     assistant4=COGNITIVE_UPLINK_RESEARCH_PER_ASSISTANT,
     base_scientist=RESEARCH_PER_SCIENTIST,
     base_assistant=RESEARCH_PER_ASSISTANT,
+    sighting_rp=SIGHTING_RESEARCH_BONUS,
+    detection_bonus_pct=f"{DETECTION_CHANCE_BONUS:.0%}",
+    investigation_cost=INVESTIGATION_COST,
+    discounted_surveillance_cost=COUNTERINTEL_SURVEILLANCE_COST,
+    base_surveillance_cost=SURVEILLANCE_BUMP_COST,
+    extended_sightings=COUNTERINTEL_SIGHTINGS_LOG,
+    base_sightings=MAX_SIGHTINGS_LOG,
+    extended_max=EXTENDED_SURVEILLANCE_MAX,
+    extended_surveillance_cost=EXTENDED_SURVEILLANCE_COST,
+    extended_detection_pct=f"{EXTENDED_SURVEILLANCE_DETECTION:.0%}",
+    interception_pct=f"{INTERCEPTION_CHANCE:.0%}",
+    ghostwire_detection_bonus_pct=f"{GHOSTWIRE_DETECTION_BONUS:.0%}",
+    stims_operative_cost=STIMS_OPERATIVE_COST,
+    base_operative_cost=ACADEMY_TRAINING_COST[EmployeeCategory.OPERATIVE],
+    stims_operative_days=STIMS_OPERATIVE_DAYS,
+    base_operative_days=TRAINING_DAYS[EmployeeCategory.OPERATIVE],
+    workforce_income=WORKFORCE_INCOME_BONUS,
+    base_expansion=EXPANSION_COST_BASE,
+    supply_chain_expansion=SUPPLY_CHAIN_EXPANSION_BASE,
 )
 
 # A row's prereqs must already have been seen — i.e. defined earlier in
@@ -300,8 +572,9 @@ TECHNOLOGIES = [
         cost=cost,
         prereqs=prereqs,
         description=description.format(**_TECHNOLOGY_DESCRIPTION_ARGS),
+        faction_id=faction_id,
     )
-    for tech_id, name, cost, prereqs, description in _TECHNOLOGY_ROWS
+    for tech_id, name, cost, prereqs, description, faction_id in _TECHNOLOGY_ROWS
 ]
 TECHNOLOGIES_BY_ID = {tech.id: tech for tech in TECHNOLOGIES}
 
@@ -350,6 +623,12 @@ class Sighting:
     actor_id: str  # "player", or a runners.RivalRunner.id
     territory_id: str
     day: int
+    # Populated when Counter-Intelligence is researched: which faction the
+    # detected runner belongs to (or "independent" when none). None otherwise.
+    runner_faction_id: str | None = None
+    # Whether Operation Intercept disrupted this runner's current activity.
+    # Only ever True when the tech is researched and the interception roll hit.
+    intercepted: bool = False
 
 
 # Per-faction blog history, capped like Sighting/MAX_SIGHTINGS_LOG.
@@ -389,52 +668,26 @@ def log_faction_event(
     del log[MAX_FACTION_EVENTS:]
 
 
-class EmployeeCategory(StrEnum):
-    """What a training session at the Academy produces. All three now have a
-    consumer: scientists and research assistants staff the research facility
-    (collect_research), and operatives are the corp's field force — deployed onto
-    a district as its garrison, or committed to an attack on a rival's
-    (deploy_operatives / attack_territory). They are tracked as three pools rather
-    than one because they aren't fungible: an operative can't staff a lab and a
-    scientist can't hold a block."""
-
-    SCIENTIST = "scientist"
-    OPERATIVE = "operative"
-    RESEARCH_ASSISTANT = "research_assistant"
-
-
-# Days a batch spends at the Academy before the hires land in the pool. Training
-# is no longer instant: train_employees queues the batch and advance_training
-# completes it on the day tick this many days later. Different roles take
-# different amounts of time to train up. Not balance-simulated.
-TRAINING_DAYS = {
-    EmployeeCategory.SCIENTIST: 9,
-    EmployeeCategory.OPERATIVE: 6,
-    EmployeeCategory.RESEARCH_ASSISTANT: 3,
-}
-
-# Cash cost of one training batch, per category. Used to be a single flat 200 --
-# same cost regardless of category made Research Assistants a dead pick once a
-# game runs long enough for the training slot's opportunity cost to matter: same
-# price as a Scientist, a third of the training time, but half the RP/day, so a
-# Scientist trained back-to-back always overtakes an Assistant trained in the same
-# stretch of slot-time (crossover ~day 15, and it never comes back). Pricing each
-# category off its own RESEARCH_PER_SCIENTIST/RESEARCH_PER_ASSISTANT rate keeps
-# cash-per-RP even across the two, so the real choice is capacity (lab_capacity vs
-# assistant_capacity) and how soon you want the hire, not a strictly dominated
-# option. An Operative produces no RP at all, so there's no rate to peg its price
-# to -- it keeps the original flat price. Not balance-simulated.
-ACADEMY_TRAINING_COST = {
-    EmployeeCategory.SCIENTIST: 200,
-    EmployeeCategory.OPERATIVE: 200,
-    EmployeeCategory.RESEARCH_ASSISTANT: 100,
-}
-
-
 def employee_plural(category: EmployeeCategory) -> str:
     """research_assistant -> "research assistants"; scientist/operative have no
     underscore to begin with, so this just adds the s."""
     return f"{category.replace('_', ' ')}s"
+
+
+def operative_training_cost(corp_state: CorpState) -> int:
+    """Base training cost for operatives, discounted when Combat Stims (Meridian
+    Biochem) is researched."""
+    if has_technology(corp_state, COMBAT_STIMS_ID):
+        return STIMS_OPERATIVE_COST
+    return ACADEMY_TRAINING_COST[EmployeeCategory.OPERATIVE]
+
+
+def operative_training_days(corp_state: CorpState) -> int:
+    """Training duration for operatives, shortened when Rapid Deployment (Meridian
+    Biochem) is researched."""
+    if has_technology(corp_state, RAPID_DEPLOYMENT_ID):
+        return STIMS_OPERATIVE_DAYS
+    return TRAINING_DAYS[EmployeeCategory.OPERATIVE]
 
 
 @dataclass
@@ -472,7 +725,8 @@ class CorpState:
     # permanent — nothing takes a tech back.
     researched: set[str] = field(default_factory=set)
     # Surveillance sightings logged against this corp's own territory,
-    # most-recent-first, capped by surveillance.MAX_SIGHTINGS_LOG. Stays empty
+    # most-recent-first, capped by MAX_SIGHTINGS_LOG (or COUNTERINTEL_SIGHTINGS_LOG
+    # when Counter-Intelligence is researched). Stays empty
     # until surveillance.resolve_surveillance_day actually catches someone —
     # corp_turn.py never appends to this itself.
     sightings: list[Sighting] = field(default_factory=list)
@@ -492,7 +746,8 @@ def prereqs_met(corp_state: CorpState, technology: Technology) -> bool:
 def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     """Spend research points to unlock a Technology permanently. Fails closed (no
     charge, no mutation) if it's already researched, its prereqs aren't all
-    researched yet, or the corp can't afford it.
+    researched yet, the corp can't afford it, or the technology is faction-gated
+    to a different faction than the one the player is running.
 
     Deliberately NOT on the daily_action_used slot: RP is its own pacing gate
     (10 RP is ~10 days of research at the base rate), and double-gating a
@@ -502,6 +757,8 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     """
     technology = TECHNOLOGIES_BY_ID[technology_id]
     if has_technology(corp_state, technology_id) or not prereqs_met(corp_state, technology):
+        return False
+    if technology.faction_id is not None and technology.faction_id != corp_state.faction_id:
         return False
     if technology.cost > corp_state.research_points:
         return False
@@ -516,7 +773,8 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     (WORKER_SURVEILLANCE_INCOME_BONUS, then PANOPTICON_GRID_INCOME_BONUS, then
     SHADOW_ECONOMY_INCOME_BONUS — summed, not replaced, unlike the Brains
     chain's research rates) — per territory, not once, so each tech keeps
-    paying as the corp expands."""
+    paying as the corp expands. Optimized Workforce (Prometheus) adds another
+    per-territory bonus."""
     owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
     bonus = 0
     if has_technology(corp_state, WORKER_SURVEILLANCE_ID):
@@ -525,6 +783,8 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
         bonus += PANOPTICON_GRID_INCOME_BONUS
     if has_technology(corp_state, SHADOW_ECONOMY_ID):
         bonus += SHADOW_ECONOMY_INCOME_BONUS
+    if has_technology(corp_state, OPTIMIZED_WORKFORCE_ID):
+        bonus += WORKFORCE_INCOME_BONUS
     return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
@@ -645,7 +905,9 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     sits at the highest-rate facility with a seat free before any of them sits at
     a worse one. Each facility's own research_tier counts whether or not anyone is
     staffing it, exactly as it did in the single-facility case.
-    """
+
+    Total Information Awareness (when researched) adds SIGHTING_RESEARCH_BONUS RP
+    per sighting currently in the log — each detection feeds the research machine."""
     scientists_left = corp_state.scientists
     assistants_left = corp_state.research_assistants
     total = 0.0
@@ -657,6 +919,10 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
         aides = min(assistants_left, assistant_capacity(facility))
         assistants_left -= aides
         total += aides * assistant_rate(corp_state)
+    if has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
+        total += len(corp_state.sightings) * SIGHTING_RESEARCH_BONUS
+    if has_technology(corp_state, SIGNAL_INTERCEPT_ID):
+        total += len(corp_state.sightings) * SIGNAL_INTERCEPT_RP
     return total
 
 
@@ -668,43 +934,109 @@ def _owned_territories(corp_state: CorpState, corp_map: CorpMap) -> list[Territo
     )
 
 
+def effective_surveillance_max(corp_state: CorpState) -> int:
+    """Highest Surveillance level this corp can reach. Normally MODIFIER_MAX (5);
+    Deep Surveillance raises it to EXTENDED_SURVEILLANCE_MAX (6)."""
+    if has_technology(corp_state, DEEP_SURVEILLANCE_ID):
+        return EXTENDED_SURVEILLANCE_MAX
+    return MODIFIER_MAX
+
+
 def surveillance_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
-    """Districts the corp holds whose Surveillance isn't already at MODIFIER_MAX.
+    """Districts the corp holds whose Surveillance isn't already at its effective
+    maximum (MODIFIER_MAX, or EXTENDED_SURVEILLANCE_MAX with Deep Surveillance).
     Empty until Worker Surveillance is researched — the tech is what grants the
     ability at all, not just a discount on it."""
     if not has_technology(corp_state, WORKER_SURVEILLANCE_ID):
         return []
+    ceiling = effective_surveillance_max(corp_state)
     return [
         t
         for t in _owned_territories(corp_state, corp_map)
-        if t.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) < MODIFIER_MAX
+        if t.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) < ceiling
     ]
 
 
+def surveillance_bump_cost(corp_state: CorpState, territory: Territory) -> int:
+    """Cost to raise this territory's Surveillance by 1. Counter-Intelligence
+    drops the base cost; the extended level (5→6, Deep Surveillance required)
+    costs EXTENDED_SURVEILLANCE_COST regardless."""
+    level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+    if level >= MODIFIER_MAX:
+        return EXTENDED_SURVEILLANCE_COST
+    if has_technology(corp_state, COUNTER_INTELLIGENCE_ID):
+        return COUNTERINTEL_SURVEILLANCE_COST
+    return SURVEILLANCE_BUMP_COST
+
+
 def raise_surveillance(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
-    """Pay SURVEILLANCE_BUMP_COST to raise one held district's Surveillance by 1.
+    """Pay the level-appropriate Surveillance bump cost to raise one held
+    district's Surveillance by 1.
 
-    Repeatable within a day (cash is the only gate — see SURVEILLANCE_BUMP_COST),
-    so unlike expand_into/train_employees this never touches daily_action_used.
-    Fails closed if the tech isn't researched, the district isn't a legal target
-    (not held, or already at MODIFIER_MAX), or the corp can't afford it.
-
-    Deliberately does NOT re-derive TerritoryModifier.DEVELOPMENT, though
-    corpmap._development() reads Surveillance: Development is raised as its own
-    purchase here (raise_development), gated on Security and Surveillance rather
-    than recomputed from them. So a district can sit at high Surveillance and low
-    Development — that's the gap raise_development exists to let the player close,
-    not an inconsistency to auto-correct.
-    """
+    Repeatable within a day (cash is the only gate), so unlike
+    expand_into/train_employees this never touches daily_action_used. Fails
+    closed if the tech isn't researched, the district isn't a legal target
+    (not held, or already at its effective max), or the corp can't afford it."""
     if territory_id not in {t.id for t in surveillance_targets(corp_state, corp_map)}:
         return False
-    if SURVEILLANCE_BUMP_COST > corp_state.cash:
-        return False
     territory = corp_map.territories[territory_id]
-    corp_state.cash -= SURVEILLANCE_BUMP_COST
+    cost = surveillance_bump_cost(corp_state, territory)
+    if cost > corp_state.cash:
+        return False
+    corp_state.cash -= cost
     territory.modifiers[TerritoryModifier.SURVEILLANCE] = (
         territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0) + 1
     )
+    return True
+
+
+def sightings_log_cap(corp_state: CorpState) -> int:
+    """How many entries the sightings log holds. Counter-Intelligence doubles it."""
+    if has_technology(corp_state, COUNTER_INTELLIGENCE_ID):
+        return COUNTERINTEL_SIGHTINGS_LOG
+    return MAX_SIGHTINGS_LOG
+
+
+def investigate_sighting_targets(
+    corp_state: CorpState, corp_map: CorpMap,
+) -> list[Sighting]:
+    """Sightings that are eligible for investigation. Only available after Total
+    Information Awareness is researched, and only when daily_action_used is still
+    free (investigation is a directed move). Each sighting can be investigated
+    exactly once — spotted runners don't exist after the event."""
+    if corp_state.daily_action_used:
+        return []
+    if not has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
+        return []
+    if corp_state.cash < INVESTIGATION_COST:
+        return []
+    return list(corp_state.sightings)
+
+
+def investigate_sighting(
+    corp_state: CorpState, sighting: Sighting, rng: random.Random,
+) -> bool:
+    """Pay INVESTIGATION_COST, mark the day's directed move used, and gather
+    actionable intel on a sighted runner. The intel itself is surfaced by the
+    caller (CorpScreen) — this function only deducts the cost and marks the
+    slot. Fails closed if the tech isn't researched, the day's move is already
+    spent, or the corp can't afford it.
+
+    Returns True on success so the caller can display the intel. The intel is
+    deterministic (it's just reading fields the sighting already carries), not a
+    random roll — the cash + daily-move cost is the gate."""
+    if corp_state.daily_action_used:
+        return False
+    if not has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
+        return False
+    if INVESTIGATION_COST > corp_state.cash:
+        return False
+    corp_state.cash -= INVESTIGATION_COST
+    corp_state.daily_action_used = True
+    # The intel itself — what the caller displays — is just what the sighting
+    # already carries (runner id, faction, territory, day, intercepted flag).
+    # The cash buys the story beat; nothing is rolled.
+    corp_state.sightings = [s for s in corp_state.sightings if s is not sighting]
     return True
 
 
@@ -744,8 +1076,11 @@ def raise_development(corp_state: CorpState, corp_map: CorpMap, territory_id: st
     return True
 
 
-def expansion_cost(territory: Territory) -> int:
-    return EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * territory.value
+def expansion_cost(territory: Territory, corp_state: CorpState | None = None) -> int:
+    base = EXPANSION_COST_BASE
+    if corp_state is not None and has_technology(corp_state, SUPPLY_CHAIN_ID):
+        base = SUPPLY_CHAIN_EXPANSION_BASE
+    return base + EXPANSION_COST_PER_VALUE * territory.value
 
 
 def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng: random.Random) -> bool:
@@ -757,7 +1092,7 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
     if territory_id not in expansion_candidates(corp_map, corp_state.faction_id):
         return False
     territory = corp_map.territories[territory_id]
-    cost = expansion_cost(territory)
+    cost = expansion_cost(territory, corp_state)
     if cost > corp_state.cash:
         return False
     corp_state.cash -= cost
@@ -766,16 +1101,22 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
     return True
 
 
-def defense_strength(territory: Territory) -> int:
+def defense_strength(territory: Territory, corp_state: CorpState | None = None) -> int:
     """What an attacker has to beat to take this district: the operatives
     stationed there plus its Security modifier.
+
+    When the corp has researched Hardened Garrison, each garrisoned operative
+    counts double (garrison × 2 + Security).
 
     Note the asymmetry with garrison: Security is bought once and keeps defending
     forever, while a garrison is spent by the fight that uses it, so a
     well-policed district is the durable half of a defense and troops are the
     half you have to keep replacing.
     """
-    return territory.garrison + territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+    garrison = territory.garrison
+    if corp_state is not None and has_technology(corp_state, HARDENED_GARRISON_ID):
+        garrison *= HARDENED_GARRISON_MULTIPLIER
+    return garrison + territory.modifiers.get(TerritoryModifier.SECURITY, 0)
 
 
 def deployable_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
@@ -830,11 +1171,17 @@ class AttackResult:
 
 
 def resolve_attack(
-    territory: Territory, attacker_id: str, committed: int, rng: random.Random
+    territory: Territory,
+    attacker_id: str,
+    committed: int,
+    rng: random.Random,
+    *,
+    attack_bonus: int = 0,
+    defender_corp_state: CorpState | None = None,
 ) -> AttackResult:
-    """The contest itself, with no corp state on either side — so rivals.py's AI
-    factions (which have no CorpState) settle an attack through exactly the same
-    dice the player does, and a test can drive it without building a corp.
+    """The contest itself, taking no corp state for the attacker — so rivals.py's
+    AI factions (which have no CorpState) settle an attack through exactly the
+    same dice the player does, and a test can drive it without building a corp.
 
     Both sides roll one CONTEST_DIE on top of their strength; the attacker needs
     to strictly exceed the defender, so a tie holds the ground. Losses land the
@@ -842,11 +1189,19 @@ def resolve_attack(
     they had to grind through (capped at what they brought), the defender loses
     their whole garrison if the district falls and one per attacker if it doesn't.
 
+    attack_bonus is added to the attacker's roll — the player's Shock Assault
+    technology feeds it; the AI never does.
+
+    defender_corp_state feeds defense_strength's Hardened Garrison bonus. It's
+    the *defender's* state, not the attacker's — only ever non-None when the
+    player is the one holding the territory, since AI factions carry no
+    CorpState of their own to research the tech into.
+
     Mutates `territory` (ownership and garrison) and returns the record.
     """
     defender_id = territory.owner
-    defense = defense_strength(territory)
-    attack_power = committed + rng.randint(1, CONTEST_DIE)
+    defense = defense_strength(territory, defender_corp_state)
+    attack_power = committed + rng.randint(1, CONTEST_DIE) + attack_bonus
     defense_power = defense + rng.randint(1, CONTEST_DIE)
     captured = attack_power > defense_power
 
@@ -896,7 +1251,8 @@ def attack_territory(
         return None
     territory = corp_map.territories[territory_id]
     corp_state.operatives -= committed
-    result = resolve_attack(territory, corp_state.faction_id, committed, rng)
+    bonus = SHOCK_ASSAULT_BONUS if has_technology(corp_state, SHOCK_ASSAULT_ID) else 0
+    result = resolve_attack(territory, corp_state.faction_id, committed, rng, attack_bonus=bonus)
     if not result.captured:
         corp_state.operatives += committed - result.attacker_losses
     corp_state.daily_action_used = True
@@ -938,13 +1294,23 @@ def train_employees(
     if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = owned_academy(corp_state, corp_map)
-    if academy is None or ACADEMY_TRAINING_COST[category] > corp_state.cash:
+    cost = (
+        operative_training_cost(corp_state)
+        if category is EmployeeCategory.OPERATIVE
+        else ACADEMY_TRAINING_COST[category]
+    )
+    days = (
+        operative_training_days(corp_state)
+        if category is EmployeeCategory.OPERATIVE
+        else TRAINING_DAYS[category]
+    )
+    if academy is None or cost > corp_state.cash:
         return False
-    corp_state.cash -= ACADEMY_TRAINING_COST[category]
+    corp_state.cash -= cost
     corp_state.pending_recruit = PendingRecruit(
         category=category,
         count=academy.academy_tier or 0,
-        ready_day=day + TRAINING_DAYS[category],
+        ready_day=day + days,
     )
     corp_state.daily_action_used = True
     return True

@@ -10,12 +10,18 @@ there's no real-RNG state to worry about here.
 """
 
 from shadowguy.character import Character
-from shadowguy.corp_turn import CorpState
+from shadowguy.corp_turn import (
+    COUNTER_INTELLIGENCE_ID,
+    MAX_SIGHTINGS_LOG,
+    OPERATION_INTERCEPT_ID,
+    TOTAL_INFORMATION_AWARENESS_ID,
+    CorpState,
+)
 from shadowguy.corpmap import CorpMap, Territory, TerritoryModifier
 from shadowguy.factions import FACTIONS
 from shadowguy.rivals import RunnerState
 from shadowguy.runners import RIVAL_RUNNERS
-from shadowguy.surveillance import MAX_SIGHTINGS_LOG, resolve_surveillance_day
+from shadowguy.surveillance import resolve_surveillance_day
 
 from helpers import ForcedChance
 
@@ -118,3 +124,124 @@ def test_sightings_log_is_capped_and_most_recent_first():
     assert len(corp_state.sightings) == MAX_SIGHTINGS_LOG
     assert corp_state.sightings[0].day == MAX_SIGHTINGS_LOG + 4  # most recent first
     assert corp_state.sightings[-1].day == 5  # oldest kept entry
+
+
+# --- Technology-aware detection tests ---------------------------------------
+
+NOT_MISS = ForcedChance(0.05)  # beats level-0's 0.0 but loses to everything else
+
+
+def test_counter_intelligence_enriches_runner_sightings():
+    corp_map = _map()
+    character = Character(name="t", location_id="open_ground")
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID})
+    runner_id = RIVAL_RUNNERS[0].id
+    sightings = resolve_surveillance_day(
+        character, corp_map, corp_state,
+        {runner_id: RunnerState(territory_id="watched")},
+        day=3, rng=HIT,
+    )
+    assert len(sightings) == 1
+    assert sightings[0].runner_faction_id == "independent"
+
+
+def test_counter_intelligence_extends_sightings_log():
+    corp_map = _map()
+    character = Character(name="t", location_id="watched")
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID})
+    from shadowguy.corp_turn import COUNTERINTEL_SIGHTINGS_LOG
+    for day in range(1, COUNTERINTEL_SIGHTINGS_LOG + 5):
+        resolve_surveillance_day(character, corp_map, corp_state, {}, day=day, rng=HIT)
+    assert len(corp_state.sightings) == COUNTERINTEL_SIGHTINGS_LOG
+
+
+def test_total_information_awareness_adds_detection_bonus():
+    """Level-0 surveillance has 0% detection chance; TIA's 5% bonus makes it
+    possible. NOT_MISS = 0.05 beats 0.05 exactly (< is strict)."""
+    corp_map = _map()
+    character = Character(name="t", location_id="unwatched_corp")
+    corp_state = CorpState(faction_id=IRONCLAD, researched={TOTAL_INFORMATION_AWARENESS_ID})
+    # Without the bonus, level 0 never detects (tested above).
+    without = resolve_surveillance_day(
+        character, corp_map,
+        CorpState(faction_id=IRONCLAD),
+        {}, day=1, rng=HIT,
+    )
+    assert without == []
+    # With TIA, the flat bonus pushes the chance from 0.0 to 0.05.
+    # rng=HIT (0.0) beats 0.05, so it detects.
+    with_bonus = resolve_surveillance_day(
+        character, corp_map, corp_state, {}, day=1, rng=HIT,
+    )
+    assert len(with_bonus) == 1
+
+
+def test_operation_intercept_triggers_on_a_hit():
+    """INTERCEPTION_CHANCE is 0.25, so a rolled 0.0 hits it."""
+    corp_map = _map()
+    character = Character(name="t", location_id="open_ground")
+    corp_state = CorpState(
+        faction_id=IRONCLAD,
+        researched={COUNTER_INTELLIGENCE_ID, OPERATION_INTERCEPT_ID},
+    )
+    runner_id = RIVAL_RUNNERS[0].id
+    sightings = resolve_surveillance_day(
+        character, corp_map, corp_state,
+        {runner_id: RunnerState(territory_id="watched")},
+        day=3, rng=HIT,
+    )
+    assert len(sightings) == 1
+    assert sightings[0].intercepted is True
+    assert sightings[0].runner_faction_id == "independent"
+
+
+def test_operation_intercept_misses_on_a_high_roll():
+    """INTERCEPTION_CHANCE is 0.25. Roll 0.30 hits detection (surveillance=3,
+    detection 0.35) but misses interception (0.30 >= 0.25)."""
+    corp_map = _map()
+    character = Character(name="t", location_id="open_ground")
+    corp_state = CorpState(
+        faction_id=IRONCLAD,
+        researched={COUNTER_INTELLIGENCE_ID, OPERATION_INTERCEPT_ID},
+    )
+    runner_id = RIVAL_RUNNERS[0].id
+    DETECT_NOT_INTERCEPT = ForcedChance(0.30)
+    sightings = resolve_surveillance_day(
+        character, corp_map, corp_state,
+        {runner_id: RunnerState(territory_id="watched")},
+        day=3, rng=DETECT_NOT_INTERCEPT,
+    )
+    assert len(sightings) == 1
+    assert sightings[0].intercepted is False
+
+
+def test_interception_does_not_fire_without_tech():
+    """Counter-Intelligence researched but not Operation Intercept: no intercept."""
+    corp_map = _map()
+    character = Character(name="t", location_id="open_ground")
+    corp_state = CorpState(faction_id=IRONCLAD, researched={COUNTER_INTELLIGENCE_ID})
+    runner_id = RIVAL_RUNNERS[0].id
+    sightings = resolve_surveillance_day(
+        character, corp_map, corp_state,
+        {runner_id: RunnerState(territory_id="watched")},
+        day=3, rng=HIT,
+    )
+    assert len(sightings) == 1
+    assert sightings[0].intercepted is False
+    assert sightings[0].runner_faction_id == "independent"
+
+
+def test_player_sighting_never_has_faction_nor_interception():
+    corp_map = _map()
+    character = Character(name="t", location_id="watched")
+    corp_state = CorpState(
+        faction_id=IRONCLAD,
+        researched={COUNTER_INTELLIGENCE_ID, OPERATION_INTERCEPT_ID},
+    )
+    sightings = resolve_surveillance_day(
+        character, corp_map, corp_state, {}, day=7, rng=HIT,
+    )
+    assert len(sightings) == 1
+    assert sightings[0].kind == "player"
+    assert sightings[0].runner_faction_id is None
+    assert sightings[0].intercepted is False

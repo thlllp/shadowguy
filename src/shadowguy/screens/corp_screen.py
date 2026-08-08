@@ -7,14 +7,15 @@ from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
+    INVESTIGATION_COST,
     RESEARCH_FACILITY_REBUILD_COST,
-    SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     TRAINING_DAYS,
     CorpState,
     EmployeeCategory,
     FactionEvent,
+    Sighting,
     assistant_capacity,
     assistant_rate,
     attack_territory,
@@ -30,10 +31,14 @@ from shadowguy.corp_turn import (
     expand_into,
     expansion_cost,
     has_technology,
+    investigate_sighting,
+    investigate_sighting_targets,
     lab_capacity,
     log_faction_event,
     next_efficiency_cost,
     next_lab_cost,
+    operative_training_cost,
+    operative_training_days,
     owned_research_facility,
     prereqs_met,
     raise_development,
@@ -42,6 +47,7 @@ from shadowguy.corp_turn import (
     rebuild_facility_targets,
     research_rate,
     research_technology,
+    surveillance_bump_cost,
     surveillance_targets,
     technology_tree_layout,
     train_employees,
@@ -65,10 +71,15 @@ NO_CORP_TEXT = (
 )
 
 
-def _sighting_label(sighting, corp_map) -> str:
+def _sighting_label(sighting: Sighting, corp_map) -> str:
     who = "You" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
     territory_name = corp_map.territories[sighting.territory_id].name
-    return f"Day {sighting.day} — {who} spotted in {territory_name}"
+    parts = [f"Day {sighting.day} — {who} spotted in {territory_name}"]
+    if sighting.intercepted:
+        parts.append("[intercepted]")
+    if sighting.runner_faction_id:
+        parts.append(f"({sighting.runner_faction_id})")
+    return " ".join(parts)
 
 
 def _gate(label: str, corp_state: CorpState, cost: int, *, daily: bool = True) -> str:
@@ -146,7 +157,7 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
     for territory in deployable_targets(corp_state, corp_map):
         security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
         label = (
-            f"Reinforce {territory.name} — defense {defense_strength(territory)} "
+            f"Reinforce {territory.name} — defense {defense_strength(territory, corp_state)} "
             f"({territory.garrison} garrison + {security} Security)"
         )
         if corp_state.daily_action_used:
@@ -217,7 +228,7 @@ def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
     candidates = expansion_candidates(corp_map, corp_state.faction_id)
     for territory_id in candidates:
         territory = corp_map.territories[territory_id]
-        cost = expansion_cost(territory)
+        cost = expansion_cost(territory, corp_state)
         label = _gate(f"Expand into {territory.name} — {cost}eb", corp_state, cost)
         rows.append(ListItem(Static(label), id=f"expand_{territory_id}"))
     if not candidates:
@@ -225,13 +236,14 @@ def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
 
     for territory in surveillance_targets(corp_state, corp_map):
         level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+        cost = surveillance_bump_cost(corp_state, territory)
         label = (
             f"Raise Surveillance in {territory.name} "
-            f"({level}→{level + 1}) — {SURVEILLANCE_BUMP_COST}eb"
+            f"({level}→{level + 1}) — {cost}eb"
         )
         rows.append(
             ListItem(
-                Static(_gate(label, corp_state, SURVEILLANCE_BUMP_COST, daily=False)),
+                Static(_gate(label, corp_state, cost, daily=False)),
                 id=f"surveil_{territory.id}",
             )
         )
@@ -282,8 +294,13 @@ def academy_rows(corp_state: CorpState, corp_map, day: int) -> list[ListItem]:
 
     rows = []
     for category in EmployeeCategory:
-        cost = ACADEMY_TRAINING_COST[category]
-        label = f"Train {employee_plural(category)} ({TRAINING_DAYS[category]}d) — {cost}eb"
+        if category is EmployeeCategory.OPERATIVE:
+            cost = operative_training_cost(corp_state)
+            days = operative_training_days(corp_state)
+        else:
+            cost = ACADEMY_TRAINING_COST[category]
+            days = TRAINING_DAYS[category]
+        label = f"Train {employee_plural(category)} ({days}d) — {cost}eb"
         rows.append(ListItem(Static(_gate(label, corp_state, cost)), id=f"train_{category}"))
     return rows
 
@@ -333,10 +350,17 @@ def research_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
 def sighting_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
     if not corp_state.sightings:
         return [ListItem(Static("No sightings yet."), id="no_sightings")]
-    return [
-        ListItem(Static(_sighting_label(sighting, corp_map)), id=f"sighting_{i}")
-        for i, sighting in enumerate(corp_state.sightings)
-    ]
+    can_investigate = bool(investigate_sighting_targets(corp_state, corp_map))
+    rows: list[ListItem] = []
+    for i, sighting in enumerate(corp_state.sightings):
+        label = _sighting_label(sighting, corp_map)
+        if can_investigate:
+            label += f" — investigate ({INVESTIGATION_COST}eb)"
+            item_id = f"investigate_{i}"
+        else:
+            item_id = f"sighting_{i}"
+        rows.append(ListItem(Static(label), id=item_id))
+    return rows
 
 
 class CorpActionsMixin:
@@ -366,6 +390,26 @@ class CorpActionsMixin:
         through to them. Read-only rows count as handled: there's nothing to do, but
         nothing else should try either."""
         if item_id.startswith("sighting_") or item_id in ("no_sightings", "no_operations"):
+            return True
+
+        if item_id.startswith("investigate_"):
+            idx = int(item_id.removeprefix("investigate_"))
+            sighting = self.app.corp_state.sightings[idx]
+            if investigate_sighting(self.app.corp_state, sighting, self.app.rng):
+                who = "you" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
+                faction_info = ""
+                if sighting.runner_faction_id:
+                    faction_info = f", affiliated with {sighting.runner_faction_id}"
+                if sighting.intercepted:
+                    faction_info += " — activity disrupted by Operation Intercept"
+                self.notify(
+                    f"Investigated sighting: {who} was in "
+                    f"{self.app.corp_map.territories[sighting.territory_id].name} on day "
+                    f"{sighting.day}{faction_info}."
+                )
+                await self._refresh_corp_view()
+            else:
+                self._notify_refusal()
             return True
 
         if item_id.startswith("corpinfo_"):
@@ -719,6 +763,8 @@ class ResearchTreeScreen(BackScreen):
         max_tier = max(col for col, _ in layout.values())
         by_tier: dict[int, list] = {tier: [] for tier in range(max_tier + 1)}
         for technology in TECHNOLOGIES:
+            if technology.faction_id is not None and technology.faction_id != corp_state.faction_id:
+                continue
             by_tier[layout[technology.id][0]].append(technology)
 
         for tier, technologies in by_tier.items():

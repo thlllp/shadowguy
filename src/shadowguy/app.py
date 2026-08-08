@@ -265,6 +265,7 @@ class ShadowguyApp(App):
             self.rival_researched,
             self.faction_events,
             self.runners,
+            self.corp_state,
         )
         self.rival_actions += today_actions
         # Runners take jobs off the fixers' boards overnight (the offer stays
