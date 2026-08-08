@@ -30,13 +30,16 @@ from shadowguy.corp_turn import (
     employee_plural,
     expand_into,
     expansion_cost,
+    gather_intel,
     has_technology,
+    intel_targets,
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
     log_faction_event,
     next_efficiency_cost,
     next_lab_cost,
+    operative_max,
     operative_training_cost,
     operative_training_days,
     owned_research_facility,
@@ -47,8 +50,12 @@ from shadowguy.corp_turn import (
     rebuild_facility_targets,
     research_rate,
     research_technology,
+    sabotage,
+    sabotage_targets,
     surveillance_bump_cost,
     surveillance_targets,
+    tail_runner,
+    tail_runner_targets,
     technology_tree_layout,
     train_employees,
 )
@@ -175,6 +182,23 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
         elif not corp_state.operatives:
             label += " (no operatives to send)"
         rows.append(ListItem(Static(label), id=f"attack_{territory_id}"))
+
+    for sighting in tail_runner_targets(corp_state):
+        who = RUNNERS_BY_ID[sighting.actor_id].name
+        territory_name = corp_map.territories[sighting.territory_id].name
+        label = f"Tail {who} (spotted in {territory_name} on day {sighting.day})"
+        rows.append(ListItem(Static(label), id=f"tail_{sighting.day}_{sighting.actor_id}"))
+
+    for territory in intel_targets(corp_state, corp_map):
+        owner_name = FACTIONS_BY_ID[territory.owner].name if territory.owner != "neutral" else "neutral ground"
+        label = f"Gather intel on {territory.name} ({owner_name})"
+        rows.append(ListItem(Static(label), id=f"intel_{territory.id}"))
+
+    for territory in sabotage_targets(corp_state, corp_map):
+        owner_name = FACTIONS_BY_ID[territory.owner].name
+        security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+        label = f"Sabotage {territory.name} ({owner_name}) — Security {security}"
+        rows.append(ListItem(Static(label), id=f"sabotage_{territory.id}"))
     return rows
 
 
@@ -197,8 +221,10 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
         )
     return (
         f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
-        f"{corp_state.scientists} scientists — {corp_state.operatives} operatives — "
-        f"{corp_state.research_assistants} research assistants — "
+        f"{corp_state.scientists} scientists — "
+        f"{corp_state.operatives}/{operative_max(corp_state)} operatives — "
+        f"{corp_state.research_assistants} research assistants "
+        f"({corp_state.tasking_operatives} on task) — "
         f"Day {day}\n"
         f"Territories ({len(owned)}): {', '.join(t.name for t in owned) or 'none'}"
         f"{facility_line}"
@@ -494,6 +520,66 @@ class CorpActionsMixin:
                 self.notify("Upgraded the Research Facility's efficiency.")
             else:
                 self._notify_refusal()
+
+        elif item_id.startswith("tail_"):
+            parts = item_id.removeprefix("tail_").split("_", 1)
+            sighting_day = int(parts[0])
+            actor_id = parts[1]
+            sighting = next(
+                (s for s in corp_state.sightings if s.day == sighting_day and s.actor_id == actor_id),
+                None,
+            )
+            if sighting is None:
+                self.notify("That sighting is no longer in the log.", severity="warning")
+            elif tail_runner(corp_state, sighting, self.app.rng):
+                who = RUNNERS_BY_ID[sighting.actor_id].name
+                faction_note = ""
+                if sighting.runner_faction_id:
+                    faction_note = f" ({sighting.runner_faction_id})"
+                self.notify(
+                    f"Tailing {who}{faction_note} — operative dispatched. "
+                    f"Intel: spotted in {corp_map.territories[sighting.territory_id].name} "
+                    f"on day {sighting.day}."
+                )
+            else:
+                self.notify("The tail lost their target. Operative dispatched anyway.")
+
+        elif item_id.startswith("intel_"):
+            territory_id = item_id.removeprefix("intel_")
+            if gather_intel(corp_state, corp_map, territory_id, self.app.rng):
+                territory = corp_map.territories[territory_id]
+                owner_name = (
+                    FACTIONS_BY_ID[territory.owner].name if territory.owner != "neutral" else "neutral ground"
+                )
+                modifier_parts = []
+                for mod in TerritoryModifier:
+                    val = territory.modifiers.get(mod, 0)
+                    if val:
+                        modifier_parts.append(f"{mod.value} {val}")
+                mods = ", ".join(modifier_parts) if modifier_parts else "none"
+                locations = ", ".join(
+                    f"{loc.name} ({loc.kind.value})" for loc in territory.locations
+                ) if territory.locations else "none"
+                self.notify(
+                    f"Intel on {territory.name} ({owner_name}): "
+                    f"garrison {territory.garrison}, modifiers [{mods}], "
+                    f"locations [{locations}]."
+                )
+            else:
+                self.notify("The operative came back empty-handed.")
+
+        elif item_id.startswith("sabotage_"):
+            territory_id = item_id.removeprefix("sabotage_")
+            result = sabotage(corp_state, corp_map, territory_id, self.app.rng)
+            if result is not None:
+                territory = corp_map.territories[territory_id]
+                security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+                self.notify(
+                    f"Sabotage in {result}: Security reduced to {security}. "
+                    f"Operative exfiltrated — back tomorrow."
+                )
+            else:
+                self.notify("Sabotage failed — operative captured or killed.")
 
         else:
             return False

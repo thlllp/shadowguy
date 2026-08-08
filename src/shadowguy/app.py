@@ -17,6 +17,7 @@ from shadowguy.corp_turn import (
     collect_research,
     corp_defeated,
     employee_plural,
+    return_tasking_operatives,
 )
 from shadowguy.corpmap import lodging_cost
 from shadowguy.corpmap_gen import generate_corp_map
@@ -301,6 +302,9 @@ class ShadowguyApp(App):
                     f"Training complete: {trained.count} new "
                     f"{employee_plural(trained.category)} report for duty."
                 )
+            returned = return_tasking_operatives(self.corp_state)
+            if returned:
+                self.notify(f"{returned} operative(s) returned from tasking.")
             sightings = resolve_surveillance_day(
                 self.character, self.corp_map, self.corp_state, self.rival_runner_states, day, self.rng, self.runners
             )

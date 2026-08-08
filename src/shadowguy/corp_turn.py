@@ -67,6 +67,13 @@ from shadowguy.corpmap import (
 # First-slice numbers, not balance-simulated.
 STARTING_CASH = 500
 
+# The most untasked operatives a corp can hold in its pool at once (garrisoned
+# operatives don't count against this cap). Enforced by train_employees and
+# advance_training. Low on purpose — the first few bodies are a real decision
+# between defense, offense, and the new tasking options (tail_runner / gather_intel).
+# May be raised by a future technology.
+STARTING_OPERATIVE_MAX = 2
+
 TERRITORY_INCOME_BASE = 10
 TERRITORY_INCOME_PER_VALUE = 15
 
@@ -690,6 +697,25 @@ def operative_training_days(corp_state: CorpState) -> int:
     return TRAINING_DAYS[EmployeeCategory.OPERATIVE]
 
 
+def operative_max(_corp_state: CorpState) -> int:
+    """The most untasked operatives this corp can hold in its pool at once.
+    Garrisoned operatives (on Territory.garrison) don't count against this cap —
+    it gates the pool size, not total headcount. Starts at STARTING_OPERATIVE_MAX;
+    may be raised by a future technology."""
+    return STARTING_OPERATIVE_MAX
+
+
+def _add_operatives(corp_state: CorpState, count: int) -> int:
+    """Add up to `count` operatives to the pool, clipped at operative_max — the
+    shared mutator every path that grows the pool from outside it (training
+    completing, a tasking operative returning) goes through, so the cap can't be
+    missed by a future call site. Returns how many actually landed."""
+    room = max(operative_max(corp_state) - corp_state.operatives, 0)
+    added = min(count, room)
+    corp_state.operatives += added
+    return added
+
+
 @dataclass
 class PendingRecruit:
     """A training batch in progress at the Academy: which category is training,
@@ -730,6 +756,12 @@ class CorpState:
     # until surveillance.resolve_surveillance_day actually catches someone —
     # corp_turn.py never appends to this itself.
     sightings: list[Sighting] = field(default_factory=list)
+    # Operatives currently out on a task (tail_runner / gather_intel). They leave
+    # the pool when dispatched and return on the next day tick — see
+    # return_tasking_operatives. Doesn't count against operative_max, so a corp at
+    # cap can still send them out (they'll come back into a capped pool and be
+    # lost above it — dispatch them wisely).
+    tasking_operatives: int = 0
 
 
 def has_technology(corp_state: CorpState, technology_id: str) -> bool:
@@ -1153,6 +1185,149 @@ def deploy_operatives(
     return True
 
 
+def return_tasking_operatives(corp_state: CorpState) -> int:
+    """Bring operatives back from their task (tail_runner / gather_intel) at the
+    start of a new day. Returns them to the pool, clipped to operative_max — any
+    above the cap are lost (the corp can only field so many at once). Returns how
+    many were actually returned (capped count), so the caller can report it."""
+    if corp_state.tasking_operatives <= 0:
+        return 0
+    returning = corp_state.tasking_operatives
+    corp_state.tasking_operatives = 0
+    return _add_operatives(corp_state, returning)
+
+
+def _dispatch_operative(corp_state: CorpState, rng: random.Random) -> bool:
+    """Spend one operative from the pool on a tasking action: marks the day's
+    move used and rolls the shared 50% success chance. Shared by
+    tail_runner/gather_intel/sabotage, which differ only in target validation
+    and in whether a failure still returns the operative to tasking_operatives
+    (tail_runner/gather_intel always do; sabotage only on success) — that part
+    stays with each caller."""
+    corp_state.operatives -= 1
+    corp_state.daily_action_used = True
+    return rng.random() < 0.5
+
+
+# --- Operative tasking: tail a sighted runner ---------------------------------
+
+
+def tail_runner_targets(corp_state: CorpState) -> list[Sighting]:
+    """Sightings of independent runners eligible for a tail. Only while the day's
+    move is free, an operative is spare in the pool, and the sighting is of a
+    runner (not the player)."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return []
+    return [s for s in corp_state.sightings if s.kind == "runner"]
+
+
+def tail_runner(corp_state: CorpState, sighting: Sighting, rng: random.Random) -> bool:
+    """Dispatch one operative to tail a sighted runner. The operative leaves the
+    pool immediately (to tasking_operatives), the day's move is spent, and a
+    detection-style roll determines intel quality:
+
+    - Success: the caller surfaces the intel (runner faction, last known activity,
+      territory of origin). The sighting stays in the log — an investigated
+      sighting is worth more RP with Total Information Awareness.
+    - Failure: no intel; the operative simply returns next day via
+      return_tasking_operatives.
+
+    Returns True on success (a hit), so the caller can display the intel. Fails
+    closed if the day's move is spent, no operatives are spare, or no runner
+    sightings exist."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return False
+    if sighting.kind != "runner":
+        return False
+    success = _dispatch_operative(corp_state, rng)
+    corp_state.tasking_operatives += 1
+    return success
+
+
+# --- Operative tasking: gather intel on a territory ---------------------------
+
+
+def intel_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Rival or neutral territories an operative can be sent to gather intel on.
+    Only while the day's move is free and an operative is spare."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return []
+    return [
+        t for t in corp_map.territories.values()
+        if t.owner != corp_state.faction_id
+    ]
+
+
+def gather_intel(
+    corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng: random.Random,
+) -> bool:
+    """Dispatch one operative to scout a rival or neutral territory. The operative
+    leaves the pool for tasking, the day's move is spent, and a roll determines
+    intel quality:
+
+    - Success (50%): the caller surfaces everything visible about the territory
+      (owner, garrison count, modifiers, locations/buildings).
+    - Failure: no intel; the operative returns next day.
+
+    Returns True on success. Fails closed if the day's move is spent, no
+    operatives are spare, or the territory is the corp's own."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return False
+    territory = corp_map.territories.get(territory_id)
+    if territory is None or territory.owner == corp_state.faction_id:
+        return False
+    success = _dispatch_operative(corp_state, rng)
+    corp_state.tasking_operatives += 1
+    return success
+
+
+# --- Operative tasking: sabotage a rival territory ----------------------------
+
+
+def sabotage_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Rival-held territories an operative can be sent to sabotage. Only while the
+    day's move is free and an operative is spare. Neutral ground and the corp's own
+    territory are excluded — sabotage is a hostile act."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return []
+    return [
+        t for t in corp_map.territories.values()
+        if t.owner not in (corp_state.faction_id, "neutral")
+    ]
+
+
+def sabotage(
+    corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng: random.Random,
+) -> str | None:
+    """Dispatch one operative to sabotage a rival-held territory. The operative
+    leaves the pool for tasking (returns next day via return_tasking_operatives),
+    the day's move is spent, and a roll determines the outcome:
+
+    - Success (50%): the territory's Security drops by 1 (minimum 0). The
+      operative returns alive. Returns the target territory's name for the
+      caller to report.
+    - Failure: the operative is captured or killed — they do NOT return (lost
+      from tasking). Returns None.
+
+    Fails closed (no move consumed, nothing mutated) if the day's move is spent,
+    no operatives are spare, or the target isn't a rival-held territory."""
+    if corp_state.daily_action_used or corp_state.operatives <= 0:
+        return None
+    territory = corp_map.territories.get(territory_id)
+    if territory is None or territory.owner in (corp_state.faction_id, "neutral"):
+        return None
+    if _dispatch_operative(corp_state, rng):
+        # Success: the operative did the job and reports back.
+        territory.modifiers[TerritoryModifier.SECURITY] = max(
+            0, territory.modifiers.get(TerritoryModifier.SECURITY, 0) - 1,
+        )
+        corp_state.tasking_operatives += 1
+        return territory.name
+    else:
+        # Failure: operative lost — no tasking return.
+        return None
+
+
 @dataclass
 class AttackResult:
     """What one resolved attack did, for the caller to report. Returned by
@@ -1290,10 +1465,16 @@ def train_employees(
     advance_training completes it. Shares expand_into's once-a-day slot and the
     Academy's single training slot — fails closed if the corp's already made its
     move today, a batch is already training, holds no Academy (a rival can capture
-    the one it was seeded — see build_academy), or can't afford it."""
+    the one it was seeded — see build_academy), can't afford it, or (for operatives)
+    the pool is already at or above the cap."""
     if corp_state.daily_action_used or corp_state.pending_recruit is not None:
         return False
     academy = owned_academy(corp_state, corp_map)
+    if academy is None:
+        return False
+    count = academy.academy_tier or 0
+    if category is EmployeeCategory.OPERATIVE and corp_state.operatives + count > operative_max(corp_state):
+        return False
     cost = (
         operative_training_cost(corp_state)
         if category is EmployeeCategory.OPERATIVE
@@ -1304,12 +1485,12 @@ def train_employees(
         if category is EmployeeCategory.OPERATIVE
         else TRAINING_DAYS[category]
     )
-    if academy is None or cost > corp_state.cash:
+    if cost > corp_state.cash:
         return False
     corp_state.cash -= cost
     corp_state.pending_recruit = PendingRecruit(
         category=category,
-        count=academy.academy_tier or 0,
+        count=count,
         ready_day=day + days,
     )
     corp_state.daily_action_used = True
@@ -1327,7 +1508,15 @@ def advance_training(corp_state: CorpState, day: int) -> PendingRecruit | None:
     if recruit.category is EmployeeCategory.SCIENTIST:
         corp_state.scientists += recruit.count
     elif recruit.category is EmployeeCategory.OPERATIVE:
-        corp_state.operatives += recruit.count
+        # Snapped to the cap rather than routed through _add_operatives' room-based
+        # clip: unlike a tasking operative returning, the pool here may already sit
+        # above operative_max (e.g. the cap dropping after the batch was queued), and
+        # this is the point that resyncs it back down rather than adding on top.
+        # The recruit's own count is trimmed to match what actually landed, so the
+        # caller (app.py's completion toast) doesn't overstate the batch.
+        before = corp_state.operatives
+        corp_state.operatives = min(before + recruit.count, operative_max(corp_state))
+        recruit.count = max(corp_state.operatives - before, 0)
     else:
         corp_state.research_assistants += recruit.count
     corp_state.pending_recruit = None
