@@ -148,7 +148,7 @@ from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, complete_job, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
 from textual.geometry import Offset
-from textual.widgets import Collapsible, ListItem, ListView, Static
+from textual.widgets import Button, Collapsible, ListItem, ListView, Static
 
 from helpers import AlwaysSix, ForcedChance, crew_stats_for
 
@@ -565,7 +565,7 @@ def test_corp_map_screen_has_sidebar_categories():
             # Select the corp category to see its action list.
             await pilot.click("#cat_corp")
             await pilot.pause()
-            assert any(item.id == "rest" for item in app.screen.query_one("#activities", ListView).children)
+            assert app.screen.query_one("#rest_button", Button) is not None
 
             await pilot.press("c")
             await pilot.pause()
@@ -2317,9 +2317,10 @@ def test_corp_screen_expand_and_rest():
             cash_before = app.corp_state.cash
             # Rest is 8 hours now, not a full day -- click it enough times (3 * 8 =
             # HOURS_PER_DAY) to actually cross a day boundary and fire the tick.
+            rest_button = app.screen.query_one("#rest_button", Button)
             for _ in range(HOURS_PER_DAY // REST_HOURS_COST):
-                await pilot.click("#rest")
-                await pilot.pause()
+                rest_button.press()
+                await _settle(pilot)
             assert app.character.day == day_before + 1
             assert app.character.elapsed_hours == hours_before + HOURS_PER_DAY
             assert app.corp_state.daily_action_used is False
@@ -2360,11 +2361,10 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             research_ids = {item.id for item in research_list.children}
             assert research_ids == {"build_lab", "build_efficiency"}
 
-            # Neither set of ids leaked into the territory/rest list.
+            # Neither set of ids leaked into the territory list (rest is a button now).
             corp_list_ids = {item.id for item in app.screen.query_one("#corp_list", ListView).children}
             assert "train_scientist" not in corp_list_ids
             assert "build_lab" not in corp_list_ids
-            assert "rest" in corp_list_ids
 
             scientists_before = app.corp_state.scientists
             await pilot.click("#train_scientist")
@@ -2625,7 +2625,7 @@ def test_hovering_a_territory_leaves_the_locals_panel_on_the_current_location():
 
             here = app.corp_map.territories[app.character.location_id]
             neighbor = app.corp_map.territories[here.connections[0]]
-            expected = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers", "Rest"}
+            expected = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers"}
             assert {box.title for box in screen.query("#map_local_boxes Collapsible")} == expected
 
             _hover_territory(screen, neighbor.id)
@@ -3913,7 +3913,7 @@ def test_corp_only_map_mode_shows_territory_actions_instead_of_locals():
             await _settle_map_corp_actions(pilot, screen)
 
             rows = [item.id for item in screen.query_one("#map_corp_actions", ListView).children]
-            assert "rest" in rows, "Rest must stay reachable from the map screen regardless of district"
+            assert screen.query_one("#rest_button", Button) is not None, "Rest button must be reachable from the map screen"
             assert f"deploy_{target}" in rows
 
             await pilot.click(f"#deploy_{target}")
