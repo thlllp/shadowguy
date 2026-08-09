@@ -57,6 +57,8 @@ from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     AP_COST,
+    FUNDRAISE_PER_TERRITORY,
+    LEVY_PER_VALUE,
     RESEARCH_FACILITY_REBUILD_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
@@ -4281,3 +4283,48 @@ def test_ammo_can_be_bought_at_a_weapon_shop_and_loaded_from_the_inventory_scree
             assert character.ammo[AmmoKind.PISTOL.value] == reserve - magazine
 
     run(body())
+
+
+def test_corp_screen_free_actions_run_a_broke_corp_off_action_points_alone():
+    """The three 0eb rows (corp_turn's free actions) end to end on CorpScreen: a corp
+    with no cash can still fundraise, and a solvent one isn't offered the row at all.
+    Without these a broke corp burns both action points every day with nothing to
+    spend them on -- every other AP move charges cash too."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            app.corp_state.cash = 0
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+            def rows():
+                return [item.id for item in screen.query_one("#corp_list", ListView).children]
+
+            ours = app.corp_state.faction_id
+            held = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)
+            assert "fundraise" in rows()
+            # Survey reaches ground no cash-gated move can: gang turf and the reserved
+            # player start are both legal targets.
+            assert [r for r in rows() if r.startswith("survey_")]
+
+            await pilot.click("#fundraise")
+            await _settle(pilot)
+            assert app.corp_state.cash == FUNDRAISE_PER_TERRITORY * len(held)
+            assert app.corp_state.action_points == 1
+
+            # Levy is offered wherever Development is left to strip, broke or not.
+            territory = app.corp_map.territories[held[0]]
+            territory.modifiers[TerritoryModifier.DEVELOPMENT] = 2
+            app.corp_state.cash = 1_000_000
+            await screen._refresh()
+            await _settle(pilot)
+            assert "fundraise" not in rows()  # solvent: the row is gone, not greyed
+
+            cash_before = app.corp_state.cash
+            await pilot.click(f"#levy_{territory.id}")
+            await _settle(pilot)
+            assert app.corp_state.cash == cash_before + LEVY_PER_VALUE * territory.value
+            assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
+            assert app.corp_state.action_points == 0

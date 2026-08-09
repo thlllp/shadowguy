@@ -29,9 +29,12 @@ from shadowguy.corp_turn import (
     EXPANSION_COST_PER_VALUE,
     EXTENDED_SURVEILLANCE_COST,
     EXTENDED_SURVEILLANCE_MAX,
+    FUNDRAISE_CASH_CEILING,
+    FUNDRAISE_PER_TERRITORY,
     HARDENED_GARRISON_ID,
     INVESTIGATION_COST,
     LAB_UPGRADE_COSTS,
+    LEVY_PER_VALUE,
     MAX_EFFICIENCY_UPGRADES,
     MAX_LABS_BUILT,
     MAX_SIGHTINGS_LOG,
@@ -61,6 +64,7 @@ from shadowguy.corp_turn import (
     build_efficiency_upgrade,
     build_lab,
     build_research_facility,
+    can_fundraise,
     collect_income,
     collect_research,
     corp_defeated,
@@ -70,12 +74,17 @@ from shadowguy.corp_turn import (
     effective_surveillance_max,
     expand_into,
     expansion_cost,
+    fundraise,
+    fundraise_amount,
     gather_intel,
     has_technology,
     intel_targets,
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
+    levy,
+    levy_amount,
+    levy_targets,
     next_efficiency_cost,
     next_lab_cost,
     operative_max,
@@ -97,6 +106,8 @@ from shadowguy.corp_turn import (
     sightings_log_cap,
     surveillance_bump_cost,
     surveillance_targets,
+    survey,
+    survey_targets,
     tail_runner,
     tail_runner_targets,
     train_employees,
@@ -1938,3 +1949,118 @@ def test_rapid_deployment_reduces_operative_training_days():
     assert operative_training_days(corp_state) == TRAINING_DAYS[EmployeeCategory.OPERATIVE]
     corp_state.researched.add(RAPID_DEPLOYMENT_ID)
     assert operative_training_days(corp_state) == STIMS_OPERATIVE_DAYS
+
+
+# --- Free actions (1 AP, 0eb) -------------------------------------------------
+
+
+def test_fundraise_pays_per_territory_held_and_costs_only_ap():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0)
+
+    raised = fundraise(corp_state, corp_map)
+
+    # iron_home + iron_second, not the neutral ground next to them.
+    assert raised == 2 * FUNDRAISE_PER_TERRITORY
+    assert corp_state.cash == raised
+    assert corp_state.action_points == 2 - AP_COST
+
+
+def test_fundraise_is_offered_only_to_a_broke_corp():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=FUNDRAISE_CASH_CEILING)
+
+    assert not can_fundraise(corp_state, corp_map)
+    assert fundraise(corp_state, corp_map) is None
+    assert corp_state.cash == FUNDRAISE_CASH_CEILING
+    assert corp_state.action_points == 2  # fails closed, no AP burned
+
+    corp_state.cash = FUNDRAISE_CASH_CEILING - 1
+    assert can_fundraise(corp_state, corp_map)
+
+
+def test_fundraise_fails_closed_with_no_ap():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0, action_points=0)
+
+    assert fundraise(corp_state, corp_map) is None
+    assert corp_state.cash == 0
+
+
+def test_fundraise_pays_nothing_to_a_corp_holding_nothing():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=GHOSTWIRE, cash=0)
+
+    assert fundraise_amount(corp_state, corp_map) == 0
+    assert not can_fundraise(corp_state, corp_map)
+    assert fundraise(corp_state, corp_map) is None
+
+
+def test_levy_trades_a_point_of_development_for_cash():
+    corp_map = _map()
+    territory = corp_map.territories["iron_home"]
+    territory.modifiers[TerritoryModifier.DEVELOPMENT] = 2
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0)
+
+    raised = levy(corp_state, corp_map, "iron_home")
+
+    assert raised == LEVY_PER_VALUE * territory.value
+    assert corp_state.cash == raised
+    assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
+    assert corp_state.action_points == 2 - AP_COST
+
+
+def test_levy_targets_skip_undeveloped_and_unowned_districts():
+    corp_map = _map()
+    corp_map.territories["iron_home"].modifiers[TerritoryModifier.DEVELOPMENT] = 1
+    corp_map.territories["neutral_a"].modifiers[TerritoryModifier.DEVELOPMENT] = 5
+    corp_state = CorpState(faction_id=IRONCLAD)
+
+    assert [t.id for t in levy_targets(corp_state, corp_map)] == ["iron_home"]
+    # iron_second is held but flat, neutral_a is developed but not ours.
+    assert levy(corp_state, corp_map, "iron_second") is None
+    assert levy(corp_state, corp_map, "neutral_a") is None
+    assert corp_state.action_points == 2
+
+
+def test_levy_is_a_worse_deal_than_the_development_it_strips():
+    """Levying back a district the corp paid DEVELOPMENT_BUMP_COST to build up must
+    lose money, or the pair becomes a cash pump."""
+    corp_map = _map()
+    for territory in corp_map.territories.values():
+        assert levy_amount(territory) < DEVELOPMENT_BUMP_COST
+
+
+def test_survey_reads_a_bordering_district_for_free():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0)
+
+    surveyed = survey(corp_state, corp_map, "neutral_a")
+
+    assert surveyed is corp_map.territories["neutral_a"]
+    assert corp_state.cash == 0
+    assert corp_state.operatives == 0  # no operative spent, unlike gather_intel
+    assert corp_state.action_points == 2 - AP_COST
+
+
+def test_survey_targets_are_bordering_districts_the_corp_doesnt_hold():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+
+    # Gang turf and the reserved player start are in: looking commits nothing, so
+    # this is wider than expansion_candidates.
+    assert [t.id for t in survey_targets(corp_state, corp_map)] == [
+        "neutral_a",
+        "neutral_gang",
+        "start",
+    ]
+    assert survey(corp_state, corp_map, "iron_second") is None  # already ours
+    assert corp_state.action_points == 2
+
+
+def test_survey_fails_closed_with_no_ap():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD, action_points=0)
+
+    assert survey_targets(corp_state, corp_map) == []
+    assert survey(corp_state, corp_map, "neutral_a") is None
