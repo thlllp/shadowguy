@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from shadowguy.checks import resolve_rng
-from shadowguy.corpmap import CorpMap
+from shadowguy.corpmap import CorpMap, LocationKind
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.jobs import JobTiming, generate_job
 from shadowguy.scene import Scene
@@ -14,6 +14,9 @@ from shadowguy.security import SecurityContract, generate_security_contract
 
 if TYPE_CHECKING:
     from shadowguy.character import Character
+
+# Amy's fixer id — unique, one per map, seated at Amy's Place.
+AMY_FIXER_ID = "fixer_amy"
 
 # Rows are (id, name, specialty, faction_id). faction_id None is a street-level
 # contact, seeded on neutral ground; a real faction_id is an inside contact, seeded
@@ -25,6 +28,7 @@ FIXER_ROSTER = [
     ("fixer_switchblade_sal", "Switchblade Sal", "Street muscle & quick cash", None),
     ("fixer_tallyman", "The Tallyman", "Debt collection & courier work", None),
     ("fixer_neon_choir", "Neon Choir", "Info brokering & blackmail", None),
+    (AMY_FIXER_ID, "Amy", "Amy's Place regulars & underground work", None),
     ("fixer_stitch", "Stitch", "Ironclad hardware & muscle", "faction_ironclad"),
     ("fixer_null", "Null", "Ghostwire backdoors & data runs", "faction_ghostwire"),
     ("fixer_doc_vex", "Doc Vex", "Meridian black-clinic contracts", "faction_meridian"),
@@ -111,23 +115,43 @@ def create_fixers(corp_map: CorpMap, rng: random.Random | None = None) -> list[F
     actually owns this run, so which of their districts holds the contact varies
     with the map like everything else — a corp's own turf isn't off-limits to them,
     unlike a street-level fixer.
+
+    Amy is the one exception: she is always seated at the territory that holds
+    Amy's Place (LocationKind.AMYS_PLACE), never randomly.
     """
     rng = resolve_rng(rng)
+    amys_territory = next(
+        t
+        for t in corp_map.territories.values()
+        if any(loc.kind == LocationKind.AMYS_PLACE for loc in t.locations)
+    )
     neutral_candidates = [
         territory.id
         for territory in corp_map.territories.values()
-        if territory.owner == "neutral" and territory.id != corp_map.player_start_id
+        if territory.owner == "neutral"
+        and territory.id != corp_map.player_start_id
+        and territory.id != amys_territory.id
     ]
     corp_candidates: dict[str, list[str]] = {}
     for territory in corp_map.territories.values():
         if territory.owner != "neutral":
             corp_candidates.setdefault(territory.owner, []).append(territory.id)
 
-    neutral_roster = [entry for entry in FIXER_ROSTER if entry[3] is None]
+    neutral_roster = [entry for entry in FIXER_ROSTER if entry[3] is None and entry[0] != AMY_FIXER_ID]
     fixers = _seat(neutral_roster, neutral_candidates, rng)
     for faction_id, faction_territory_ids in corp_candidates.items():
         corp_roster = [entry for entry in FIXER_ROSTER if entry[3] == faction_id]
         fixers += _seat(corp_roster, faction_territory_ids, rng)
+
+    _, amy_name, amy_specialty, _ = next(entry for entry in FIXER_ROSTER if entry[0] == AMY_FIXER_ID)
+    fixers.append(
+        Fixer(
+            id=AMY_FIXER_ID,
+            name=amy_name,
+            specialty=amy_specialty,
+            location_id=amys_territory.id,
+        )
+    )
     return fixers
 
 

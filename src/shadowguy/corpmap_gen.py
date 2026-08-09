@@ -410,6 +410,22 @@ def _make_docks(territory_id: str, rng: random.Random, used_names: set[str]) -> 
     )
 
 
+AMYS_PLACE_ROLE = "fixer"
+
+
+def _make_amys_place(territory_id: str, rng: random.Random) -> Location:
+    """Amy's Place — a unique fixer bar, one per map on neutral ground. Always staffed
+    by Amy and never a job site: it's injected out of band like the junkyard and docks,
+    and Amy the fixer is seated here by create_fixers."""
+    location_id = f"{territory_id}_amys_place"
+    return Location(
+        id=location_id,
+        name="Amy's Place",
+        kind=LocationKind.AMYS_PLACE,
+        characters=_characters_for_roles(location_id, [AMYS_PLACE_ROLE], rng),
+    )
+
+
 
 def _neighbors(cell: Cell) -> list[Cell]:
     x, y = cell
@@ -565,6 +581,7 @@ class _InjectionPlan:
     gang_ids: dict[str, str]
     junkyard_ids: set[str]
     docks_ids: set[str]
+    amys_place_id: str
 
 
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
@@ -581,20 +598,33 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         gang_turf.setdefault(gang_id, []).append(tid)
     den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
 
+    # Amy's Place is a single guaranteed placement, same footing as hospital/den above
+    # rather than a junkyard/docks-style count scaled to the neutral pool — so it's
+    # reserved right after them, while the neutral pool is least fragmented, instead of
+    # competing with junkyard/docks for what's left.
+    amy_candidates = [tid for tid in neutral_ids if tid not in hospital_ids and tid not in den_ids]
+    if not amy_candidates:
+        raise ValueError("_plan_injections: no neutral tile left for Amy's Place")
+    amys_place_id = rng.choice(amy_candidates)
+
     # Junkyards draw from neutral ground only, and skip any tile already reserved for
-    # a hospital or a gang den: those two already stack to the reserved-slot ceiling a
-    # neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY - MIN_LOCATIONS_PER_TERRITORY
-    # == 2) — a third reservation on the same tile would make generate_corp_map's
-    # `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop below MIN and raise.
-    junkyard_candidates = [tid for tid in neutral_ids if tid not in hospital_ids and tid not in den_ids]
+    # a hospital, gang den or Amy's Place: those already stack to the reserved-slot
+    # ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
+    # MIN_LOCATIONS_PER_TERRITORY == 2) — a third reservation on the same tile would
+    # make generate_corp_map's `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop
+    # below MIN and raise.
+    junkyard_candidates = [
+        tid for tid in neutral_ids
+        if tid not in hospital_ids and tid not in den_ids and tid != amys_place_id
+    ]
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
     junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
 
     # Same neutral-only, out-of-band placement as junkyards (reuses junkyard_candidates
-    # rather than re-deriving the hospital/den exclusion), plus mutually exclusive with
-    # junkyards too — a neutral tile already tops out at 2 stacked reservations (see the
-    # junkyard_candidates comment above); a docks would be the third if it could land on
-    # a junkyard tile.
+    # rather than re-deriving the hospital/den/Amy's Place exclusion), plus mutually
+    # exclusive with junkyards too — a neutral tile already tops out at 2 stacked
+    # reservations (see the junkyard_candidates comment above); a docks would be the
+    # third if it could land on a junkyard tile.
     docks_candidates = [tid for tid in junkyard_candidates if tid not in junkyard_ids]
     docks_count = min(len(docks_candidates), max(1, round(len(neutral_ids) / TILES_PER_DOCKS)))
     docks_ids = set(rng.sample(docks_candidates, docks_count))
@@ -624,6 +654,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         gang_ids=gang_ids,
         junkyard_ids=junkyard_ids,
         docks_ids=docks_ids,
+        amys_place_id=amys_place_id,
     )
 
 
@@ -666,6 +697,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid in plan.academy_ids)
             + (tid in plan.junkyard_ids)
             + (tid in plan.docks_ids)
+            + (tid == plan.amys_place_id)
         )
         count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
@@ -693,6 +725,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         territories[tid].locations.append(_make_junkyard(tid, rng, used_names))
     for tid in plan.docks_ids:
         territories[tid].locations.append(_make_docks(tid, rng, used_names))
+    territories[plan.amys_place_id].locations.append(_make_amys_place(plan.amys_place_id, rng))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
     for tid, faction_id in plan.research_ids.items():
