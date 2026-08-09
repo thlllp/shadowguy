@@ -40,11 +40,17 @@ class Archetype:
     # Deltaware/Trashware (min_standing 0) are ever reachable here, same reason `gear`
     # never names a standing-gated Item.
     cyberware: tuple[str, ...] = ()
+    # shops.Program ids bought (Character.buy_creation_program, same gear_budget swap)
+    # and installed onto the first deck `gear` carries (inventory.install_program,
+    # free once owned). Only meaningful for a preset whose gear includes a deck
+    # (program_slots > 0) -- see the Hacker row, the only one that names any today.
+    programs: tuple[str, ...] = ()
 
     def apply(self, character: "Character") -> None:
         from shadowguy.character import GEAR_EB_PER_POINT
         from shadowguy.cybernetics import CYBERWARE_BY_ID
-        from shadowguy.shops import ITEMS_BY_ID
+        from shadowguy.inventory import install_program
+        from shadowguy.shops import ITEMS_BY_ID, PROGRAMS_BY_ID
 
         for stat, points in self.stats.items():
             for _ in range(points):
@@ -54,11 +60,14 @@ class Archetype:
             while character.skill_rank(skill_id) < target_rank:
                 if not character.spend_skill_point(skill_id):
                     raise ValueError(f"{self.id}: cannot afford {skill_id} rank {target_rank}")
-        # Gear (and cyberware) last: the rank list above leaves exactly the points this
-        # needs, so converting first would starve it. Buy in the order written -- a
-        # preset that can't afford its own list is a bad row, and _validate_preset says so.
-        bill = sum(ITEMS_BY_ID[item_id].price for item_id in self.gear) + sum(
-            CYBERWARE_BY_ID[cyberware_id].price for cyberware_id in self.cyberware
+        # Gear (and cyberware, and programs) last: the rank list above leaves exactly
+        # the points this needs, so converting first would starve it. Buy in the order
+        # written -- a preset that can't afford its own list is a bad row, and
+        # _validate_preset says so.
+        bill = (
+            sum(ITEMS_BY_ID[item_id].price for item_id in self.gear)
+            + sum(CYBERWARE_BY_ID[cyberware_id].price for cyberware_id in self.cyberware)
+            + sum(PROGRAMS_BY_ID[program_id].price for program_id in self.programs)
         )
         while character.gear_budget < bill:
             if not character.convert_skill_point_to_gear():
@@ -72,6 +81,23 @@ class Archetype:
         for cyberware_id in self.cyberware:
             if not character.buy_creation_cyberware(cyberware_id):
                 raise ValueError(f"{self.id}: cannot install {cyberware_id}")
+        if self.programs:
+            deck_index = next(
+                (
+                    i
+                    for i, entry in enumerate(character.inventory)
+                    if ITEMS_BY_ID[entry.item_id].program_slots > 0
+                ),
+                None,
+            )
+            if deck_index is None:
+                raise ValueError(f"{self.id}: names programs but gear carries no deck")
+            for program_id in self.programs:
+                if not character.buy_creation_program(program_id):
+                    raise ValueError(f"{self.id}: cannot buy {program_id}")
+                message = install_program(character, deck_index, program_id)
+                if not message.startswith("Installed "):
+                    raise ValueError(f"{self.id}: cannot install {program_id} ({message})")
 
 
 # id, name, description, stats, skills (id -> target rank)
@@ -96,11 +122,16 @@ _ARCHETYPE_ROWS = (
         {"body": 3, "strength": 3},
         # Strength is bought for the damage, not the skill list: it adds to every melee
         # hit (combat.melee_damage_bonus), so a club in this build swings for its rating
-        # plus 4 before the roll's margin.
-        {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1},
+        # plus 4 before the roll's margin. Clubs sits one rank lower than a pure skill
+        # build would buy: the cyberarm below now eats the point instead.
+        {"clubs": 6, "toughness": 6, "grapple": 3, "intimidation": 1},
         # Walks in wearing the heaviest armor the ungated catalog sells: this build wins
         # by still standing, and Body already feeds the soak roll the Hardsuit adds to.
         ("brass_knuckles", "combat_knife", "hardsuit", "reinforced_helmet", "steel_toe_boots"),
+        # A Deltaware Grapple Rig Cyberarm: +2 Grapple stacked straight onto the skill
+        # this build already carries, same "one signature stat, chrome doubles down on
+        # it" shape the Street Samurai's cyberarm uses.
+        ("grapple_rig_cyberarm",),
         (),
     ),
     (
@@ -119,15 +150,26 @@ _ARCHETYPE_ROWS = (
         # Infer sits one rank lower than the read above would otherwise buy: the
         # Zetatech Rig's price is the point of the build (see gear below), and it now
         # eats a third skill point rather than two, so this is the rank that gives up
-        # the ground.
-        {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2},
+        # the ground. Hack gives up a second rank on top of that -- to the Datajack
+        # below and the two programs riding in the Rig's slots.
+        {"cybercombat": 6, "hack": 4, "computer": 4, "infer": 2, "tinkering": 2},
         # The deck *is* the build -- a hacker with no cyberdeck cannot enter the matrix
         # at all, and the Zetatech Rig's 3 program slots are the most the ungated catalog
         # offers. It's also the priciest single item in the ungated catalog, which is
         # deliberate: a top-tier deck is meant to cost this build a real rank, not pocket
         # change. The pistol and jacket are so the walk to the job isn't fatal.
         ("zetatech_rig", "pipe_pistol", "leather_jacket", "kevlar_helmet"),
-        (),
+        # A Deltaware Datajack: +1 to every matrix action (cybernetics.Cyberware.
+        # matrix_action_bonus), unconditional rather than tied to one roll the way the
+        # skills above are -- the closest thing to a stat bump this build's whole arena
+        # gets.
+        ("datajack",),
+        # Two of the Rig's three slots filled at creation, so this build walks into its
+        # first matrix fight with real programs rather than an empty deck: Icebreaker
+        # for guaranteed chip damage against the ICE (matrix.py rolls no skill for a
+        # program's own action_damage), Sleaze as a second way past it that doesn't cost
+        # a Cybercombat roll.
+        ("icebreaker", "sleaze"),
     ),
     (
         "infiltrator",
@@ -136,12 +178,16 @@ _ARCHETYPE_ROWS = (
         {"agility": 4, "perception": 2},
         # Blades rather than a gun: this build's whole premise is not being heard, and
         # a blade is the weapon it can carry concealed. Sight stays because Recon --
-        # the Infiltrator's own job archetype -- leads every beat with a perception skill.
-        {"stealth": 7, "deception": 5, "sight": 3, "blades": 3},
+        # the Infiltrator's own job archetype -- leads every beat with a perception
+        # skill, though it gives up a rank to the cybereye below.
+        {"stealth": 7, "deception": 5, "sight": 2, "blades": 3},
         # Blades and nothing that bangs: Slippers carry a Stealth bonus of their own
         # (shops.Item.skill_bonuses), and light armor because being seen is the failure
         # state, not being shot.
         ("monoblade", "combat_knife", "leather_jacket", "slippers"),
+        # A Deltaware Cybereye Scanner: +1 Perception stacked onto the same stat Sight
+        # already rolls, so the rank Sight gave up above isn't a net loss.
+        ("cybereye_scanner",),
         (),
     ),
     (
@@ -156,9 +202,14 @@ _ARCHETYPE_ROWS = (
         # 650eb Pump Shotgun. Gear points are the fix: this preset now spends one of
         # them on the shotgun, so its signature skill has a weapon to roll from day one
         # rather than after a job or two of shooting a Pipe Pistol. Pistols stays as the
-        # sidearm the second weapon slot carries.
-        {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3},
+        # sidearm the second weapon slot carries. Longarms gives up a rank to the
+        # reflex coprocessor below.
+        {"longarms": 6, "dodge": 5, "toughness": 3, "pistols": 3},
         ("pump_shotgun", "pipe_pistol", "kevlar_vest", "reinforced_helmet", "steel_toe_boots"),
+        # A Deltaware Reflex Coprocessor: +1 Agility feeds both Dodge and the ranged
+        # to-hit roll, the same "one signature stat, chrome doubles down" shape the
+        # Street Samurai's cyberarm uses.
+        ("reflex_coprocessor",),
         (),
     ),
     (
@@ -191,6 +242,7 @@ _ARCHETYPE_ROWS = (
         # 6) would leave this build one bad ripperdoc visit from cyberpsychosis before
         # its first job.
         ("hydraulic_cyberarm",),
+        (),
     ),
     (
         "fixer",
@@ -202,12 +254,16 @@ _ARCHETYPE_ROWS = (
         # recruit_cut), so it discounts every hire's wage and job cut for the whole run
         # -- this build fields a crew the others can't afford. Computer is what those 2
         # logic points are for: digging up information is the other half of the job, and
-        # a stat this preset buys should be a stat it actually rolls.
-        {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3},
+        # a stat this preset buys should be a stat it actually rolls. Deception gives up
+        # a rank to the adrenal gland below.
+        {"negotiations": 7, "leadership": 5, "deception": 2, "computer": 3},
         # The car is the buy nobody else makes: a Slot.VEHICLE item cuts TRAVEL_HOURS_COST
         # on every hop (shops.Item.travel_reduction), and this is the build that spends
         # its run moving between people rather than shooting them.
         ("armored_towncar", "pipe_pistol", "leather_jacket", "pawned_charm"),
+        # A Deltaware Synthetic Adrenal Gland: +1 Cool, the one stat this whole build
+        # is spent on and no other preset touches.
+        ("synthetic_adrenal_gland",),
         (),
     ),
 )
@@ -256,8 +312,9 @@ def _init() -> None:
             skills=skills,
             gear=gear,
             cyberware=cyberware,
+            programs=programs,
         )
-        for id_, name, description, stats, skills, gear, cyberware in _ARCHETYPE_ROWS
+        for id_, name, description, stats, skills, gear, cyberware, programs in _ARCHETYPE_ROWS
     ]
     for archetype in archetypes_list:
         _validate_preset(archetype)
