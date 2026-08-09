@@ -24,6 +24,7 @@ from shadowguy.corp_turn import (
     build_academy,
     build_lab,
     build_research_facility,
+    can_fundraise,
     defense_strength,
     deploy_operatives,
     deployable_targets,
@@ -31,12 +32,17 @@ from shadowguy.corp_turn import (
     employee_plural,
     expand_into,
     expansion_cost,
+    fundraise,
+    fundraise_amount,
     gather_intel,
     has_technology,
     intel_targets,
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
+    levy,
+    levy_amount,
+    levy_targets,
     log_faction_event,
     next_efficiency_cost,
     next_lab_cost,
@@ -53,6 +59,8 @@ from shadowguy.corp_turn import (
     research_technology,
     sabotage,
     sabotage_targets,
+    survey,
+    survey_targets,
     surveillance_bump_cost,
     surveillance_targets,
     tail_runner,
@@ -249,8 +257,40 @@ def standing_rows(character) -> list[ListItem]:
     ]
 
 
+def free_action_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
+    """The 1 AP / 0eb moves (corp_turn's free actions): fundraise, levy, survey.
+    Listed after the cash-gated rows because they're the fallback, not the plan —
+    but listed at all so a broke corp's action points always have somewhere to go.
+
+    Fundraising is left off entirely for a solvent corp (can_fundraise), unlike the
+    cash rows above, which stay up carrying a "(can't afford)" note: a row that
+    exists only under a cash ceiling reads as broken when it's shown to a corp
+    that's doing fine."""
+    rows = []
+    if can_fundraise(corp_state, corp_map):
+        label = f"Fundraise — +{fundraise_amount(corp_state, corp_map)}eb, free"
+        rows.append(ListItem(Static(_gate(label, corp_state, 0)), id="fundraise"))
+
+    for territory in levy_targets(corp_state, corp_map):
+        level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+        label = (
+            f"Levy {territory.name} — +{levy_amount(territory)}eb, "
+            f"Development {level}→{level - 1}"
+        )
+        rows.append(ListItem(Static(_gate(label, corp_state, 0)), id=f"levy_{territory.id}"))
+
+    for territory in survey_targets(corp_state, corp_map):
+        owner_name = (
+            FACTIONS_BY_ID[territory.owner].name if territory.owner != "neutral" else "neutral ground"
+        )
+        label = f"Survey {territory.name} ({owner_name}) — free"
+        rows.append(ListItem(Static(label), id=f"survey_{territory.id}"))
+    return rows
+
+
 def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
-    """Expansion onto neutral ground, plus the two repeatable modifier bumps."""
+    """Expansion onto neutral ground, the two repeatable modifier bumps, then the
+    free actions (free_action_rows)."""
     rows = []
     candidates = expansion_candidates(corp_map, corp_state.faction_id)
     for territory_id in candidates:
@@ -284,6 +324,8 @@ def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
                 id=f"develop_{territory.id}",
             )
         )
+
+    rows.extend(free_action_rows(corp_state, corp_map))
     return rows
 
 
@@ -481,6 +523,41 @@ class CorpActionsMixin:
                 )
             else:
                 self.notify("Can't afford it.", severity="warning")
+
+        elif item_id == "fundraise":
+            raised = fundraise(corp_state, corp_map)
+            if raised is not None:
+                self.notify(f"Emergency fundraising: +{raised}eb.")
+            else:
+                self._notify_refusal()
+
+        elif item_id.startswith("levy_"):
+            territory_id = item_id.removeprefix("levy_")
+            raised = levy(corp_state, corp_map, territory_id)
+            if raised is not None:
+                territory = corp_map.territories[territory_id]
+                level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+                self.notify(
+                    f"Levied {territory.name}: +{raised}eb, Development down to {level}."
+                )
+            else:
+                self._notify_refusal()
+
+        elif item_id.startswith("survey_"):
+            territory = survey(corp_state, corp_map, item_id.removeprefix("survey_"))
+            if territory is not None:
+                owner_name = (
+                    FACTIONS_BY_ID[territory.owner].name
+                    if territory.owner != "neutral"
+                    else "neutral ground"
+                )
+                security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+                self.notify(
+                    f"Survey of {territory.name} ({owner_name}): garrison "
+                    f"{territory.garrison}, Security {security}, value {territory.value}."
+                )
+            else:
+                self._notify_refusal()
 
         elif item_id.startswith("train_"):
             category = EmployeeCategory(item_id.removeprefix("train_"))

@@ -51,6 +51,7 @@ from .corp_screen import (
     ResearchTreeScreen,
     academy_rows,
     corp_info_text,
+    free_action_rows,
     operations_rows,
     research_rows,
     sighting_rows,
@@ -686,7 +687,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     # id, not endswith(f"_{territory_id}") -- a suffix check would also catch
     # academy_rows' train_research_assistant (EmployeeCategory.RESEARCH_ASSISTANT
     # has an internal underscore) if a district were ever named e.g. "Assistant".
-    _TERRITORY_ACTION_PREFIXES = ("expand", "surveil", "develop", "deploy", "attack", "newacademy", "rebuild")
+    _TERRITORY_ACTION_PREFIXES = (
+        "expand", "surveil", "develop", "levy", "survey",
+        "deploy", "attack", "newacademy", "rebuild",
+    )
 
     async def _refresh_map_corp_actions(self, territory_id: str) -> None:
         """Populate the corp actions panel for `territory_id` — whatever's under the
@@ -717,6 +721,12 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         ids = {f"{prefix}_{territory_id}" for prefix in self._TERRITORY_ACTION_PREFIXES}
         filtered = [row for row in territory_rows(corp_state, corp_map) if row.id in ids]
         filtered += [row for row in operations_rows(corp_state, corp_map) if row.id in ids]
+        # "fundraise" is corp-wide rather than territory-scoped, so it has no id suffix
+        # for the filter above to match. It's also the one move a corp with no cash and
+        # no operatives has left, so offer it on any district the corp holds rather than
+        # only on the Corp tab.
+        if territory.owner == corp_state.faction_id:
+            filtered += [r for r in free_action_rows(corp_state, corp_map) if r.id == "fundraise"]
 
         academy_all = academy_rows(corp_state, corp_map, day)
         academy = owned_academy(corp_state, corp_map)

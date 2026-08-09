@@ -27,6 +27,11 @@ before reading any function here:
   them behind action points would make researching compete with expanding for
   no design reason.
 
+Three actions cost AP and nothing else, so a corp that's out of cash still has
+something to spend the day on: fundraise (an emergency valve, only under
+FUNDRAISE_CASH_CEILING), levy (Development traded back for cash) and survey
+(gather_intel's recon without the operative).
+
 Each faction is seeded one RESEARCH_FACILITY and one ACADEMY (corpmap.add_research_facility
 /add_academy, called by the generator). A corp can come to hold two of a kind
 (capturing a rival's district takes its buildings with it) or none (losing its own
@@ -442,6 +447,25 @@ SURVEILLANCE_BUMP_COST = 400
 DEVELOPMENT_MIN_SECURITY = 3
 DEVELOPMENT_MIN_SURVEILLANCE = 3
 DEVELOPMENT_BUMP_COST = 800
+
+# --- Free actions -------------------------------------------------------------
+# Everything above spends cash as well as AP, so a broke corp used to have both
+# its action points and nothing to put them on: the operative moves are the only
+# cash-free ones, and operatives themselves are bought at the Academy. The three
+# below cost 1 AP and 0eb.
+
+# Emergency fundraising: eb per district held, offered only while the corp's cash
+# is under FUNDRAISE_CASH_CEILING. The ceiling is what keeps this an emergency
+# valve instead of a second income stream — a solvent corp can't call it at all,
+# so it never competes with collect_income as a way to make money.
+FUNDRAISE_PER_TERRITORY = 25
+FUNDRAISE_CASH_CEILING = STARTING_CASH
+
+# Levy: eb per point of a district's value, paid for with a point of its
+# Development. Deliberately lossy against DEVELOPMENT_BUMP_COST in both
+# directions — selling a built-up block back off is a bad trade, just a
+# survivable one.
+LEVY_PER_VALUE = 100
 
 # Each Brains tier replaces both per-head research rates outright rather than
 # adding to them — a flat better rate, not a stacking bonus, so there's one
@@ -1104,6 +1128,104 @@ def raise_development(corp_state: CorpState, corp_map: CorpMap, territory_id: st
         territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0) + 1
     )
     return True
+
+
+# --- Free actions: 1 AP, 0eb --------------------------------------------------
+
+
+def fundraise_amount(corp_state: CorpState, corp_map: CorpMap) -> int:
+    """What one round of emergency fundraising would raise: FUNDRAISE_PER_TERRITORY
+    per district held. 0 for a corp holding nothing (which is a lost run anyway —
+    see corp_defeated)."""
+    return FUNDRAISE_PER_TERRITORY * len(_owned_territories(corp_state, corp_map))
+
+
+def can_fundraise(corp_state: CorpState, corp_map: CorpMap) -> bool:
+    """Whether fundraising is on the table at all — only while the corp is under
+    FUNDRAISE_CASH_CEILING and still holds ground. Separate from `fundraise` so the
+    Corp screen can leave the row off entirely for a solvent corp rather than
+    showing one that always refuses."""
+    return corp_state.cash < FUNDRAISE_CASH_CEILING and fundraise_amount(corp_state, corp_map) > 0
+
+
+def fundraise(corp_state: CorpState, corp_map: CorpMap) -> int | None:
+    """Spend the day's action point to raise fundraise_amount() in cash, costing
+    nothing. The way out of a corp that's broke, holding ground, and therefore
+    locked out of every cash-gated move on the board.
+
+    Returns the eb raised, or None (nothing mutated, no AP spent) if the corp is
+    out of AP or isn't broke enough to qualify."""
+    if corp_state.action_points < AP_COST or not can_fundraise(corp_state, corp_map):
+        return None
+    amount = fundraise_amount(corp_state, corp_map)
+    corp_state.cash += amount
+    corp_state.action_points -= AP_COST
+    return amount
+
+
+def levy_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp holds with Development left to strip — the mirror of
+    development_targets, which lists the ones with room to build up."""
+    return [
+        t
+        for t in _owned_territories(corp_state, corp_map)
+        if t.modifiers.get(TerritoryModifier.DEVELOPMENT, 0) > 0
+    ]
+
+
+def levy_amount(territory: Territory) -> int:
+    """What levying this district would raise: LEVY_PER_VALUE per point of its value."""
+    return LEVY_PER_VALUE * territory.value
+
+
+def levy(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> int | None:
+    """Spend the day's action point to strip a point of Development off a held
+    district for cash, costing nothing up front. Bigger than fundraising and not
+    gated on being broke — it's paid for out of the block itself, and Development
+    is what prices runner-side lodging and safehouses (corpmap.lodging_cost /
+    safehouse_price), so a levied district gets cheaper to live in.
+
+    Returns the eb raised, or None (nothing mutated, no AP spent) on no AP or a
+    district that isn't held or has no Development left to take."""
+    if corp_state.action_points < AP_COST:
+        return None
+    if territory_id not in {t.id for t in levy_targets(corp_state, corp_map)}:
+        return None
+    territory = corp_map.territories[territory_id]
+    amount = levy_amount(territory)
+    territory.modifiers[TerritoryModifier.DEVELOPMENT] -= 1
+    corp_state.cash += amount
+    corp_state.action_points -= AP_COST
+    return amount
+
+
+def survey_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts a survey can read: everything bordering the corp's own ground that
+    the corp doesn't hold, neutral and gang turf included. Wider than
+    expansion_candidates/attack_candidates (which each list only the ground their
+    own move can legally take) because looking at a block commits nothing."""
+    if corp_state.action_points < AP_COST:
+        return []
+    owned = _owned_territories(corp_state, corp_map)
+    seen = {
+        conn_id
+        for territory in owned
+        for conn_id in territory.connections
+        if corp_map.territories[conn_id].owner != corp_state.faction_id
+    }
+    return sorted((corp_map.territories[tid] for tid in seen), key=lambda t: t.id)
+
+
+def survey(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> Territory | None:
+    """Spend the day's action point to read a bordering district's garrison,
+    Security and value from your own side of the line — gather_intel's job without
+    the operative or the 50% roll, and correspondingly thinner (the caller reports
+    no locations list). Returns the surveyed Territory for the caller to describe,
+    or None on no AP or an illegal target."""
+    if territory_id not in {t.id for t in survey_targets(corp_state, corp_map)}:
+        return None
+    corp_state.action_points -= AP_COST
+    return corp_map.territories[territory_id]
 
 
 def expansion_cost(territory: Territory, corp_state: CorpState | None = None) -> int:

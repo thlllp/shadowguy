@@ -816,6 +816,14 @@ Rep and standing are deliberately near-redundant: a completed job is +1 rep *and
 
 **Neither the tech purchase nor either modifier bump touches `daily_action_used`** — RP/cash are their own gates, repeatable within a day. None of these numbers balance-simulated.
 
+**Three free actions cost 1 AP and 0eb**, so a corp with no cash still has something to spend the day on. Every other AP move charges cash too, and the cash-free ones (`deploy_operatives`, the three operative taskings) need operatives, which are themselves bought at the Academy — a broke corp with an empty pool used to burn both action points every day with nothing to put them on. Rendered by `corp_screen.free_action_rows`, listed after the cash-gated rows because they're the fallback, not the plan:
+
+- **`fundraise`** — `FUNDRAISE_PER_TERRITORY` (25) × districts held, in cash. Offered **only while cash is under `FUNDRAISE_CASH_CEILING`** (`STARTING_CASH`, 500), which is what keeps it an emergency valve rather than a second income stream: a solvent corp can't call it, so it never competes with `collect_income`. `free_action_rows` leaves the row off entirely rather than showing a permanently-refusing one, and `CorpMapScreen` also offers it on any held district (it's corp-wide, so it has no id suffix for `_TERRITORY_ACTION_PREFIXES` to filter on, and it's the one move a broke corp with no operatives has left).
+- **`levy`** — `LEVY_PER_VALUE` (100) × a held district's value, paid for with a point of its Development. Bigger than fundraising and not gated on being broke, because the block itself pays. Deliberately lossy against `DEVELOPMENT_BUMP_COST` in both directions (a test pins `levy_amount < DEVELOPMENT_BUMP_COST` for every district) or the pair becomes a cash pump. Levying also makes the district *cheaper to live in*, since Development prices runner-side lodging and safehouses.
+- **`survey`** — reads a bordering district's garrison, Security and value. `gather_intel`'s recon without the operative or the 50% roll, and correspondingly thinner (no locations list). `survey_targets` is wider than `expansion_candidates`/`attack_candidates` — gang turf and the reserved player start are in it, because looking commits nothing.
+
+First-slice numbers, not balance-simulated. The one most likely to need tuning is `FUNDRAISE_PER_TERRITORY` against `TERRITORY_INCOME_BASE`/`_PER_VALUE`: at 2 AP/day it's what decides how fast a broke corp digs out.
+
 `CorpScreen` renders four stacked sections (territory actions + Academy/Research Facility/Surveillance Log — Technology moved to its own screen), overflowing a single 80×24 viewport (it scrolls; click-position UI tests should drive a taller size, since the map's unseeded rng varies row counts).
 
 **Operatives now have their driver**: they are the corp's field force, deployed as a district's garrison or committed to an attack (see Corp conflict). Scientists still buy nothing directly beyond feeding research.
