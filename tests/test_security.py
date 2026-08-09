@@ -5,8 +5,9 @@ import random
 import pytest
 
 from shadowguy.checks import CRITICAL_MARGIN, CheckResult, day_tier
-from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS
-from shadowguy.factions import FACTIONS_BY_ID, RIVAL_WEIGHT
+from shadowguy.corpmap import GENERATED_KINDS, PLAYER_OWNED_KINDS, claim_territory
+from shadowguy.corpmap_gen import generate_corp_map
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, RIVAL_WEIGHT
 from shadowguy.security import (
     BLOWN_FIXER_TRUST_HIT,
     BLOWN_REP_HIT,
@@ -42,6 +43,26 @@ def test_generated_contract_targets_a_real_held_territory_and_location(corp_map,
     location = next(loc for loc in territory.locations if loc.id == contract.location_id)
     assert location.kind in GENERATED_KINDS
     assert location.kind not in PLAYER_OWNED_KINDS
+
+
+def test_generated_contract_never_targets_a_corp_held_slum():
+    """jobs.generate_job's guard, mirrored: a slum a corp expanded onto is held ground
+    with nothing in it but its encampment, which is no site to guard. Builds its own
+    map since claim_territory mutates and the corp_map fixture is module-scoped."""
+    corp_map = generate_corp_map(FACTIONS, random.Random(0))
+    faction_id = FACTIONS[0].id
+    for territory in corp_map.territories.values():
+        if territory.is_slum:
+            claim_territory(territory, faction_id, random.Random(0))
+    claimed = [
+        t.id
+        for t in corp_map.territories.values()
+        if t.owner == faction_id and not any(loc.kind in GENERATED_KINDS for loc in t.locations)
+    ]
+    assert claimed, "expected at least one held district with no generated locations"
+    for seed in SEEDS:
+        contract = generate_security_contract(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+        assert contract.territory_id not in claimed
 
 
 @pytest.mark.parametrize("seed", SEEDS)

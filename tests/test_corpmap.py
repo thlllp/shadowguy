@@ -7,6 +7,7 @@ test_corpmap_gen.py.
 import random
 
 from shadowguy.corpmap import (
+    LODGING_COST_PER_DEVELOPMENT,
     MODIFIER_MAX,
     CorpMap,
     Location,
@@ -18,6 +19,7 @@ from shadowguy.corpmap import (
     build_workshop,
     capture_territory,
     claim_territory,
+    lodging_cost,
     territory_distance,
     travel_path,
 )
@@ -73,6 +75,20 @@ def test_claim_territory_clears_any_garrison():
     territory = Territory(id="t1", name="Testville", x=0, y=0, garrison=4)
     claim_territory(territory, "faction_ironclad", random.Random(0))
     assert territory.garrison == 0
+
+
+def test_claim_territory_clears_the_slum_flag():
+    """is_slum describes *neutral* ground. A corp moving in reseeds the modifiers to
+    corp values, so leaving the flag set would keep a garrisoned district labelled a
+    slum on the map and resting there free forever."""
+    territory = Territory(id="t1", name="Testville", x=0, y=0, is_slum=True)
+    claim_territory(territory, "faction_ironclad", random.Random(0))
+    assert territory.is_slum is False
+    # The slum short-circuit in lodging_cost no longer fires: it charges by Development
+    # like any other district now.
+    assert lodging_cost(territory) == (
+        LODGING_COST_PER_DEVELOPMENT * territory.modifiers[TerritoryModifier.DEVELOPMENT]
+    )
 
 
 def test_capture_territory_keeps_modifiers_and_locations():

@@ -261,7 +261,12 @@ SAVE_SUFFIX = ".save"
 # v66 added CorpState.tasking_operatives -- operatives out on tail_runner/gather_intel/
 # sabotage, tracked separately from the capped operatives pool so a corp at
 # operative_max can still dispatch them (see corp_turn.return_tasking_operatives).
-SAVE_VERSION = 67
+# v68 added corpmap.Territory.is_slum -- the SLUM_COUNT neutral districts of houseless
+# encampments, which have no generated locations and rest free (corpmap.lodging_cost).
+# A pre-v68 pickled Territory lacks the attribute entirely (pickle restores a dataclass
+# through __dict__, never __init__, so the field default never applies), so the first
+# map render would AttributeError in corpmap._label.
+SAVE_VERSION = 68
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

@@ -985,16 +985,23 @@ def generate_job(
     rng = resolve_rng(rng)
     archetype = rng.choice(ARCHETYPES)
     specialist = archetype_specialist(archetype)
-    # The mark is a real corp, hit in a district it actually holds on this run's map.
+    # The mark is a real corp, hit in a district it actually holds on this run's map —
+    # and one with somewhere in it to actually hit. A corp that expands onto a slum
+    # holds a district generated with no locations but its encampment (see Slums &
+    # encampments in DESIGN.md), which would leave the site pick below empty.
     held = sorted(
-        (t for t in corp_map.territories.values() if t.owner in FACTIONS_BY_ID),
+        (
+            t for t in corp_map.territories.values()
+            if t.owner in FACTIONS_BY_ID
+            and any(loc.kind in GENERATED_KINDS for loc in t.locations)
+        ),
         key=lambda t: t.id,
     )
     territory = rng.choice(held)
     faction = FACTIONS_BY_ID[territory.owner]
     # Never the runner's own place: if they've bought a safehouse in this corp district,
     # it's not a job site (and carries none of the LOCATION_SKILL/legwork tables a site
-    # needs). A held district always has its generated locations to pick from.
+    # needs).
     location = rng.choice([loc for loc in territory.locations if loc.kind in GENERATED_KINDS])
     target = rng.choice(TARGETS)
     tier = _tier_for_day(day)

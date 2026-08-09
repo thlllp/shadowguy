@@ -32,6 +32,7 @@ from shadowguy.corpmap import (
     Location,
     LocationKind,
     Territory,
+    slum_modifiers,
     add_academy,
     add_research_facility,
     location_stat,
@@ -89,6 +90,10 @@ TILES_PER_JUNKYARD = 10
 # Docks are the same rarity band as junkyards, and neutral-only for the same reason
 # (see _plan_injections) -- a corp block doesn't get a fishing spot either.
 TILES_PER_DOCKS = 10
+
+# Exactly this many neutral territories are slums — encampments, no shops, no gang
+# presence. Guaranteed, not ratio-scaled like junkyards/docks.
+SLUM_COUNT = 3
 
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
@@ -155,6 +160,7 @@ LOCATION_SUFFIXES = {
     LocationKind.CYBER_CLINIC: ["Augment Clinic", "Chrome Den", "Grafting Parlor", "Wetware Bazaar"],
     LocationKind.JUNKYARD: ["Junkyard", "Scrapyard", "Wrecking Yard", "Salvage Yard"],
     LocationKind.DOCKS: ["Docks", "Pier", "Wharf", "Boat Launch"],
+    LocationKind.ENCAMPMENT: ["Encampment", "Shantytown", "Tent City", "Squatter Camp"],
 }
 
 LOCATION_PREFIXES = [
@@ -426,6 +432,21 @@ def _make_amys_place(territory_id: str, rng: random.Random) -> Location:
     )
 
 
+ENCAMPMENT_ROLES = ("squatter", "street dweller", "encampment elder", "tent resident")
+
+
+def _make_encampment(territory_id: str, rng: random.Random, used_names: set[str]) -> Location:
+    """An encampment of houseless people — no shop, no gig, no job target. Placed on
+    every slum territory (exactly SLUM_COUNT per map)."""
+    location_id = f"{territory_id}_encampment"
+    return Location(
+        id=location_id,
+        name=_unique_location_name(LocationKind.ENCAMPMENT, rng, used_names),
+        kind=LocationKind.ENCAMPMENT,
+        characters=_characters_for_roles(location_id, list(ENCAMPMENT_ROLES), rng),
+    )
+
+
 
 def _neighbors(cell: Cell) -> list[Cell]:
     x, y = cell
@@ -582,6 +603,7 @@ class _InjectionPlan:
     junkyard_ids: set[str]
     docks_ids: set[str]
     amys_place_id: str
+    slum_ids: set[str]
 
 
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
@@ -607,21 +629,36 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         raise ValueError("_plan_injections: no neutral tile left for Amy's Place")
     amys_place_id = rng.choice(amy_candidates)
 
+    # Slums: exactly SLUM_COUNT neutral territories, inhabited entirely by houseless
+    # people in encampments — no shops, no gang presence. Picked from the same neutral
+    # pool as Amy's Place, minus gang turf (a slum can't also be gang ground).
+    slum_candidates = [
+        tid for tid in amy_candidates
+        if tid != amys_place_id and tid not in gang_ids
+    ]
+    if len(slum_candidates) < SLUM_COUNT:
+        raise ValueError(
+            f"_plan_injections: only {len(slum_candidates)} neutral tiles left for "
+            f"{SLUM_COUNT} slums"
+        )
+    slum_ids = set(rng.sample(slum_candidates, SLUM_COUNT))
+
     # Junkyards draw from neutral ground only, and skip any tile already reserved for
-    # a hospital, gang den or Amy's Place: those already stack to the reserved-slot
-    # ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
+    # a hospital, gang den, Amy's Place or a slum: those already stack to the
+    # reserved-slot ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
     # MIN_LOCATIONS_PER_TERRITORY == 2) — a third reservation on the same tile would
     # make generate_corp_map's `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop
     # below MIN and raise.
     junkyard_candidates = [
         tid for tid in neutral_ids
-        if tid not in hospital_ids and tid not in den_ids and tid != amys_place_id
+        if tid not in hospital_ids and tid not in den_ids
+        and tid != amys_place_id and tid not in slum_ids
     ]
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
     junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
 
     # Same neutral-only, out-of-band placement as junkyards (reuses junkyard_candidates
-    # rather than re-deriving the hospital/den/Amy's Place exclusion), plus mutually
+    # rather than re-deriving the hospital/den/Amy's Place/slum exclusion), plus mutually
     # exclusive with junkyards too — a neutral tile already tops out at 2 stacked
     # reservations (see the junkyard_candidates comment above); a docks would be the
     # third if it could land on a junkyard tile.
@@ -655,6 +692,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         junkyard_ids=junkyard_ids,
         docks_ids=docks_ids,
         amys_place_id=amys_place_id,
+        slum_ids=slum_ids,
     )
 
 
@@ -688,6 +726,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         x, y = cell
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
+        is_slum = tid in plan.slum_ids
         reserved = (
             (tid == start_id)
             + (tid in plan.hospital_ids)
@@ -699,13 +738,18 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid in plan.docks_ids)
             + (tid == plan.amys_place_id)
         )
-        count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
+        if is_slum:
+            count = 0
+        else:
+            count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
         territories[tid] = Territory(
             id=tid, name=name, x=x, y=y, owner=owner, value=values[cell],
             connections=sorted(ids[other] for other in region if frozenset((cell, other)) in edges),
-            locations=_make_locations(tid, owner, rng, used_names, count),
-            modifiers=make_modifiers(owner, values[cell], rng),
+            locations=_make_locations(tid, owner, rng, used_names, count) if count > 0 else [],
+            modifiers=slum_modifiers() if is_slum else make_modifiers(owner, values[cell], rng),
+            # Never a gang id on a slum: the candidate filter above excludes gang turf.
             gang_id=plan.gang_ids.get(tid),
+            is_slum=is_slum,
         )
 
     start = territories[start_id]
@@ -725,6 +769,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         territories[tid].locations.append(_make_junkyard(tid, rng, used_names))
     for tid in plan.docks_ids:
         territories[tid].locations.append(_make_docks(tid, rng, used_names))
+    for tid in plan.slum_ids:
+        territories[tid].locations.append(_make_encampment(tid, rng, used_names))
     territories[plan.amys_place_id].locations.append(_make_amys_place(plan.amys_place_id, rng))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
