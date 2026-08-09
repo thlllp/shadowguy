@@ -798,6 +798,7 @@ class CorpScreen(CorpActionsMixin, BackScreen):
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
         await self._handle_corp_selection(item_id)
+        await self._refresh()
 
 
 class ResearchTreeScreen(BackScreen):
