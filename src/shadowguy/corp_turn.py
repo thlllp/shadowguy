@@ -54,6 +54,7 @@ from typing import Literal
 
 from shadowguy.corpmap import (
     MODIFIER_MAX,
+    STARTING_ACADEMY_TIER,
     CorpMap,
     Location,
     LocationKind,
@@ -68,7 +69,7 @@ from shadowguy.corpmap import (
 )
 
 # First-slice numbers, not balance-simulated.
-STARTING_CASH = 500
+STARTING_CASH = 1500
 
 # The most untasked operatives a corp can hold in its pool at once (garrisoned
 # operatives don't count against this cap). Enforced by train_employees and
@@ -146,14 +147,19 @@ RESEARCH_PER_SCIENTIST = 1
 # the captured one. Not balance-simulated.
 RESEARCH_FACILITY_REBUILD_COST = 3000
 
-# The academy's equivalent (build_academy). Deliberately cheaper than a research
-# facility's rebuild even though an academy is the worse loss: nothing has ever raised
-# academy_tier, so there are no upgrade tracks inside one, and this single payment
-# restores the *whole* building. The facility's 3000 only buys back a bare shell — its
-# labs and efficiency upgrades cost another 17,000 on top. Pricing them the same would
-# make the academy the strictly worse deal for restoring strictly more. Not
-# balance-simulated.
+# The academy's rebuild (build_academy). Restores at STARTING_ACADEMY_TIER — any
+# accumulated tier upgrades on the captured one are lost, same as a Research
+# Facility's labs and efficiency. Deliberately cheaper than the facility's bare
+# rebuild (3000) even though an academy is the worse loss, because the facility's
+# rebuild buys a shell whose upgrades add another 17,000 on top; pricing them
+# equal would make the academy the strictly worse deal for restoring strictly
+# more. Not balance-simulated.
 ACADEMY_REBUILD_COST = 2000
+
+# Pay these to raise academy_tier by one (STARTING_ACADEMY_TIER → 2 → 3). Two
+# slots, progressively steeper. Costs 1 AP, same as build_lab / build_academy.
+ACADEMY_UPGRADE_COSTS = (3000, 8000)
+MAX_ACADEMY_TIER = STARTING_ACADEMY_TIER + len(ACADEMY_UPGRADE_COSTS)  # 3
 
 # Cost of the 1st and 2nd efficiency upgrade, indexed by
 # Location.efficiency_upgrades -- strictly sequential, same shape as
@@ -1641,6 +1647,32 @@ def advance_training(corp_state: CorpState, day: int) -> PendingRecruit | None:
         corp_state.research_assistants += recruit.count
     corp_state.pending_recruit = None
     return recruit
+
+
+def next_academy_upgrade_cost(academy: Location) -> int | None:
+    tier = academy.academy_tier or 0
+    idx = tier - STARTING_ACADEMY_TIER
+    if idx < 0 or idx >= len(ACADEMY_UPGRADE_COSTS):
+        return None
+    return ACADEMY_UPGRADE_COSTS[idx]
+
+
+def upgrade_academy(corp_state: CorpState, corp_map: CorpMap) -> bool:
+    """Spend cash and 1 AP to raise the academy's tier by one, training one more
+    employee per batch. Fails closed if out of AP, no academy, already maxed, or
+    can't afford the next upgrade."""
+    if corp_state.action_points < AP_COST:
+        return False
+    academy = owned_academy(corp_state, corp_map)
+    if academy is None:
+        return False
+    cost = next_academy_upgrade_cost(academy)
+    if cost is None or cost > corp_state.cash:
+        return False
+    corp_state.cash -= cost
+    academy.academy_tier = (academy.academy_tier or STARTING_ACADEMY_TIER) + 1
+    corp_state.action_points -= AP_COST
+    return True
 
 
 def rebuild_academy_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:

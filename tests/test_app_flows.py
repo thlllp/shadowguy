@@ -2413,7 +2413,7 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
 
             academy_list = app.screen.query_one("#academy_list", ListView)
             academy_ids = {item.id for item in academy_list.children}
-            assert academy_ids == {"train_scientist", "train_operative", "train_research_assistant"}
+            assert academy_ids == {"upgrade_academy", "train_scientist", "train_operative", "train_research_assistant"}
 
             research_list = app.screen.query_one("#research_list", ListView)
             research_ids = {item.id for item in research_list.children}

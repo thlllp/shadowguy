@@ -9,7 +9,9 @@ from shadowguy.corp_turn import (
     AP_COST,
     DEVELOPMENT_BUMP_COST,
     INVESTIGATION_COST,
+    MAX_ACADEMY_TIER,
     RESEARCH_FACILITY_REBUILD_COST,
+    STARTING_ACADEMY_TIER,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     TRAINING_DAYS,
@@ -44,11 +46,13 @@ from shadowguy.corp_turn import (
     levy_amount,
     levy_targets,
     log_faction_event,
+    next_academy_upgrade_cost,
     next_efficiency_cost,
     next_lab_cost,
     operative_max,
     operative_training_cost,
     operative_training_days,
+    owned_academy,
     owned_research_facility,
     prereqs_met,
     raise_development,
@@ -67,6 +71,7 @@ from shadowguy.corp_turn import (
     tail_runner_targets,
     technology_tree_layout,
     train_employees,
+    upgrade_academy,
 )
 from shadowguy.corpmap import TerritoryModifier, attack_candidates, expansion_candidates
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
@@ -362,6 +367,23 @@ def academy_rows(corp_state: CorpState, corp_map, day: int) -> list[ListItem]:
         ]
 
     rows = []
+    academy = owned_academy(corp_state, corp_map)
+    if academy is not None:
+        upgrade_cost = next_academy_upgrade_cost(academy)
+        if upgrade_cost is not None:
+            current = academy.academy_tier or STARTING_ACADEMY_TIER
+            label = (
+                f"Expand Academy ({current} → {current + 1}) — {upgrade_cost}eb"
+            )
+            rows.append(
+                ListItem(
+                    Static(_gate(label, corp_state, upgrade_cost)),
+                    id="upgrade_academy",
+                )
+            )
+        elif (academy.academy_tier or 0) >= MAX_ACADEMY_TIER:
+            rows.append(ListItem(Static("Academy fully expanded."), id="academy_maxed"))
+
     for category in EmployeeCategory:
         if category is EmployeeCategory.OPERATIVE:
             cost = operative_training_cost(corp_state)
@@ -572,6 +594,13 @@ class CorpActionsMixin:
                 )
             elif corp_state.pending_recruit is not None:
                 self.notify("The Academy's already training a batch.", severity="warning")
+            else:
+                self._notify_refusal()
+
+        elif item_id == "upgrade_academy":
+            if upgrade_academy(corp_state, corp_map):
+                academy = owned_academy(corp_state, corp_map)
+                self.notify(f"Academy expanded to tier {academy.academy_tier} — trains {academy.academy_tier} per batch.")
             else:
                 self._notify_refusal()
 
