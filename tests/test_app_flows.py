@@ -1639,6 +1639,64 @@ def test_corp_only_rest_waives_lodging_regardless_of_location():
     run(body())
 
 
+def test_corp_rest_always_crosses_midnight_and_collects_income():
+    """A corp Rest sleeps to 6 AM *tomorrow*, from any hour of the day. _corp_rest_hours
+    once targeted 6 AM of the current day, so resting any time after 6 AM returned
+    negative hours: the clock ran backward, no day boundary was crossed, and the corp
+    never collected a single eb of territory income."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            assert app.corp_state is not None
+
+            # Every hour of the day, not just the morning: the old bug only bit past 6 AM.
+            for start_hour in range(HOURS_PER_DAY):
+                app.character.elapsed_hours = float(app.character.day * HOURS_PER_DAY + start_hour)
+                day_before = app.character.day
+                elapsed_before = app.character.elapsed_hours
+                cash_before = app.corp_state.cash
+
+                app.rest()
+
+                assert app.character.elapsed_hours > elapsed_before
+                assert app.character.day == day_before + 1
+                assert app.character.hour_of_day == 6
+                assert app.corp_state.cash > cash_before
+
+    run(body())
+
+
+def test_corp_only_panels_show_corp_cash_and_track_it_across_a_rest():
+    """A corp-only run's always-visible panel carries the corp's books, not the unused
+    placeholder runner's -- and map mode (where the Rest button lives) keeps #corp_info
+    up too. Without both, resting showed a runner Cash line that never moves while the
+    corp's actual income landed somewhere off screen."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(100, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            assert app.corp_state is not None
+            screen = app.screen
+            sheet = screen.query_one(CharacterSheet)
+            info = screen.query_one("#corp_info")
+
+            assert info.display  # map mode, corp_only
+            cash_before = app.corp_state.cash
+            assert f"Cash: {cash_before}eb" in sheet.render()
+
+            await pilot.click("#rest_button")
+            await pilot.pause()
+
+            assert app.corp_state.cash > cash_before
+            assert f"Cash: {app.corp_state.cash}eb" in sheet.render()
+            assert f"{app.corp_state.cash}eb" in str(info.content)
+
+    run(body())
+
+
 def test_spend_time_fires_the_day_tick_once_per_boundary_crossed():
     """spend_time's per-boundary loop only ever fires once with today's in-game costs
     (nothing spends >=2*HOURS_PER_DAY in one call) -- this proves the loop itself

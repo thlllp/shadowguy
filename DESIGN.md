@@ -634,6 +634,8 @@ Today only a *completed* job moves standing (`jobs.JOB_STANDING_HIT` = -2, on th
 
 **`CharacterSheet` is the one panel every runner-mode screen yields**, at (or near) the top: combat, tactical, matrix, burglary, scene, shop, creation, and `CorpMapScreen` (the one gap, closed alongside the standing-column/Stun/12-hour-clock changes above). It carries Health, Fatigue, Stun, Cash, Rep, Experience, Humanity, core stats, the standing column, and equipped gear — everything a runner might need to check without leaving whatever they're doing. Not yielded by `CorpScreen` (the corp-mode screen has its own corp-focused header) or the pre-game menus.
 
+**In a corp-only run (`app.corp_only`) the same panel renders the corp's books instead** — faction, day/hour, `CorpState.cash`/`research_points`/`action_points`, territories held, scientists, operatives. The runner behind it is an unused placeholder there, so its cash and health never move; showing them made a corp collecting `collect_income` every day look like it was earning nothing. For the same reason `CorpMapScreen` keeps `#corp_info` (`corp_screen.corp_info_text`) visible in **map** mode when `corp_only`, not only under the Corp tab: map mode is where the Rest button lives.
+
 ## Rival AI (`shadowguy/rivals.py`)
 
 The world's other actors getting a turn of their own (Faction standing above is the player's actions moving the corps). A parallel resolution module like `security.py`/`encounters.py`, not a `Scene`: `resolve_rival_day` is called once per day from `_apply_day_tick`, returns a `RivalAction` (`kind`, `actor_id`, `day`, `territory_id`) per acting actor.

@@ -532,7 +532,9 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self.query_one("#activities").display = not in_map
         self.query_one("#map_local_boxes_scroll").display = in_map and not corp_only
         self.query_one("#map_corp_actions_scroll").display = in_map and corp_only
-        self.query_one("#corp_info").display = is_corp
+        # Also up in corp_only's map mode: that's where the Rest button is, and the
+        # corp's books (cash/research/territories) are the only numbers moving there.
+        self.query_one("#corp_info").display = is_corp or (in_map and corp_only)
         self.query_one("#academy_panel").display = is_corp
         self.query_one("#research_panel").display = is_corp
         self.query_one("#surveillance_panel").display = is_corp
@@ -555,7 +557,19 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self._refresh_map_view()
         if not self.app.corp_only:
             self._schedule_map_local_boxes()
+        else:
+            self._refresh_map_corp_info()
         self._refresh_rest_button()
+
+    def _refresh_map_corp_info(self) -> None:
+        """Redraw #corp_info for corp_only's map mode (_set_content_visibility keeps it
+        up there). Separate from _refresh_corp, which also rebuilds the Corp tab's
+        panels -- none of which are mounted-and-visible in map mode."""
+        corp_state = self.app.corp_state
+        if corp_state is None:
+            return
+        info = self.query_one("#corp_info", Static)
+        info.update(corp_info_text(corp_state, self.app.corp_map, self.app.character.day))
 
     def _refresh_map_view(self) -> None:
         """The map text and the territory summary bar — the two things that do follow

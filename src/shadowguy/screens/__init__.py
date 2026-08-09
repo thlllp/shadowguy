@@ -5,7 +5,9 @@ from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
 from shadowguy.character import MAX_SKILL_RANK, Character
+from shadowguy.corp_turn import operative_max
 from shadowguy.cybernetics import free_humanity
+from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.grid import Grid, Tile
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
@@ -135,6 +137,12 @@ class CharacterSheet(Static):
 
     def render(self) -> str:
         c = self.character
+        # A corp-only run never builds a runner (app.corp_only): the Character behind
+        # this panel is an unused placeholder, so its cash/health/stats say nothing.
+        # Show the corp's own books instead -- income lands in CorpState.cash, and the
+        # player rests from the map view, where the Corp tab's #corp_info isn't up.
+        if self.app.corp_only and self.app.corp_state is not None:
+            return self._render_corp()
         fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
         # What's left of the runner (ceiling minus installed chrome), not the ceiling --
         # the ceiling alone says nothing about how chromed-up they currently are. The
@@ -152,6 +160,20 @@ class CharacterSheet(Static):
             f"Body: {c.stat('body')}  Strength: {c.stat('strength')}  Agility: {c.stat('agility')}\n"
             f"Perception: {c.stat('perception')}  Logic: {c.stat('logic')}  "
             f"Cool: {c.stat('cool')}"
+        )
+
+    def _render_corp(self) -> str:
+        c = self.character
+        corp_state = self.app.corp_state
+        faction = FACTIONS_BY_ID[corp_state.faction_id]
+        owned = sum(1 for t in self.app.corp_map.territories.values() if t.owner == corp_state.faction_id)
+        return (
+            f"{faction.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
+            f"Cash: {corp_state.cash}eb   Research: {corp_state.research_points:g}rp   "
+            f"Actions: {corp_state.action_points}\n"
+            f"Territories: {owned}   Scientists: {corp_state.scientists}   "
+            f"Operatives: {corp_state.operatives}/{operative_max(corp_state)} "
+            f"({corp_state.tasking_operatives} on task)"
         )
 
 
