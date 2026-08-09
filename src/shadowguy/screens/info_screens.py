@@ -1,3 +1,4 @@
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
@@ -8,9 +9,7 @@ from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
 from shadowguy.inventory import (
     active_deck_entry,
-    free_program_slots,
     install_program,
-    installed_programs_for,
     reload_weapon,
     rounds_needed,
     toggle_equip,
@@ -24,6 +23,7 @@ from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
     PROGRAMS_BY_ID,
+    Program,
     bonus_text,
     effective_item,
     loaded_rounds,
@@ -116,65 +116,181 @@ class InventoryScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
 
 
 class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
-    """Deck + Program management, split out of InventoryScreen: a deck's
-    installed_programs and which deck is Character.stat()'s and matrix.py's
-    active one (inventory.active_deck_entry -- the equipped deck with the best
-    Logic bonus) are cyberdeck-specific concerns, not general gear.
-    Equip/stow itself stays generic and lives on InventoryScreen too (a deck
-    is still an Item there); a deck's equip toggle is repeated here only
-    because it's what active_deck_entry actually reads."""
+    """Deck + Program management with visual slot display."""
 
     BINDINGS = MENU_BACK_BINDINGS
+
+    CSS = """
+    #deck_title {
+        text-style: bold;
+        color: $accent;
+        margin: 1 0 0 0;
+    }
+
+    #deck_slot_display {
+        margin: 0 0 1 0;
+        min-height: 1;
+    }
+    """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
+        yield Static("C Y B E R D E C K", id="deck_title")
+        yield Static(id="deck_slot_display")
         yield ListView(id="cyberdeck_items")
         yield Footer()
 
+    def _slot_display(self, character: Character) -> Text:
+        active = active_deck_entry(character.inventory)
+        result = Text()
+
+        if not active:
+            result.append("\n")
+            result.append("  ░▒▓ NO DECK ACTIVE ▓▒░\n", style="bold dim")
+            result.append("  No cyberdeck equipped.\n", style="dim")
+            result.append("  Equip one below or visit a Computer Store.\n", style="dim")
+            return result
+
+        entry, item = active
+        total = item.program_slots
+        installed = entry.installed_programs
+        used_ram = sum(
+            PROGRAMS_BY_ID[pid].ram_cost for pid in installed if pid in PROGRAMS_BY_ID
+        )
+        logic = item.bonuses.get("logic", 0)
+        free_slots = total - used_ram
+
+        result.append("  ")
+        result.append(item.name, style="bold cyan")
+        result.append(f"  \u2500\u2500  Logic +{logic}", style="dim")
+        result.append(f"  \u2500\u2500  {free_slots}/{total} slots free\n\n", style="dim")
+
+        SLOT_WIDTH = 26
+
+        slots: list[tuple[str, Program | None, int]] = []
+        for i in range(total):
+            pid = installed[i] if i < len(installed) else None
+            prog = PROGRAMS_BY_ID.get(pid) if pid else None
+            slots.append(("occupied" if prog else "empty", prog, i + 1))
+
+        def _slot_color(kind: str) -> str:
+            return "green" if kind == "occupied" else "dim"
+
+        result.append("  ")
+        for kind, _, _ in slots:
+            result.append("\u250c" + "\u2500" * (SLOT_WIDTH - 2) + "\u2510  ", style=_slot_color(kind))
+        result.append("\n")
+
+        result.append("  ")
+        for kind, _, num in slots:
+            label = f"SLOT {num}"
+            pad = SLOT_WIDTH - 3 - len(label)
+            result.append(f"\u2502 {label}{' ' * pad}\u2502  ", style=_slot_color(kind))
+        result.append("\n")
+
+        result.append("  ")
+        for kind, prog, _ in slots:
+            if prog:
+                name = prog.name[:SLOT_WIDTH - 4]
+                pad = SLOT_WIDTH - 3 - len(name)
+                result.append(f"\u2502 {name}{' ' * pad}\u2502  ", style="bold green")
+            else:
+                label = "--- EMPTY ---"
+                pad = SLOT_WIDTH - 3 - len(label)
+                result.append(f"\u2502 {label}{' ' * pad}\u2502  ", style="dim")
+        result.append("\n")
+
+        result.append("  ")
+        for kind, prog, _ in slots:
+            if prog:
+                bonus_parts: list[str] = []
+                if prog.integrity_bonus:
+                    bonus_parts.append(f"+{prog.integrity_bonus} int")
+                if prog.firewall_bonus:
+                    bonus_parts.append(f"+{prog.firewall_bonus} fw")
+                if prog.soak_bonus:
+                    bonus_parts.append(f"+{prog.soak_bonus} soak")
+                if prog.damage_bonus:
+                    bonus_parts.append(f"+{prog.damage_bonus} dmg")
+                if prog.action_damage:
+                    bonus_parts.append(f"{prog.action_damage} dmg")
+                if prog.action_sleaze:
+                    bonus_parts.append("sleaze")
+                if prog.action_extract:
+                    bonus_parts.append("extract")
+                if prog.action_analyze:
+                    bonus_parts.append("analyze")
+                if prog.action_skip_ice:
+                    bonus_parts.append("skip")
+                if bonus_parts:
+                    detail = ", ".join(bonus_parts)
+                elif prog.uses_per_fight == 0:
+                    detail = prog.tag or "passive"
+                else:
+                    detail = prog.tag or f"{prog.uses_per_fight} uses"
+                detail = detail[:SLOT_WIDTH - 4]
+                pad = SLOT_WIDTH - 3 - len(detail)
+                result.append(f"\u2502 {detail}{' ' * pad}\u2502  ", style="dim cyan")
+            else:
+                pad = SLOT_WIDTH - 5
+                result.append(f"\u2502 {' ' * pad}\u2502  ", style="dim")
+        result.append("\n")
+
+        result.append("  ")
+        for kind, _, _ in slots:
+            result.append("\u2514" + "\u2500" * (SLOT_WIDTH - 2) + "\u2518  ", style=_slot_color(kind))
+
+        return result
+
     async def _refresh(self) -> None:
         character = self.app.character
+
+        self.query_one("#deck_slot_display", Static).update(self._slot_display(character))
+
         active_entry = active_deck_entry(character.inventory)
         active_index = character.inventory.index(active_entry[0]) if active_entry else None
 
-        items = []
+        items: list[ListItem] = []
         for index, entry in enumerate(character.inventory):
             item = ITEMS_BY_ID[entry.item_id]
             if item.program_slots <= 0:
                 continue
-            state = "Equipped" if entry.equipped else "Stowed"
+            state = "\u2726 Equipped" if entry.equipped else "\u25c7 Stowed"
             tag = " [active]" if index == active_index else ""
-            installed = installed_programs_for(entry)
-            names = ", ".join(p.name for p in installed) if installed else "none"
-            used_ram = item.program_slots - free_program_slots(item, entry)
             items.append(
                 ListItem(
-                    Static(
-                        f"{state} — {item.name}{tag} — programs: {names} "
-                        f"({used_ram}/{item.program_slots} slots)"
-                    ),
+                    Static(f"{state} \u2014 {item.name}{tag} ({item.program_slots} slots)"),
                     id=f"toggle_{index}",
                 )
             )
-            for program_id in entry.installed_programs:
-                program = PROGRAMS_BY_ID[program_id]
-                items.append(
-                    ListItem(
-                        Static(f"  Uninstall {program.name} from {item.name}"),
-                        id=f"uninstall_{index}_{program_id}",
-                    )
-                )
-            for program_id in sorted(character.owned_programs - set(entry.installed_programs)):
-                program = PROGRAMS_BY_ID[program_id]
-                items.append(
-                    ListItem(
-                        Static(f"  Install {program.name} on {item.name}"),
-                        id=f"install_{index}_{program_id}",
-                    )
-                )
+            if index == active_index and active_entry:
+                for program_id in entry.installed_programs:
+                    program = PROGRAMS_BY_ID.get(program_id)
+                    if program:
+                        items.append(
+                            ListItem(
+                                Static(f"  \u2715 Uninstall {program.name}"),
+                                id=f"uninstall_{index}_{program_id}",
+                            )
+                        )
+                for program_id in sorted(character.owned_programs - set(entry.installed_programs)):
+                    program = PROGRAMS_BY_ID.get(program_id)
+                    if program:
+                        items.append(
+                            ListItem(
+                                Static(f"  \uff0b Install {program.name}"),
+                                id=f"install_{index}_{program_id}",
+                            )
+                        )
 
         if not items:
-            items.append(ListItem(Static("No cyberdeck owned — visit a Computer Store."), id="no_deck"))
+            items.append(
+                ListItem(
+                    Static("No cyberdeck owned \u2014 visit a Computer Store."),
+                    id="no_deck",
+                )
+            )
 
         await _replace_items(self.query_one("#cyberdeck_items", ListView), items)
 
