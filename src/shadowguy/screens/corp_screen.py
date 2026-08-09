@@ -445,6 +445,9 @@ class CorpActionsMixin:
     Requires the host to provide an async `_refresh_corp_view()`.
     """
 
+    def _flash_territory_if_map(self, territory_id: str) -> None:
+        """No-op on CorpScreen; CorpMapScreen overrides to flash the territory on its map."""
+
     def _notify_refusal(self) -> None:
         """Why the corp_turn call just failed closed. Cash is the fallback: every daily
         action checks AP first and its own price second."""
@@ -498,6 +501,7 @@ class CorpActionsMixin:
             territory_id = item_id.removeprefix("expand_")
             if expand_into(corp_state, corp_map, territory_id, self.app.rng):
                 self.notify(f"Claimed {corp_map.territories[territory_id].name}.")
+                self._flash_territory_if_map(territory_id)
                 log_faction_event(
                     self.app.faction_events,
                     corp_state.faction_id,
@@ -717,6 +721,7 @@ class CorpActionsMixin:
                 f"{territory.name} is yours — {result.attacker_losses} lost, "
                 f"{committed - result.attacker_losses} holding it."
             )
+            self._flash_territory_if_map(territory_id)
             log_faction_event(
                 self.app.faction_events,
                 corp_state.faction_id,

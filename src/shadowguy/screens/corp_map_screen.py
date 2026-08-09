@@ -251,6 +251,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self.hovered_id: str | None = None
         self.rendered = None
         self._render_key: tuple[str, str] | None = None
+        self._flash_territory_id: str | None = None
         self._map_locals_task: asyncio.Task | None = None
         self._map_locals_pending_id: str | None = None
         self._map_corp_actions_task: asyncio.Task | None = None
@@ -572,6 +573,21 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         info = self.query_one("#corp_info", Static)
         info.update(corp_info_text(corp_state, self.app.corp_map, self.app.character.day))
 
+    def _flash_territory(self, territory_id: str) -> None:
+        """Highlight a territory on the map for 1 second, then clear — a visual
+        sting for territory claims and seizures."""
+        self._flash_territory_id = territory_id
+        self._refresh_map_view()
+        self.set_timer(1.0, self._clear_flash)
+
+    def _clear_flash(self) -> None:
+        self._flash_territory_id = None
+        self._refresh_map_view()
+
+    def _flash_territory_if_map(self, territory_id: str) -> None:
+        """Override from CorpActionsMixin — Map mode already maps."""
+        self._flash_territory(territory_id)
+
     def _refresh_map_view(self) -> None:
         """The map text and the territory summary bar — the two things that do follow
         the cursor and the mouse. For corp_only, also the corp actions panel, which
@@ -597,10 +613,13 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             self._render_key = key
         text = Text(self.rendered.text)
         for span in self.rendered.spans:
-            color = OWNER_COLORS.get(corp_map.territories[span.territory_id].owner)
+            territory = corp_map.territories[span.territory_id]
+            color = OWNER_COLORS.get(territory.owner)
             if color:
                 text.stylize(color, span.offset, span.offset + span.end - span.start)
-            if span.territory_id == self.hovered_id:
+            if span.territory_id == self._flash_territory_id:
+                text.stylize("bold yellow reverse", span.offset, span.offset + span.end - span.start)
+            elif span.territory_id == self.hovered_id:
                 text.stylize("reverse", span.offset, span.offset + span.end - span.start)
         self.query_one("#map", Static).update(text)
 

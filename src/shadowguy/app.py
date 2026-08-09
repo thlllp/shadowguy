@@ -303,9 +303,29 @@ class ShadowguyApp(App):
                 faction = FACTIONS_BY_ID[self.corp_state.faction_id]
                 self.exit(message=f"{faction.name} has been broken up. Game over.")
                 return
-            self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
-            self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
+            income = collect_income(self.corp_state, self.corp_map)
+            self.corp_state.cash += income
+            rp = collect_research(self.corp_state, self.corp_map)
+            self.corp_state.research_points += rp
             self.corp_state.action_points = 2
+            parts = []
+            if income:
+                parts.append(f"+{income}eb")
+            if rp:
+                parts.append(f"+{rp:g}rp")
+            if parts:
+                self.notify(f"Day {day} income: {', '.join(parts)}.")
+            for action in today_actions:
+                if action.kind == "faction":
+                    name = FACTIONS_BY_ID[action.actor_id].name
+                    if action.attack is not None and action.attack.captured:
+                        target = self.corp_map.territories[action.attack.territory_id].name
+                        if action.attack.defender_id != self.corp_state.faction_id:
+                            loser = FACTIONS_BY_ID[action.attack.defender_id].name
+                            self.notify(f"{name} seized {target} from {loser}.")
+                    elif action.territory_id is not None:
+                        target = self.corp_map.territories[action.territory_id].name
+                        self.notify(f"{name} claimed {target}.")
             trained = advance_training(self.corp_state, day)
             if trained:
                 self.notify(
