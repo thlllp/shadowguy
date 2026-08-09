@@ -12,6 +12,7 @@ from collections import Counter, deque
 import pytest
 
 from shadowguy.corpmap import (
+    MODIFIER_MAX,
     STARTING_ACADEMY_TIER,
     STARTING_RESEARCH_TIER,
     LocationKind,
@@ -25,6 +26,7 @@ from shadowguy.corpmap_gen import (
     GANG_TURF_MIN,
     JUNKYARD_ROLE,
     MIN_START_DEGREE,
+    SLUM_COUNT,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
     TILES_PER_DOCKS,
@@ -356,6 +358,67 @@ def test_local_character_ids_are_unique_across_the_map(seed):
     corp_map = generate_corp_map(FACTIONS, random.Random(seed))
     ids = [char.id for _loc, char in corp_map.characters()]
     assert len(ids) == len(set(ids))
+
+
+def _slums(corp_map):
+    return [t for t in corp_map.territories.values() if t.is_slum]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_exactly_slum_count_slums(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    assert len(_slums(corp_map)) == SLUM_COUNT
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_slums_are_neutral_non_start(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for t in _slums(corp_map):
+        assert t.owner == "neutral"
+        assert t.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_slums_have_no_gang_presence(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for t in _slums(corp_map):
+        assert t.gang_id is None
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_slums_have_encampment_not_shops(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    shop_kinds = {
+        LocationKind.PAWN, LocationKind.WEAPON_SHOP, LocationKind.AUTO_DEALER,
+        LocationKind.PHARMACY, LocationKind.COMPUTER_STORE, LocationKind.CYBER_CLINIC,
+        LocationKind.BAR, LocationKind.REAL_ESTATE,
+    }
+    for t in _slums(corp_map):
+        kinds = {loc.kind for loc in t.locations}
+        assert LocationKind.ENCAMPMENT in kinds
+        assert not kinds & shop_kinds
+        assert LocationKind.HOSPITAL not in kinds
+        assert LocationKind.GANG_DEN not in kinds
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_slums_never_share_with_junkyard_or_docks(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for t in _slums(corp_map):
+        kinds = {loc.kind for loc in t.locations}
+        assert LocationKind.JUNKYARD not in kinds
+        assert LocationKind.DOCKS not in kinds
+        assert LocationKind.AMYS_PLACE not in kinds
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_slums_have_zero_development_security_surveillance(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for t in _slums(corp_map):
+        assert t.modifiers["development"] == 0
+        assert t.modifiers["security"] == 0
+        assert t.modifiers["surveillance"] == 0
+        assert t.modifiers["unrest"] == MODIFIER_MAX
 
 
 def test_generate_corp_map_raises_if_factions_dont_fit():

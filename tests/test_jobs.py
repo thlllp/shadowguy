@@ -9,9 +9,11 @@ from shadowguy.corpmap import (
     GENERATED_KINDS,
     PLAYER_OWNED_KINDS,
     TerritoryModifier,
+    claim_territory,
     territory_distance,
 )
-from shadowguy.factions import FACTIONS_BY_ID
+from shadowguy.corpmap_gen import generate_corp_map
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.gangs import GANGS
 from shadowguy.jobs import (
     AMBUSH_LABEL,
@@ -205,6 +207,27 @@ def test_generated_job_targets_a_real_held_territory_and_location(corp_map, seed
     location = next(loc for loc in territory.locations if loc.id == scene.target_location_id)
     assert location.kind in GENERATED_KINDS
     assert location.kind not in PLAYER_OWNED_KINDS
+
+
+def test_generated_job_never_targets_a_corp_held_slum():
+    """A slum generates no locations but its encampment, which isn't a GENERATED_KIND.
+    Once a corp expands onto one it's held ground like any other, so the site pick has
+    to skip it or it draws from an empty list. Builds its own map: claim_territory
+    mutates, and the corp_map fixture is module-scoped."""
+    corp_map = generate_corp_map(FACTIONS, random.Random(0))
+    faction_id = FACTIONS[0].id
+    for territory in corp_map.territories.values():
+        if territory.is_slum:
+            claim_territory(territory, faction_id, random.Random(0))
+    claimed = [
+        t.id
+        for t in corp_map.territories.values()
+        if t.owner == faction_id and not any(loc.kind in GENERATED_KINDS for loc in t.locations)
+    ]
+    assert claimed, "expected at least one held district with no generated locations"
+    for seed in SEEDS:
+        scene, _timing = generate_job(day=1, corp_map=corp_map, fixer_id="fx", rng=random.Random(seed))
+        assert scene.target_territory_id not in claimed
 
 
 @pytest.mark.parametrize("seed", SEEDS)

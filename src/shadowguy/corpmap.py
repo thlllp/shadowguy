@@ -63,6 +63,7 @@ class LocationKind(StrEnum):
     JUNKYARD = "junkyard"
     DOCKS = "docks"
     AMYS_PLACE = "amys_place"
+    ENCAMPMENT = "encampment"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -89,6 +90,7 @@ UNROLLED_KINDS = (
     LocationKind.JUNKYARD,
     LocationKind.DOCKS,
     LocationKind.AMYS_PLACE,
+    LocationKind.ENCAMPMENT,
 )
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
@@ -241,6 +243,10 @@ class Territory:
     # "neutral" here), just operates on it. See corpmap_gen's GANG_TURF_MIN/MAX
     # and _place_gangs.
     gang_id: str | None = None
+    # A slum is a neutral district inhabited entirely by houseless people in
+    # encampments — no shops, no targets, no gang presence. Exactly SLUM_COUNT
+    # per map, selected in _plan_injections.
+    is_slum: bool = False
     # Operatives stationed here by whichever corp holds it — the defense half of
     # corp-vs-corp conflict (see corp_turn.attack_territory / defense_strength).
     # Lives on the Territory rather than on CorpState so the AI factions, which
@@ -293,9 +299,11 @@ LODGING_COST_PER_DEVELOPMENT = 5
 
 def lodging_cost(territory: Territory) -> int:
     """What resting in this district costs the runner tonight. Free where they own a
-    place (has_home), or where Amy's Place is; otherwise LODGING_COST_PER_DEVELOPMENT
-    per Development level."""
+    place (has_home), where Amy's Place is, or in a slum; otherwise
+    LODGING_COST_PER_DEVELOPMENT per Development level."""
     if has_home(territory):
+        return 0
+    if territory.is_slum:
         return 0
     if any(loc.kind == LocationKind.AMYS_PLACE for loc in territory.locations):
         return 0
@@ -405,11 +413,14 @@ def claim_territory(territory: Territory, faction_id: str, rng: random.Random) -
     """A faction moves onto previously-neutral ground: flips ownership and reseeds
     modifiers the way any corp-held district gets them (_corp_modifiers) — neutral
     ground's modifiers (flat Unrest MODIFIER_MAX, no Security/Surveillance) no longer
-    describe it under new ownership. A gang's presence doesn't survive a corp moving in.
+    describe it under new ownership. A gang's presence doesn't survive a corp moving in,
+    and neither does a slum: is_slum means *neutral* ground, so the free lodging and the
+    map's slum label both go with the ownership flip.
     territory.value is left as-is: the corp hasn't built the block up yet."""
     territory.owner = faction_id
     territory.modifiers = _corp_modifiers(territory.value, rng)
     territory.gang_id = None
+    territory.is_slum = False
     territory.garrison = 0
 
 
@@ -521,6 +532,8 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
     tag = _owner_tag(territory.owner)
     if tag:
         parts.append(tag)
+    if territory.is_slum:
+        parts.append("S")
     if territory.id == here_id:
         parts.append("@")
     return f"{marker}[{' '.join(parts)}]"
@@ -673,6 +686,18 @@ def _neutral_modifiers(rng: random.Random) -> dict[TerritoryModifier, int]:
         TerritoryModifier.SURVEILLANCE: 0,
         TerritoryModifier.UNREST: MODIFIER_MAX,
         TerritoryModifier.DEVELOPMENT: rng.randint(1, 2),
+        TerritoryModifier.RESTRICTED: 0,
+    }
+
+
+def slum_modifiers() -> dict[TerritoryModifier, int]:
+    """A slum is a district nobody invests in: no security, no surveillance,
+    max unrest, no development, no restrictions. The street runs it entirely."""
+    return {
+        TerritoryModifier.SECURITY: 0,
+        TerritoryModifier.SURVEILLANCE: 0,
+        TerritoryModifier.UNREST: MODIFIER_MAX,
+        TerritoryModifier.DEVELOPMENT: 0,
         TerritoryModifier.RESTRICTED: 0,
     }
 

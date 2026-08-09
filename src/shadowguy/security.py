@@ -116,7 +116,11 @@ def generate_security_contract(
     # The mark is a real corp, guarded at a district it actually holds this run —
     # same targeting as jobs.generate_job.
     held = sorted(
-        (t for t in corp_map.territories.values() if t.owner in FACTIONS_BY_ID),
+        (
+            t for t in corp_map.territories.values()
+            if t.owner in FACTIONS_BY_ID
+            and any(loc.kind in GENERATED_KINDS for loc in t.locations)
+        ),
         key=lambda t: t.id,
     )
     territory = rng.choice(held)

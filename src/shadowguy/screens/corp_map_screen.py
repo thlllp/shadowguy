@@ -737,11 +737,12 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         )
         fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
         gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
+        slum_suffix = ", slum" if t.is_slum else ""
         modifier_line = "  ".join(
             f"{MODIFIER_LABELS[modifier]}:{level}" for modifier, level in t.modifiers.items()
         )
         return (
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}\n"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}{slum_suffix}\n"
             f"Borders: {borders}\n"
             f"{modifier_line}\n"
             f"{self._travel_hint(t, here, character)}"
@@ -1055,7 +1056,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 stock_text = f"{shown}, +{len(names) - _STOCK_PREVIEW_COUNT} more"
             content.append(Static(f"For sale ({len(names)}): {stock_text}", markup=False))
 
-        action_items.append(ListItem(Static("Enter"), id=f"map_local_{location.id}"))
+        # An encampment is scenery: nowhere to walk into, so it gets no "Enter" row
+        # rather than one that opens nothing (_push_location_screen has no branch for it).
+        if location.kind != LocationKind.ENCAMPMENT:
+            action_items.append(ListItem(Static("Enter"), id=f"map_local_{location.id}"))
         content.append(ListView(*action_items))
 
         return Collapsible(
