@@ -18,6 +18,7 @@ from shadowguy.corpmap import (
     has_home,
 )
 from shadowguy.corpmap_gen import (
+    AMYS_PLACE_ROLE,
     DOCKS_ROLE,
     FACTION_VALUE_SPREAD,
     GANG_TURF_MAX,
@@ -256,6 +257,43 @@ def test_docks_never_share_a_tile_with_a_junkyard_hospital_or_gang_den(seed):
         kinds = {loc.kind for loc in territory.locations}
         assert LocationKind.HOSPITAL not in kinds
         assert LocationKind.GANG_DEN not in kinds
+
+
+def _amys_places(corp_map):
+    return [
+        (territory, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.AMYS_PLACE
+    ]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_exactly_one_amys_place_on_neutral_non_start_ground(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    amys_places = _amys_places(corp_map)
+    assert len(amys_places) == 1
+    territory, _location = amys_places[0]
+    assert territory.owner == "neutral"
+    assert territory.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_amys_place_has_exactly_one_fixer_character(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    _territory, location = _amys_places(corp_map)[0]
+    assert [c.role for c in location.characters] == [AMYS_PLACE_ROLE]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_amys_place_never_shares_a_tile_with_a_junkyard_docks_hospital_or_gang_den(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    amy_territory, _location = _amys_places(corp_map)[0]
+    kinds = {loc.kind for loc in amy_territory.locations}
+    assert LocationKind.JUNKYARD not in kinds
+    assert LocationKind.DOCKS not in kinds
+    assert LocationKind.HOSPITAL not in kinds
+    assert LocationKind.GANG_DEN not in kinds
 
 
 @pytest.mark.parametrize("seed", SEEDS)

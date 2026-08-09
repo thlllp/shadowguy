@@ -26,7 +26,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.fixer import discover_fixers_here
+from shadowguy.fixer import AMY_FIXER_ID, discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
@@ -892,6 +892,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         elif location.kind == LocationKind.GANG_DEN:
             if territory.gang_id:
                 self.app.push_screen(GangDenScreen(location, GANGS_BY_ID[territory.gang_id]))
+        elif location.kind == LocationKind.AMYS_PLACE:
+            amy = next((f for f in self.app.fixers if f.id == AMY_FIXER_ID), None)
+            if amy is not None:
+                self.app.push_screen(FixerOffersScreen(amy))
         elif location.kind in PLAYER_OWNED_KINDS:
             self.app.push_screen(SafehouseScreen(location))
 

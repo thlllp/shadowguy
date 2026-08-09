@@ -62,6 +62,7 @@ class LocationKind(StrEnum):
     ACADEMY = "academy"
     JUNKYARD = "junkyard"
     DOCKS = "docks"
+    AMYS_PLACE = "amys_place"
 
 
 # The runner's own places — their home, and any safehouse they come to hold. One
@@ -87,6 +88,7 @@ UNROLLED_KINDS = (
     LocationKind.ACADEMY,
     LocationKind.JUNKYARD,
     LocationKind.DOCKS,
+    LocationKind.AMYS_PLACE,
 )
 
 # Kinds the world generator gives the full per-kind treatment: everything with a real
@@ -291,8 +293,11 @@ LODGING_COST_PER_DEVELOPMENT = 5
 
 def lodging_cost(territory: Territory) -> int:
     """What resting in this district costs the runner tonight. Free where they own a
-    place (has_home); otherwise LODGING_COST_PER_DEVELOPMENT per Development level."""
+    place (has_home), or where Amy's Place is; otherwise LODGING_COST_PER_DEVELOPMENT
+    per Development level."""
     if has_home(territory):
+        return 0
+    if any(loc.kind == LocationKind.AMYS_PLACE for loc in territory.locations):
         return 0
     return LODGING_COST_PER_DEVELOPMENT * territory.modifiers[TerritoryModifier.DEVELOPMENT]
 
