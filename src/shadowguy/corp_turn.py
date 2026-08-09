@@ -10,23 +10,21 @@ factions.TAKEOVER_COST).
 
 Corp mode shares the runner's own day clock rather than keeping a separate
 calendar: ShadowguyApp's day tick (app._apply_day_tick) collects each day's
-territory income into CorpState.cash and resets daily_action_used, right
+territory income into CorpState.cash and resets action_points, right
 alongside the AI factions' own resolve_rival_day (which skips the player's
 faction_id once this is set).
 
 **A corp turn has two independent budgets**, which is the one thing worth knowing
 before reading any function here:
 
-- **The day's one directed move**, gated on CorpState.daily_action_used (the same
-  "_used_today flag reset each day" idiom Character.on_new_day() uses for
-  health_kit_used_today). Mutually exclusive, and every one of them documents the
-  slot it shares: expand_into, attack_territory, deploy_operatives,
+- **The day's action points**, gated on CorpState.action_points (2 per day).
+  Most actions cost 1 AP: expand_into, attack_territory, deploy_operatives,
   train_employees, build_lab, build_efficiency_upgrade, build_research_facility,
-  build_academy.
+  build_academy, and operative tasking (tail/gather_intel/sabotage/investigate).
 - **Whatever cash/RP has piled up.** research_technology and the two territory
   bumps (raise_surveillance, raise_development) deliberately do NOT touch
-  daily_action_used — RP and cash are their own pacing gates, and double-gating
-  them behind the directed move would make researching compete with expanding for
+  action_points — RP and cash are their own pacing gates, and double-gating
+  them behind action points would make researching compete with expanding for
   no design reason.
 
 Each faction is seeded one RESEARCH_FACILITY and one ACADEMY (corpmap.add_research_facility
@@ -73,6 +71,8 @@ STARTING_CASH = 500
 # between defense, offense, and the new tasking options (tail_runner / gather_intel).
 # May be raised by a future technology.
 STARTING_OPERATIVE_MAX = 2
+
+AP_COST = 1
 
 TERRITORY_INCOME_BASE = 10
 TERRITORY_INCOME_PER_VALUE = 15
@@ -304,8 +304,7 @@ _TECHNOLOGY_ROWS = (
         (SHADOW_ECONOMY_ID,),
         "Every sighting your Surveillance network catches generates {sighting_rp}rp, "
         "detection chance rises by {detection_bonus_pct} at every level, and you "
-        "can spend {investigation_cost}eb to investigate a sighting (uses your "
-        "day's directed move).",
+        "can spend {investigation_cost}eb to investigate a sighting (costs 1 AP).",
         None,
     ),
     (
@@ -426,7 +425,7 @@ _TECHNOLOGY_ROWS = (
 WORKER_SURVEILLANCE_INCOME_BONUS = 10
 PANOPTICON_GRID_INCOME_BONUS = 15
 SHADOW_ECONOMY_INCOME_BONUS = 25
-# Cash per Surveillance bump. Deliberately NOT on the daily_action_used slot —
+# Cash per Surveillance bump. Deliberately NOT on the action_points slot —
 # unlike expand/train/build, this is repeatable within a day and cash is its only
 # gate, so the tech's own income bonus partly funds its use.
 SURVEILLANCE_BUMP_COST = 400
@@ -470,7 +469,7 @@ SIGHTING_RESEARCH_BONUS = 5
 # Flat detection-chance bonus applied at every Surveillance level — stacks on
 # top of SURVEILLANCE_DETECTION_CHANCE in surveillance.py.
 DETECTION_CHANCE_BONUS = 0.05
-# Cost in eb to investigate a single sighting. On the daily_action_used slot
+# Cost in eb to investigate a single sighting. Costs 1 AP.
 # (unlike raise_surveillance), so it competes with expand/attack/train.
 INVESTIGATION_COST = 600
 
@@ -731,9 +730,8 @@ class PendingRecruit:
 @dataclass
 class CorpState:
     """The player's own corp: which Faction they run, its cash/research points/
-    scientists/operatives/research_assistants on hand, and whether they've
-    already spent today's one move (expand_into or train_employees — see
-    module docstring)."""
+    scientists/operatives/research_assistants on hand, and how many action points
+    remain today (2 per day)."""
 
     faction_id: str
     cash: int = STARTING_CASH
@@ -741,7 +739,7 @@ class CorpState:
     scientists: int = 0
     operatives: int = 0
     research_assistants: int = 0
-    daily_action_used: bool = False
+    action_points: int = 2
     # A training batch in progress at the Academy, or None when idle. The Academy
     # has a single training slot, so train_employees won't start a second batch
     # while this is set; advance_training clears it once its ready_day arrives.
@@ -781,9 +779,9 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     researched yet, the corp can't afford it, or the technology is faction-gated
     to a different faction than the one the player is running.
 
-    Deliberately NOT on the daily_action_used slot: RP is its own pacing gate
+    Deliberately NOT on the action_points slot: RP is its own pacing gate
     (10 RP is ~10 days of research at the base rate), and double-gating a
-    purchase behind the day's one *directed move* would make researching compete
+    purchase behind action points would make researching compete
     with expanding for no design reason. Same call the cash-gated territory
     bumps below make.
     """
@@ -1006,7 +1004,7 @@ def raise_surveillance(corp_state: CorpState, corp_map: CorpMap, territory_id: s
     district's Surveillance by 1.
 
     Repeatable within a day (cash is the only gate), so unlike
-    expand_into/train_employees this never touches daily_action_used. Fails
+    expand_into/train_employees this never touches action_points. Fails
     closed if the tech isn't researched, the district isn't a legal target
     (not held, or already at its effective max), or the corp can't afford it."""
     if territory_id not in {t.id for t in surveillance_targets(corp_state, corp_map)}:
@@ -1033,10 +1031,10 @@ def investigate_sighting_targets(
     corp_state: CorpState, corp_map: CorpMap,
 ) -> list[Sighting]:
     """Sightings that are eligible for investigation. Only available after Total
-    Information Awareness is researched, and only when daily_action_used is still
-    free (investigation is a directed move). Each sighting can be investigated
+    Information Awareness is researched, and only when action_points are still
+    available (investigation costs 1 AP). Each sighting can be investigated
     exactly once — spotted runners don't exist after the event."""
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return []
     if not has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
         return []
@@ -1048,7 +1046,7 @@ def investigate_sighting_targets(
 def investigate_sighting(
     corp_state: CorpState, sighting: Sighting, rng: random.Random,
 ) -> bool:
-    """Pay INVESTIGATION_COST, mark the day's directed move used, and gather
+    """Pay INVESTIGATION_COST, deduct 1 AP, and gather
     actionable intel on a sighted runner. The intel itself is surfaced by the
     caller (CorpScreen) — this function only deducts the cost and marks the
     slot. Fails closed if the tech isn't researched, the day's move is already
@@ -1057,14 +1055,14 @@ def investigate_sighting(
     Returns True on success so the caller can display the intel. The intel is
     deterministic (it's just reading fields the sighting already carries), not a
     random roll — the cash + daily-move cost is the gate."""
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     if not has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
         return False
     if INVESTIGATION_COST > corp_state.cash:
         return False
     corp_state.cash -= INVESTIGATION_COST
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     # The intel itself — what the caller displays — is just what the sighting
     # already carries (runner id, faction, territory, day, intercepted flag).
     # The cash buys the story beat; nothing is rolled.
@@ -1119,7 +1117,7 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
     """Spend cash to claim a bordering neutral territory. Fails closed (no
     mutation, no charge) if the corp's already made its move today, the target
     isn't a legal candidate for this faction right now, or it can't afford it."""
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     if territory_id not in expansion_candidates(corp_map, corp_state.faction_id):
         return False
@@ -1129,7 +1127,7 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
         return False
     corp_state.cash -= cost
     claim_territory(territory, corp_state.faction_id, rng)
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1163,25 +1161,25 @@ def deploy_operatives(
 ) -> bool:
     """Station `count` of the corp's untasked operatives on a district it holds,
     moving them from CorpState.operatives onto Territory.garrison. Spends the
-    day's one directed move, same slot as expand_into/train_employees — a redeploy
+    day's action point budget, same slot as expand_into/train_employees — a redeploy
     is a real logistical decision, not a free click.
 
     One-way on purpose: there is no recall. Operatives committed to holding ground
     are committed, which is what stops a single stack from shuttling around the
     map defending everything in turn.
 
-    Fails closed (no move consumed, nothing mutated) if the corp has already acted
-    today, `count` isn't positive, it hasn't got that many operatives spare, or the
+    Fails closed (no AP consumed, nothing mutated) if the corp has no AP,
+    `count` isn't positive, it hasn't got that many operatives spare, or the
     district isn't one it holds.
     """
-    if corp_state.daily_action_used or count <= 0 or count > corp_state.operatives:
+    if corp_state.action_points < AP_COST or count <= 0 or count > corp_state.operatives:
         return False
     territory = corp_map.territories.get(territory_id)
     if territory is None or territory.owner != corp_state.faction_id:
         return False
     corp_state.operatives -= count
     territory.garrison += count
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1205,7 +1203,7 @@ def _dispatch_operative(corp_state: CorpState, rng: random.Random) -> bool:
     (tail_runner/gather_intel always do; sabotage only on success) — that part
     stays with each caller."""
     corp_state.operatives -= 1
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return rng.random() < 0.5
 
 
@@ -1216,7 +1214,7 @@ def tail_runner_targets(corp_state: CorpState) -> list[Sighting]:
     """Sightings of independent runners eligible for a tail. Only while the day's
     move is free, an operative is spare in the pool, and the sighting is of a
     runner (not the player)."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return []
     return [s for s in corp_state.sightings if s.kind == "runner"]
 
@@ -1235,7 +1233,7 @@ def tail_runner(corp_state: CorpState, sighting: Sighting, rng: random.Random) -
     Returns True on success (a hit), so the caller can display the intel. Fails
     closed if the day's move is spent, no operatives are spare, or no runner
     sightings exist."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return False
     if sighting.kind != "runner":
         return False
@@ -1250,7 +1248,7 @@ def tail_runner(corp_state: CorpState, sighting: Sighting, rng: random.Random) -
 def intel_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
     """Rival or neutral territories an operative can be sent to gather intel on.
     Only while the day's move is free and an operative is spare."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return []
     return [
         t for t in corp_map.territories.values()
@@ -1271,7 +1269,7 @@ def gather_intel(
 
     Returns True on success. Fails closed if the day's move is spent, no
     operatives are spare, or the territory is the corp's own."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return False
     territory = corp_map.territories.get(territory_id)
     if territory is None or territory.owner == corp_state.faction_id:
@@ -1288,7 +1286,7 @@ def sabotage_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory
     """Rival-held territories an operative can be sent to sabotage. Only while the
     day's move is free and an operative is spare. Neutral ground and the corp's own
     territory are excluded — sabotage is a hostile act."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return []
     return [
         t for t in corp_map.territories.values()
@@ -1311,7 +1309,7 @@ def sabotage(
 
     Fails closed (no move consumed, nothing mutated) if the day's move is spent,
     no operatives are spare, or the target isn't a rival-held territory."""
-    if corp_state.daily_action_used or corp_state.operatives <= 0:
+    if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return None
     territory = corp_map.territories.get(territory_id)
     if territory is None or territory.owner in (corp_state.faction_id, "neutral"):
@@ -1408,17 +1406,17 @@ def attack_territory(
     corp_state: CorpState, corp_map: CorpMap, territory_id: str, committed: int, rng: random.Random
 ) -> AttackResult | None:
     """Throw `committed` operatives at a rival-held district bordering your own
-    ground. Spends the day's one directed move, same slot as expand_into.
+    ground. Costs 1 AP, same slot as expand_into.
 
     Costs no cash — operatives *are* the cost, and they were paid for at the
     Academy.
 
-    Returns None (no move consumed, nothing mutated) if the corp has already acted
-    today, the target isn't a legal attack candidate right now, or it can't field
+    Returns None (no AP consumed, nothing mutated) if the corp has no AP,
+    the target isn't a legal attack candidate right now, or it can't field
     that many operatives. On a repel the survivors come home to the pool; on a
     capture they stay as the new garrison (see resolve_attack).
     """
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return None
     if committed < MIN_ATTACK_FORCE or committed > corp_state.operatives:
         return None
@@ -1430,7 +1428,7 @@ def attack_territory(
     result = resolve_attack(territory, corp_state.faction_id, committed, rng, attack_bonus=bonus)
     if not result.captured:
         corp_state.operatives += committed - result.attacker_losses
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return result
 
 
@@ -1467,7 +1465,7 @@ def train_employees(
     move today, a batch is already training, holds no Academy (a rival can capture
     the one it was seeded — see build_academy), can't afford it, or (for operatives)
     the pool is already at or above the cap."""
-    if corp_state.daily_action_used or corp_state.pending_recruit is not None:
+    if corp_state.action_points < AP_COST or corp_state.pending_recruit is not None:
         return False
     academy = owned_academy(corp_state, corp_map)
     if academy is None:
@@ -1493,7 +1491,7 @@ def train_employees(
         count=count,
         ready_day=day + days,
     )
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1544,7 +1542,7 @@ def build_academy(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -
     Fails closed if the corp has already moved today, still holds an academy, can't
     afford it, or names a district it doesn't hold.
     """
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     if territory_id not in {t.id for t in rebuild_academy_targets(corp_state, corp_map)}:
         return False
@@ -1552,7 +1550,7 @@ def build_academy(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -
         return False
     corp_state.cash -= ACADEMY_REBUILD_COST
     add_academy(corp_map.territories[territory_id])
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1561,7 +1559,7 @@ def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:
     scientist capacity by one. Shares expand_into/train_employees' daily slot;
     fails closed if the corp's already made its move today, holds no Research
     Facility, has already built out to MAX_LABS_BUILT, or can't afford it."""
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     facility = owned_research_facility(corp_state, corp_map)
     if facility is None:
@@ -1571,7 +1569,7 @@ def build_lab(corp_state: CorpState, corp_map: CorpMap) -> bool:
         return False
     corp_state.cash -= cost
     facility.labs_built = (facility.labs_built or 0) + 1
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1602,7 +1600,7 @@ def build_research_facility(corp_state: CorpState, corp_map: CorpMap, territory_
     Fails closed if the corp has already moved today, still holds a facility, can't
     afford it, or names a district it doesn't hold.
     """
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     if territory_id not in {t.id for t in rebuild_facility_targets(corp_state, corp_map)}:
         return False
@@ -1610,7 +1608,7 @@ def build_research_facility(corp_state: CorpState, corp_map: CorpMap, territory_
         return False
     corp_state.cash -= RESEARCH_FACILITY_REBUILD_COST
     add_research_facility(corp_map.territories[territory_id])
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True
 
 
@@ -1620,7 +1618,7 @@ def build_efficiency_upgrade(corp_state: CorpState, corp_map: CorpMap) -> bool:
     daily slot; fails closed if the corp's already made its move today, holds
     no Research Facility, has already built out to MAX_EFFICIENCY_UPGRADES, or
     can't afford it."""
-    if corp_state.daily_action_used:
+    if corp_state.action_points < AP_COST:
         return False
     facility = owned_research_facility(corp_state, corp_map)
     if facility is None:
@@ -1630,5 +1628,5 @@ def build_efficiency_upgrade(corp_state: CorpState, corp_map: CorpMap) -> bool:
         return False
     corp_state.cash -= cost
     facility.efficiency_upgrades = (facility.efficiency_upgrades or 0) + 1
-    corp_state.daily_action_used = True
+    corp_state.action_points -= AP_COST
     return True

@@ -56,6 +56,7 @@ from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
+    AP_COST,
     RESEARCH_FACILITY_REBUILD_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
@@ -2310,20 +2311,17 @@ def test_corp_screen_expand_and_rest():
             await pilot.click(f"#expand_{target_id}")
             await pilot.pause()
             assert app.corp_map.territories[target_id].owner == faction_id
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
 
             day_before = app.character.day
             hours_before = app.character.elapsed_hours
             cash_before = app.corp_state.cash
-            # Rest is 8 hours now, not a full day -- click it enough times (3 * 8 =
-            # HOURS_PER_DAY) to actually cross a day boundary and fire the tick.
+            # Corp rest skips to next day's 6 AM — one click crosses midnight.
             rest_button = app.screen.query_one("#rest_button", Button)
-            for _ in range(HOURS_PER_DAY // REST_HOURS_COST):
-                rest_button.press()
-                await _settle(pilot)
+            rest_button.press()
+            await _settle(pilot)
             assert app.character.day == day_before + 1
-            assert app.character.elapsed_hours == hours_before + HOURS_PER_DAY
-            assert app.corp_state.daily_action_used is False
+            assert app.corp_state.action_points == 2
             assert app.corp_state.cash >= cash_before  # territory income collected
 
     run(body())
@@ -2373,7 +2371,7 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
             # the pool doesn't grow until it completes on a later day tick.
             assert app.corp_state.scientists == scientists_before
             assert app.corp_state.pending_recruit is not None
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
             # While a batch trains, the Academy shows its progress row, not new offers.
             academy_ids = {item.id for item in academy_list.children}
             assert academy_ids == {"pending_recruit"}
@@ -2843,8 +2841,8 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.pause()
             assert has_technology(app.corp_state, WORKER_SURVEILLANCE_ID)
             assert app.corp_state.research_points == 0
-            # Researching is not the day's directed move.
-            assert app.corp_state.daily_action_used is False
+            # Researching does not consume AP.
+            assert app.corp_state.action_points == 2
 
             owned = [t for t in app.corp_map.territories.values() if t.owner == faction.id]
             assert collect_income(app.corp_state, app.corp_map) - income_before == (
@@ -2879,7 +2877,7 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.click(f"#{surveil_ids[0]}")
             await pilot.pause()
             assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == before + 1
-            assert app.corp_state.daily_action_used is False
+            assert app.corp_state.action_points == 2
 
     run(body())
 
@@ -3715,7 +3713,7 @@ def test_corp_screen_reinforce_flow_moves_operatives_onto_the_district():
             await _settle(pilot)
             assert app.corp_map.territories[target].garrison == 4
             assert app.corp_state.operatives == 0
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
 
     run(body())
 
@@ -3770,7 +3768,7 @@ def test_corp_screen_attack_flow_resolves_against_a_rival():
             assert app.corp_map.territories[target].owner == ours
             assert app.corp_map.territories[target].garrison == 3
             assert app.corp_state.operatives == 0
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
             # The capture shows up on the corp's own public website.
             seizures = [e for e in app.faction_events[ours] if e.kind == "seizure"]
             assert seizures[0].territory_id == target
@@ -3816,7 +3814,7 @@ def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
 
             assert app.corp_map.territories[target].garrison == 4
             assert app.corp_state.operatives == 0
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
             # Survived the callback and redrew, rather than dying inside it.
             assert isinstance(app.screen, CorpMapScreen)
             rows = [item.id for item in screen.query_one("#activities", ListView).children]
@@ -4072,9 +4070,9 @@ def test_corp_screen_offers_an_academy_rebuild_once_it_is_captured():
             await _settle(pilot)
 
             assert app.corp_state.cash == 0
-            assert app.corp_state.daily_action_used is True
+            assert app.corp_state.action_points == 1
             # Training rows are back now that an Academy stands again.
-            app.corp_state.daily_action_used = False
+            app.corp_state.action_points = 2
             await screen._refresh()
             await _settle(pilot)
             rows = [item.id for item in screen.query_one("#academy_list", ListView).children]

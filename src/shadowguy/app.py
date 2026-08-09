@@ -180,15 +180,25 @@ class ShadowguyApp(App):
         """How long the next Rest will actually run: REST_HOURS_COST, unless the
         Phone's Alarm Clock tab has set Character.alarm_hour, in which case it's
         only until that hour — wrapping to the next day, and never 0 (an alarm set
-        to the current hour wakes a full day later, not instantly)."""
+        to the current hour wakes a full day later, not instantly).
+        For a corp rest, skips to 6 AM of the next calendar day instead."""
         character = self.character
+        if self.corp_state is not None:
+            return self._corp_rest_hours()
         if character.alarm_hour is None:
             return REST_HOURS_COST
         return (character.alarm_hour - character.hour_of_day) % HOURS_PER_DAY or HOURS_PER_DAY
 
+    def _corp_rest_hours(self) -> int:
+        """How many hours from now until 6 AM of the next calendar day. Always
+        crosses midnight (at least 1 hour, up to 25)."""
+        return self.character.day * HOURS_PER_DAY + 6 - int(self.character.elapsed_hours)
+
     def rest_label(self) -> str:
         """The "Rest" menu item's text for CorpMapScreen/CorpScreen, previewing rest_cost()
         and, with an alarm set, the shorter actual duration."""
+        if self.corp_state is not None:
+            return "Rest (to 6 AM)"
         hours = self._rest_hours()
         cost = self.rest_cost()
         if not cost:
@@ -295,7 +305,7 @@ class ShadowguyApp(App):
                 return
             self.corp_state.cash += collect_income(self.corp_state, self.corp_map)
             self.corp_state.research_points += collect_research(self.corp_state, self.corp_map)
-            self.corp_state.daily_action_used = False
+            self.corp_state.action_points = 2
             trained = advance_training(self.corp_state, day)
             if trained:
                 self.notify(

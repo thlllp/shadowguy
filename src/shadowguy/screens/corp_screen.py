@@ -6,6 +6,7 @@ from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListV
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
+    AP_COST,
     DEVELOPMENT_BUMP_COST,
     INVESTIGATION_COST,
     RESEARCH_FACILITY_REBUILD_COST,
@@ -90,11 +91,11 @@ def _sighting_label(sighting: Sighting, corp_map) -> str:
 
 
 def _gate(label: str, corp_state: CorpState, cost: int, *, daily: bool = True) -> str:
-    """Why picking this row would fail, appended to its own label -- the day's directed
-    move first, then the price, which is the order the corp_turn call itself checks them
-    in. `daily=False` for the repeatable bumps, which cost cash but not the day's move."""
-    if daily and corp_state.daily_action_used:
-        return f"{label} (already acted today)"
+    """Why picking this row would fail, appended to its own label -- AP gate
+    first, then the price, which is the order the corp_turn call itself checks them
+    in. `daily=False` for the repeatable bumps, which cost cash but not AP."""
+    if daily and corp_state.action_points < AP_COST:
+        return f"{label} (no AP remaining)"
     if cost > corp_state.cash:
         return f"{label} (can't afford)"
     return label
@@ -157,8 +158,8 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
     Shared by CorpScreen (its own #operations_list panel) and CorpMapScreen (folded
     into the flat corp-category list a corp_only run plays from), because a
     corp-only game never opens CorpScreen and would otherwise have no way to fight
-    at all. Both rows spend the day's directed move, so both carry the same
-    "already acted today" note the expansion rows do.
+    at all. Both rows cost 1 AP, so both carry the same
+    "no AP remaining" note the expansion rows do.
     """
     rows = []
     for territory in deployable_targets(corp_state, corp_map):
@@ -167,8 +168,8 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
             f"Reinforce {territory.name} — defense {defense_strength(territory, corp_state)} "
             f"({territory.garrison} garrison + {security} Security)"
         )
-        if corp_state.daily_action_used:
-            label += " (already acted today)"
+        if corp_state.action_points < AP_COST:
+            label += " (no AP remaining)"
         elif not corp_state.operatives:
             label += " (no operatives spare)"
         rows.append(ListItem(Static(label), id=f"deploy_{territory.id}"))
@@ -177,8 +178,8 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
         territory = corp_map.territories[territory_id]
         holder = FACTIONS_BY_ID[territory.owner].name
         label = f"Attack {territory.name} ({holder}) — defense {defense_strength(territory)}"
-        if corp_state.daily_action_used:
-            label += " (already acted today)"
+        if corp_state.action_points < AP_COST:
+            label += " (no AP remaining)"
         elif not corp_state.operatives:
             label += " (no operatives to send)"
         rows.append(ListItem(Static(label), id=f"attack_{territory_id}"))
@@ -404,9 +405,9 @@ class CorpActionsMixin:
 
     def _notify_refusal(self) -> None:
         """Why the corp_turn call just failed closed. Cash is the fallback: every daily
-        action checks the day's directed move first and its own price second."""
-        if self.app.corp_state.daily_action_used:
-            self.notify("Already made your move today.", severity="warning")
+        action checks AP first and its own price second."""
+        if self.app.corp_state.action_points < AP_COST:
+            self.notify("No action points remaining today.", severity="warning")
         else:
             self.notify("Can't afford it.", severity="warning")
 
@@ -592,14 +593,14 @@ class CorpActionsMixin:
         then ask how many (ForcePickScreen) and hand the answer to corp_turn.
 
         The gates are checked here rather than letting the corp_turn call fail closed
-        so the player isn't walked through a force picker only to be told they'd
-        already acted — the module still fails closed underneath either way."""
+        so the player isn't walked through a force picker only to be told they're
+        out of AP — the module still fails closed underneath either way."""
         corp_state = self.app.corp_state
         is_attack = item_id.startswith("attack_")
         territory_id = item_id.removeprefix("attack_" if is_attack else "deploy_")
         territory = self.app.corp_map.territories[territory_id]
-        if corp_state.daily_action_used:
-            self.notify("Already made your move today.", severity="warning")
+        if corp_state.action_points < AP_COST:
+            self.notify("No action points remaining today.", severity="warning")
             return
         if not corp_state.operatives:
             self.notify("No operatives to send. Train some at the Academy.", severity="warning")
