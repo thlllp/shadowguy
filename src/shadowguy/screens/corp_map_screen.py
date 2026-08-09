@@ -180,6 +180,11 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         height: 1fr;
         overflow-x: auto;
         padding: 0 1;
+        content-align: center middle;
+    }
+
+    #map {
+        width: auto;
     }
 
     #territory_summary {
