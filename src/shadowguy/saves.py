@@ -261,7 +261,7 @@ SAVE_SUFFIX = ".save"
 # v66 added CorpState.tasking_operatives -- operatives out on tail_runner/gather_intel/
 # sabotage, tracked separately from the capped operatives pool so a corp at
 # operative_max can still dispatch them (see corp_turn.return_tasking_operatives).
-SAVE_VERSION = 66
+SAVE_VERSION = 67
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

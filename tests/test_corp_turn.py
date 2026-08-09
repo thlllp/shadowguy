@@ -12,6 +12,7 @@ import pytest
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
+    AP_COST,
     BASE_LAB_CAPACITY,
     BRAINS_2_ID,
     BRAINS_2_RESEARCH_PER_ASSISTANT,
@@ -206,12 +207,12 @@ def test_expand_into_succeeds_and_charges_cash():
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is True
     assert corp_map.territories["neutral_a"].owner == IRONCLAD
     assert corp_state.cash == 10_000 - cost
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_expand_into_fails_when_already_used_today():
     corp_map = _map()
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, action_points=0)
     rng = random.Random(0)
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is False
     assert corp_map.territories["neutral_a"].owner == "neutral"
@@ -224,7 +225,7 @@ def test_expand_into_fails_when_unaffordable():
     rng = random.Random(0)
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is False
     assert corp_map.territories["neutral_a"].owner == "neutral"
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
 
 
 def test_expand_into_fails_for_gang_turf():
@@ -274,11 +275,11 @@ def test_expand_into_only_mutates_the_claimed_territory(seed):
             assert territory.owner == faction_id
         else:
             assert territory.owner == before[tid]
-    assert corp_state.daily_action_used is True
-    # A second attempt the same day must not touch anything further.
+    assert corp_state.action_points == 1
+    # A second expand same day succeeds — one AP remains.
     other_candidates = expansion_candidates(corp_map, faction_id)
     if other_candidates:
-        assert expand_into(corp_state, corp_map, other_candidates[0], rng) is False
+        assert expand_into(corp_state, corp_map, other_candidates[0], rng) is True
 
 
 def test_train_employees_queues_a_batch_and_charges_cash():
@@ -289,7 +290,7 @@ def test_train_employees_queues_a_batch_and_charges_cash():
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
     assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=5) is True
     assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST[EmployeeCategory.SCIENTIST]
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
     # The hires don't land yet -- they're queued behind the training delay.
     assert corp_state.scientists == 0
     pending = corp_state.pending_recruit
@@ -373,7 +374,7 @@ def test_train_employees_trains_one_batch_at_a_time():
     assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is True
     # A second batch is refused while the first is still training, even on a later
     # day with the daily action free -- the Academy has one slot.
-    corp_state.daily_action_used = False
+    corp_state.action_points = 2
     assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is False
     assert corp_state.pending_recruit.category is EmployeeCategory.SCIENTIST
     assert corp_state.cash == 10_000 - ACADEMY_TRAINING_COST[EmployeeCategory.SCIENTIST]
@@ -388,21 +389,21 @@ def test_train_employees_fails_with_no_academy():
 
 
 @pytest.mark.parametrize(
-    "cash,daily_action_used",
-    [(0, False), (10_000, True)],
-    ids=["unaffordable", "already_used_today"],
+    "cash,action_points",
+    [(0, 2), (10_000, 0)],
+    ids=["unaffordable", "no_ap"],
 )
-def test_train_employees_fails_closed_with_an_academy_standing(cash, daily_action_used):
+def test_train_employees_fails_closed_with_an_academy_standing(cash, action_points):
     corp_map = _map()
     corp_map.territories["iron_second"].locations.append(
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
     )
-    corp_state = CorpState(faction_id=IRONCLAD, cash=cash, daily_action_used=daily_action_used)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=cash, action_points=action_points)
     assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
     assert corp_state.pending_recruit is None
 
 
-def test_expand_and_train_share_the_same_daily_slot():
+def test_expand_and_train_both_can_be_done_in_one_day():
     corp_map = _map()
     corp_map.territories["iron_second"].locations.append(
         Location(id="acad1", name="Academy", kind=LocationKind.ACADEMY, academy_tier=1)
@@ -410,9 +411,11 @@ def test_expand_and_train_share_the_same_daily_slot():
     corp_state = CorpState(faction_id=IRONCLAD, cash=100_000)
     rng = random.Random(0)
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is True
-    # Training the same day is refused -- the day's one move is already spent.
-    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is False
-    assert corp_state.pending_recruit is None
+    assert corp_state.action_points == 1
+    # Training the same day succeeds -- one AP remains.
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is True
+    assert corp_state.pending_recruit is not None
+    assert corp_state.action_points == 0
 
 
 def test_lab_capacity_starts_at_base_with_no_labs_built():
@@ -483,7 +486,7 @@ def test_build_upgrade_succeeds_and_charges_cash(build, counter, costs, cap):
     facility = owned_research_facility(corp_state, corp_map)
     assert getattr(facility, counter) == 1
     assert corp_state.cash == 10_000 - costs[0]
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 @pytest.mark.parametrize("build,counter,costs,cap", _UPGRADES)
@@ -491,11 +494,11 @@ def test_build_upgrade_is_sequential(build, counter, costs, cap):
     corp_map = _map_with_facility()
     corp_state = CorpState(faction_id=IRONCLAD, cash=100_000)
     assert build(corp_state, corp_map) is True
-    corp_state.daily_action_used = False
+    corp_state.action_points = 2
     assert build(corp_state, corp_map) is True
     facility = owned_research_facility(corp_state, corp_map)
     assert getattr(facility, counter) == cap
-    corp_state.daily_action_used = False
+    corp_state.action_points = 2
     assert build(corp_state, corp_map) is False
     assert getattr(facility, counter) == cap
 
@@ -516,7 +519,7 @@ def test_build_upgrade_fails_when_unaffordable(build):
 
 @pytest.mark.parametrize("build", _BUILDERS)
 def test_build_upgrade_fails_when_already_used_today(build):
-    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, daily_action_used=True)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, action_points=0)
     assert build(corp_state, _map_with_facility()) is False
 
 
@@ -683,7 +686,7 @@ def test_research_technology_does_not_consume_the_daily_action():
     """RP is its own pacing gate, so researching doesn't compete with expanding."""
     corp_state = CorpState(faction_id=IRONCLAD, research_points=10)
     assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is True
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
 
 
 def test_worker_surveillance_income_bonus_is_per_territory():
@@ -713,7 +716,7 @@ def test_raise_surveillance_bumps_one_level_and_charges_cash():
     assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 2
     assert corp_state.cash == 10_000 - SURVEILLANCE_BUMP_COST
     # Repeatable within the same day -- cash is the only gate.
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
     assert raise_surveillance(corp_state, corp_map, "iron_home") is True
     assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == 3
 
@@ -782,7 +785,7 @@ def test_raise_development_bumps_one_level_and_charges_cash():
     assert raise_development(corp_state, corp_map, "iron_home") is True
     assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 2
     assert corp_state.cash == 10_000 - DEVELOPMENT_BUMP_COST
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
 
 
 def test_raise_development_needs_no_technology():
@@ -955,7 +958,7 @@ def test_deploy_operatives_moves_them_from_the_pool_onto_the_district():
     assert deploy_operatives(corp_state, corp_map, "iron_home", 3) is True
     assert corp_state.operatives == 2
     assert corp_map.territories["iron_home"].garrison == 3
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_deploy_operatives_fails_closed_on_every_gate():
@@ -969,9 +972,9 @@ def test_deploy_operatives_fails_closed_on_every_gate():
     assert deploy_operatives(corp_state, corp_map, "iron_home", 0) is False
     assert corp_state.operatives == 2
     assert corp_map.territories["iron_home"].garrison == 0
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
     # Already moved today.
-    corp_state.daily_action_used = True
+    corp_state.action_points = 0
     assert deploy_operatives(corp_state, corp_map, "iron_home", 1) is False
     assert corp_state.operatives == 2
 
@@ -987,7 +990,7 @@ def test_attack_captures_when_the_force_beats_the_defense():
     # Survivors hold the ground they took rather than returning to the pool.
     assert corp_map.territories["ghost_home"].garrison == 1
     assert corp_state.operatives == 2
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_attack_is_repelled_when_the_defense_holds_and_survivors_come_home():
@@ -1033,8 +1036,8 @@ def test_attack_fails_closed_on_every_gate():
     # Your own ground.
     assert attack_territory(corp_state, corp_map, "iron_second", 1, AlwaysSix()) is None
     assert corp_state.operatives == 2
-    assert corp_state.daily_action_used is False
-    corp_state.daily_action_used = True
+    assert corp_state.action_points >= AP_COST
+    corp_state.action_points = 0
     assert attack_territory(corp_state, corp_map, "ghost_home", 1, AlwaysSix()) is None
 
 
@@ -1143,7 +1146,7 @@ def test_rebuild_is_not_offered_while_the_corp_still_holds_a_facility():
     assert rebuild_facility_targets(corp_state, corp_map) == []
     assert build_research_facility(corp_state, corp_map, "iron_second") is False
     assert corp_state.cash == RESEARCH_FACILITY_REBUILD_COST
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
 
 
 def test_losing_the_only_facility_opens_the_rebuild():
@@ -1162,7 +1165,7 @@ def test_build_research_facility_stands_a_bare_one_up_and_charges_cash():
     corp_state = CorpState(faction_id=IRONCLAD, cash=RESEARCH_FACILITY_REBUILD_COST + 50)
     assert build_research_facility(corp_state, corp_map, "iron_home") is True
     assert corp_state.cash == 50
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
     facility = owned_research_facility(corp_state, corp_map)
     assert facility is not None
     assert facility.research_tier == STARTING_RESEARCH_TIER
@@ -1190,9 +1193,9 @@ def test_build_research_facility_fails_closed_on_every_gate():
     assert build_research_facility(corp_state, corp_map, "ghost_home") is False
     assert build_research_facility(corp_state, corp_map, "neutral_a") is False
     assert owned_research_facilities(corp_state, corp_map) == []
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
     # Already moved today.
-    corp_state.daily_action_used = True
+    corp_state.action_points = 0
     assert build_research_facility(corp_state, corp_map, "iron_home") is False
     assert corp_state.cash == RESEARCH_FACILITY_REBUILD_COST
 
@@ -1231,7 +1234,7 @@ def test_academy_rebuild_is_not_offered_while_the_corp_still_holds_one():
     assert rebuild_academy_targets(corp_state, corp_map) == []
     assert build_academy(corp_state, corp_map, "iron_second") is False
     assert corp_state.cash == ACADEMY_REBUILD_COST
-    assert corp_state.daily_action_used is False
+    assert corp_state.action_points >= AP_COST
 
 
 def test_losing_the_academy_blocks_training_and_opens_the_rebuild():
@@ -1253,10 +1256,10 @@ def test_build_academy_restores_training():
 
     assert build_academy(corp_state, corp_map, "iron_home") is True
     assert corp_state.cash == 500
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
     # A fresh day, and the corp can train again.
-    corp_state.daily_action_used = False
+    corp_state.action_points = 2
     assert train_employees(corp_state, corp_map, EmployeeCategory.OPERATIVE, day=1) is True
     assert corp_state.pending_recruit.category is EmployeeCategory.OPERATIVE
     assert corp_state.pending_recruit.count == STARTING_ACADEMY_TIER
@@ -1269,8 +1272,8 @@ def test_build_academy_fails_closed_on_every_gate():
     corp_state.cash = ACADEMY_REBUILD_COST
     assert build_academy(corp_state, corp_map, "ghost_home") is False
     assert build_academy(corp_state, corp_map, "neutral_a") is False
-    assert corp_state.daily_action_used is False
-    corp_state.daily_action_used = True
+    assert corp_state.action_points >= AP_COST
+    corp_state.action_points = 0
     assert build_academy(corp_state, corp_map, "iron_home") is False
     assert corp_state.cash == ACADEMY_REBUILD_COST
 
@@ -1422,9 +1425,9 @@ def test_investigate_sighting_targets_empty_without_tech():
     assert investigate_sighting_targets(corp_state, corp_map) == []
 
 
-def test_investigate_sighting_targets_empty_when_daily_action_used():
+def test_investigate_sighting_targets_empty_when_no_ap():
     corp_state = CorpState(
-        faction_id=IRONCLAD, cash=10_000, daily_action_used=True,
+        faction_id=IRONCLAD, cash=10_000, action_points=0,
         researched={TOTAL_INFORMATION_AWARENESS_ID},
         sightings=[Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)],
     )
@@ -1464,13 +1467,13 @@ def test_investigate_sighting_spends_cash_and_marks_the_day():
     )
     assert investigate_sighting(corp_state, sighting, random.Random()) is True
     assert corp_state.cash == 10_000 - INVESTIGATION_COST
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_investigate_sighting_fails_when_already_acted():
     sighting = Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)
     corp_state = CorpState(
-        faction_id=IRONCLAD, cash=10_000, daily_action_used=True,
+        faction_id=IRONCLAD, cash=10_000, action_points=0,
         researched={TOTAL_INFORMATION_AWARENESS_ID},
         sightings=[sighting],
     )
@@ -1642,7 +1645,7 @@ def test_tail_runner_targets_empty_when_no_operatives():
 def test_tail_runner_targets_empty_when_acted_today():
     sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
     corp_state = CorpState(
-        faction_id=IRONCLAD, operatives=1, daily_action_used=True,
+        faction_id=IRONCLAD, operatives=1, action_points=0,
         sightings=[sighting],
     )
     assert tail_runner_targets(corp_state) == []
@@ -1670,7 +1673,7 @@ def test_tail_runner_dispatches_operative_on_hit():
     assert tail_runner(corp_state, sighting, HitChance()) is True
     assert corp_state.operatives == 0
     assert corp_state.tasking_operatives == 1
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_tail_runner_marks_day_even_on_miss():
@@ -1683,7 +1686,7 @@ def test_tail_runner_marks_day_even_on_miss():
     assert tail_runner(corp_state, sighting, MissChance()) is False
     assert corp_state.operatives == 0
     assert corp_state.tasking_operatives == 1
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_tail_runner_fails_without_operatives():
@@ -1695,7 +1698,7 @@ def test_tail_runner_fails_without_operatives():
 def test_tail_runner_fails_when_acted_today():
     sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
     corp_state = CorpState(
-        faction_id=IRONCLAD, operatives=1, daily_action_used=True,
+        faction_id=IRONCLAD, operatives=1, action_points=0,
         sightings=[sighting],
     )
     assert tail_runner(corp_state, sighting, random.Random()) is False
@@ -1711,7 +1714,7 @@ def test_gather_intel_dispatches_operative_on_hit():
     assert gather_intel(corp_state, corp_map, "neutral_a", HitChance()) is True
     assert corp_state.operatives == 0
     assert corp_state.tasking_operatives == 1
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_gather_intel_refuses_own_territory():
@@ -1776,7 +1779,7 @@ def test_sabotage_reduces_security_on_hit():
     assert corp_map.territories["rival"].modifiers[TerritoryModifier.SECURITY] == 2
     assert corp_state.operatives == 0
     assert corp_state.tasking_operatives == 1
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_sabotage_loses_operative_on_miss():
@@ -1796,7 +1799,7 @@ def test_sabotage_loses_operative_on_miss():
     assert result is None
     assert corp_state.operatives == 0
     assert corp_state.tasking_operatives == 0  # lost, not returning
-    assert corp_state.daily_action_used is True
+    assert corp_state.action_points == 1
 
 
 def test_sabotage_security_cannot_go_below_zero():
