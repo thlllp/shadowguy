@@ -88,7 +88,7 @@ _RUNNER_CATEGORIES = [
     ("job", "Jobs"),
     ("legwork", "Legwork"),
     ("gear", "Gear"),
-    ("cyberdeck", "Cyberdeck"),
+    ("cyberdeck", "Deck"),
     ("skills", "Skills"),
     ("phone", "Phone"),
     ("corp", "Corp"),
@@ -101,7 +101,7 @@ _FULL_WIDTH_CATEGORIES = frozenset({"job", "legwork"})
 _CORP_CATEGORIES = [
     ("corp", "Corp"),
     ("phone", "Phone"),
-    ("tech", "Technology"),
+    ("tech", "Tech"),
 ]
 
 
@@ -144,23 +144,32 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         width: 1fr;
     }
 
-    #rest_button {
-        width: auto;
-        dock: right;
-    }
-
-    #sidebar {
-        width: 20;
+    #cat_button_panel {
+        width: 22;
         border: solid $accent;
         padding: 0 1;
+        height: auto;
     }
 
-    #categories {
-        border: none;
+    #cat_buttons {
+        grid-size: 2;
+        grid-gutter: 0 1;
+        height: auto;
     }
 
-    #categories:focus {
-        border: none;
+    #cat_buttons Button {
+        width: 9;
+    }
+
+    #rest_panel {
+        width: 28;
+        border: solid $accent;
+        padding: 0 1;
+        height: auto;
+    }
+
+    #rest_button {
+        width: 100%;
     }
 
     #main_panel {
@@ -255,12 +264,13 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         yield Header()
         with Horizontal(id="top_bar"):
             yield CharacterSheet(self.app.character)
-            rest_button = Button(self.app.rest_label(), id="rest_button")
-            rest_button.can_focus = False
-            yield rest_button
+            with Vertical(id="cat_button_panel"):
+                yield Grid(id="cat_buttons")
+            with Vertical(id="rest_panel"):
+                rest_button = Button(self.app.rest_label(), id="rest_button")
+                rest_button.can_focus = False
+                yield rest_button
         with Horizontal():
-            with Vertical(id="sidebar"):
-                yield ListView(id="categories")
             with Vertical(id="main_panel"):
                 yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
                 yield Static(markup=False, id="territory_summary")
@@ -283,8 +293,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     async def on_mount(self) -> None:
         self.selected_id = self.app.character.location_id
-        await self._refresh_categories()
-        self.query_one("#categories", ListView).can_focus = False
+        await self._build_category_buttons()
         if self.selected_category is None:
             self._refresh_map()
         else:
@@ -301,6 +310,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 self._do_refresh_map()
             else:
                 await self._refresh_activities()
+            return
+        if event.button.id.startswith("cat_"):
+            await self._select_category(event.button.id.removeprefix("cat_"))
+            return
 
     def refresh_map(self) -> None:
         """Public entry point for tests that manipulate selected_id/hovered_id
@@ -352,9 +365,19 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     # ── category navigation ─────────────────────────────────────────────────
 
-    async def _refresh_categories(self) -> None:
-        items = [ListItem(Static(label), id=f"cat_{key}") for key, label in self.categories]
-        await _replace_items(self.query_one("#categories", ListView), items)
+    async def _build_category_buttons(self) -> None:
+        grid = self.query_one("#cat_buttons", Grid)
+        await grid.remove_children()
+        cats = self.categories
+        columns = (len(cats) + 1) // 2
+        grid.styles.grid_size_columns = columns
+        # 9 chars per button + gutters + 4 for panel padding/border
+        panel = self.query_one("#cat_button_panel")
+        panel.styles.width = columns * 9 + (columns - 1) + 4
+        for key, label in cats:
+            btn = Button(label, id=f"cat_{key}")
+            btn.can_focus = False
+            await grid.mount(btn)
 
     async def _select_category(self, key: str) -> None:
         if key == "phone":
@@ -420,10 +443,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     # ── list-view dispatch ──────────────────────────────────────────────────
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id == "categories":
-            await self._select_category(event.item.id.removeprefix("cat_"))
-            return
-
         item_id = event.item.id
         character = self.app.character
 
@@ -502,7 +521,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         is_corp = self.selected_category == "corp"
         corp_only = self.app.corp_only
 
-        self.query_one("#sidebar").display = self.selected_category not in _FULL_WIDTH_CATEGORIES
+        self.query_one("#cat_button_panel").display = self.selected_category not in _FULL_WIDTH_CATEGORIES
         self.query_one("#map_scroll").display = in_map
         self.query_one("#territory_summary").display = in_map
         self.query_one("#activities").display = not in_map
