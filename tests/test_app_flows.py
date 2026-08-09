@@ -539,9 +539,9 @@ def test_new_game_corp_mode_picks_faction_and_skips_creation():
 
 
 def test_corp_map_screen_has_sidebar_categories():
-    """CorpMapScreen now carries the category sidebar natively -- no separate
-    CorpMainMenu screen. 'corp' renders inline; 'phone'/'tech' push their own
-    screens. escape returns to the map view from any inline category."""
+    """CorpMapScreen carries category buttons in a top-left panel. 'corp' renders
+    inline; 'phone'/'tech' push their own screens. escape returns to the map view
+    from any inline category."""
 
     async def body():
         app = ShadowguyApp()
@@ -555,8 +555,8 @@ def test_corp_map_screen_has_sidebar_categories():
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
 
-            categories = app.screen.query_one("#categories", ListView)
-            assert [item.id for item in categories.children] == [
+            cat_buttons = app.screen.query("#cat_buttons Button")
+            assert [btn.id for btn in cat_buttons] == [
                 "cat_corp",
                 "cat_phone",
                 "cat_tech",
@@ -571,7 +571,7 @@ def test_corp_map_screen_has_sidebar_categories():
             await pilot.pause()
             assert isinstance(app.screen, PhoneScreen)
             app.pop_screen()
-            await pilot.pause()
+            await _settle(pilot)
 
             await pilot.click("#cat_tech")
             await pilot.pause()
@@ -1487,8 +1487,8 @@ def test_cyberdeck_menu_option_reaches_the_screen_with_no_decks_owned():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
 
-            categories = app.screen.query_one("#categories", ListView)
-            assert "cat_cyberdeck" in [item.id for item in categories.children]
+            cat_buttons = app.screen.query("#cat_buttons Button")
+            assert any(btn.id == "cat_cyberdeck" for btn in cat_buttons)
 
             await pilot.click("#cat_cyberdeck")
             await pilot.pause()
@@ -2400,14 +2400,14 @@ def test_corp_map_screen_corp_sections_stack_top_to_bottom():
             await pilot.click("#cat_corp")
             await pilot.pause()
 
-            sidebar = app.screen.query_one("#sidebar")
+            cat_panel = app.screen.query_one("#cat_button_panel")
             main_panel = app.screen.query_one("#main_panel")
             activities = app.screen.query_one("#activities", ListView)
             academy_panel = app.screen.query_one("#academy_panel")
             research_panel = app.screen.query_one("#research_panel")
 
-            # The sidebar and main panel are side by side.
-            assert sidebar.region.x + sidebar.region.width <= main_panel.region.x
+            # The category button panel sits above the main panel (top bar area).
+            assert cat_panel.region.y + cat_panel.region.height <= main_panel.region.y
 
             # Each section starts at or after the previous one's bottom edge -- top to
             # bottom, never overlapping.
@@ -2557,8 +2557,8 @@ def test_map_hover_boxes_visible_in_map_mode_and_hidden_otherwise():
 
 
 def test_jobs_and_legwork_tabs_hide_the_sidebar_and_escape_brings_it_back():
-    """The Jobs and Legwork activity lists take the full width: the category sidebar
-    is hidden while either is selected, and 'escape' restores it with the map."""
+    """The Jobs and Legwork activity lists take the full width: the category button
+    panel is hidden while either is selected, and 'escape' restores it with the map."""
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -2566,16 +2566,16 @@ def test_jobs_and_legwork_tabs_hide_the_sidebar_and_escape_brings_it_back():
             app.push_screen(CorpMapScreen())
             await pilot.pause()
             screen = app.screen
-            sidebar = screen.query_one("#sidebar")
+            cat_panel = screen.query_one("#cat_button_panel")
             activities = screen.query_one("#activities", ListView)
 
-            assert sidebar.display is True
+            assert cat_panel.display is True
 
             for category in ("job", "legwork"):
                 screen.selected_category = category
                 await screen._refresh_activities()
                 await _settle(pilot)
-                assert sidebar.display is False
+                assert cat_panel.display is False
                 # ... and the activity list really does get the whole width.
                 assert activities.region.x == 0
                 assert activities.region.width == 80
@@ -2583,13 +2583,13 @@ def test_jobs_and_legwork_tabs_hide_the_sidebar_and_escape_brings_it_back():
                 await pilot.press("escape")
                 await _settle(pilot)
                 assert screen.selected_category is None
-                assert sidebar.display is True
+                assert cat_panel.display is True
 
-            # A tab that isn't full-width keeps the sidebar.
+            # A tab that isn't full-width keeps the button panel.
             screen.selected_category = "corp"
             await screen._refresh_activities()
             await pilot.pause()
-            assert sidebar.display is True
+            assert cat_panel.display is True
 
     run(body())
 
