@@ -55,17 +55,17 @@ def test_archetypes_by_id_keys_match():
     "archetype_id,name,stats,skills,cyberware",
     [
         ("enforcer", "Enforcer", {"body": 3, "strength": 3},
-         {"clubs": 7, "toughness": 6, "grapple": 3, "intimidation": 1}, ()),
+         {"clubs": 6, "toughness": 6, "grapple": 3, "intimidation": 1}, ("grapple_rig_cyberarm",)),
         ("hacker", "Hacker", {"logic": 6},
-         {"cybercombat": 6, "hack": 5, "computer": 4, "infer": 2, "tinkering": 2}, ()),
+         {"cybercombat": 6, "hack": 4, "computer": 4, "infer": 2, "tinkering": 2}, ("datajack",)),
         ("infiltrator", "Infiltrator", {"agility": 4, "perception": 2},
-         {"stealth": 7, "deception": 5, "sight": 3, "blades": 3}, ()),
+         {"stealth": 7, "deception": 5, "sight": 2, "blades": 3}, ("cybereye_scanner",)),
         ("gunslinger", "Gunslinger", {"agility": 3, "body": 3},
-         {"longarms": 7, "dodge": 5, "toughness": 3, "pistols": 3}, ()),
+         {"longarms": 6, "dodge": 5, "toughness": 3, "pistols": 3}, ("reflex_coprocessor",)),
         ("street_samurai", "Street Samurai", {"agility": 4, "strength": 2},
          {"blades": 7, "dodge": 5, "acrobatics": 3, "grapple": 2}, ("hydraulic_cyberarm",)),
         ("fixer", "Fixer", {"cool": 4, "logic": 2},
-         {"negotiations": 7, "leadership": 5, "deception": 3, "computer": 3}, ()),
+         {"negotiations": 7, "leadership": 5, "deception": 2, "computer": 3}, ("synthetic_adrenal_gland",)),
     ],
 )
 def test_preset_contents(archetype_id, name, stats, skills, cyberware):
@@ -143,7 +143,7 @@ def test_apply_sets_correct_skill_ranks():
     c = Character(name="test")
     a.apply(c)
     assert c.skill_rank("cybercombat") == 6
-    assert c.skill_rank("hack") == 5
+    assert c.skill_rank("hack") == 4
 
 
 def test_bad_preset_raises():
@@ -200,6 +200,29 @@ def test_no_preset_ships_cyberware_a_fresh_runner_could_not_buy():
         for cyberware_id in a.cyberware:
             assert cyberware_id in CYBERWARE_BY_ID, f"{a.id}: unknown cyberware {cyberware_id}"
             assert not CYBERWARE_BY_ID[cyberware_id].min_standing, f"{a.id}: {cyberware_id} is gated"
+
+
+def test_no_preset_ships_a_program_a_fresh_runner_could_not_buy():
+    """Same gate as gear/cyberware, above, for Archetype.programs -- only min_standing 0
+    programs are ever reachable before the run starts."""
+    from shadowguy.shops import PROGRAMS_BY_ID
+
+    for a in archetypes.ARCHETYPES:
+        for program_id in a.programs:
+            assert program_id in PROGRAMS_BY_ID, f"{a.id}: unknown program {program_id}"
+            assert not PROGRAMS_BY_ID[program_id].min_standing, f"{a.id}: {program_id} is gated"
+
+
+def test_hacker_installs_two_programs_on_its_deck():
+    """The deck is the build (see the Hacker's own gear comment) -- it shouldn't walk
+    in empty. apply() both buys (owned_programs) and installs (onto the Zetatech Rig)."""
+    a = archetypes.ARCHETYPES_BY_ID["hacker"]
+    assert len(a.programs) >= 2
+    c = Character(name="test")
+    a.apply(c)
+    assert set(a.programs) <= c.owned_programs
+    deck_entry = next(e for e in c.inventory if e.item_id == "zetatech_rig")
+    assert set(a.programs) <= set(deck_entry.installed_programs)
 
 
 def test_every_preset_still_spends_both_pools_to_zero_with_gear_in_the_mix():

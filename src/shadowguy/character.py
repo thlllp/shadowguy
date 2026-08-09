@@ -13,6 +13,7 @@ from shadowguy.inventory import equipped_bonus, equipped_skill_bonus
 from shadowguy.runners import RUNNERS_BY_ID, can_work_support, live_runner, recruit_wage
 from shadowguy.shops import (
     ITEMS_BY_ID,
+    PROGRAMS_BY_ID,
     InventoryItem,
     Item,
     grant_item,
@@ -707,6 +708,20 @@ class Character:
         self.gear_budget -= cyberware.price
         self.installed_cyberware[cyberware.slot] = cyberware_id
         self.humanity = round(self.humanity - SURGERY_SCARRING, 2)
+        return True
+
+    def buy_creation_program(self, program_id: str) -> bool:
+        """Spend gear budget (never cash) buying one ungated Program into the runner's
+        owned pool (Character.owned_programs) at creation -- the creation-time
+        counterpart to shops.buy_program, same funding swap buy_creation_gear/
+        buy_creation_cyberware make. Only min_standing 0 programs are ever reachable
+        here, same reason as the other two. Installing onto a deck is a separate step
+        (inventory.install_program), same as it is post-creation."""
+        program = PROGRAMS_BY_ID[program_id]
+        if program.min_standing or program.price > self.gear_budget or program_id in self.owned_programs:
+            return False
+        self.gear_budget -= program.price
+        self.owned_programs.add(program_id)
         return True
 
     def spend_experience_on_skill(self, skill_id: str) -> bool:
