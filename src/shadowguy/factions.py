@@ -49,7 +49,7 @@ FACTIONS = [
         id="faction_sanctuary",
         name="Sanctuary Holdings",
         specialty=FactionSpecialty.FAITH,
-        description="Old-world faith reborn as corporate doctrine — tithes, crusades, and a very literal bottom line.",
+        description="Salvation delivered by wire transfer. Every confession feeds the algorithm; every prayer is a data point.",
     ),
 ]
 
