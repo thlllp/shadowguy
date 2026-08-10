@@ -6,6 +6,7 @@ generator's docstrings promise. These assert the guarantees documented in
 corpmap_gen.py hold across a broad seed sample, not just "it doesn't crash."
 """
 
+import functools
 import random
 from collections import Counter, deque
 
@@ -26,6 +27,7 @@ from shadowguy.corpmap_gen import (
     GANG_TURF_MIN,
     JUNKYARD_ROLE,
     MIN_START_DEGREE,
+    OUTSKIRTS_COUNT,
     SLUM_COUNT,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
@@ -39,9 +41,21 @@ from shadowguy.gangs import GANG_RANKS, GANGS, GANGS_BY_ID
 SEEDS = range(200)
 
 
+@functools.lru_cache(maxsize=None)
+def _generated_map(seed: int):
+    """One map per seed, shared by every test below.
+
+    Kept at CLAUDE.md's documented 200 seeds even after the board went to
+    TERRITORY_COUNT 260 (which made a map ~4x more expensive to build): 40+ tests
+    assert against the same seed and none of them mutate the map, so generating it
+    once per seed instead of once per test is what pays for the width.
+    """
+    return generate_corp_map(FACTIONS, random.Random(seed))
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_map_has_exactly_territory_count_territories(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     assert len(corp_map.territories) == TERRITORY_COUNT
 
 
@@ -49,7 +63,7 @@ def test_map_has_exactly_territory_count_territories(seed):
 def test_map_is_fully_connected(seed):
     """Every territory must be reachable from every other -- generate_corp_map's
     spanning-tree guarantee, checked by BFS rather than trusted."""
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     territories = corp_map.territories
     start = next(iter(territories))
     seen = {start}
@@ -65,7 +79,7 @@ def test_map_is_fully_connected(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_connections_are_symmetric(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for tid, territory in corp_map.territories.items():
         for other in territory.connections:
             assert tid in corp_map.territories[other].connections
@@ -73,7 +87,7 @@ def test_connections_are_symmetric(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_faction_holds_equal_territory_count(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     counts = Counter(t.owner for t in corp_map.territories.values())
     for faction in FACTIONS:
         assert counts[faction.id] == TERRITORIES_PER_FACTION
@@ -81,7 +95,7 @@ def test_every_faction_holds_equal_territory_count(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_faction_holds_equal_total_value(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     totals = {faction.id: 0 for faction in FACTIONS}
     for territory in corp_map.territories.values():
         if territory.owner in totals:
@@ -92,7 +106,7 @@ def test_every_faction_holds_equal_total_value(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_gang_holds_turf_in_range(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     counts = Counter(t.gang_id for t in corp_map.territories.values() if t.gang_id)
     for gang in GANGS:
         assert GANG_TURF_MIN <= counts[gang.id] <= GANG_TURF_MAX
@@ -100,7 +114,7 @@ def test_every_gang_holds_turf_in_range(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_gang_turf_is_unclaimed_and_never_the_start(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for territory in corp_map.territories.values():
         if territory.gang_id:
             assert territory.owner == "neutral"
@@ -109,7 +123,7 @@ def test_gang_turf_is_unclaimed_and_never_the_start(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_player_start_is_neutral(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     start = corp_map.territories[corp_map.player_start_id]
     assert start.owner == "neutral"
     assert start.owner not in FACTIONS_BY_ID
@@ -117,21 +131,21 @@ def test_player_start_is_neutral(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_player_start_has_minimum_degree(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     start = corp_map.territories[corp_map.player_start_id]
     assert len(start.connections) >= MIN_START_DEGREE
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_player_start_has_apartment(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     start = corp_map.territories[corp_map.player_start_id]
     assert has_home(start)
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_player_start_apartment_has_a_workshop_already_built(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     start = corp_map.territories[corp_map.player_start_id]
     apartment = next(loc for loc in start.locations if loc.kind == LocationKind.APARTMENT)
     assert apartment.workshop_built is True
@@ -139,7 +153,7 @@ def test_player_start_apartment_has_a_workshop_already_built(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_each_gang_has_exactly_one_den_on_its_own_turf(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     dens = {}
     for territory in corp_map.territories.values():
         for location in territory.locations:
@@ -152,7 +166,7 @@ def test_each_gang_has_exactly_one_den_on_its_own_turf(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_gang_den_is_staffed_with_both_ranks(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     dens = [
         location
         for territory in corp_map.territories.values()
@@ -177,7 +191,7 @@ def _junkyards(corp_map):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_junkyards_are_neutral_and_never_the_start(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for territory, _location in _junkyards(corp_map):
         assert territory.owner == "neutral"
         assert territory.id != corp_map.player_start_id
@@ -189,7 +203,7 @@ def test_junkyard_count_matches_neutral_density(seed):
     checked against the map's own neutral, non-start territory count rather than a
     hardcoded number, so this stays correct if TERRITORY_COUNT/TERRITORIES_PER_FACTION
     or the faction count ever changes."""
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     neutral_count = sum(
         1
         for t in corp_map.territories.values()
@@ -201,7 +215,7 @@ def test_junkyard_count_matches_neutral_density(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_junkyard_has_exactly_one_scrapper(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     junkyards = _junkyards(corp_map)
     assert junkyards
     for _territory, location in junkyards:
@@ -219,7 +233,7 @@ def _docks(corp_map):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_docks_are_neutral_and_never_the_start(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for territory, _location in _docks(corp_map):
         assert territory.owner == "neutral"
         assert territory.id != corp_map.player_start_id
@@ -229,7 +243,7 @@ def test_docks_are_neutral_and_never_the_start(seed):
 def test_docks_count_matches_neutral_density(seed):
     """Same reasoning as test_junkyard_count_matches_neutral_density: checked against
     the map's own neutral, non-start territory count rather than a hardcoded number."""
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     neutral_count = sum(
         1
         for t in corp_map.territories.values()
@@ -241,7 +255,7 @@ def test_docks_count_matches_neutral_density(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_docks_has_exactly_one_angler(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     docks = _docks(corp_map)
     assert docks
     for _territory, location in docks:
@@ -250,7 +264,7 @@ def test_every_docks_has_exactly_one_angler(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_docks_never_share_a_tile_with_a_junkyard_hospital_or_gang_den(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     docks_ids = {territory.id for territory, _location in _docks(corp_map)}
     junkyard_ids = {territory.id for territory, _location in _junkyards(corp_map)}
     assert not docks_ids & junkyard_ids
@@ -272,7 +286,7 @@ def _amys_places(corp_map):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_exactly_one_amys_place_on_neutral_non_start_ground(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     amys_places = _amys_places(corp_map)
     assert len(amys_places) == 1
     territory, _location = amys_places[0]
@@ -282,14 +296,14 @@ def test_exactly_one_amys_place_on_neutral_non_start_ground(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_amys_place_has_exactly_one_fixer_character(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     _territory, location = _amys_places(corp_map)[0]
     assert [c.role for c in location.characters] == [AMYS_PLACE_ROLE]
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_amys_place_never_shares_a_tile_with_a_junkyard_docks_hospital_or_gang_den(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     amy_territory, _location = _amys_places(corp_map)[0]
     kinds = {loc.kind for loc in amy_territory.locations}
     assert LocationKind.JUNKYARD not in kinds
@@ -300,7 +314,7 @@ def test_amys_place_never_shares_a_tile_with_a_junkyard_docks_hospital_or_gang_d
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_each_faction_has_exactly_one_hq(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     hq_owners = [
         territory.owner
         for territory in corp_map.territories.values()
@@ -312,7 +326,7 @@ def test_each_faction_has_exactly_one_hq(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_each_faction_has_exactly_one_research_facility_at_starting_tier(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     facilities = [
         (territory.owner, location)
         for territory in corp_map.territories.values()
@@ -325,7 +339,7 @@ def test_each_faction_has_exactly_one_research_facility_at_starting_tier(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_each_faction_has_exactly_one_academy_at_starting_tier(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     academies = [
         (territory.owner, location)
         for territory in corp_map.territories.values()
@@ -338,7 +352,7 @@ def test_each_faction_has_exactly_one_academy_at_starting_tier(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_hq_research_facility_and_academy_never_share_a_district(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     special = {LocationKind.CORP_HQ, LocationKind.RESEARCH_FACILITY, LocationKind.ACADEMY}
     for territory in corp_map.territories.values():
         kinds = [location.kind for location in territory.locations if location.kind in special]
@@ -348,14 +362,14 @@ def test_hq_research_facility_and_academy_never_share_a_district(seed):
 @pytest.mark.parametrize("attribute", ["id", "name"])
 @pytest.mark.parametrize("seed", SEEDS)
 def test_location_ids_and_names_are_unique_across_the_map(seed, attribute):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     values = [getattr(loc, attribute) for t in corp_map.territories.values() for loc in t.locations]
     assert len(values) == len(set(values))
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_local_character_ids_are_unique_across_the_map(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     ids = [char.id for _loc, char in corp_map.characters()]
     assert len(ids) == len(set(ids))
 
@@ -366,13 +380,13 @@ def _slums(corp_map):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_exactly_slum_count_slums(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     assert len(_slums(corp_map)) == SLUM_COUNT
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_slums_are_neutral_non_start(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for t in _slums(corp_map):
         assert t.owner == "neutral"
         assert t.id != corp_map.player_start_id
@@ -380,14 +394,14 @@ def test_slums_are_neutral_non_start(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_slums_have_no_gang_presence(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for t in _slums(corp_map):
         assert t.gang_id is None
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_slums_have_encampment_not_shops(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     shop_kinds = {
         LocationKind.PAWN, LocationKind.WEAPON_SHOP, LocationKind.AUTO_DEALER,
         LocationKind.PHARMACY, LocationKind.COMPUTER_STORE, LocationKind.CYBER_CLINIC,
@@ -403,7 +417,7 @@ def test_slums_have_encampment_not_shops(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_slums_never_share_with_junkyard_or_docks(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for t in _slums(corp_map):
         kinds = {loc.kind for loc in t.locations}
         assert LocationKind.JUNKYARD not in kinds
@@ -413,12 +427,72 @@ def test_slums_never_share_with_junkyard_or_docks(seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_slums_have_zero_development_security_surveillance(seed):
-    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    corp_map = _generated_map(seed)
     for t in _slums(corp_map):
         assert t.modifiers["development"] == 0
         assert t.modifiers["security"] == 0
         assert t.modifiers["surveillance"] == 0
         assert t.modifiers["unrest"] == MODIFIER_MAX
+
+
+def _outskirts(corp_map):
+    return [t for t in corp_map.territories.values() if t.is_outskirts]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_exactly_outskirts_count_outskirts(seed):
+    corp_map = _generated_map(seed)
+    assert len(_outskirts(corp_map)) == OUTSKIRTS_COUNT
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_are_neutral_non_start(seed):
+    corp_map = _generated_map(seed)
+    for t in _outskirts(corp_map):
+        assert t.owner == "neutral"
+        assert t.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_are_on_grid_edge(seed):
+    corp_map = _generated_map(seed)
+    for t in _outskirts(corp_map):
+        assert t.x == 0 or t.x == 13 or t.y == 0 or t.y == 23
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_have_no_gang_presence(seed):
+    corp_map = _generated_map(seed)
+    for t in _outskirts(corp_map):
+        assert t.gang_id is None
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_have_zero_development_security_surveillance(seed):
+    corp_map = _generated_map(seed)
+    for t in _outskirts(corp_map):
+        assert t.modifiers["development"] == 0
+        assert t.modifiers["security"] == 0
+        assert t.modifiers["surveillance"] == 0
+        assert t.modifiers["unrest"] == MODIFIER_MAX
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_never_share_with_junkyard_or_docks(seed):
+    corp_map = _generated_map(seed)
+    for t in _outskirts(corp_map):
+        kinds = {loc.kind for loc in t.locations}
+        assert LocationKind.JUNKYARD not in kinds
+        assert LocationKind.DOCKS not in kinds
+        assert LocationKind.AMYS_PLACE not in kinds
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_outskirts_and_slums_are_disjoint(seed):
+    corp_map = _generated_map(seed)
+    outskirts_ids = {t.id for t in _outskirts(corp_map)}
+    slum_ids = {t.id for t in _slums(corp_map)}
+    assert not outskirts_ids & slum_ids
 
 
 def test_generate_corp_map_raises_if_factions_dont_fit():
