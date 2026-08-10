@@ -210,12 +210,15 @@ async def _scroll_into_view(pilot, screen, selector: str) -> None:
     QuitMenu, when the row sits past the bottom of the screen). Nothing collapses the
     box's contents for us any more (CorpMapScreen's accordion only closes sibling
     *location* boxes, not what is nested inside the one being opened), so scroll
-    explicitly. Containment is checked against the strip's own region rather than the
-    screen's: a row on the Footer's line is technically on-screen and still unclickable."""
+    explicitly. Two _settles upfront because expanding a box doesn't always settle the
+    scrollable ancestor's virtual size in one; overlaps rather than full containment
+    because pilot.click hits the centre of the widget, not its entire footprint."""
     strip = screen.query_one("#map_local_boxes_scroll")
-    for _ in range(3):
+    await _settle(pilot)
+    await _settle(pilot)
+    for _ in range(5):
         widget = screen.query_one(selector)
-        if widget.region in strip.region:
+        if widget.region.overlaps(strip.region):
             return
         widget.scroll_visible(animate=False)
         await _settle(pilot)
@@ -1474,6 +1477,7 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{store_location.id}", Collapsible).collapsed = False
             await _settle(pilot)
+            await _scroll_into_view(pilot, app.screen, f"#map_local_{store_location.id}")
             await pilot.click(f"#map_local_{store_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -4221,6 +4225,7 @@ def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
             await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{clinic.id}", Collapsible).collapsed = False
             await _settle(pilot)
+            await _scroll_into_view(pilot, app.screen, f"#map_local_{clinic.id}")
             await pilot.click(f"#map_local_{clinic.id}")
             await pilot.pause()
             assert isinstance(app.screen, RipperdocScreen)
