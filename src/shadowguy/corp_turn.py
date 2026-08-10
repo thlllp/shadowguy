@@ -508,7 +508,8 @@ _TECHNOLOGY_ROWS = (
         "Tithes",
         25,
         (),
-        "Every territory you hold earns +{tithes_income}eb/day in base income.",
+        "Every territory you hold generates +{tithes_income}eb/day — "
+        "donations wired directly from the faithful, no questions asked.",
         "faction_sanctuary",
     ),
     (
@@ -516,7 +517,8 @@ _TECHNOLOGY_ROWS = (
         "Crusade",
         45,
         (TITHES_ID,),
-        "Your attack rolls get +1 on the contest die.",
+        "Your attack rolls get +1 on the contest die — the faithful march where "
+        "the algorithm points.",
         "faction_sanctuary",
     ),
 )
