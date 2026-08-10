@@ -69,7 +69,7 @@ from shadowguy.corpmap import (
 )
 
 # First-slice numbers, not balance-simulated.
-STARTING_CASH = 1500
+STARTING_CASH = 2000
 
 # The most untasked operatives a corp can hold in its pool at once (garrisoned
 # operatives don't count against this cap). Enforced by train_employees and
