@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING
 from shadowguy.character import Character
 from shadowguy.corp_turn import (
     COUNTER_INTELLIGENCE_ID,
+    DEEP_PROTOCOL_DETECTION_BONUS,
+    DEEP_SURVEILLANCE_PROTOCOL_ID,
     DETECTION_CHANCE_BONUS,
     EXTENDED_SURVEILLANCE_DETECTION,
     EXTENDED_SURVEILLANCE_MAX,
@@ -79,7 +81,9 @@ def _detection_chance(
         chance = SURVEILLANCE_DETECTION_CHANCE[level]
     if has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
         chance += DETECTION_CHANCE_BONUS
-    if has_technology(corp_state, ICE_CRACKED_NETWORKS_ID):
+    if has_technology(corp_state, DEEP_SURVEILLANCE_PROTOCOL_ID):
+        chance += DEEP_PROTOCOL_DETECTION_BONUS
+    elif has_technology(corp_state, ICE_CRACKED_NETWORKS_ID):
         chance += GHOSTWIRE_DETECTION_BONUS
     return min(chance, 1.0)
 

@@ -25,7 +25,7 @@ from shadowguy.surveillance import resolve_surveillance_day
 
 from helpers import ForcedChance
 
-IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, _, _ = (f.id for f in FACTIONS)
 
 HIT = ForcedChance(0.0)
 MISS = ForcedChance(0.99)

@@ -2936,15 +2936,17 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             assert not any(i.startswith("surveil_") for i in corp_ids)
 
             # Technology now lives on its own pushed Research Tree screen. Worker
-            # Surveillance, Brains 2, Counter-Intelligence, and one faction root
-            # (Hardened Garrison for Ironclad) are the tier-0 roots.
+            # Surveillance, Brains 2, Counter-Intelligence, Consolidated Holdings,
+            # Fortified Defenses, Research Expansion and one faction root (Hardened
+            # Garrison for Ironclad) are the tier-0 roots.
             await pilot.press("t")
             await pilot.pause()
             assert isinstance(app.screen, ResearchTreeScreen)
             tier0_ids = {item.id for item in app.screen.query_one("#tier_0_list", ListView).children}
             assert tier0_ids == {
                 "tech_worker_surveillance", "tech_brains_2", "tech_counter_intelligence",
-                "tech_hardened_garrison",
+                "tech_consolidated_holdings", "tech_fortified_defenses",
+                "tech_research_expansion", "tech_hardened_garrison",
             }
 
             income_before = collect_income(app.corp_state, app.corp_map)

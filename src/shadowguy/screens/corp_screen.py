@@ -224,8 +224,8 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
     facility = owned_research_facility(corp_state, corp_map)
     facility_line = ""
     if facility is not None:
-        capacity = lab_capacity(facility)
-        assist_capacity = assistant_capacity(facility)
+        capacity = lab_capacity(facility, corp_state)
+        assist_capacity = assistant_capacity(facility, corp_state)
         facility_line = (
             f"\nResearch Facility: tier {facility.research_tier}, "
             f"{min(corp_state.scientists, capacity)}/{capacity} scientists at work "
