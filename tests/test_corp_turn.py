@@ -128,7 +128,7 @@ from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from helpers import AlwaysOne, AlwaysSix
 
-IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, _, _ = (f.id for f in FACTIONS)
 
 SEEDS = range(150)
 

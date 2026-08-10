@@ -1,7 +1,7 @@
 """The player's own Corp turn: a parallel resolution module, like rivals.py/
 security.py — not a Scene.
 
-The player runs one of the 4 seeded Factions (CorpState.faction_id) rather than
+The player runs one of the 5 seeded Factions (CorpState.faction_id) rather than
 founding a new one. Two ways in, both building a CorpState: a corp-only run picks
 one at New Game (screens/menu_screens.py's CorpSelectScreen), and a runner earns
 one mid-run by buying a controlling stake at that corp's own HQ
@@ -239,14 +239,25 @@ COMBAT_STIMS_ID = "combat_stims"
 RAPID_DEPLOYMENT_ID = "rapid_deployment"
 OPTIMIZED_WORKFORCE_ID = "optimized_workforce"
 SUPPLY_CHAIN_ID = "supply_chain"
+CONSOLIDATED_HOLDINGS_ID = "consolidated_holdings"
+FORTIFIED_DEFENSES_ID = "fortified_defenses"
+RESEARCH_EXPANSION_ID = "research_expansion"
+TOTAL_WAR_ID = "total_war"
+DEEP_SURVEILLANCE_PROTOCOL_ID = "deep_surveillance_protocol"
+ACCELERATED_METABOLISM_ID = "accelerated_metabolism"
+MARKET_MONOPOLY_ID = "market_monopoly"
+TITHES_ID = "tithes"
+CRUSADE_ID = "crusade"
 
-# id, name, cost (RP), prereqs, description — three chains: income/surveillance
-# (4 deep, Worker Surveillance → Panopticon Grid → Shadow Economy → Total
-# Information Awareness), research-rate (3 deep, Brains 2 → Brains 3 → Cognitive
-# Uplink), counter-intel (3 deep, Counter-Intelligence → Deep Surveillance →
-# Operation Intercept). Worker Surveillance, Brains 2, and Counter-Intelligence
-# are the three roots (empty prereqs, researchable from day one); every other row
-# names the tech directly below it in its own chain. A row's
+# id, name, cost (RP), prereqs, description — six public roots (Worker
+# Surveillance, Brains 2, Counter-Intelligence, Consolidated Holdings,
+# Fortified Defenses, Research Expansion) and their chains, plus five
+# faction-specific chains (Ironclad: Hardened Garrison → Shock Assault → Total
+# War; Ghostwire: Signal Intercept → ICE-Cracked Networks → Deep Surveillance
+# Protocol; Meridian: Combat Stims → Rapid Deployment → Accelerated Metabolism;
+# Prometheus: Optimized Workforce → Supply Chain → Market Monopoly; Sanctuary:
+# Tithes → Crusade). Every root has empty prereqs, researchable from day one;
+# every other row names the tech directly below it in its own chain. A row's
 # prereqs must already have appeared earlier in this tuple — enforced below,
 # because technology_tree_layout() (and the topological loop that builds
 # TECHNOLOGIES itself) both assume a prereq's own row is already processed by
@@ -349,6 +360,34 @@ _TECHNOLOGY_ROWS = (
         "(they go to ground).",
         None,
     ),
+    # --- 3 public techs (all-faction, no faction gate) ------------------------
+    (
+        CONSOLIDATED_HOLDINGS_ID,
+        "Consolidated Holdings",
+        20,
+        (),
+        "Emergency fundraising yields {consolidated_rate}eb per territory instead "
+        "of {base_rate}eb.",
+        None,
+    ),
+    (
+        FORTIFIED_DEFENSES_ID,
+        "Fortified Defenses",
+        25,
+        (),
+        "Your districts get +1 on the defense contest die when a rival attacks "
+        "them.",
+        None,
+    ),
+    (
+        RESEARCH_EXPANSION_ID,
+        "Research Expansion",
+        20,
+        (),
+        "Each research lab seats {expanded_scientist} additional scientist, "
+        "raising capacity from {base_capacity} to {expanded_capacity} per lab.",
+        None,
+    ),
     # --- Ironclad Dynamics (WEAPONS) -------------------------------------------
     (
         "hardened_garrison",
@@ -366,6 +405,15 @@ _TECHNOLOGY_ROWS = (
         ("hardened_garrison",),
         "Your attack rolls get +1 on the contest die, making every assault hit "
         "harder.",
+        "faction_ironclad",
+    ),
+    (
+        TOTAL_WAR_ID,
+        "Total War",
+        60,
+        (SHOCK_ASSAULT_ID,),
+        "Your attack rolls get +{total_war_bonus} on the contest die (replaces "
+        "Shock Assault's +1).",
         "faction_ironclad",
     ),
     # --- Ghostwire Collective (HACKING) ----------------------------------------
@@ -388,6 +436,16 @@ _TECHNOLOGY_ROWS = (
         "at every level (stacks with Total Information Awareness).",
         "faction_ghostwire",
     ),
+    (
+        DEEP_SURVEILLANCE_PROTOCOL_ID,
+        "Deep Surveillance Protocol",
+        55,
+        (ICE_CRACKED_NETWORKS_ID,),
+        "Surveillance detection chance bonus rises to "
+        "{deep_protocol_detection_bonus_pct} (replaces ICE-Cracked Networks' "
+        "{ghostwire_detection_bonus_pct}).",
+        "faction_ghostwire",
+    ),
     # --- Meridian Biochem (PHARMA) ---------------------------------------------
     (
         "combat_stims",
@@ -407,6 +465,16 @@ _TECHNOLOGY_ROWS = (
         "{base_operative_days}.",
         "faction_meridian",
     ),
+    (
+        ACCELERATED_METABOLISM_ID,
+        "Accelerated Metabolism",
+        50,
+        (RAPID_DEPLOYMENT_ID,),
+        "Operative training costs {accelerated_operative_cost}eb and completes in "
+        "{accelerated_operative_days} day (replaces Combat Stims and Rapid "
+        "Deployment's rates).",
+        "faction_meridian",
+    ),
     # --- Prometheus Cybernetics (CYBERNETICS) ----------------------------------
     (
         "optimized_workforce",
@@ -424,6 +492,32 @@ _TECHNOLOGY_ROWS = (
         "Expanding into neutral territory costs half as much (base cost "
         "{base_expansion}eb → {supply_chain_expansion}eb).",
         "faction_prometheus",
+    ),
+    (
+        MARKET_MONOPOLY_ID,
+        "Market Monopoly",
+        55,
+        (SUPPLY_CHAIN_ID,),
+        "Every territory you hold earns +{market_monopoly_income}eb/day in base "
+        "income (replaces Optimized Workforce's +{workforce_income}eb).",
+        "faction_prometheus",
+    ),
+    # --- Sanctuary Holdings (FAITH) --------------------------------------------
+    (
+        TITHES_ID,
+        "Tithes",
+        25,
+        (),
+        "Every territory you hold earns +{tithes_income}eb/day in base income.",
+        "faction_sanctuary",
+    ),
+    (
+        CRUSADE_ID,
+        "Crusade",
+        45,
+        (TITHES_ID,),
+        "Your attack rolls get +1 on the contest die.",
+        "faction_sanctuary",
     ),
 )
 
@@ -523,6 +617,15 @@ EXTENDED_SURVEILLANCE_DETECTION = 0.80
 # Chance that a successful detection disrupts the target's current activity.
 INTERCEPTION_CHANCE = 0.25
 
+# --- Three more public techs: Consolidated Holdings, Fortified Defenses, Research
+# Expansion.
+# Fundraising yield per territory when Consolidated Holdings is researched.
+CONSOLIDATED_FUNDRAISE_PER_TERRITORY = 35
+# Bonus on the defense contest die when Fortified Defenses is researched.
+FORTIFIED_DEFENSES_BONUS = 1
+# Extra scientist capacity per lab when Research Expansion is researched.
+RESEARCH_EXPANSION_BONUS = 1
+
 # --- Ironclad Dynamics: Hardened Garrison / Shock Assault --------------------
 # Multiplier applied to garrison in defense_strength when Hardened Garrison is
 # researched. Normally garrison counts 1:1; this makes garrisoned operatives
@@ -553,6 +656,23 @@ STIMS_OPERATIVE_DAYS = 3
 WORKFORCE_INCOME_BONUS = 5
 # Halved expansion base cost with Supply Chain researched.
 SUPPLY_CHAIN_EXPANSION_BASE = EXPANSION_COST_BASE // 2
+
+# --- Ironclad: Total War ---------------------------------------------------
+TOTAL_WAR_BONUS = 2
+
+# --- Ghostwire: Deep Surveillance Protocol ----------------------------------
+DEEP_PROTOCOL_DETECTION_BONUS = 0.20
+
+# --- Meridian: Accelerated Metabolism ---------------------------------------
+ACCELERATED_OPERATIVE_COST = 50
+ACCELERATED_OPERATIVE_DAYS = 1
+
+# --- Prometheus: Market Monopoly --------------------------------------------
+MARKET_MONOPOLY_INCOME_BONUS = 20
+
+# --- Sanctuary Holdings: Tithes / Crusade -----------------------------------
+TITHES_INCOME_BONUS = 15
+CRUSADE_BONUS = 1
 
 # Descriptions are filled in from the constants above rather than repeating the
 # numbers as prose, so a retune can't leave the shop text lying about the effect.
@@ -588,6 +708,17 @@ _TECHNOLOGY_DESCRIPTION_ARGS = dict(
     workforce_income=WORKFORCE_INCOME_BONUS,
     base_expansion=EXPANSION_COST_BASE,
     supply_chain_expansion=SUPPLY_CHAIN_EXPANSION_BASE,
+    consolidated_rate=CONSOLIDATED_FUNDRAISE_PER_TERRITORY,
+    base_rate=FUNDRAISE_PER_TERRITORY,
+    expanded_scientist=RESEARCH_EXPANSION_BONUS,
+    base_capacity=BASE_LAB_CAPACITY,
+    expanded_capacity=BASE_LAB_CAPACITY + RESEARCH_EXPANSION_BONUS,
+    total_war_bonus=TOTAL_WAR_BONUS,
+    deep_protocol_detection_bonus_pct=f"{DEEP_PROTOCOL_DETECTION_BONUS:.0%}",
+    accelerated_operative_cost=ACCELERATED_OPERATIVE_COST,
+    accelerated_operative_days=ACCELERATED_OPERATIVE_DAYS,
+    market_monopoly_income=MARKET_MONOPOLY_INCOME_BONUS,
+    tithes_income=TITHES_INCOME_BONUS,
 )
 
 # A row's prereqs must already have been seen — i.e. defined earlier in
@@ -711,16 +842,20 @@ def employee_plural(category: EmployeeCategory) -> str:
 
 
 def operative_training_cost(corp_state: CorpState) -> int:
-    """Base training cost for operatives, discounted when Combat Stims (Meridian
-    Biochem) is researched."""
+    """Base training cost for operatives, discounted by Meridian Biochem's
+    Combat Stims or Accelerated Metabolism."""
+    if has_technology(corp_state, ACCELERATED_METABOLISM_ID):
+        return ACCELERATED_OPERATIVE_COST
     if has_technology(corp_state, COMBAT_STIMS_ID):
         return STIMS_OPERATIVE_COST
     return ACADEMY_TRAINING_COST[EmployeeCategory.OPERATIVE]
 
 
 def operative_training_days(corp_state: CorpState) -> int:
-    """Training duration for operatives, shortened when Rapid Deployment (Meridian
-    Biochem) is researched."""
+    """Training duration for operatives, shortened by Meridian Biochem's
+    Rapid Deployment or Accelerated Metabolism."""
+    if has_technology(corp_state, ACCELERATED_METABOLISM_ID):
+        return ACCELERATED_OPERATIVE_DAYS
     if has_technology(corp_state, RAPID_DEPLOYMENT_ID):
         return STIMS_OPERATIVE_DAYS
     return TRAINING_DAYS[EmployeeCategory.OPERATIVE]
@@ -843,8 +978,12 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
         bonus += PANOPTICON_GRID_INCOME_BONUS
     if has_technology(corp_state, SHADOW_ECONOMY_ID):
         bonus += SHADOW_ECONOMY_INCOME_BONUS
-    if has_technology(corp_state, OPTIMIZED_WORKFORCE_ID):
+    if has_technology(corp_state, MARKET_MONOPOLY_ID):
+        bonus += MARKET_MONOPOLY_INCOME_BONUS
+    elif has_technology(corp_state, OPTIMIZED_WORKFORCE_ID):
         bonus += WORKFORCE_INCOME_BONUS
+    if has_technology(corp_state, TITHES_ID):
+        bonus += TITHES_INCOME_BONUS
     return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
 
 
@@ -868,7 +1007,7 @@ def owned_research_facilities(corp_state: CorpState, corp_map: CorpMap) -> list[
             for location in territory.locations
             if location.kind == LocationKind.RESEARCH_FACILITY
         ),
-        key=lambda f: (-research_rate(corp_state, f), -assistant_capacity(f), f.id),
+        key=lambda f: (-research_rate(corp_state, f), -assistant_capacity(f, corp_state), f.id),
     )
 
 
@@ -885,10 +1024,12 @@ def owned_research_facility(corp_state: CorpState, corp_map: CorpMap) -> Locatio
     return facilities[0] if facilities else None
 
 
-def lab_capacity(facility: Location) -> int:
+def lab_capacity(facility: Location, corp_state: CorpState | None = None) -> int:
     """How many scientists this facility can put to work: a free base seat plus
-    one more per lab built there."""
-    return BASE_LAB_CAPACITY + (facility.labs_built or 0)
+    one more per lab built there, plus one additional when Research Expansion is
+    researched."""
+    bonus = RESEARCH_EXPANSION_BONUS if corp_state is not None and has_technology(corp_state, RESEARCH_EXPANSION_ID) else 0
+    return BASE_LAB_CAPACITY + (facility.labs_built or 0) + bonus
 
 
 def next_lab_cost(facility: Location) -> int | None:
@@ -943,10 +1084,10 @@ def next_efficiency_cost(facility: Location) -> int | None:
     return EFFICIENCY_UPGRADE_COSTS[efficiency_upgrades]
 
 
-def assistant_capacity(facility: Location) -> int:
+def assistant_capacity(facility: Location, corp_state: CorpState | None = None) -> int:
     """How many research assistants this facility can put to work: each lab
     seats RESEARCH_ASSISTANTS_PER_LAB of them, same lab count as lab_capacity."""
-    return RESEARCH_ASSISTANTS_PER_LAB * lab_capacity(facility)
+    return RESEARCH_ASSISTANTS_PER_LAB * lab_capacity(facility, corp_state)
 
 
 def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
@@ -973,10 +1114,10 @@ def collect_research(corp_state: CorpState, corp_map: CorpMap) -> float:
     total = 0.0
     for facility in owned_research_facilities(corp_state, corp_map):
         total += facility.research_tier or 0
-        working = min(scientists_left, lab_capacity(facility))
+        working = min(scientists_left, lab_capacity(facility, corp_state))
         scientists_left -= working
         total += working * research_rate(corp_state, facility)
-        aides = min(assistants_left, assistant_capacity(facility))
+        aides = min(assistants_left, assistant_capacity(facility, corp_state))
         assistants_left -= aides
         total += aides * assistant_rate(corp_state)
     if has_technology(corp_state, TOTAL_INFORMATION_AWARENESS_ID):
@@ -1141,9 +1282,11 @@ def raise_development(corp_state: CorpState, corp_map: CorpMap, territory_id: st
 
 def fundraise_amount(corp_state: CorpState, corp_map: CorpMap) -> int:
     """What one round of emergency fundraising would raise: FUNDRAISE_PER_TERRITORY
-    per district held. 0 for a corp holding nothing (which is a lost run anyway —
-    see corp_defeated)."""
-    return FUNDRAISE_PER_TERRITORY * len(_owned_territories(corp_state, corp_map))
+    per district held (or CONSOLIDATED_FUNDRAISE_PER_TERRITORY when Consolidated
+    Holdings is researched). 0 for a corp holding nothing (which is a lost run
+    anyway — see corp_defeated)."""
+    per_territory = CONSOLIDATED_FUNDRAISE_PER_TERRITORY if has_technology(corp_state, CONSOLIDATED_HOLDINGS_ID) else FUNDRAISE_PER_TERRITORY
+    return per_territory * len(_owned_territories(corp_state, corp_map))
 
 
 def can_fundraise(corp_state: CorpState, corp_map: CorpMap) -> bool:
@@ -1478,6 +1621,7 @@ def resolve_attack(
     rng: random.Random,
     *,
     attack_bonus: int = 0,
+    defense_bonus: int = 0,
     defender_corp_state: CorpState | None = None,
 ) -> AttackResult:
     """The contest itself, taking no corp state for the attacker — so rivals.py's
@@ -1491,7 +1635,9 @@ def resolve_attack(
     their whole garrison if the district falls and one per attacker if it doesn't.
 
     attack_bonus is added to the attacker's roll — the player's Shock Assault
-    technology feeds it; the AI never does.
+    technology feeds it; the AI never does. defense_bonus is added to the
+    defender's roll — Fortified Defenses technology feeds it when the defender
+    has researched it.
 
     defender_corp_state feeds defense_strength's Hardened Garrison bonus. It's
     the *defender's* state, not the attacker's — only ever non-None when the
@@ -1503,7 +1649,7 @@ def resolve_attack(
     defender_id = territory.owner
     defense = defense_strength(territory, defender_corp_state)
     attack_power = committed + rng.randint(1, CONTEST_DIE) + attack_bonus
-    defense_power = defense + rng.randint(1, CONTEST_DIE)
+    defense_power = defense + rng.randint(1, CONTEST_DIE) + defense_bonus
     captured = attack_power > defense_power
 
     attacker_losses = min(committed, defense)
@@ -1552,7 +1698,13 @@ def attack_territory(
         return None
     territory = corp_map.territories[territory_id]
     corp_state.operatives -= committed
-    bonus = SHOCK_ASSAULT_BONUS if has_technology(corp_state, SHOCK_ASSAULT_ID) else 0
+    bonus = 0
+    if has_technology(corp_state, TOTAL_WAR_ID):
+        bonus = TOTAL_WAR_BONUS
+    elif has_technology(corp_state, SHOCK_ASSAULT_ID):
+        bonus = SHOCK_ASSAULT_BONUS
+    elif has_technology(corp_state, CRUSADE_ID):
+        bonus = CRUSADE_BONUS
     result = resolve_attack(territory, corp_state.faction_id, committed, rng, attack_bonus=bonus)
     if not result.captured:
         corp_state.operatives += committed - result.attacker_losses

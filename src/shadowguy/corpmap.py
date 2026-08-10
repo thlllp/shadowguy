@@ -31,7 +31,7 @@ OWNER_TAGS = {
 # map without checking the 3-letter tag. Neutral ground gets no entry (and so no
 # override) — unclaimed is meant to look unclaimed, not tagged bright anything.
 # strict=True raises at import time if this list drifts out of sync with FACTIONS.
-_OWNER_COLOR_VALUES = ["red", "cyan", "green", "yellow"]
+_OWNER_COLOR_VALUES = ["red", "cyan", "green", "yellow", "magenta"]
 OWNER_COLORS = dict(zip((faction.id for faction in FACTIONS), _OWNER_COLOR_VALUES, strict=True))
 
 

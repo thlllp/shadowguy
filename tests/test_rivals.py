@@ -51,7 +51,7 @@ from shadowguy.shops import ITEMS_BY_ID
 
 from helpers import ForcedChance
 
-IRONCLAD, GHOSTWIRE, MERIDIAN, _ = (f.id for f in FACTIONS)
+IRONCLAD, GHOSTWIRE, MERIDIAN, _, _ = (f.id for f in FACTIONS)
 
 
 HIT = ForcedChance(0.0)  # 0.0 < EXPANSION_CHANCE -> always triggers

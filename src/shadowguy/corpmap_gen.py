@@ -204,6 +204,7 @@ LOCATION_KIND_FOR_SPECIALTY = {
     FactionSpecialty.HACKING: LocationKind.DATA,
     FactionSpecialty.PHARMA: LocationKind.LAB,
     FactionSpecialty.CYBERNETICS: LocationKind.CYBER_CLINIC,
+    FactionSpecialty.FAITH: LocationKind.DEPOT,
 }
 
 LOCATION_SUFFIXES = {

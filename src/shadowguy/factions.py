@@ -9,6 +9,7 @@ class FactionSpecialty(StrEnum):
     HACKING = "hacking"
     PHARMA = "pharma"
     CYBERNETICS = "cybernetics"
+    FAITH = "faith"
 
 
 @dataclass
@@ -43,6 +44,12 @@ FACTIONS = [
         name="Prometheus Cybernetics",
         specialty=FactionSpecialty.CYBERNETICS,
         description="Augmentation conglomerate grafting grey-market chrome into anyone who can pay.",
+    ),
+    Faction(
+        id="faction_sanctuary",
+        name="Sanctuary Holdings",
+        specialty=FactionSpecialty.FAITH,
+        description="Old-world faith reborn as corporate doctrine — tithes, crusades, and a very literal bottom line.",
     ),
 ]
 

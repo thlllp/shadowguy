@@ -90,8 +90,11 @@ from typing import TYPE_CHECKING, Literal
 from shadowguy.character import HOURS_PER_DAY, Character
 from shadowguy.corp_turn import (
     TECHNOLOGIES,
+    FORTIFIED_DEFENSES_BONUS,
+    FORTIFIED_DEFENSES_ID,
     AttackResult,
     FactionEvent,
+    has_technology,
     log_faction_event,
     resolve_attack,
 )
@@ -358,21 +361,27 @@ def _faction_attack(
     attack_territory rolls, so the AI can't be fighting a different war.
 
     player_faction_id/player_corp_state feed resolve_attack's Hardened Garrison
-    bonus when the target happens to be the player's own ground — an AI faction
-    has no CorpState to research the tech into, so it's only ever the defender's
-    side that can carry one."""
+    bonus and Fortified Defenses die bonus when the target happens to be the
+    player's own ground — an AI faction has no CorpState to research the tech
+    into, so it's only ever the defender's side that can carry one."""
     candidates = attack_candidates(corp_map, faction_id)
     if not candidates or rng.random() >= ATTACK_CHANCE:
         return None
     target_id = _pick_attack_target(corp_map, faction_id, candidates, relations, rng)
     target = corp_map.territories[target_id]
     defender_corp_state = player_corp_state if target.owner == player_faction_id else None
+    defense_bonus = (
+        FORTIFIED_DEFENSES_BONUS
+        if defender_corp_state is not None and has_technology(defender_corp_state, FORTIFIED_DEFENSES_ID)
+        else 0
+    )
     return resolve_attack(
         target,
         faction_id,
         _attack_force(corp_map, faction_id),
         rng,
         defender_corp_state=defender_corp_state,
+        defense_bonus=defense_bonus,
     )
 
 
