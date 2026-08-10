@@ -266,7 +266,10 @@ SAVE_SUFFIX = ".save"
 # A pre-v68 pickled Territory lacks the attribute entirely (pickle restores a dataclass
 # through __dict__, never __init__, so the field default never applies), so the first
 # map render would AttributeError in corpmap._label.
-SAVE_VERSION = 68
+# v69 added corpmap.Territory.is_outskirts -- the OUTSKIRTS_COUNT neutral edge districts
+# with free lodging and an "O" map tag. A pre-v69 pickled Territory lacks the attribute,
+# same pickle-restore issue as is_slum above.
+SAVE_VERSION = 69
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

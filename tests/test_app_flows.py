@@ -27,6 +27,7 @@ from shadowguy.character import (
 from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
+    GENERATED_KINDS,
     OWNER_TAGS,
     WORKSHOP_BUILD_COST,
     Location,
@@ -108,6 +109,7 @@ from shadowguy.screens.menu_screens import (
     TitleMenu,
 )
 from shadowguy.gangs import GANGS, GANGS_BY_ID
+from shadowguy.gigs import generate_gig
 from shadowguy.screens.corp_map_screen import GangTollScreen
 from shadowguy.fishing import FISHING_HOURS_COST
 from shadowguy.scene import BurglaryStage, Outcome, SceneKind, TacticalStage
@@ -196,6 +198,28 @@ async def _settle(pilot) -> None:
     """
     await pilot.pause()
     await pilot.pause()
+
+
+async def _scroll_into_view(pilot, screen, selector: str) -> None:
+    """Bring a row inside #map_local_boxes_scroll onto the screen before clicking it.
+
+    An expanded location box can run far taller than the strip's `height: 14`, which
+    leaves its lower rows (the "Enter" row among them) outside the strip — and
+    `pilot.click(selector)` clicks screen coordinates, so an off-screen target sends the
+    click to whatever happens to be at that point instead (the Footer, which opens
+    QuitMenu, when the row sits past the bottom of the screen). Nothing collapses the
+    box's contents for us any more (CorpMapScreen's accordion only closes sibling
+    *location* boxes, not what is nested inside the one being opened), so scroll
+    explicitly. Containment is checked against the strip's own region rather than the
+    screen's: a row on the Footer's line is technically on-screen and still unclickable."""
+    strip = screen.query_one("#map_local_boxes_scroll")
+    for _ in range(3):
+        widget = screen.query_one(selector)
+        if widget.region in strip.region:
+            return
+        widget.scroll_visible(animate=False)
+        await _settle(pilot)
+    raise AssertionError(f"{selector} is still outside #map_local_boxes_scroll after scrolling")
 
 
 async def _settle_map_boxes(pilot, screen) -> None:
@@ -1407,8 +1431,7 @@ def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
             await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{shop_location.id}", Collapsible).collapsed = False
             await _settle(pilot)
-            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
-            await _settle(pilot)
+            await _scroll_into_view(pilot, app.screen, f"#map_local_{shop_location.id}")
             await pilot.click(f"#map_local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -1450,8 +1473,6 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             app.push_screen(CorpMapScreen())
             await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{store_location.id}", Collapsible).collapsed = False
-            await _settle(pilot)
-            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
             await _settle(pilot)
             await pilot.click(f"#map_local_{store_location.id}")
             await pilot.pause()
@@ -2578,7 +2599,7 @@ def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
             app.push_screen(CorpMapScreen())
             await _settle_map_boxes(pilot, app.screen)
 
-            boxes = list(app.screen.query("#map_local_boxes Collapsible"))
+            boxes = list(app.screen.query("#map_local_boxes > Collapsible"))
             assert len(boxes) >= 2  # at least one Location plus the Fixers box
             assert all(box.collapsed for box in boxes)
 
@@ -2590,6 +2611,37 @@ def test_local_boxes_collapsed_by_default_and_accordion_to_one_open():
             await pilot.pause()
             assert boxes[0].collapsed is True, "opening box1 should have closed box0"
             assert boxes[1].collapsed is False
+
+    run(body())
+
+
+def test_opening_a_local_box_leaves_its_nested_gig_box_expanded():
+    """The accordion closes sibling *location* boxes, not the Gig box nested inside the
+    one being opened -- on_collapsible_expanded queries direct children, so the gig
+    box's collapsed=False survives its parent opening."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            territory = app.corp_map.territories[app.character.location_id]
+            location = next(
+                loc for loc in territory.locations
+                if loc.characters and loc.kind in GENERATED_KINDS
+            )
+            app.location_gigs[location.id] = generate_gig(
+                1, location, location.characters[0], territory, random.Random(0)
+            )
+            app.push_screen(CorpMapScreen())
+            await _settle_map_boxes(pilot, app.screen)
+
+            screen = app.screen
+            box = screen.query_one(f"#map_local_box_{location.id}", Collapsible)
+            gig_box = screen.query_one(f"#gig_box_{location.id}", Collapsible)
+            assert gig_box.collapsed is False
+
+            box.collapsed = False
+            await pilot.pause()
+            assert gig_box.collapsed is False, "the accordion closed the nested gig box"
 
     run(body())
 
@@ -2684,13 +2736,13 @@ def test_hovering_a_territory_leaves_the_locals_panel_on_the_current_location():
             here = app.corp_map.territories[app.character.location_id]
             neighbor = app.corp_map.territories[here.connections[0]]
             expected = {f"{loc.name} ({loc.kind})" for loc in here.locations} | {"Fixers"}
-            assert {box.title for box in screen.query("#map_local_boxes Collapsible")} == expected
+            assert {box.title for box in screen.query("#map_local_boxes > Collapsible")} == expected
 
             _hover_territory(screen, neighbor.id)
             await _settle_map_boxes(pilot, screen)
 
             # The panel is untouched...
-            assert {box.title for box in screen.query("#map_local_boxes Collapsible")} == expected, (
+            assert {box.title for box in screen.query("#map_local_boxes > Collapsible")} == expected, (
                 "hovering another territory must not repoint the Locals panel"
             )
             # ...while the bar between map and panel is exactly what may follow the mouse.
@@ -2762,8 +2814,7 @@ def test_a_locals_box_is_openable_and_enterable_while_hovering_elsewhere():
             await _settle(pilot)
             assert box.collapsed is False, "opening a box in your own territory is never vetoed"
 
-            screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
-            await _settle(pilot)
+            await _scroll_into_view(pilot, screen, f"#map_local_{shop_location.id}")
             await pilot.click(f"#map_local_{shop_location.id}")
             await pilot.pause()
             assert isinstance(app.screen, ShopScreen)
@@ -4169,8 +4220,6 @@ def test_ripperdoc_flow_installs_cyberware_from_a_clinic_on_the_map():
             app.push_screen(CorpMapScreen())
             await _settle_map_boxes(pilot, app.screen)
             app.screen.query_one(f"#map_local_box_{clinic.id}", Collapsible).collapsed = False
-            await _settle(pilot)
-            app.screen.query_one("#map_local_boxes_scroll").scroll_end(animate=False, immediate=True)
             await _settle(pilot)
             await pilot.click(f"#map_local_{clinic.id}")
             await pilot.pause()

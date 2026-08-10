@@ -4,7 +4,7 @@ Everything here is generation-time only — the grid the city is a blob on, grow
 that blob (`_grow_region`), wiring it up (`_connect`), racing one contiguous bloc
 per faction across it (`_grow_blocs`), scattering gang turf, planting the out-of-band
 places every map needs exactly so many of (`_plan_injections`: hospitals, HQs,
-research facilities, academies, gang dens, junkyards), and naming every district,
+research facilities, academies, gang dens, junkyards, docks, slums, outskirts), and naming every district,
 storefront and person in one.
 
 The arrow points one way: this imports `corpmap` for the model it fills in, and
@@ -32,6 +32,7 @@ from shadowguy.corpmap import (
     Location,
     LocationKind,
     Territory,
+    outskirts_modifiers,
     slum_modifiers,
     add_academy,
     add_research_facility,
@@ -49,9 +50,9 @@ from shadowguy.relations import generate_relations
 
 # The grid is deliberately roomier than TERRITORY_COUNT: the leftover cells are
 # the holes that keep _grow_region's blob from degenerating into a full rectangle.
-GRID_COLS = 7
-GRID_ROWS = 12
-TERRITORY_COUNT = 65
+GRID_COLS = 14
+GRID_ROWS = 24
+TERRITORY_COUNT = 260
 TERRITORIES_PER_FACTION = 6
 
 # Every faction is handed exactly this multiset of values, so equal territory
@@ -95,6 +96,10 @@ TILES_PER_DOCKS = 10
 # presence. Guaranteed, not ratio-scaled like junkyards/docks.
 SLUM_COUNT = 3
 
+# Exactly this many neutral territories on the grid edge are outskirts — the
+# forgotten rim of the city. Guaranteed, not ratio-scaled.
+OUTSKIRTS_COUNT = 5
+
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
 EXTRA_EDGE_CHANCE = 0.35
@@ -119,6 +124,62 @@ DISTRICT_NAMES = [
     "Signal", "Causeway", "Greyline", "Stackyard", "Lowtide", "Highwater",
     "Farrow", "Cordon", "Switchback", "Blacktide", "Coldwater", "Overpass",
     "Trench",
+    "Aerie", "Alloy", "Anchor", "Anvil", "Arcade", "Archway",
+    "Argus", "Ashen", "Atrium", "Auger", "Aurora", "Axis",
+    "Azimuth", "Ballast", "Banner", "Barrow", "Basalt", "Beacon",
+    "Bellows", "Bitumen", "Blackwood", "Blister", "Bluffs", "Bonefield",
+    "Bowery", "Bramble", "Breakwater", "Brimstone", "Broadside", "Bulwark",
+    "Bunker", "Burrow", "Cadence", "Caisson", "Calico", "Canticle",
+    "Carbon", "Cargo", "Carrion", "Cascade", "Catwalk", "Cellar",
+    "Chandler", "Charcoal", "Chevron", "Chimney", "Cistern", "Citadel",
+    "Clarion", "Clayworks", "Cleft", "Clocktower", "Cobalt", "Coffer",
+    "Colossus", "Conduit", "Copperworks", "Cornice", "Cove", "Crag",
+    "Crane", "Crescent", "Crucible", "Culvert", "Cypher", "Damper",
+    "Darkwater", "Dawnline", "Deepcut", "Derrick", "Diesel", "Distillery",
+    "Dovetail", "Downshaft", "Dragline", "Drainage", "Dredge", "Driftway",
+    "Dustbowl", "Dynamo", "Eastgate", "Ebbtide", "Echoworks", "Eddy",
+    "Effigy", "Elevator", "Embankment", "Enclave", "Ferrous", "Filament",
+    "Firebreak", "Flatiron", "Flashpoint", "Flint", "Floodgate", "Flotsam",
+    "Flue", "Forge", "Fossil", "Foundation", "Fracture", "Franchise",
+    "Freightline", "Fulcrum", "Furnace", "Gallows", "Gantryway", "Garnet",
+    "Gasworks", "Gatehouse", "Gauge", "Girder", "Glassworks", "Gloaming",
+    "Goldline", "Gorge", "Granary", "Granite", "Graphite", "Grate",
+    "Gravel", "Greenbelt", "Grindstone", "Grotto", "Gully", "Gunmetal",
+    "Gypsum", "Hackle", "Hammerfall", "Hardpan", "Harrow", "Hatchway",
+    "Haulage", "Headland", "Hearth", "Heatsink", "Hedgerow", "Helix",
+    "Hinterland", "Hollow", "Hookline", "Hopper", "Hostel", "Housing",
+    "Hubcap", "Ironworks", "Jetty", "Joist", "Junkline", "Kelpfield",
+    "Kiln", "Knothole", "Landfill", "Lantern", "Lattice", "Leadworks",
+    "Ledger", "Levee", "Lighthouse", "Limekiln", "Linchpin", "Lintel",
+    "Lodestone", "Loftline", "Longhaul", "Lumberyard", "Lyeworks", "Magnet",
+    "Mainline", "Mangrove", "Manhole", "Marlstone", "Masthead", "Meltwater",
+    "Mesa", "Midway", "Milepost", "Mineshaft", "Moorland", "Mortar",
+    "Mudflat", "Nadir", "Netherworks", "Nickelplate", "Nightshade", "Northgate",
+    "Numbers", "Oakline", "Obsidian", "Offramp", "Oilfield", "Orchard",
+    "Ossuary", "Outfall", "Overburden", "Oxbow", "Palladium", "Parapet",
+    "Pavement", "Peatmoss", "Pendulum", "Penstock", "Pigiron", "Pilings",
+    "Pinion", "Pitchfork", "Plexus", "Plinth", "Plumbline", "Polestar",
+    "Potash", "Powerline", "Pressgang", "Pumpworks", "Purlieu", "Quayside",
+    "Quicklime", "Quicksand", "Quill", "Radial", "Railyard", "Rampart",
+    "Rebar", "Reclaim", "Redoubt", "Reedbed", "Refinery", "Relayfield",
+    "Rendering", "Repose", "Reservoir", "Retort", "Revetment", "Rimrock",
+    "Ripsaw", "Riverbend", "Roadhouse", "Rockfall", "Rookery", "Roundhouse",
+    "Sablewood", "Saltmarsh", "Sandbar", "Sawmill", "Scaffold", "Scarline",
+    "Schooner", "Scrapline", "Seagate", "Seawall", "Sediment", "Sentinel",
+    "Shalefield", "Shipyard", "Shoreline", "Shunt", "Sidetrack", "Sinkhole",
+    "Slipway", "Sluicegate", "Smelter", "Smokestack", "Snarl", "Soapstone",
+    "Sootfall", "Southgate", "Spillway", "Spindle", "Splinter", "Spoilbank",
+    "Springline", "Stampworks", "Standpipe", "Stanchion", "Steamworks", "Stockade",
+    "Stonecut", "Stopgap", "Stormline", "Stratum", "Substation", "Sumpline",
+    "Sunkline", "Switchgear", "Tailrace", "Talus", "Tarpit", "Teardown",
+    "Tenement", "Threshing", "Tideline", "Timberline", "Tinworks", "Toolworks",
+    "Topsoil", "Torchlight", "Towpath", "Trackside", "Tramline", "Transom",
+    "Trawlline", "Trestle", "Trussworks", "Tumbledown", "Turbine", "Turnstile",
+    "Underline", "Undertow", "Upshaft", "Vanadium", "Vantage", "Vaultline",
+    "Ventway", "Viaduct", "Vinegar", "Volt", "Wardline", "Warehouse",
+    "Waterline", "Weirgate", "Westgate", "Wheelhouse", "Whetstone", "Whitewater",
+    "Wickerworks", "Winch", "Windbreak", "Windrow", "Wireworks", "Woodsmoke",
+    "Workhouse", "Yardarm", "Zephyr", "Zincworks",
 ]
 
 # A district holds a variable number of locations — roomier now there are more kinds to
@@ -171,6 +232,16 @@ LOCATION_PREFIXES = [
     "Greywire", "Split Lip", "Backdraft", "Rustline", "Cold Front", "Deadbolt",
     "Riptide", "Foxfire", "Ninth Circuit", "Salt Line", "Chrome Row", "Widow's Walk",
     "Last Call", "Old Pier",
+    "Ash Harbor", "Bitter Creek", "Black Lantern", "Bonewhite",
+    "Brass Kettle", "Broken Spoke", "Candlewick", "Carbon Row",
+    "Cinderlight", "Coldsnap", "Crooked Mile", "Dim Horizon",
+    "Dogwatch", "Driftwood", "Emberfall", "False Dawn",
+    "Flint Row", "Gallowglass", "Ghost Tide", "Glass Alley",
+    "Hard Bargain", "Iron Sparrow", "Lamplight", "Long Shadow",
+    "Mercy Street", "Nickel Row", "Oil Drum", "Paper Lantern",
+    "Quiet Hollow", "Rain Shadow", "Rough Cut", "Saltwater",
+    "Second Chance", "Sixth Bell", "Slow Burn", "Stray Dog",
+    "Thin Ice", "Tidewrack", "Twelfth Gate", "Wire Hollow",
 ]
 
 # Street handles for the people who run/haunt locations. Sampled distinct within one
@@ -604,6 +675,7 @@ class _InjectionPlan:
     docks_ids: set[str]
     amys_place_id: str
     slum_ids: set[str]
+    outskirts_ids: set[str]
 
 
 def _plan_injections(region: list[Cell], owners: dict[Cell, str],
@@ -643,6 +715,23 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         )
     slum_ids = set(rng.sample(slum_candidates, SLUM_COUNT))
 
+    # Outskirts: exactly OUTSKIRTS_COUNT neutral territories on the grid edge, not
+    # already reserved. Outer rim only — the same edge the player starts on.
+    id_to_cell = {tid: cell for cell, tid in ids.items()}
+    outskirts_candidates = [
+        tid for tid in neutral_ids
+        if _on_grid_edge(id_to_cell[tid])
+        and tid not in hospital_ids and tid not in den_ids
+        and tid != amys_place_id and tid not in slum_ids
+        and tid not in gang_ids
+    ]
+    if len(outskirts_candidates) < OUTSKIRTS_COUNT:
+        raise ValueError(
+            f"_plan_injections: only {len(outskirts_candidates)} edge tiles left for "
+            f"{OUTSKIRTS_COUNT} outskirts"
+        )
+    outskirts_ids = set(rng.sample(outskirts_candidates, OUTSKIRTS_COUNT))
+
     # Junkyards draw from neutral ground only, and skip any tile already reserved for
     # a hospital, gang den, Amy's Place or a slum: those already stack to the
     # reserved-slot ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
@@ -653,6 +742,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         tid for tid in neutral_ids
         if tid not in hospital_ids and tid not in den_ids
         and tid != amys_place_id and tid not in slum_ids
+        and tid not in outskirts_ids
     ]
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
     junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
@@ -693,6 +783,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         docks_ids=docks_ids,
         amys_place_id=amys_place_id,
         slum_ids=slum_ids,
+        outskirts_ids=outskirts_ids,
     )
 
 
@@ -727,6 +818,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         tid = ids[cell]
         owner = owners.get(cell, "neutral")
         is_slum = tid in plan.slum_ids
+        is_outskirts = tid in plan.outskirts_ids
         reserved = (
             (tid == start_id)
             + (tid in plan.hospital_ids)
@@ -742,14 +834,21 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             count = 0
         else:
             count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
+        if is_slum:
+            modifiers = slum_modifiers()
+        elif is_outskirts:
+            modifiers = outskirts_modifiers()
+        else:
+            modifiers = make_modifiers(owner, values[cell], rng)
         territories[tid] = Territory(
             id=tid, name=name, x=x, y=y, owner=owner, value=values[cell],
             connections=sorted(ids[other] for other in region if frozenset((cell, other)) in edges),
             locations=_make_locations(tid, owner, rng, used_names, count) if count > 0 else [],
-            modifiers=slum_modifiers() if is_slum else make_modifiers(owner, values[cell], rng),
-            # Never a gang id on a slum: the candidate filter above excludes gang turf.
+            modifiers=modifiers,
+            # Never a gang id on a slum or outskirts: the candidate filters above exclude gang turf.
             gang_id=plan.gang_ids.get(tid),
             is_slum=is_slum,
+            is_outskirts=is_outskirts,
         )
 
     start = territories[start_id]

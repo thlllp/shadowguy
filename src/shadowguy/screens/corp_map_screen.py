@@ -5,6 +5,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
+from textual.geometry import Region
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListView, Static
 
@@ -136,6 +137,14 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
+    # Textual's default AUTO_FOCUS ("*") focuses the first focusable widget when the
+    # screen mounts -- #activities, the category list, which is *hidden* in map mode
+    # and binds up/down for its own rows. Focused, it swallowed half the map's cursor
+    # keys before this screen's own "move" bindings ever saw them. Map mode wants no
+    # focused widget at all; the category tabs focus their list explicitly (on_mount /
+    # _select_category call focus_next themselves).
+    AUTO_FOCUS = None
+
     CSS = """
     #top_bar {
         height: auto;
@@ -178,10 +187,16 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     }
 
     #map_scroll {
+        /* Scrolls on both axes: the board is far wider and taller than any
+        terminal (260 districts on a 14x24 grid renders ~280 columns by ~47
+        lines), so the viewport is always a window onto part of it. Anchored
+        top-left rather than content-align: center middle -- centering only
+        does anything while the content fits, which it never does now, and it
+        offsets the map's own coordinates away from the scroll origin that
+        _scroll_selection_into_view works in. */
         height: 1fr;
-        overflow-x: auto;
+        overflow: auto auto;
         padding: 0 1;
-        content-align: center middle;
     }
 
     #map {
@@ -219,13 +234,10 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     }
 
     #map_local_boxes {
-        /* Phone-tile look: a grid of bordered boxes, one per Location (plus a
-        Fixers box). Each box's height is auto -- rows aren't fixed like
-        #territory_summary since these only rebuild on an explicit refresh
-        (entering the category, the runner travelling, an action changing what's
-        here, ...), never on hover and never on every passing mouse pixel. */
+        /* Single-column: each expanded location box takes the full width so
+        the nested Gig collapsible (approaches + skills) has room to breathe. */
         layout: grid;
-        grid-size: 3;
+        grid-size: 1;
         grid-gutter: 1 2;
         height: auto;
         padding: 0 1;
@@ -251,6 +263,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self.hovered_id: str | None = None
         self.rendered = None
         self._render_key: tuple[str, str] | None = None
+        self._scrolled_selection_id: str | None = None
         self._flash_territory_id: str | None = None
         self._map_locals_task: asyncio.Task | None = None
         self._map_locals_pending_id: str | None = None
@@ -279,7 +292,14 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 yield rest_button
         with Horizontal():
             with Vertical(id="main_panel"):
-                yield ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
+                map_scroll = ScrollableContainer(Static(markup=False, id="map"), id="map_scroll")
+                # A ScrollableContainer takes focus and binds the arrow keys itself
+                # once its content actually overflows -- which the map now always
+                # does. Focused, it would swallow up/down/left/right and pan the view
+                # instead of moving the cursor (this screen's own "move" bindings).
+                # The view follows the cursor through _scroll_selection_into_view.
+                map_scroll.can_focus = False
+                yield map_scroll
                 yield Static(markup=False, id="territory_summary")
                 yield ListView(id="activities")
                 yield ScrollableContainer(Grid(id="map_local_boxes"), id="map_local_boxes_scroll")
@@ -303,9 +323,20 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         await self._build_category_buttons()
         if self.selected_category is None:
             self._refresh_map()
+            # After the refresh, not inside it: focus is handed out as the screen
+            # mounts, so _set_content_visibility's own guard runs too early to catch
+            # it. See AUTO_FOCUS above for what a focused #activities costs the map.
+            self.call_after_refresh(self._release_hidden_focus)
         else:
             await self._refresh_activities()
             self.focus_next()
+
+    def _release_hidden_focus(self) -> None:
+        """Drop focus if it's sitting on a widget this screen has hidden — a focused
+        ListView binds up/down for its own rows and never lets the map's cursor keys
+        through."""
+        if self.focused is not None and not self.focused.display:
+            self.set_focus(None)
 
     def _refresh_rest_button(self) -> None:
         self.query_one("#rest_button", Button).label = self.app.rest_label()
@@ -541,6 +572,8 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         self.query_one("#research_panel").display = is_corp
         self.query_one("#surveillance_panel").display = is_corp
 
+        self._release_hidden_focus()
+
     # ── map ─────────────────────────────────────────────────────────────────
 
     def _refresh_map(self) -> None:
@@ -622,6 +655,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             elif span.territory_id == self.hovered_id:
                 text.stylize("reverse", span.offset, span.offset + span.end - span.start)
         self.query_one("#map", Static).update(text)
+        self._scroll_selection_into_view()
 
         focus_id = self.hovered_id or self.selected_id
         if focus_id is None:
@@ -637,6 +671,32 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         # than spawn a background task _refresh_map_corp_actions would just discard.
         if self.app.corp_only and self.selected_category is None:
             self._schedule_map_corp_actions(focus_id)
+
+    def _scroll_selection_into_view(self) -> None:
+        """Keep the cursor on screen. The board (260 districts) renders several times
+        wider and taller than the viewport, so arrowing across it would otherwise walk
+        the selection straight off the visible window with no way to follow it.
+
+        Called from _refresh_map_view, which every cursor move already goes through.
+        Scrolls to the *selected* node, never the hovered one: the mouse can only hover
+        what's already visible, and scrolling under a moving pointer fights the player.
+
+        Only when the selection actually *changed*, though — _refresh_map_view also runs
+        on every hover change, and re-scrolling there would snap the viewport back to the
+        cursor the moment the pointer moved, making wheel-scrolling the board impossible.
+        """
+        if self.rendered is None or not self.selected_id:
+            return
+        if self.selected_id == self._scrolled_selection_id:
+            return
+        self._scrolled_selection_id = self.selected_id
+        span = next((s for s in self.rendered.spans if s.territory_id == self.selected_id), None)
+        if span is None:
+            return
+        self.query_one("#map_scroll", ScrollableContainer).scroll_to_region(
+            Region(span.start, span.line, span.end - span.start, 1),
+            animate=False,
+        )
 
     def _schedule_map_local_boxes(self) -> None:
         """Queue a Locals-panel rebuild for the territory the runner is standing in.
@@ -781,11 +841,12 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         fixer_suffix = f", fixer: {fixer_here.name}" if fixer_here else ""
         gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
         slum_suffix = ", slum" if t.is_slum else ""
+        outskirts_suffix = ", outskirts" if t.is_outskirts else ""
         modifier_line = "  ".join(
             f"{MODIFIER_LABELS[modifier]}:{level}" for modifier, level in t.modifiers.items()
         )
         return (
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}{slum_suffix}\n"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}{slum_suffix}{outskirts_suffix}\n"
             f"Borders: {borders}\n"
             f"{modifier_line}\n"
             f"{self._travel_hint(t, here, character)}"
@@ -1054,7 +1115,20 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             gig_label = f"Gig — {gig.title}{who} ({gig.hours_cost}h)"
             if character.cash < gig.max_cash_loss:
                 gig_label += f" — can't cover the stake ({gig.max_cash_loss} cash)"
-            action_items.append(ListItem(Static(gig_label), id=f"gig_{location.id}"))
+            gig_action = ListView(ListItem(Static(gig_label), id=f"gig_{location.id}"))
+            approach_lines = []
+            for choice in gig.stages["start"].choices:
+                # gigs._build_choice already suffixes the skill name onto the label.
+                approach_lines.append(Static(choice.label, markup=False))
+            content.append(
+                Collapsible(
+                    gig_action,
+                    *approach_lines,
+                    title="Gig",
+                    collapsed=False,
+                    id=f"gig_box_{location.id}",
+                )
+            )
         else:
             content.append(Static("No gig here right now.", markup=False))
 
@@ -1122,7 +1196,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         somewhere they can act."""
         if not (event.collapsible.id or "").startswith("map_local_box"):
             return
-        for box in self.query("#map_local_boxes Collapsible"):
+        for box in self.query("#map_local_boxes > Collapsible"):
             if box is not event.collapsible:
                 box.collapsed = True
 
