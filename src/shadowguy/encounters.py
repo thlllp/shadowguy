@@ -1,13 +1,15 @@
-"""Gang turf encounters: what happens when a runner who's fallen out with a street
-Gang walks onto that gang's turf.
+"""Territory encounters: what happens when a runner walks into hostile ground — gang turf
+or a corp's territory where they've burned their standing.
 
 A parallel resolution subsystem, like security.py — not a Scene. Territory entry
-(CorpMapScreen.action_travel) rolls one of these when the runner steps onto the turf of
-a gang (corpmap.Territory.gang_id) they hold negative Character.gang_standing with.
-Nothing drives that standing into the red yet; this is the mechanism, waiting on a driver
-(a failed gang gig, a hit on their turf) the way security contracts predated theirs.
+(CorpMapScreen.action_travel) rolls these when the runner enters a district controlled by
+a hostile faction.
 
-Leaf-ish: imports character/combat/corpmap/gangs/scene, never app or a screen.
+None of this drives standing negative on its own; that belongs to job/gig completion.
+This is the mechanism on top of the standing score — once a job hits a corp's reputation,
+entering their territory carries risk.
+
+Leaf-ish: imports character/combat/corpmap/factions/gangs/scene, never app or a screen.
 """
 
 import random
@@ -15,7 +17,8 @@ from dataclasses import dataclass
 
 from shadowguy.character import Character
 from shadowguy.combat import roll_enemies
-from shadowguy.corpmap import Territory
+from shadowguy.corpmap import Territory, TerritoryModifier
+from shadowguy.factions import FACTIONS_BY_ID, Faction
 from shadowguy.gangs import GANGS_BY_ID, Gang
 from shadowguy.scene import Encounter, Outcome
 
@@ -72,4 +75,90 @@ def gang_attack(gang: Gang, rng: random.Random) -> Encounter:
         enemies=roll_enemies(ENCOUNTER_ENEMY_TIER, rng),
         victory=Outcome(text=f"You leave {gang.name}'s people in the gutter and move on."),
         escape=Outcome(text=f"You break clear of {gang.name} and keep moving."),
+    )
+
+
+# ── corp territory encounters ────────────────────────────────────────────────
+
+# Detection chance: base 8% + 6% per SURVEILLANCE point on the territory, so even a
+# lightly monitored district (SURVEILLANCE 1) has a 14% chance of spotting a hostile
+# runner. Full ghostwire territory (5) caps at 38% — not a certainty.
+CORP_SPOTTED_BASE = 0.08
+CORP_SPOTTED_PER_SURVEILLANCE = 0.06
+
+# Mild hostility: the corp wants you gone, not dead. They demand a fine to walk away.
+# Deeper grudges escalate the price. At or below ARREST_STANDING they don't negotiate.
+CORP_EXPEL_FINE = 80
+CORP_EXPEL_STEP = 50
+CORP_ARREST_STANDING = -5
+
+# Corp security is professional, not street muscle — one tier up from gangs.
+CORP_SECURITY_TIER = 1
+
+# What an arrest KO costs: time, money, face.
+ARREST_HOURS = 6.0
+ARREST_CASH_PCT = 0.33
+ARREST_STANDING_HIT = -3
+
+
+def corp_fine_for(standing: int) -> int:
+    """The bribe a corp demands to look the other way at `standing` (a toll band,
+    -1..-4). After that they don't negotiate — straight to arrest."""
+    return CORP_EXPEL_FINE + CORP_EXPEL_STEP * (abs(standing) - 1)
+
+
+@dataclass
+class CorpEncounter:
+    """What entering a corp's territory turned up. `fine` None means arrest (no toll
+    option — security attacks on sight); otherwise it's the bribe to walk away."""
+
+    faction: Faction
+    standing: int
+    territory_name: str
+    fine: int | None
+
+
+def roll_corp_encounter(
+    character: Character, territory: Territory, rng: random.Random,
+) -> CorpEncounter | None:
+    """The encounter (if any) when `character` is in `territory`: None when the
+    territory is unowned, the runner isn't negative with its owner, or the
+    detection roll simply misses."""
+    owner = territory.owner
+    if owner == "neutral":
+        return None
+    standing = character.standing_with(owner)
+    if standing >= 0:
+        return None
+    surveillance = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+    chance = CORP_SPOTTED_BASE + CORP_SPOTTED_PER_SURVEILLANCE * surveillance
+    if rng.random() >= chance:
+        return None
+    if standing <= CORP_ARREST_STANDING:
+        return CorpEncounter(
+            faction=FACTIONS_BY_ID[owner],
+            standing=standing,
+            territory_name=territory.name,
+            fine=None,
+        )
+    return CorpEncounter(
+        faction=FACTIONS_BY_ID[owner],
+        standing=standing,
+        territory_name=territory.name,
+        fine=corp_fine_for(standing),
+    )
+
+
+def corp_security_encounter(faction: Faction, territory_name: str, rng: random.Random) -> Encounter:
+    """The fight when corp security moves on a hostile runner — professional-tier
+    muscle, tier-1 enemies. No reward for surviving: this is an arrest you escaped."""
+    return Encounter(
+        prompt=f"{faction.name} security spots you in {territory_name} and moves to detain you.",
+        enemies=roll_enemies(CORP_SECURITY_TIER, rng),
+        victory=Outcome(
+            text=f"You slip through {faction.name}'s security cordon and disappear."
+        ),
+        escape=Outcome(
+            text=f"You break away from {faction.name}'s security and melt into the crowd."
+        ),
     )
