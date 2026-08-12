@@ -269,7 +269,12 @@ SAVE_SUFFIX = ".save"
 # v69 added corpmap.Territory.is_outskirts -- the OUTSKIRTS_COUNT neutral edge districts
 # with free lodging and an "O" map tag. A pre-v69 pickled Territory lacks the attribute,
 # same pickle-restore issue as is_slum above.
-SAVE_VERSION = 69
+# v70 added a fifth Faction (Sanctuary Holdings). No field changed shape, but a map is
+# laid out once per run against the FACTIONS list of the moment: a pre-v70 board has no
+# Sanctuary bloc and its CorpMap.relations (seeded from relations.ENTITY_IDS at
+# generation) holds no faction_sanctuary pair at all, so any relations.relation lookup
+# reaching that id would KeyError on a bare dict index.
+SAVE_VERSION = 70
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.

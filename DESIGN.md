@@ -850,13 +850,13 @@ The **modifier cluster stays on the model side** (`_clamp`/`_development`/`_corp
 
 The board is generated fresh each run (`generate_corp_map`): `TERRITORY_COUNT` (260) nodes on a 14×24 (`GRID_COLS`×`GRID_ROWS`) grid, one contiguous blob, wired by a random spanning tree (always connected) plus extra edges (`EXTRA_EDGE_CHANCE` 0.35) for loops. The grid is deliberately larger than `TERRITORY_COUNT` — leftover cells are the holes that stop the blob becoming a solid rectangle.
 
-The four factions: Ironclad Dynamics (weapons), Ghostwire Collective (hacking), Meridian Biochem (pharma), Prometheus Cybernetics (cybernetics).
+The five factions: Ironclad Dynamics (weapons), Ghostwire Collective (hacking), Meridian Biochem (pharma), Prometheus Cybernetics (cybernetics), Sanctuary Holdings (faith).
 
 **The runner owns nothing and starts nowhere.** `_player_start` picks an unclaimed rim node (`_on_grid_edge`) — no `"player"` owner exists on the map; `@` marks presence, not ownership. `_grow_blocs` reserves the start cell (no faction seeds/expands onto it), falling through to the neutral branch for value and modifiers like any open district. (The runner does get an `APARTMENT` location there — a place, not a holding.)
 
 The rim start demands `MIN_START_DEGREE` (2) connections — over 2000 seeds, always neutral/rim/degree 2–3.
 
-At 260 nodes: 24 corp (`TERRITORIES_PER_FACTION` 6×4) + 236 unclaimed (one = runner start, 3 slums, 5 outskirts). The corps hold under a tenth of the city — expansion room is deliberately vast, and a rival bloc is far away rather than next door. `FACTION_VALUE_SPREAD` (3,3,2,2,1,1) must match `TERRITORIES_PER_FACTION` in length — that's what makes fairness free.
+At 260 nodes: 30 corp (`TERRITORIES_PER_FACTION` 6×5) + 230 unclaimed (one = runner start, 3 slums, 5 outskirts). The corps hold under a tenth of the city — expansion room is deliberately vast, and a rival bloc is far away rather than next door. `FACTION_VALUE_SPREAD` (3,3,2,2,1,1) must match `TERRITORIES_PER_FACTION` in length — that's what makes fairness free.
 
 **The tuning constants guard each other at import time**: raises if `TERRITORY_COUNT` outgrows the grid or `DISTRICT_NAMES`, if `FACTION_VALUE_SPREAD`/`TERRITORIES_PER_FACTION` drift, or if the name pool can't cover `MAX_SAME_KIND_LOCATIONS`. Only the faction-count guard depends on the caller (stays in `generate_corp_map`). The name-pool guard is load-bearing: `_make_locations` retries an unbounded `while True` on a collision — an exhausted pool **hangs generation instead of raising**, so grow name pools alongside `TERRITORY_COUNT`.
 

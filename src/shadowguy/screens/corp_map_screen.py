@@ -327,6 +327,9 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             # mounts, so _set_content_visibility's own guard runs too early to catch
             # it. See AUTO_FOCUS above for what a focused #activities costs the map.
             self.call_after_refresh(self._release_hidden_focus)
+            # Same reason: the _refresh_map above runs before the first layout, so its
+            # scroll-to-cursor is a no-op. Retry once the container has a size.
+            self.call_after_refresh(self._scroll_selection_into_view)
         else:
             await self._refresh_activities()
             self.focus_next()
@@ -689,11 +692,18 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             return
         if self.selected_id == self._scrolled_selection_id:
             return
-        self._scrolled_selection_id = self.selected_id
         span = next((s for s in self.rendered.spans if s.territory_id == self.selected_id), None)
         if span is None:
             return
-        self.query_one("#map_scroll", ScrollableContainer).scroll_to_region(
+        scroll = self.query_one("#map_scroll", ScrollableContainer)
+        if not (scroll.content_size.width and scroll.content_size.height):
+            return
+        # Latched only once the scroll can actually land: on_mount's own _refresh_map
+        # runs before the first layout, when the container has no size and
+        # scroll_to_region is a silent no-op. Marking the id scrolled there would leave
+        # the cursor parked off-screen until the player pressed an arrow key.
+        self._scrolled_selection_id = self.selected_id
+        scroll.scroll_to_region(
             Region(span.start, span.line, span.end - span.start, 1),
             animate=False,
         )
