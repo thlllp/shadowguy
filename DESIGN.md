@@ -131,7 +131,26 @@ The runner is meant to take one `REST_HOURS_COST` (8-hour) Rest at least every `
 - **The felt penalty caps** at `FATIGUE_STAT_PENALTY_CAP` (3) — `Character.fatigue_penalty` is the one place that clamp is computed, read by both `Character.stat()` (the same chokepoint gear/cyberware/temp bonuses already go through, so every check, combat roll, and skill value feels it for free) and `screens.CharacterSheet`. The raw counter can (and does) climb past the cap while ignored; it just takes longer to halve back down through it than to hit it, which is the point.
 - `screens.CharacterSheet` shows "Rested" or "Fatigued: N (-P to stats)" so the player isn't tracking this blind.
 
-**Not balance-simulated** — the grace window, growth divisor, and cap are first-slice numbers, easy to retune (all named constants in `character.py`) once there's a feel for how often runners actually skip rest in play.
+**Balance, simulated in `tools/fatigue_sim.py`** (rest cadence × job length over 60 days, driving the real clock: a job costs 10–14h with travel, so a work cycle is *not* a day, and the tick fires per midnight crossed — sometimes none, sometimes one).
+
+The cadence the system is asking for is cheap to keep and the punishment for skipping is steep, which is the intended shape:
+
+| Pattern | Job | Penalty 1 | Penalty 2 | Penalty 3 (cap) | Peak raw fatigue |
+|---|---|---|---|---|---|
+| rest daily | 8h | never | never | never | 0 |
+| rest daily | 12h | day 9 | never | never | 1 |
+| rest every 2 days | 8h | day 2 | never | never | 1 |
+| rest every 2 days | 12h | day 2 | day 14 | day 28 | 3 |
+| rest every 3 days | 8h | day 2 | day 3 | day 6 | 3 |
+| rest every 3 days | 12h | day 2 | day 3 | day 6 | 7 |
+| rest every 5 days | either | day 2 | day 3 | day 4 | 93 |
+| never rest | either | day 2 | day 3 | day 4 | 8718 |
+
+Resting daily is genuinely free on tier-0 work, and resting every other day is the playable floor: on 8h jobs it never passes penalty 1 at all, on 12h ones it holds there for a fortnight before drifting to the cap. Past a 3-day cadence the compounding takes over within a week, and the raw counter's runaway (93 at rest-every-5, four figures if never) is what makes a deep burnout cost several rests in a row rather than one.
+
+**Job length only matters near the boundary.** A 12h job plus travel makes a work-and-rest cycle 22h against the 8h job's 18h, so the longer cycle occasionally drifts a day tick past the 24h window that the shorter one always clears — worth one point of fatigue over 60 days at a daily cadence. Once the cadence itself is overdue, the tick fires every day regardless and the two job lengths converge (identical from rest-every-5 down): **fatigue is charged per overdue day, not per hour worked.**
+
+`FATIGUE_GRACE_HOURS`/`FATIGUE_GROWTH_DIVISOR` are swept by `--sweep`. The cap and the halving rule are still hand-set.
 
 ## Time & the day clock (`shadowguy/character.py`, `shadowguy/app.py`)
 
@@ -589,7 +608,11 @@ it a burglary rather than a shootout:
 
 **Shown to all builds, warned not locked.** A Data Heist appears on everyone's offers/menu, but a scene with a matrix stage shows **"⚠ needs a cyberdeck / more Cybercombat skill"** (`matrix_warning`→`matrix_readiness`) when no equipped deck or `cybercombat` below `MIN_READY_CYBERCOMBAT` (5). It reads Cybercombat rather than Hack because what it warns about is *fighting* ICE — Hack gets the runner into the system either way. Advisory only.
 
-**Not yet balance-simulated, swingier than intended.** `BASE_INTEGRITY`/`INTEGRITY_PER_LOGIC`, `_ICE_ROWS`/`ICE_TIERS`, `FIREWALL_BASE`, deck-damage constants, `MIN_READY_CYBERCOMBAT`, `MATRIX_NETWORK_TIERS` are all hand-set. Pre-network flat-fight numbers (tier 2, always-attack policy, **measured before the fix below**): a decked hacker (Logic 6 + `zetatech_rig`, `hack` rank 4 — **measured before the three-way skill split**, so re-read it as Cybercombat rank) seizes ~100%, a deckless Logic-1 runner is ejected ~99% — intent realized, but the decked hacker was near-invulnerable (firewall scaled off `infer`, which the deck's Logic bonus also lifted, on top of the same deck bonus already lifting `player_integrity` and the Hack roll). `firewall_defense` now subtracts `inventory.equipped_deck_rating` back out — a better deck sharpens your hacking (`player_attack_damage`, the Hack roll), not your firewall — so that one compounding path is closed, though the rest of the curve is still hand-set and unsimulated. Re-run a presets×tiers sim before leaning on either the old rates or the network shape.
+**Balance, simulated in `tools/matrix_sim.py`** (presets × `ICE_TIERS`, 4000 fights per cell, straight Attack loop — no Sleaze/Extract/Harden, no network shape, so it measures the fight and not the run). It reads every derived number through this module's own helpers (`player_integrity`/`firewall_defense`/`firewall_soak`/`player_attack_damage`) rather than recomputing them, which is the only way it stays honest — an earlier version hard-zeroed soak and used the bare deck rating as damage, and reported an unsurvivable tier 2 as a result.
+
+Current rates: a **Hacker** (`zetatech_rig`, integrity 25, soak 10, Cybercombat 16) wins **100%** at every tier and finishes tier 2 with 98.5% integrity. The same runner on a `burner_deck` is barely worse (100% throughout, 96.2% integrity left at tier 2) — **deck tier is not what's carrying the specialist, Logic and Cybercombat rank are.** A **Gunslinger** (Cybercombat 4) runs 99.8 / 98.2 / **45.7%** by tier, and a **deckless Enforcer** (integrity 7, Cybercombat 2, `BARE_JACK_DAMAGE` 1) runs 66.8 / 41.0 / **0.2%**. The intent holds — the specialist owns this surface and the tourist dies in it — but the specialist owns it *completely*, with no tier that costs a maxed hacker anything. Tier 2 is the only real gate, and it's a wall rather than a slope: 45.7% for the mid build, effectively 0 for the bare one.
+
+The dials for that are `_ICE_ROWS`/`ICE_TIERS` (ICE damage against a Logic-sized soak pool) and `INTEGRITY_PER_LOGIC` — both feed off the same stat, which is why a hacker compounds. `BASE_INTEGRITY`, `FIREWALL_BASE`, the deck-damage constants, `MIN_READY_CYBERCOMBAT` and `MATRIX_NETWORK_TIERS` remain hand-set. Pre-network flat-fight numbers (tier 2, always-attack policy, **measured before the fix below**): a decked hacker (Logic 6 + `zetatech_rig`, `hack` rank 4 — **measured before the three-way skill split**, so re-read it as Cybercombat rank) seizes ~100%, a deckless Logic-1 runner is ejected ~99% — intent realized, but the decked hacker was near-invulnerable (firewall scaled off `infer`, which the deck's Logic bonus also lifted, on top of the same deck bonus already lifting `player_integrity` and the Hack roll). `firewall_defense` now subtracts `inventory.equipped_deck_rating` back out — a better deck sharpens your hacking (`player_attack_damage`, the Hack roll), not your firewall — so that one compounding path is closed, though the rest of the curve is still hand-set and unsimulated. The network layer on top of the fight is still unmeasured — `matrix_sim.py` fights a flat roster, so `MATRIX_NETWORK_TIERS` and the node graph are as unverified as they were.
 
 **Deferred**: an on-site variant (embedded hacker running smaller matrix fights mid-job, ejecting *painfully* via a health cost instead of blowing the run — an eject-cost constant away, not a new engine); a mechanical reward for reaching `CPU` (unlike `CACHE`, no payoff wired).
 
@@ -646,11 +669,11 @@ The world's other actors getting a turn of their own (Faction standing above is 
 
 Claiming (`corpmap.claim_territory(territory, faction_id, rng)`): flips `owner`, reseeds `modifiers` via `_corp_modifiers`, clears `gang_id`, zeroes `garrison`. `value` untouched, locations not regenerated. `CorpMapScreen` needs no wiring — fresh instance each push, reads `Territory.owner` live.
 
-**Reinforcement (`_reinforce`).** `AI_GARRISON_CHANCE` (0.35) at adding one operative to whichever held district is currently *thinnest*, capped per district at `AI_GARRISON_CAP` (4). Thinnest-first rather than random so a faction shores up its weak flank instead of stacking one fortress — otherwise the player finds a permanently free way in and the conflict layer never bites.
+**Reinforcement (`_reinforce`).** One roll per faction per day — `AI_GARRISON_CHANCE` (0.35) at adding one operative to whichever held district is currently *thinnest*, capped per district at `AI_GARRISON_CAP` (5). Note the roll is per *faction*, not per district: a corp's standing force grows at a flat ~0.35/day however wide it is, and only its cap scales with holdings. Thinnest-first rather than random so a faction shores up its weak flank instead of stacking one fortress — otherwise the player finds a permanently free way in and the conflict layer never bites.
 
 **An AI faction keeps no operative pool.** Its attack force is *derived* from holdings (`_attack_force`: one per `AI_TERRITORIES_PER_ATTACKER` districts, floored at `MIN_AI_ATTACK_FORCE`), and its garrison cap is per-district. Giving every faction a shadow `CorpState` purely so the player never sees it would be state for its own sake; force scaling with holdings is the only property of a pool that's observable from outside anyway. Consequence worth knowing: a runaway leader presses its advantage rather than stalling.
 
-**Attacks are the conflict layer** — see Corp conflict below for the contest itself. `ATTACK_CHANCE` (0.12) is deliberately well under `EXPANSION_CHANCE`: free ground is always the cheaper move, so corps mostly grow outward early and turn on each other once the neutral ground runs out. That ordering is what gives a run its shape.
+**Attacks are the conflict layer** — see Corp conflict below for the contest itself. `ATTACK_CHANCE` (0.09) is deliberately well under `EXPANSION_CHANCE`: free ground is always the cheaper move, so corps mostly grow outward early and turn on each other once the neutral ground runs out. That ordering is what gives a run its shape.
 
 **Target choice is what finally reads `relations.py`.** `_pick_attack_target` weights each candidate by `max(1, RELATION_TARGET_BIAS - relation(...))`, so a corp moves on whoever it already gets on worst, and an ally is picked mainly when there's nobody else to hit. The floor of 1 keeps a well-liked rival possible — a bias, not a rule. Falls back to a flat `rng.choice` when the map carries no `relations` at all (hand-built test fixtures omit them). Before this, `relations.py` was seeded at generation and consumed by nothing.
 
@@ -740,7 +763,13 @@ Kept as two explicit function pairs rather than one generic `rebuild(kind, cost)
 
 **A capture is logged as its own `FactionEvent` kind, `"seizure"`** (carrying `from_faction_id`), rendered on the corp's public website as "Acquired X from Y in a hostile takeover." Both expansion and seizure grow a corp's holdings, but only one of them took the ground off somebody. The losing corp's site doesn't report it at all, which is the joke.
 
-**Not balance-simulated.** `CONTEST_DIE`, the loss formulas, `ATTACK_CHANCE`, `AI_GARRISON_CHANCE`/`AI_GARRISON_CAP`, `AI_TERRITORIES_PER_ATTACKER`/`MIN_AI_ATTACK_FORCE`, `RELATION_TARGET_BIAS` and `JOB_SECURITY_HIT` are all first-slice. The most likely to need tuning is `ATTACK_CHANCE` against `EXPANSION_CHANCE` — that ratio is what decides how long a run stays peaceful.
+**Balance, simulated in `tools/conflict_sim.py`** (a 30-district ring, 5 factions, 200 days, `--map-sim`; the atomic `resolve_attack` grid is the same tool's default mode). The sim models the AI's day the way `resolve_rival_day` runs it — expand, one reinforcement roll per faction, attack — and settles every fight through the real `resolve_attack`, so only the map shape is a stand-in.
+
+At the shipped numbers (`EXPANSION_CHANCE` 0.2, `ATTACK_CHANCE` 0.09, `AI_GARRISON_CAP` 5, `AI_TERRITORIES_PER_ATTACKER` 2), 200 runs: neutral ground runs out around **day 29**, the first cross-border attack lands **day 19** and the first capture **day 20**, ~75 attacks over the run at a **42%** capture rate, **1.1** of 5 factions eliminated (71% of runs kill at least one), and the biggest corp ends holding **~50%** of the board. That's the shape the ratio is for: a peaceful first month, a contested second, no runaway winner by default.
+
+`ATTACK_CHANCE` 0.12 → **0.09** and `AI_GARRISON_CAP` 4 → **5** both came out of that sweep. `--sweep` (EXP × ATT) shows eliminations and largest-share climbing steeply with `ATTACK_CHANCE` — at 0.15 the leader ends on ~80% of the board and the map is decided early — while `--defense-sweep` (cap × territories-per-attacker) is monotone in the cap: 3 → 6 drops attacker success 55% → 40%. 5 is the knee, where attacks still mostly fail but a stack of holdings can't be sat on forever.
+
+**Still first-slice, and un-swept:** `CONTEST_DIE`, the loss formulas, `AI_GARRISON_CHANCE`, `MIN_AI_ATTACK_FORCE`, `RELATION_TARGET_BIAS` and `JOB_SECURITY_HIT`. The sim also models no player, no Security modifier and no defensive tech, so it measures AI-vs-AI equilibrium only.
 
 ## Surveillance detection (`shadowguy/surveillance.py`)
 
@@ -910,7 +939,7 @@ The criminal-underworld counterpart to Factions, on the opposite premise: **a ga
 
 **Map/menu presence, plus two live consequences.** A territory carrying gang turf shows a `gang: <name>` suffix alongside `owner:` in `CorpMapScreen`, both in the map's own territory info and, when the runner is standing there, its Locals panel. Beyond display, gangs have standing, a turf-entry encounter (below), and a job of their own (Gang deliveries, below) — still no dialogue.
 
-**Gang standing & turf encounters (`shadowguy/encounters.py`, `Character.gang_standing`, `CorpMapScreen`).** When negative, `encounters.py` resolves entry: `action_travel`, after moving onto gang turf, calls `roll_gang_encounter` (flat `GANG_ENCOUNTER_CHANCE` 0.25). A hit at standing **-1…-4** offers an escalating toll (`toll_for` = `TOLL_BASE` 40 + `TOLL_STEP` 30 × depth) via `GangTollScreen` (pay, refuse, or fail into a fight); standing **-5 or worse** (`ATTACK_STANDING`) skips the toll and attacks outright. The fight is `gang_attack`: street-tier (`ENCOUNTER_ENEMY_TIER` 0) `Encounter` with `Drop.ENEMY`, via ordinary `CombatScreen` with a map-side `_on_gang_combat_end` mirroring `SceneScreen`'s death/knockout handling. **Not balance-simulated.**
+**Gang standing & turf encounters (`shadowguy/encounters.py`, `Character.gang_standing`, `CorpMapScreen`).** When negative, `encounters.py` resolves entry: `action_travel`, after moving onto gang turf, calls `roll_gang_encounter` (flat `GANG_ENCOUNTER_CHANCE` 0.25). A hit at standing **-1…-4** offers an escalating toll (`toll_for` = `TOLL_BASE` 40 + `TOLL_STEP` 30 × depth) via `GangTollScreen` (pay, refuse, or fail into a fight); **paying also buys `TOLL_STANDING_GAIN` (+1) standing back**, so cooperating is a slow way out of a grudge rather than pure extortion — it can't be farmed past neutral, since `roll_gang_encounter` stops firing at standing 0. Standing **-5 or worse** (`ATTACK_STANDING`) skips the toll and attacks outright. The fight is `gang_attack`: street-tier (`ENCOUNTER_ENEMY_TIER` 0) `Encounter` with `Drop.ENEMY`, via ordinary `CombatScreen` with a map-side `_on_gang_combat_end` mirroring `SceneScreen`'s death/knockout handling. **Not balance-simulated.**
 
 ### Gang deliveries (`shadowguy/jobs.py` — `SmugglingJob`, `screens/shop_screens.py` — `GangDenScreen`)
 

@@ -31,6 +31,9 @@ GANG_ENCOUNTER_CHANCE = 0.25
 # is no toll — they just come at you. The fee climbs TOLL_STEP per point of grudge.
 TOLL_BASE = 40
 TOLL_STEP = 30
+# Standing gained by paying the toll — a small step back toward neutral,
+# so cooperating isn't purely punitive.
+TOLL_STANDING_GAIN = 1
 ATTACK_STANDING = -5
 
 # Street muscle, not a corp response team — the same tier legwork's ambush fields.

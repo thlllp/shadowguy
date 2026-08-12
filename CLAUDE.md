@@ -96,6 +96,28 @@ standings, the corp turn loop, the map, shops and cyberware — lives in
 frequently load-bearing, several were set against a balance simulation, and the
 sections flag which ones are safe to touch.
 
+### Balance harnesses (`tools/`)
+
+Developer tools, run by hand. Not part of the game, not imported by it, not run
+by CI. Each one owns a section of `DESIGN.md` and the numbers quoted there came
+out of it — **re-run the matching harness when you change a constant it
+measures**, and update the DESIGN.md figures with what it prints.
+
+| Tool | Measures | DESIGN.md section |
+|---|---|---|
+| `combat_sim.py` | abstract fights, presets × `ENEMY_TIERS` | Combat / Enemy roster |
+| `matrix_sim.py` | ICE fights, presets × `ICE_TIERS` | Matrix |
+| `conflict_sim.py` | `resolve_attack` grid + a multi-faction map sim | Corp conflict |
+| `fatigue_sim.py` | rest cadence × job length over 60 days | Fatigue |
+
+**A harness that recomputes game math instead of calling it will lie.**
+`matrix_sim.py` reads `player_integrity`/`firewall_defense`/`firewall_soak`/
+`player_attack_damage` from `matrix.py` rather than re-deriving them, after an
+earlier version that hard-zeroed soak and used the bare deck rating as damage
+reported a tier that was never that lethal. Same rule for the AI's day in
+`conflict_sim.py`: reinforcement is one roll per faction (`rivals._reinforce`),
+not one per district. Import the real function wherever there is one.
+
 ### Codebase layout
 
 Orientation only — each module's own section in `DESIGN.md` carries the detail.

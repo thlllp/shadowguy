@@ -32,6 +32,7 @@ from shadowguy.encounters import (
     ARREST_STANDING_HIT,
     CorpEncounter,
     GangEncounter,
+    TOLL_STANDING_GAIN,
     corp_security_encounter,
     gang_attack,
     roll_corp_encounter,
@@ -984,7 +985,13 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     def _on_toll(self, paid: bool) -> None:
         if paid:
-            self.notify(f"You pay off {self._pending_gang.name} and move on.")
+            character = self.app.character
+            character.adjust_gang_standing(self._pending_gang.id, TOLL_STANDING_GAIN)
+            new_standing = character.gang_standing_with(self._pending_gang.id)
+            self.notify(
+                f"You pay off {self._pending_gang.name} and move on. "
+                f"Standing with them rises to {new_standing}."
+            )
         else:
             self._start_gang_fight(self._pending_gang)
 
