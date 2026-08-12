@@ -83,10 +83,30 @@ AP_COST = 1
 TERRITORY_INCOME_BASE = 10
 TERRITORY_INCOME_PER_VALUE = 15
 
+# What holding a district costs per day, subtracted from gross income in
+# collect_income -- so income is net, and a district can be a bad buy rather than
+# free money. corpmap_gen only ever rolls value 1..3, so the three rows a player
+# actually sees are 25/40/55 gross and 10/25/40 net: the poorest ground pays back
+# an expansion in ~35 days and the richest in ~9, which is what makes *which*
+# district to take a real decision instead of a formality.
+#
+# Net income can go negative for a corp holding a lot of poor ground; that is
+# deliberate (fundraise and levy both cost only AP, so a corp can always dig out).
+# Measured in tools/corp_econ_sim.py -- see Corp economy in DESIGN.md.
+TERRITORY_UPKEEP = 15
+
 # Mirrors corpmap.safehouse_price's base + per-value shape: a richer neutral
 # territory costs more to move into.
 EXPANSION_COST_BASE = 150
 EXPANSION_COST_PER_VALUE = 100
+# Sprawl: an expansion costs (1 + held / this) times its base price, so the
+# twentieth district costs three times what the first did. Without it, income and
+# expansion cost both scale linearly with holdings, which means the *rate* a corp
+# can buy ground never slows -- the sim had a corp taking 214 of 260 districts by
+# day 120 with cash never binding after day 10. The brake has to grow faster than
+# income does, and this is the cheapest way to make it. Not a hard cap: a big corp
+# still expands, just slowly enough that building is worth the action point.
+EXPANSION_SPRAWL_DIVISOR = 10
 
 
 class EmployeeCategory(StrEnum):
@@ -976,7 +996,8 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
 
 
 def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
-    """Flat daily income from every territory the player's faction holds, plus
+    """Daily income from every territory the player's faction holds, **net of
+    TERRITORY_UPKEEP per district**, plus
     whichever of the surveillance chain's per-territory bonuses are researched
     (WORKER_SURVEILLANCE_INCOME_BONUS, then PANOPTICON_GRID_INCOME_BONUS, then
     SHADOW_ECONOMY_INCOME_BONUS — summed, not replaced, unlike the Brains
@@ -997,7 +1018,8 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
         bonus += WORKFORCE_INCOME_BONUS
     if has_technology(corp_state, TITHES_ID):
         bonus += TITHES_INCOME_BONUS
-    return sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
+    gross = sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
+    return gross - TERRITORY_UPKEEP * len(owned)
 
 
 def owned_research_facilities(corp_state: CorpState, corp_map: CorpMap) -> list[Location]:
@@ -1390,11 +1412,21 @@ def survey(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> Terri
     return corp_map.territories[territory_id]
 
 
-def expansion_cost(territory: Territory, corp_state: CorpState | None = None) -> int:
+def expansion_cost(
+    territory: Territory, corp_state: CorpState | None = None, corp_map: CorpMap | None = None
+) -> int:
+    """What claiming this district costs, scaled by how much ground the corp
+    already holds (EXPANSION_SPRAWL_DIVISOR). `corp_map` is what the sprawl
+    multiplier is counted from; omitting it prices the district as if the corp held
+    nothing, which is only right for a preview that has no corp behind it."""
     base = EXPANSION_COST_BASE
     if corp_state is not None and has_technology(corp_state, SUPPLY_CHAIN_ID):
         base = SUPPLY_CHAIN_EXPANSION_BASE
-    return base + EXPANSION_COST_PER_VALUE * territory.value
+    price = base + EXPANSION_COST_PER_VALUE * territory.value
+    if corp_state is None or corp_map is None:
+        return price
+    held = len(_owned_territories(corp_state, corp_map))
+    return int(price * (1 + held / EXPANSION_SPRAWL_DIVISOR))
 
 
 def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng: random.Random) -> bool:
@@ -1406,7 +1438,7 @@ def expand_into(corp_state: CorpState, corp_map: CorpMap, territory_id: str, rng
     if territory_id not in expansion_candidates(corp_map, corp_state.faction_id):
         return False
     territory = corp_map.territories[territory_id]
-    cost = expansion_cost(territory, corp_state)
+    cost = expansion_cost(territory, corp_state, corp_map)
     if cost > corp_state.cash:
         return False
     corp_state.cash -= cost

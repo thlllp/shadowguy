@@ -26,6 +26,7 @@ from shadowguy.corp_turn import (
     DEVELOPMENT_MIN_SURVEILLANCE,
     EFFICIENCY_UPGRADE_COSTS,
     EXPANSION_COST_BASE,
+    EXPANSION_SPRAWL_DIVISOR,
     EXPANSION_COST_PER_VALUE,
     EXTENDED_SURVEILLANCE_COST,
     EXTENDED_SURVEILLANCE_MAX,
@@ -49,6 +50,7 @@ from shadowguy.corp_turn import (
     TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
     TERRITORY_INCOME_PER_VALUE,
+    TERRITORY_UPKEEP,
     TOTAL_INFORMATION_AWARENESS_ID,
     TRAINING_DAYS,
     WORKER_SURVEILLANCE_ID,
@@ -162,8 +164,10 @@ def _map():
 def test_collect_income_sums_only_owned_territories():
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD)
-    expected = (TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 2) + (
-        TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 1
+    expected = (
+        (TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 2)
+        + (TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 1)
+        - 2 * TERRITORY_UPKEEP
     )
     assert collect_income(corp_state, corp_map) == expected
 
@@ -210,11 +214,40 @@ def test_expansion_cost_scales_with_value():
     assert expansion_cost(territory) == EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * 3
 
 
+def test_expansion_cost_scales_with_ground_already_held():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+    territory = corp_map.territories["neutral_a"]
+    unsprawled = expansion_cost(territory)
+    # IRONCLAD holds two districts in _map(), so the sprawl multiplier is 1.2.
+    assert expansion_cost(territory, corp_state, corp_map) == int(
+        unsprawled * (1 + 2 / EXPANSION_SPRAWL_DIVISOR)
+    )
+
+
+def test_expansion_cost_without_a_map_is_the_unsprawled_price():
+    corp_map = _map()
+    corp_state = CorpState(faction_id=IRONCLAD)
+    territory = corp_map.territories["neutral_a"]
+    assert expansion_cost(territory, corp_state) == expansion_cost(territory)
+
+
+def test_collect_income_is_net_of_upkeep_and_can_go_negative():
+    """A corp holding only ground poorer than TERRITORY_UPKEEP loses money daily —
+    the pressure that makes which district to take a real decision."""
+    corp_map = _map()
+    for tid in ("iron_home", "iron_second"):
+        corp_map.territories[tid].value = 0
+    corp_state = CorpState(faction_id=IRONCLAD)
+    assert collect_income(corp_state, corp_map) == 2 * (TERRITORY_INCOME_BASE - TERRITORY_UPKEEP)
+    assert collect_income(corp_state, corp_map) < 0
+
+
 def test_expand_into_succeeds_and_charges_cash():
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
     rng = random.Random(0)
-    cost = expansion_cost(corp_map.territories["neutral_a"])
+    cost = expansion_cost(corp_map.territories["neutral_a"], corp_state, corp_map)
     assert expand_into(corp_state, corp_map, "neutral_a", rng) is True
     assert corp_map.territories["neutral_a"].owner == IRONCLAD
     assert corp_state.cash == 10_000 - cost
@@ -265,7 +298,9 @@ def test_collect_income_matches_formula_on_generated_maps(seed):
     faction_id = FACTIONS[0].id
     corp_state = CorpState(faction_id=faction_id)
     owned = [t for t in corp_map.territories.values() if t.owner == faction_id]
-    expected = sum(TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
+    expected = sum(
+        TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * t.value - TERRITORY_UPKEEP for t in owned
+    )
     assert collect_income(corp_state, corp_map) == expected
 
 
