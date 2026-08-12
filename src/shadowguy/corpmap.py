@@ -528,6 +528,11 @@ def territory_distance(corp_map: CorpMap, from_id: str, to_id: str) -> int:
     return len(travel_path(corp_map, from_id, to_id))
 
 
+def unowned_territory_ids(corp_map: CorpMap) -> list[str]:
+    """Every territory id still held by nobody — neutral ground."""
+    return [t.id for t in corp_map.territories.values() if t.owner == "neutral"]
+
+
 def _owner_tag(owner: str) -> str:
     if owner in OWNER_TAGS:
         return OWNER_TAGS[owner]
@@ -563,10 +568,23 @@ class NodeSpan:
     offset: int  # absolute index into RenderedMap.text
 
 
+@dataclass(frozen=True)
+class ConnectorSpan:
+    """Where a connection dash/pipe landed between two territory labels."""
+
+    territory_a: str
+    territory_b: str
+    line: int
+    start: int
+    end: int
+    offset: int
+
+
 @dataclass
 class RenderedMap:
     text: str
     spans: list[NodeSpan]
+    connector_spans: list[ConnectorSpan] = field(default_factory=list)
 
     def territory_at(self, line: int, column: int) -> str | None:
         for span in self.spans:
@@ -597,6 +615,7 @@ def render_ascii_map(
 
     lines: list[str] = []
     spans: list[NodeSpan] = []
+    connector_spans: list[ConnectorSpan] = []
     for row in range(max_row + 1):
         node_cells = []
         for col in range(max_col + 1):
@@ -615,11 +634,20 @@ def render_ascii_map(
                 )
             right = by_pos.get((col + 1, row))
             linked = bool(t and right and right.id in t.connections)
-            # Pad with the connector char too, so the line reaches the label
-            # instead of leaving a ragged gap after short names.
             connector = "-" * CONNECTOR_WIDTH if linked else " " * CONNECTOR_WIDTH
             is_last_col = col == max_col
             padded = label.ljust(col_width[col], "-" if linked else " ")
+            if linked:
+                connector_spans.append(
+                    ConnectorSpan(
+                        territory_a=t.id,
+                        territory_b=right.id,
+                        line=len(lines),
+                        start=col_offset[col] + len(label),
+                        end=col_offset[col] + col_width[col] + CONNECTOR_WIDTH,
+                        offset=0,
+                    )
+                )
             node_cells.append(padded + ("" if is_last_col else connector))
         lines.append("".join(node_cells).rstrip())
 
@@ -631,6 +659,16 @@ def render_ascii_map(
             below = by_pos.get((col, row + 1))
             if t and below and below.id in t.connections:
                 connector_line[col_offset[col] + 1] = "|"
+                connector_spans.append(
+                    ConnectorSpan(
+                        territory_a=t.id,
+                        territory_b=below.id,
+                        line=len(lines),
+                        start=col_offset[col] + 1,
+                        end=col_offset[col] + 2,
+                        offset=0,
+                    )
+                )
         lines.append("".join(connector_line).rstrip())
 
     line_start = {}
@@ -650,7 +688,19 @@ def render_ascii_map(
         for span in spans
     ]
 
-    return RenderedMap(text="\n".join(lines), spans=spans)
+    connector_spans = [
+        ConnectorSpan(
+            territory_a=cs.territory_a,
+            territory_b=cs.territory_b,
+            line=cs.line,
+            start=cs.start,
+            end=cs.end,
+            offset=line_start[cs.line] + cs.start,
+        )
+        for cs in connector_spans
+    ]
+
+    return RenderedMap(text="\n".join(lines), spans=spans, connector_spans=connector_spans)
 
 def _clamp(level: int) -> int:
     return max(0, min(MODIFIER_MAX, level))

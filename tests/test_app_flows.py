@@ -152,6 +152,7 @@ from shadowguy.shops import (
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, complete_job, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
+from textual.containers import ScrollableContainer
 from textual.geometry import Offset
 from textual.widgets import Button, Collapsible, ListItem, ListView, Static
 
@@ -211,14 +212,18 @@ async def _scroll_into_view(pilot, screen, selector: str) -> None:
     box's contents for us any more (CorpMapScreen's accordion only closes sibling
     *location* boxes, not what is nested inside the one being opened), so scroll
     explicitly. Two _settles upfront because expanding a box doesn't always settle the
-    scrollable ancestor's virtual size in one; overlaps rather than full containment
-    because pilot.click hits the centre of the widget, not its entire footprint."""
+    scrollable ancestor's virtual size in one; the check is on the widget's top-left
+    corner rather than its whole footprint or a bare overlap, because that corner is the
+    exact point pilot.click aims at (`_get_mouse_message_arguments` posts the event at
+    `target.region.offset + offset`, not at the widget's centre). A row overlapping the
+    strip by one line can still have its corner outside it, and the click then lands on
+    whatever is at that point instead."""
     strip = screen.query_one("#map_local_boxes_scroll")
     await _settle(pilot)
     await _settle(pilot)
     for _ in range(5):
         widget = screen.query_one(selector)
-        if widget.region.overlaps(strip.region):
+        if strip.region.contains_point(widget.region.offset):
             return
         widget.scroll_visible(animate=False)
         await _settle(pilot)
@@ -2646,6 +2651,32 @@ def test_opening_a_local_box_leaves_its_nested_gig_box_expanded():
             box.collapsed = False
             await pilot.pause()
             assert gig_box.collapsed is False, "the accordion closed the nested gig box"
+
+    run(body())
+
+
+def test_map_opens_scrolled_to_the_cursor():
+    """The board renders far wider and taller than any viewport, so the district the
+    cursor starts on has to be scrolled to before the player ever sees it -- otherwise
+    the map opens on some unrelated corner and the cursor has to be hunted for with the
+    arrow keys. on_mount's own _refresh_map runs before the first layout, when
+    #map_scroll has no size and scroll_to_region is a silent no-op, so the scroll is
+    retried after the refresh."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.push_screen(CorpMapScreen())
+            await _settle(pilot)
+            await _settle(pilot)
+
+            screen = app.screen
+            scroll = screen.query_one("#map_scroll", ScrollableContainer)
+            span = next(s for s in screen.rendered.spans if s.territory_id == screen.selected_id)
+            x = span.start - scroll.scroll_offset.x
+            y = span.line - scroll.scroll_offset.y
+            assert 0 <= x < scroll.content_size.width, f"cursor off-screen horizontally at x={x}"
+            assert 0 <= y < scroll.content_size.height, f"cursor off-screen vertically at y={y}"
 
     run(body())
 

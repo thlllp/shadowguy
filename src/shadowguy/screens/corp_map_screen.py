@@ -24,8 +24,19 @@ from shadowguy.corpmap import (
     owner_label,
     render_ascii_map,
     travel_path,
+    unowned_territory_ids,
 )
-from shadowguy.encounters import GangEncounter, gang_attack, roll_gang_encounter
+from shadowguy.encounters import (
+    ARREST_CASH_PCT,
+    ARREST_HOURS,
+    ARREST_STANDING_HIT,
+    CorpEncounter,
+    GangEncounter,
+    corp_security_encounter,
+    gang_attack,
+    roll_corp_encounter,
+    roll_gang_encounter,
+)
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.fixer import AMY_FIXER_ID, discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
@@ -327,6 +338,9 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             # mounts, so _set_content_visibility's own guard runs too early to catch
             # it. See AUTO_FOCUS above for what a focused #activities costs the map.
             self.call_after_refresh(self._release_hidden_focus)
+            # Same reason: the _refresh_map above runs before the first layout, so its
+            # scroll-to-cursor is a no-op. Retry once the container has a size.
+            self.call_after_refresh(self._scroll_selection_into_view)
         else:
             await self._refresh_activities()
             self.focus_next()
@@ -654,10 +668,23 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 text.stylize("bold yellow reverse", span.offset, span.offset + span.end - span.start)
             elif span.territory_id == self.hovered_id:
                 text.stylize("reverse", span.offset, span.offset + span.end - span.start)
+        focus_id = self.hovered_id or self.selected_id
+        if focus_id and focus_id != character.location_id:
+            path = travel_path(corp_map, character.location_id, focus_id)
+            path_set = set(path)
+            all_path_set = path_set | {character.location_id}
+            for span in self.rendered.spans:
+                if (
+                    span.territory_id in path_set
+                    and span.territory_id != focus_id
+                    and span.territory_id != character.location_id
+                ):
+                    text.stylize("bold", span.offset, span.offset + span.end - span.start)
+            for conn in self.rendered.connector_spans:
+                if conn.territory_a in all_path_set and conn.territory_b in all_path_set:
+                    text.stylize("bold bright_black", conn.offset, conn.offset + conn.end - conn.start)
         self.query_one("#map", Static).update(text)
         self._scroll_selection_into_view()
-
-        focus_id = self.hovered_id or self.selected_id
         if focus_id is None:
             return
         t = corp_map.territories[focus_id]
@@ -689,11 +716,18 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             return
         if self.selected_id == self._scrolled_selection_id:
             return
-        self._scrolled_selection_id = self.selected_id
         span = next((s for s in self.rendered.spans if s.territory_id == self.selected_id), None)
         if span is None:
             return
-        self.query_one("#map_scroll", ScrollableContainer).scroll_to_region(
+        scroll = self.query_one("#map_scroll", ScrollableContainer)
+        if not (scroll.content_size.width and scroll.content_size.height):
+            return
+        # Latched only once the scroll can actually land: on_mount's own _refresh_map
+        # runs before the first layout, when the container has no size and
+        # scroll_to_region is a silent no-op. Marking the id scrolled there would leave
+        # the cursor parked off-screen until the player pressed an arrow key.
+        self._scrolled_selection_id = self.selected_id
+        scroll.scroll_to_region(
             Region(span.start, span.line, span.end - span.start, 1),
             animate=False,
         )
@@ -894,19 +928,24 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
 
     def _walk_travel_path(self, path: list[str]) -> None:
         """Advance the character one hop at a time along `path`, stopping the
-        moment a hop rolls a gang encounter -- the player is already at that hop's
-        district, and anything further down the route needs another fast-travel
-        pick once the encounter's resolved."""
+        moment a hop rolls a gang or corp encounter -- the player is already at
+        that hop's district, and anything further down the route needs another
+        fast-travel pick once the encounter's resolved."""
         character = self.app.character
         for next_id in path:
             if self.app.corp_only:
                 character.location_id = next_id
                 self._do_refresh_map()
                 continue
+            prev_id = character.location_id
             self.app.spend_time(_travel_hours(character))
             character.location_id = next_id
             self._do_refresh_map()
             if self._maybe_gang_encounter():
+                self._prev_territory_id = prev_id
+                return
+            if self._maybe_corp_encounter():
+                self._prev_territory_id = prev_id
                 return
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
@@ -973,6 +1012,80 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             self._gang_encounter.victory
             if result is CombatOutcome.VICTORY
             else self._gang_encounter.escape
+        )
+        self.notify(outcome.text)
+
+    # ── corp territory encounters ─────────────────────────────────────────────
+
+    def _maybe_corp_encounter(self) -> bool:
+        """Roll for a corp encounter at the character's current district. Returns
+        whether one fired, so _walk_travel_path knows to stop. Mirrors
+        _maybe_gang_encounter — detection gate, toll-or-attack, same shape."""
+        character = self.app.character
+        territory = self.app.corp_map.territories[character.location_id]
+        encounter = roll_corp_encounter(character, territory, self.app.rng)
+        if encounter is None:
+            return False
+        self._pending_corp = encounter
+        if encounter.fine is None:
+            self._start_corp_fight(encounter)
+        else:
+            self.app.push_screen(CorpTollScreen(encounter), self._on_corp_toll)
+        return True
+
+    def _on_corp_toll(self, paid: bool) -> None:
+        character = self.app.character
+        enc = self._pending_corp
+        if paid:
+            character.cash -= enc.fine
+            character.adjust_standing(enc.faction.id, -1)
+            expel_id = getattr(self, "_prev_territory_id", None)
+            if expel_id is not None:
+                character.location_id = expel_id
+                self._do_refresh_map()
+            self.notify(
+                f"{enc.faction.name} security escorts you out of {enc.territory_name}."
+            )
+        else:
+            self._start_corp_fight(enc)
+
+    def _start_corp_fight(self, encounter: CorpEncounter) -> None:
+        self._corp_encounter = corp_security_encounter(
+            encounter.faction, encounter.territory_name, self.app.rng
+        )
+        self.app.push_screen(
+            CombatScreen(self._corp_encounter, Drop.ENEMY), self._on_corp_combat_end
+        )
+
+    def _on_corp_combat_end(self, result: CombatOutcome) -> None:
+        character = self.app.character
+        if result is CombatOutcome.DEAD:
+            self.app.exit(message=f"{character.name} has died. Game over.")
+            return
+        encounter = self._pending_corp
+        if result is CombatOutcome.KNOCKED_OUT:
+            roll = self.app.rng.randint(1, 6)
+            if roll <= 2:
+                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
+                return
+            lost = int(character.cash * ARREST_CASH_PCT)
+            character.cash -= lost
+            character.adjust_standing(encounter.faction.id, ARREST_STANDING_HIT)
+            self.app.spend_time(ARREST_HOURS)
+            unowned = unowned_territory_ids(self.app.corp_map)
+            character.location_id = (
+                unowned[0] if unowned else self.app.corp_map.player_start_id
+            )
+            self._do_refresh_map()
+            self.notify(
+                f"{encounter.faction.name} holds you for hours, then dumps you on the street. "
+                f"Lighter by {lost}eb."
+            )
+            return
+        outcome = (
+            self._corp_encounter.victory
+            if result is CombatOutcome.VICTORY
+            else self._corp_encounter.escape
         )
         self.notify(outcome.text)
 
@@ -1267,6 +1380,41 @@ class GangTollScreen(ModalScreen):
         character = self.app.character
         if event.item.id == "pay" and character.cash >= self.encounter.toll:
             character.cash -= self.encounter.toll
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+
+class CorpTollScreen(ModalScreen):
+    BINDINGS = [("escape", "refuse", "Refuse")]
+    CSS = _menu_css("CorpTollScreen", "toll_dialog")
+
+    def __init__(self, encounter: CorpEncounter) -> None:
+        super().__init__()
+        self.encounter = encounter
+
+    def compose(self) -> ComposeResult:
+        enc = self.encounter
+        can_pay = self.app.character.cash >= enc.fine
+        pay_label = f"Pay {enc.fine}eb" if can_pay else f"Pay {enc.fine}eb — can't cover it"
+        yield Vertical(
+            Static(
+                f"{enc.faction.name} security stops you in {enc.territory_name} — "
+                f"pay {enc.fine}eb and leave, or they'll take you in."
+            ),
+            ListView(
+                ListItem(Static(pay_label), id="pay"),
+                ListItem(Static("Refuse — they'll come at you"), id="refuse"),
+            ),
+            id="toll_dialog",
+        )
+
+    def action_refuse(self) -> None:
+        self.dismiss(False)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        character = self.app.character
+        if event.item.id == "pay" and character.cash >= self.encounter.fine:
             self.dismiss(True)
         else:
             self.dismiss(False)

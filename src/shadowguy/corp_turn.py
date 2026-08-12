@@ -561,7 +561,12 @@ DEVELOPMENT_BUMP_COST = 800
 # valve instead of a second income stream — a solvent corp can't call it at all,
 # so it never competes with collect_income as a way to make money.
 FUNDRAISE_PER_TERRITORY = 25
-FUNDRAISE_CASH_CEILING = STARTING_CASH
+# Its own dial rather than STARTING_CASH, which it used to track: the two answer
+# different questions (how much a corp opens with, versus how broke counts as an
+# emergency), and tying them meant every starting-cash retune silently moved the
+# valve too — raising the opening purse 1500 -> 2000 also let a corp fundraise
+# 500eb further up than before. This is the value it had at that STARTING_CASH.
+FUNDRAISE_CASH_CEILING = 1500
 
 # Levy: eb per point of a district's value, paid for with a point of its
 # Development. Deliberately lossy against DEVELOPMENT_BUMP_COST in both
@@ -673,7 +678,13 @@ ACCELERATED_OPERATIVE_DAYS = 1
 MARKET_MONOPOLY_INCOME_BONUS = 20
 
 # --- Sanctuary Holdings: Tithes / Crusade -----------------------------------
-TITHES_INCOME_BONUS = 15
+# Priced against Optimized Workforce, the one directly comparable row: the other
+# faction income root, 20 RP for +5eb. Tithes sits a little above it (income is
+# Sanctuary's whole identity, and its chain is two deep where the others run
+# three) without being the 3x outlier it opened at — +15eb for 25 RP made a
+# day-one root worth more than Prometheus's entire 3-tier, 95 RP chain ending in
+# Market Monopoly's +20.
+TITHES_INCOME_BONUS = 8
 CRUSADE_BONUS = 1
 
 # Descriptions are filled in from the constants above rather than repeating the
