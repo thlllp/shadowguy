@@ -128,12 +128,12 @@ EXPANSION_CHANCE = 0.2
 # rolled only where something is under AI_GARRISON_CAP. The cap is per district,
 # so a faction's total standing force still scales with its holdings.
 AI_GARRISON_CHANCE = 0.35
-AI_GARRISON_CAP = 4
+AI_GARRISON_CAP = 5
 # Per faction, per day: the odds it attacks a bordering rival, rolled only when it
 # has a candidate at all. Deliberately well under EXPANSION_CHANCE — free ground
 # is always the cheaper move, so corps mostly grow outward and turn on each other
 # once the neutral ground runs out, which is what gives a run its shape.
-ATTACK_CHANCE = 0.12
+ATTACK_CHANCE = 0.09
 # What a faction commits to an attack: one operative per this many districts held,
 # floored at MIN_AI_ATTACK_FORCE. A four-district corp throws 2, a ten-district
 # corp throws 5 — so a runaway leader presses its advantage rather than stalling.

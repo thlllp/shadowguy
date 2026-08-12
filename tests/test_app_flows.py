@@ -2881,6 +2881,7 @@ def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
             assert app.character.cash == 1000 - 70  # toll_for(-2)
+            assert app.character.gang_standing_with(GANGS[0].id) == -1  # improved
 
     run(body())
 
