@@ -300,7 +300,7 @@ def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
     candidates = expansion_candidates(corp_map, corp_state.faction_id)
     for territory_id in candidates:
         territory = corp_map.territories[territory_id]
-        cost = expansion_cost(territory, corp_state)
+        cost = expansion_cost(territory, corp_state, corp_map)
         label = _gate(f"Expand into {territory.name} — {cost}eb", corp_state, cost)
         rows.append(ListItem(Static(label), id=f"expand_{territory_id}"))
     if not candidates:
