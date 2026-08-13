@@ -58,8 +58,11 @@ from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     AP_COST,
+    DEVELOPMENT_MIN_SECURITY,
+    DEVELOPMENT_MIN_SURVEILLANCE,
     FUNDRAISE_PER_TERRITORY,
-    LEVY_PER_VALUE,
+    PRIVATE_SECURITY_ID,
+    SECURITY_BUMP_COST,
     RESEARCH_FACILITY_REBUILD_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
@@ -2969,8 +2972,9 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
 
             # Technology now lives on its own pushed Research Tree screen. Worker
             # Surveillance, Brains 2, Counter-Intelligence, Consolidated Holdings,
-            # Fortified Defenses, Research Expansion and one faction root (Hardened
-            # Garrison for Ironclad) are the tier-0 roots.
+            # Fortified Defenses, Research Expansion, Logistics Network, Private
+            # Security Force and one faction root (Hardened Garrison for Ironclad)
+            # are the tier-0 roots.
             await pilot.press("t")
             await pilot.pause()
             assert isinstance(app.screen, ResearchTreeScreen)
@@ -2978,7 +2982,8 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             assert tier0_ids == {
                 "tech_worker_surveillance", "tech_brains_2", "tech_counter_intelligence",
                 "tech_consolidated_holdings", "tech_fortified_defenses",
-                "tech_research_expansion", "tech_hardened_garrison",
+                "tech_research_expansion", "tech_logistics_network",
+                "tech_private_security", "tech_hardened_garrison",
             }
 
             income_before = collect_income(app.corp_state, app.corp_map)
@@ -3027,6 +3032,52 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
             await pilot.pause()
             assert territory.modifiers[TerritoryModifier.SURVEILLANCE] == before + 1
             assert app.corp_state.action_points == 2
+
+    run(body())
+
+
+def test_corp_screen_security_bump_needs_the_technology_then_unblocks_development():
+    """Private Security Force end to end: no Security row until it's researched, the
+    bump raises the district, and enough bumps put an underpoliced block over
+    DEVELOPMENT_MIN_SECURITY so it can finally be developed."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            app.corp_state.cash = 1_000_000
+            app.push_screen(CorpScreen())
+            await _settle(pilot)
+            screen = app.screen
+
+            def rows():
+                return [item.id for item in screen.query_one("#corp_list", ListView).children]
+
+            assert not [r for r in rows() if r.startswith("secure_")]
+
+            app.corp_state.researched.add(PRIVATE_SECURITY_ID)
+            # Pin a held district under the Development threshold on Security only.
+            held = sorted(
+                (t for t in app.corp_map.territories.values() if t.owner == app.corp_state.faction_id),
+                key=lambda t: t.id,
+            )[0]
+            held.modifiers[TerritoryModifier.SECURITY] = DEVELOPMENT_MIN_SECURITY - 1
+            held.modifiers[TerritoryModifier.SURVEILLANCE] = DEVELOPMENT_MIN_SURVEILLANCE
+            await screen._refresh()
+            await _settle(pilot)
+
+            assert f"develop_{held.id}" not in rows()
+            row_id = f"secure_{held.id}"
+            assert row_id in rows()
+
+            cash_before = app.corp_state.cash
+            await pilot.click(f"#{row_id}")
+            await _settle(pilot)
+            assert held.modifiers[TerritoryModifier.SECURITY] == DEVELOPMENT_MIN_SECURITY
+            assert app.corp_state.cash == cash_before - SECURITY_BUMP_COST
+            # Cash-gated, not AP-gated.
+            assert app.corp_state.action_points == 2
+            assert f"develop_{held.id}" in rows()
 
     run(body())
 
@@ -4432,7 +4483,7 @@ def test_ammo_can_be_bought_at_a_weapon_shop_and_loaded_from_the_inventory_scree
 
 
 def test_corp_screen_free_actions_run_a_broke_corp_off_action_points_alone():
-    """The three 0eb rows (corp_turn's free actions) end to end on CorpScreen: a corp
+    """The two 0eb rows (corp_turn's free actions) end to end on CorpScreen: a corp
     with no cash can still fundraise, and a solvent one isn't offered the row at all.
     Without these a broke corp burns both action points every day with nothing to
     spend them on -- every other AP move charges cash too."""
@@ -4460,17 +4511,14 @@ def test_corp_screen_free_actions_run_a_broke_corp_off_action_points_alone():
             assert app.corp_state.cash == FUNDRAISE_PER_TERRITORY * len(held)
             assert app.corp_state.action_points == 1
 
-            # Levy is offered wherever Development is left to strip, broke or not.
-            territory = app.corp_map.territories[held[0]]
-            territory.modifiers[TerritoryModifier.DEVELOPMENT] = 2
+            # Survey stays on the list whatever the corp's cash looks like; the
+            # fundraise row is the one that disappears once it's solvent.
             app.corp_state.cash = 1_000_000
             await screen._refresh()
             await _settle(pilot)
             assert "fundraise" not in rows()  # solvent: the row is gone, not greyed
 
-            cash_before = app.corp_state.cash
-            await pilot.click(f"#levy_{territory.id}")
+            survey_row = [r for r in rows() if r.startswith("survey_")][0]
+            await pilot.click(f"#{survey_row}")
             await _settle(pilot)
-            assert app.corp_state.cash == cash_before + LEVY_PER_VALUE * territory.value
-            assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
             assert app.corp_state.action_points == 0

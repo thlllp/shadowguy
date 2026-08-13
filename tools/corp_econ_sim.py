@@ -37,16 +37,19 @@ import statistics
 from dataclasses import dataclass, field
 
 from shadowguy.character import Character
-from shadowguy.corpmap import CorpMap, Territory, expansion_candidates
+from shadowguy.corpmap import CorpMap, Territory, TerritoryModifier, expansion_candidates
 from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.corp_turn import (
     ACADEMY_TRAINING_COST,
     ACADEMY_UPGRADE_COSTS,
     EFFICIENCY_UPGRADE_COSTS,
+    DEVELOPMENT_MIN_SECURITY,
+    DEVELOPMENT_MIN_SURVEILLANCE,
     FUNDRAISE_PER_TERRITORY,
     LAB_UPGRADE_COSTS,
-    LEVY_PER_VALUE,
+    LOGISTICS_BASE_CAPACITY,
+    LOGISTICS_STRAIN_COST,
     TERRITORY_INCOME_BASE,
     TERRITORY_INCOME_PER_VALUE,
     TERRITORY_UPKEEP,
@@ -61,19 +64,26 @@ from shadowguy.corp_turn import (
     collect_income,
     collect_research,
     expand_into,
+    development_targets,
     expansion_cost,
     fundraise,
     lab_capacity,
-    levy,
-    levy_amount,
-    levy_targets,
     next_academy_upgrade_cost,
     next_efficiency_cost,
     next_lab_cost,
+    logistics_capacity,
+    logistics_strain,
     owned_academy,
     owned_research_facility,
     prereqs_met,
+    raise_development,
+    raise_security,
+    raise_surveillance,
     research_technology,
+    security_bump_cost,
+    security_targets,
+    surveillance_bump_cost,
+    surveillance_targets,
     upgrade_academy,
 )
 from shadowguy.rivals import resolve_rival_day
@@ -120,11 +130,17 @@ class RunResult:
     academy_tier: int = 0
     final_income: int = 0
     final_research: float = 0.0
+    # Logistics at the end of the run: how many districts the supply lines
+    # support vs. what the corp actually holds, and what the overage costs.
+    final_capacity: int = 0
+    final_strain: int = 0
+    development_bumps: int = 0
+    security_bumps: int = 0
+    surveillance_bumps: int = 0
     # How the day's two action points were actually used, summed over the run.
     ap_spent: int = 0
     ap_idle: int = 0
     fundraises: int = 0
-    levies: int = 0
     expansions: int = 0
     trainings: int = 0
     # Days the Academy sat idle with nothing training — the training slot is a
@@ -225,22 +241,79 @@ def _try_academy(corp_state: CorpState, corp_map: CorpMap) -> bool:
 
 
 def _try_cash_action(corp_state: CorpState, corp_map: CorpMap, result: RunResult) -> bool:
-    """The two AP-only earners: levy first (bigger per AP, ungated), then fundraise
-    (only under FUNDRAISE_CASH_CEILING)."""
-    targets = levy_targets(corp_state, corp_map)
-    if targets:
-        best = max(targets, key=lambda t: (levy_amount(t), t.id))
-        if levy(corp_state, corp_map, best.id) is not None:
-            result.levies += 1
-            return True
+    """The one AP-only earner left: fundraise, offered only under
+    FUNDRAISE_CASH_CEILING (levy was removed — see Corp economy in DESIGN.md)."""
     if fundraise(corp_state, corp_map) is not None:
         result.fundraises += 1
         return True
     return False
 
 
+# Cash a developing policy refuses to spend on Development, so building the ground
+# up never starves the expansion it exists to support.
+DEVELOP_CASH_RESERVE = 1000
+
+
+def _under_threshold(territories, modifier, threshold):
+    return [t for t in territories if t.modifiers.get(modifier, 0) < threshold]
+
+
+def _spend_development(corp_state: CorpState, corp_map: CorpMap, result: RunResult) -> None:
+    """Buy logistics capacity off the map: raise Development where it's already
+    legal, and otherwise lift whichever of Security/Surveillance is still under its
+    threshold on a district that could then be developed.
+
+    None of the three bumps costs an action point (cash is their only gate), so
+    this runs outside the AP loop the way _spend_research does. All three are
+    technology-gated — raise_development needs none, but security_targets is empty
+    without Private Security Force and surveillance_targets without Worker
+    Surveillance — so a policy that hasn't researched them simply spends nothing
+    here.
+    """
+    while corp_state.cash > DEVELOP_CASH_RESERVE:
+        targets = development_targets(corp_state, corp_map)
+        if targets:
+            best = min(targets, key=lambda t: t.id)
+            if raise_development(corp_state, corp_map, best.id):
+                result.development_bumps += 1
+                continue
+        # Nothing developable yet: lift whichever threshold is in the way. Security
+        # first — it's the one that used to be unmovable, and the cheaper bump of
+        # the two once Rapid Response Teams is in.
+        blocked_security = _under_threshold(
+            security_targets(corp_state, corp_map),
+            TerritoryModifier.SECURITY,
+            DEVELOPMENT_MIN_SECURITY,
+        )
+        if blocked_security:
+            cheapest = min(
+                blocked_security, key=lambda t: (security_bump_cost(corp_state, t), t.id)
+            )
+            if not raise_security(corp_state, corp_map, cheapest.id):
+                return
+            result.security_bumps += 1
+            continue
+        blocked = [
+            t
+            for t in _under_threshold(
+                surveillance_targets(corp_state, corp_map),
+                TerritoryModifier.SURVEILLANCE,
+                DEVELOPMENT_MIN_SURVEILLANCE,
+            )
+            if t.modifiers.get(TerritoryModifier.SECURITY, 0) >= DEVELOPMENT_MIN_SECURITY
+        ]
+        if not blocked:
+            return
+        cheapest = min(blocked, key=lambda t: (surveillance_bump_cost(corp_state, t), t.id))
+        if not raise_surveillance(corp_state, corp_map, cheapest.id):
+            return
+        result.surveillance_bumps += 1
+
+
 # Each policy is an ordered list of action names; the day spends its action points
-# on the first one that succeeds, top down, and banks the AP if none do.
+# on the first one that succeeds, top down, and banks the AP if none do. "develop"
+# is the exception: it costs no AP, so it's run once a day before the AP loop and
+# is inert inside it.
 POLICIES = {
     # Buy ground and nothing else — the income curve's ceiling.
     "wide": ["expand", "cash"],
@@ -251,6 +324,9 @@ POLICIES = {
     # Never expand: the pure research line, to isolate what a corp's *starting*
     # bloc can fund on its own.
     "research_only": ["build", "train", "academy", "cash"],
+    # Expand, but build the ground up as it goes — the counterplay to logistics
+    # strain, and the policy that shows whether developing actually pays.
+    "developed": ["develop", "expand", "build", "train", "academy", "cash"],
     # Spend nothing, buy nothing: the passive-income floor a run starts on.
     "idle": [],
 }
@@ -324,6 +400,8 @@ def run_once(
 
         # --- Spend the day -------------------------------------------------
         _spend_research(corp_state, result, day, tech_order)
+        if "develop" in actions:
+            _spend_development(corp_state, corp_map, result)
         while corp_state.action_points > 0:
             for action in actions:
                 acted = (
@@ -370,6 +448,8 @@ def run_once(
     result.labs = (facility.labs_built or 0) if facility else 0
     result.efficiency = (facility.efficiency_upgrades or 0) if facility else 0
     result.academy_tier = (academy.academy_tier or 0) if academy else 0
+    result.final_capacity = logistics_capacity(corp_state, corp_map)
+    result.final_strain = logistics_strain(corp_state, corp_map)
     result.final_income = collect_income(corp_state, corp_map)
     result.final_research = collect_research(corp_state, corp_map)
     return result
@@ -403,15 +483,30 @@ def report_policies(batches: dict[str, list[RunResult]], days: int) -> None:
               f"{mean(lambda r: r.efficiency):>4.1f} {mean(lambda r: r.academy_tier):>5.1f} "
               f"{mean(lambda r: r.ap_idle) / ap_total:>7.0%}")
 
+    print("\n  Logistics — districts held vs. supplied, and what the overage costs:")
+    print(f"  {'policy':<14} {'held':>6} {'supplied':>9} {'over':>6} {'strain/day':>11} "
+          f"{'dev bumps':>10} {'sec bumps':>10} {'surv bumps':>11}")
+    for policy, batch in batches.items():
+        def mean(fn):
+            return statistics.mean(fn(r) for r in batch)
+
+        print(f"  {policy:<14} {mean(lambda r: r.territories):>6.1f} "
+              f"{mean(lambda r: r.final_capacity):>9.1f} "
+              f"{mean(lambda r: max(0, r.territories - r.final_capacity)):>6.1f} "
+              f"{mean(lambda r: r.final_strain):>11.0f} "
+              f"{mean(lambda r: r.development_bumps):>10.1f} "
+              f"{mean(lambda r: r.security_bumps):>10.1f} "
+              f"{mean(lambda r: r.surveillance_bumps):>11.1f}")
+
     print("\n  Academy idle (days with nothing training) and free-action use:")
-    print(f"  {'policy':<14} {'idle%':>7} {'trainings':>10} {'expansions':>11} {'levies':>7} {'fundraises':>11}")
+    print(f"  {'policy':<14} {'idle%':>7} {'trainings':>10} {'expansions':>11} {'fundraises':>11}")
     for policy, batch in batches.items():
         def mean(fn):
             return statistics.mean(fn(r) for r in batch)
 
         print(f"  {policy:<14} {mean(lambda r: r.academy_idle_days) / days:>6.0%} "
               f"{mean(lambda r: r.trainings):>10.1f} {mean(lambda r: r.expansions):>11.1f} "
-              f"{mean(lambda r: r.levies):>7.1f} {mean(lambda r: r.fundraises):>11.1f}")
+              f"{mean(lambda r: r.fundraises):>11.1f}")
 
 
 def report_trace(result: RunResult) -> None:
@@ -431,23 +526,35 @@ def report_trace(result: RunResult) -> None:
 
 
 def report_earn_rates() -> None:
-    """What one action point buys, by earner. The three cash actions are the corp's
-    whole income model, and they're priced against each other here rather than in
-    isolation."""
+    """What one action point buys, by earner. Passive income and the one remaining
+    cash action are the corp's whole income model, priced against each other here
+    rather than in isolation."""
     print("\nWhat one action point earns (eb), by district count and value:\n")
-    print(f"{'districts':>10} {'fundraise':>11} {'levy(v=1)':>11} {'levy(v=3)':>11} "
-          f"{'income/day v=1':>16} {'income/day v=3':>16}")
+    print(f"{'districts':>10} {'fundraise':>11} {'net/day v=1':>13} {'net/day v=3':>13} "
+          f"{'strain/day':>11}")
     print("-" * 80)
-    for n in (3, 5, 8, 12, 20):
-        income1 = n * (TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 1)
-        income3 = n * (TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 3)
-        print(f"{n:>10} {n * FUNDRAISE_PER_TERRITORY:>11} {LEVY_PER_VALUE * 1:>11} "
-              f"{LEVY_PER_VALUE * 3:>11} {income1:>16} {income3:>16}")
-    print(f"\n  fundraise: {FUNDRAISE_PER_TERRITORY}eb/district, capped to a corp under "
-          f"FUNDRAISE_CASH_CEILING. levy: {LEVY_PER_VALUE}eb per point of value, "
-          f"consuming a point of Development (finite per district).")
-    print("  Passive income is per day and free; both free actions cost the AP that "
-          "expanding or building would have used.")
+    for n in (3, 5, 8, 12, 20, 40, 80):
+        # Net, not gross: passive income is what fundraising has to be priced
+        # against, and gross overstates it by TERRITORY_UPKEEP per district --
+        # which is what made a fundraise look like a day's income when it is
+        # several. Strain assumes districts developed enough to carry themselves
+        # halfway (the sim's own measured ~0.5 capacity per district).
+        income1 = n * _net_income(Territory(id="x", name="X", x=0, y=0, owner="us", value=1))
+        income3 = n * _net_income(Territory(id="x", name="X", x=0, y=0, owner="us", value=3))
+        capacity = LOGISTICS_BASE_CAPACITY + n // 2
+        over = max(0, n - capacity)
+        strain = LOGISTICS_STRAIN_COST * over * (over + 1) // 2
+        # Supplied, not held -- fundraise_amount is capped at logistics_capacity.
+        raised = FUNDRAISE_PER_TERRITORY * min(n, capacity)
+        print(f"{n:>10} {raised:>11} {income1:>13} {income3:>13} {strain:>11}")
+    print(f"\n  fundraise: {FUNDRAISE_PER_TERRITORY}eb per *supplied* district "
+          "(min(held, logistics_capacity)), capped to a corp under "
+          "FUNDRAISE_CASH_CEILING, and the only AP-only earner left.")
+    print("  Passive income is per day, net of TERRITORY_UPKEEP and of logistics "
+          "strain; fundraising costs the AP that expanding or building would have used.")
+    print("  Both columns scale with the same district count, which is why "
+          "fundraise_amount is capped at logistics_capacity -- see Corp economy in "
+          "DESIGN.md.")
 
     print("\nWhat the ladder costs, and what it returns:\n")
     print(f"  labs         {LAB_UPGRADE_COSTS}  -> +1 scientist seat each "
@@ -471,7 +578,8 @@ def report_expansion_payback() -> None:
     print("-" * 50)
     for value in range(0, 6):
         t = Territory(id="x", name="X", x=0, y=0, owner="neutral", value=value)
-        cost = expansion_cost(t)
+        # None, None -- the unsprawled sticker price, which is what this table is about.
+        cost = expansion_cost(t, None, None)
         gross = TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * value
         net = gross - TERRITORY_UPKEEP
         payback = f"{cost / net:.1f}" if net > 0 else "never"
@@ -479,6 +587,10 @@ def report_expansion_payback() -> None:
     print(f"\n  Net is gross - TERRITORY_UPKEEP ({TERRITORY_UPKEEP}). Cost shown is the "
           "unsprawled price; a corp already holding ground pays "
           "(1 + held / EXPANSION_SPRAWL_DIVISOR) times it.")
+    print(f"  Net also ignores logistics: a corp already n districts past "
+          f"logistics_capacity pays another {LOGISTICS_STRAIN_COST} × (n+1) eb/day for "
+          "this one, which is what makes payback a function of how much you already "
+          "hold rather than of the district alone.")
 
 
 def main() -> None:

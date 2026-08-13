@@ -310,7 +310,10 @@ class ShadowguyApp(App):
             self.corp_state.action_points = 2
             parts = []
             if income:
-                parts.append(f"+{income}eb")
+                # Signed: net income goes negative on an overextended corp
+                # (TERRITORY_UPKEEP and corp_turn.logistics_strain), and "+-410eb"
+                # read as a bug rather than as the bill it is.
+                parts.append(f"{income:+d}eb")
             if rp:
                 parts.append(f"+{rp:g}rp")
             if parts:

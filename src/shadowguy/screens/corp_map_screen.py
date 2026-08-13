@@ -802,7 +802,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     # academy_rows' train_research_assistant (EmployeeCategory.RESEARCH_ASSISTANT
     # has an internal underscore) if a district were ever named e.g. "Assistant".
     _TERRITORY_ACTION_PREFIXES = (
-        "expand", "surveil", "develop", "levy", "survey",
+        "expand", "secure", "surveil", "develop", "survey",
         "deploy", "attack", "newacademy", "rebuild",
     )
 

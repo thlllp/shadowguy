@@ -42,9 +42,8 @@ from shadowguy.corp_turn import (
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
-    levy,
-    levy_amount,
-    levy_targets,
+    logistics_capacity,
+    logistics_strain,
     log_faction_event,
     next_academy_upgrade_cost,
     next_efficiency_cost,
@@ -56,6 +55,7 @@ from shadowguy.corp_turn import (
     owned_research_facility,
     prereqs_met,
     raise_development,
+    raise_security,
     raise_surveillance,
     rebuild_academy_targets,
     rebuild_facility_targets,
@@ -63,6 +63,8 @@ from shadowguy.corp_turn import (
     research_technology,
     sabotage,
     sabotage_targets,
+    security_bump_cost,
+    security_targets,
     survey,
     survey_targets,
     surveillance_bump_cost,
@@ -217,10 +219,16 @@ def operations_rows(corp_state, corp_map) -> list[ListItem]:
 
 
 def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
-    """The corp's status header: cash, research, headcount, what it holds, and how
-    much of the Research Facility is actually staffed."""
+    """The corp's status header: cash, research, headcount, what it holds, how
+    hard its supply lines are working, and how much of the Research Facility is
+    actually staffed."""
     faction = FACTIONS_BY_ID[corp_state.faction_id]
     owned = [t for t in corp_map.territories.values() if t.owner == corp_state.faction_id]
+    capacity = logistics_capacity(corp_state, corp_map)
+    strain = logistics_strain(corp_state, corp_map)
+    logistics_line = f"Logistics: {len(owned)}/{capacity} districts supplied"
+    if strain:
+        logistics_line += f" — overextended, -{strain}eb/day"
     facility = owned_research_facility(corp_state, corp_map)
     facility_line = ""
     if facility is not None:
@@ -240,7 +248,8 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
         f"{corp_state.research_assistants} research assistants "
         f"({corp_state.tasking_operatives} on task) — "
         f"Day {day}\n"
-        f"Territories ({len(owned)}): {', '.join(t.name for t in owned) or 'none'}"
+        f"Territories ({len(owned)}): {', '.join(t.name for t in owned) or 'none'}\n"
+        f"{logistics_line}"
         f"{facility_line}"
     )
 
@@ -263,7 +272,7 @@ def standing_rows(character) -> list[ListItem]:
 
 
 def free_action_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
-    """The 1 AP / 0eb moves (corp_turn's free actions): fundraise, levy, survey.
+    """The 1 AP / 0eb moves (corp_turn's free actions): fundraise and survey.
     Listed after the cash-gated rows because they're the fallback, not the plan —
     but listed at all so a broke corp's action points always have somewhere to go.
 
@@ -276,14 +285,6 @@ def free_action_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
         label = f"Fundraise — +{fundraise_amount(corp_state, corp_map)}eb, free"
         rows.append(ListItem(Static(_gate(label, corp_state, 0)), id="fundraise"))
 
-    for territory in levy_targets(corp_state, corp_map):
-        level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
-        label = (
-            f"Levy {territory.name} — +{levy_amount(territory)}eb, "
-            f"Development {level}→{level - 1}"
-        )
-        rows.append(ListItem(Static(_gate(label, corp_state, 0)), id=f"levy_{territory.id}"))
-
     for territory in survey_targets(corp_state, corp_map):
         owner_name = (
             FACTIONS_BY_ID[territory.owner].name if territory.owner != "neutral" else "neutral ground"
@@ -294,8 +295,8 @@ def free_action_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
 
 
 def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
-    """Expansion onto neutral ground, the two repeatable modifier bumps, then the
-    free actions (free_action_rows)."""
+    """Expansion onto neutral ground, the three repeatable modifier bumps, then
+    the free actions (free_action_rows)."""
     rows = []
     candidates = expansion_candidates(corp_map, corp_state.faction_id)
     for territory_id in candidates:
@@ -305,6 +306,17 @@ def territory_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
         rows.append(ListItem(Static(label), id=f"expand_{territory_id}"))
     if not candidates:
         rows.append(ListItem(Static("No neutral ground borders your territory."), id="none"))
+
+    for territory in security_targets(corp_state, corp_map):
+        level = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+        cost = security_bump_cost(corp_state, territory)
+        label = f"Raise Security in {territory.name} ({level}→{level + 1}) — {cost}eb"
+        rows.append(
+            ListItem(
+                Static(_gate(label, corp_state, cost, daily=False)),
+                id=f"secure_{territory.id}",
+            )
+        )
 
     for territory in surveillance_targets(corp_state, corp_map):
         level = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
@@ -534,6 +546,13 @@ class CorpActionsMixin:
             else:
                 self._notify_refusal()
 
+        elif item_id.startswith("secure_"):
+            territory_id = item_id.removeprefix("secure_")
+            if raise_security(corp_state, corp_map, territory_id):
+                self.notify(f"Security raised in {corp_map.territories[territory_id].name}.")
+            else:
+                self.notify("Can't afford it.", severity="warning")
+
         elif item_id.startswith("surveil_"):
             territory_id = item_id.removeprefix("surveil_")
             if raise_surveillance(corp_state, corp_map, territory_id):
@@ -554,18 +573,6 @@ class CorpActionsMixin:
             raised = fundraise(corp_state, corp_map)
             if raised is not None:
                 self.notify(f"Emergency fundraising: +{raised}eb.")
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("levy_"):
-            territory_id = item_id.removeprefix("levy_")
-            raised = levy(corp_state, corp_map, territory_id)
-            if raised is not None:
-                territory = corp_map.territories[territory_id]
-                level = territory.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
-                self.notify(
-                    f"Levied {territory.name}: +{raised}eb, Development down to {level}."
-                )
             else:
                 self._notify_refusal()
 

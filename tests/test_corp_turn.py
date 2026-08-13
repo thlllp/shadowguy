@@ -35,10 +35,18 @@ from shadowguy.corp_turn import (
     HARDENED_GARRISON_ID,
     INVESTIGATION_COST,
     LAB_UPGRADE_COSTS,
-    LEVY_PER_VALUE,
+    LOGISTICS_BASE_CAPACITY,
+    LOGISTICS_DEVELOPMENT_PER_SLOT,
+    LOGISTICS_NETWORK_CAPACITY,
+    LOGISTICS_NETWORK_ID,
+    LOGISTICS_STRAIN_COST,
+    MARTIAL_LAW_ID,
     MAX_EFFICIENCY_UPGRADES,
     MAX_LABS_BUILT,
     MAX_SIGHTINGS_LOG,
+    PRIVATE_SECURITY_ID,
+    RAPID_RESPONSE_ID,
+    RAPID_RESPONSE_SECURITY_COST,
     RESEARCH_ASSISTANTS_PER_LAB,
     RESEARCH_FACILITY_REBUILD_COST,
     RESEARCH_PER_ASSISTANT,
@@ -46,6 +54,11 @@ from shadowguy.corp_turn import (
     SIGHTING_RESEARCH_BONUS,
     STARTING_CASH,
     STARTING_OPERATIVE_MAX,
+    SECURITY_BUMP_COST,
+    EXTENDED_SECURITY_COST,
+    EXTENDED_SECURITY_MAX,
+    SUPPLY_CHAIN_ID,
+    SUPPLY_CHAIN_LOGISTICS_CAPACITY,
     SURVEILLANCE_BUMP_COST,
     TECHNOLOGIES_BY_ID,
     TERRITORY_INCOME_BASE,
@@ -84,9 +97,6 @@ from shadowguy.corp_turn import (
     investigate_sighting,
     investigate_sighting_targets,
     lab_capacity,
-    levy,
-    levy_amount,
-    levy_targets,
     next_efficiency_cost,
     next_lab_cost,
     operative_max,
@@ -99,6 +109,12 @@ from shadowguy.corp_turn import (
     rebuild_academy_targets,
     rebuild_facility_targets,
     research_rate,
+    effective_security_max,
+    logistics_capacity,
+    logistics_strain,
+    raise_security,
+    security_bump_cost,
+    security_targets,
     research_technology,
     resolve_attack,
     return_tasking_operatives,
@@ -211,14 +227,16 @@ def test_collect_research_matches_the_generated_facility_s_tier(seed):
 def test_expansion_cost_scales_with_value():
     corp_map = _map()
     territory = corp_map.territories["neutral_a"]
-    assert expansion_cost(territory) == EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * 3
+    assert expansion_cost(territory, None, None) == (
+        EXPANSION_COST_BASE + EXPANSION_COST_PER_VALUE * 3
+    )
 
 
 def test_expansion_cost_scales_with_ground_already_held():
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD)
     territory = corp_map.territories["neutral_a"]
-    unsprawled = expansion_cost(territory)
+    unsprawled = expansion_cost(territory, None, None)
     # IRONCLAD holds two districts in _map(), so the sprawl multiplier is 1.2.
     assert expansion_cost(territory, corp_state, corp_map) == int(
         unsprawled * (1 + 2 / EXPANSION_SPRAWL_DIVISOR)
@@ -229,7 +247,7 @@ def test_expansion_cost_without_a_map_is_the_unsprawled_price():
     corp_map = _map()
     corp_state = CorpState(faction_id=IRONCLAD)
     territory = corp_map.territories["neutral_a"]
-    assert expansion_cost(territory, corp_state) == expansion_cost(territory)
+    assert expansion_cost(territory, corp_state, None) == expansion_cost(territory, None, None)
 
 
 def test_collect_income_is_net_of_upkeep_and_can_go_negative():
@@ -241,6 +259,89 @@ def test_collect_income_is_net_of_upkeep_and_can_go_negative():
     corp_state = CorpState(faction_id=IRONCLAD)
     assert collect_income(corp_state, corp_map) == 2 * (TERRITORY_INCOME_BASE - TERRITORY_UPKEEP)
     assert collect_income(corp_state, corp_map) < 0
+
+
+# --- Logistics ---------------------------------------------------------------
+# Upkeep is flat per district; logistics is the brake that grows with sprawl, and
+# Development on held ground is what buys capacity back.
+
+
+def _held_map(count, development=0, value=1):
+    """A corp holding `count` districts, each at the same value and Development —
+    the shape every logistics assertion needs and none of the other fixtures have."""
+    corp_map = CorpMap(territories={}, player_start_id="start")
+    for index in range(count):
+        territory = _territory(f"iron_{index}", owner=IRONCLAD, value=value)
+        territory.modifiers = {TerritoryModifier.DEVELOPMENT: development}
+        corp_map.territories[territory.id] = territory
+    return corp_map
+
+
+def test_logistics_strain_is_zero_inside_capacity():
+    corp_state = CorpState(faction_id=IRONCLAD)
+    corp_map = _held_map(LOGISTICS_BASE_CAPACITY)
+    assert logistics_capacity(corp_state, corp_map) == LOGISTICS_BASE_CAPACITY
+    assert logistics_strain(corp_state, corp_map) == 0
+
+
+def test_logistics_strain_is_triangular_in_the_overage():
+    """The nth district past capacity costs n × LOGISTICS_STRAIN_COST, so the bill
+    grows faster than the linear income more districts bring in."""
+    corp_state = CorpState(faction_id=IRONCLAD)
+    corp_map = _held_map(LOGISTICS_BASE_CAPACITY + 3)
+    assert logistics_strain(corp_state, corp_map) == LOGISTICS_STRAIN_COST * (1 + 2 + 3)
+
+
+def test_logistics_capacity_rises_with_development_on_held_ground():
+    """LOGISTICS_DEVELOPMENT_PER_SLOT points of Development buy one more district
+    of headroom — the whole reason developing what you hold is the counterplay to
+    taking more of it."""
+    corp_state = CorpState(faction_id=IRONCLAD)
+    corp_map = _held_map(4, development=LOGISTICS_DEVELOPMENT_PER_SLOT)
+    assert logistics_capacity(corp_state, corp_map) == LOGISTICS_BASE_CAPACITY + 4
+
+
+def test_logistics_capacity_rises_with_the_logistics_technologies():
+    corp_map = _held_map(4)
+    corp_state = CorpState(faction_id=IRONCLAD, research_points=1000)
+    assert research_technology(corp_state, LOGISTICS_NETWORK_ID) is True
+    assert logistics_capacity(corp_state, corp_map) == LOGISTICS_BASE_CAPACITY + LOGISTICS_NETWORK_CAPACITY
+    # Supply Chain is Prometheus-gated and sits behind Optimized Workforce, so the
+    # set is written directly rather than researched through the tree here.
+    corp_state.researched.add(SUPPLY_CHAIN_ID)
+    assert logistics_capacity(corp_state, corp_map) == (
+        LOGISTICS_BASE_CAPACITY + LOGISTICS_NETWORK_CAPACITY + SUPPLY_CHAIN_LOGISTICS_CAPACITY
+    )
+
+
+def test_collect_income_subtracts_logistics_strain():
+    corp_state = CorpState(faction_id=IRONCLAD)
+    held = LOGISTICS_BASE_CAPACITY + 5
+    corp_map = _held_map(held)
+    gross_net_of_upkeep = held * (
+        TERRITORY_INCOME_BASE + TERRITORY_INCOME_PER_VALUE * 1 - TERRITORY_UPKEEP
+    )
+    assert collect_income(corp_state, corp_map) == gross_net_of_upkeep - logistics_strain(
+        corp_state, corp_map
+    )
+
+
+def test_raise_development_buys_logistics_capacity_back():
+    """The lever a strained corp actually pulls: DEVELOPMENT_BUMP_COST per point,
+    LOGISTICS_DEVELOPMENT_PER_SLOT points per district of headroom."""
+    corp_map = _held_map(LOGISTICS_BASE_CAPACITY + 1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=100_000)
+    before = logistics_strain(corp_state, corp_map)
+    for index in range(LOGISTICS_DEVELOPMENT_PER_SLOT):
+        _corp_territory(
+            corp_map,
+            f"iron_{index}",
+            security=DEVELOPMENT_MIN_SECURITY,
+            surveillance=DEVELOPMENT_MIN_SURVEILLANCE,
+        )
+        assert raise_development(corp_state, corp_map, f"iron_{index}") is True
+    assert logistics_capacity(corp_state, corp_map) == LOGISTICS_BASE_CAPACITY + 1
+    assert logistics_strain(corp_state, corp_map) == 0 < before
 
 
 def test_expand_into_succeeds_and_charges_cash():
@@ -800,6 +901,109 @@ def test_raise_surveillance_leaves_development_alone():
     corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={WORKER_SURVEILLANCE_ID})
     assert raise_surveillance(corp_state, corp_map, "iron_home") is True
     assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
+
+
+# --- Security: Private Security Force / Rapid Response Teams / Martial Law -----
+# Security used to be write-once (seeded at generation, never moved), which made
+# DEVELOPMENT_MIN_SECURITY a permanent wall. These are the lever.
+
+
+def test_security_targets_are_empty_without_the_technology():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", security=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert security_targets(corp_state, corp_map) == []
+    assert raise_security(corp_state, corp_map, "iron_home") is False
+    assert corp_state.cash == 10_000
+
+
+def test_raise_security_bumps_one_level_and_charges_cash():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={PRIVATE_SECURITY_ID})
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SECURITY] == 2
+    assert corp_state.cash == 10_000 - SECURITY_BUMP_COST
+    # Repeatable within the same day -- cash is the only gate, no AP.
+    assert corp_state.action_points == 2
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SECURITY] == 3
+
+
+def test_raise_security_refuses_a_maxed_district_and_unheld_ground():
+    corp_map = _map()
+    _corp_territory(corp_map, "iron_home", security=MODIFIER_MAX)
+    _corp_territory(corp_map, "neutral_a", security=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={PRIVATE_SECURITY_ID})
+    assert {t.id for t in security_targets(corp_state, corp_map)} == {"iron_second"}
+    assert raise_security(corp_state, corp_map, "iron_home") is False
+    assert raise_security(corp_state, corp_map, "neutral_a") is False
+    assert corp_state.cash == 10_000
+
+
+def test_raise_security_fails_closed_when_unaffordable():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=0, researched={PRIVATE_SECURITY_ID})
+    assert raise_security(corp_state, corp_map, "iron_home") is False
+    assert territory.modifiers[TerritoryModifier.SECURITY] == 1
+
+
+def test_rapid_response_discounts_the_security_bump():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=1)
+    corp_state = CorpState(
+        faction_id=IRONCLAD, cash=10_000, researched={PRIVATE_SECURITY_ID, RAPID_RESPONSE_ID}
+    )
+    assert security_bump_cost(corp_state, territory) == RAPID_RESPONSE_SECURITY_COST
+    assert RAPID_RESPONSE_SECURITY_COST < SECURITY_BUMP_COST
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert corp_state.cash == 10_000 - RAPID_RESPONSE_SECURITY_COST
+
+
+def test_martial_law_raises_the_ceiling_one_level_at_its_own_price():
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=MODIFIER_MAX)
+    corp_state = CorpState(
+        faction_id=IRONCLAD,
+        cash=10_000,
+        researched={PRIVATE_SECURITY_ID, RAPID_RESPONSE_ID, MARTIAL_LAW_ID},
+    )
+    assert effective_security_max(corp_state) == EXTENDED_SECURITY_MAX
+    assert security_bump_cost(corp_state, territory) == EXTENDED_SECURITY_COST
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert territory.modifiers[TerritoryModifier.SECURITY] == EXTENDED_SECURITY_MAX
+    # And that really is the ceiling.
+    assert raise_security(corp_state, corp_map, "iron_home") is False
+
+
+def test_raise_security_unblocks_development_on_underpoliced_ground():
+    """The whole point of the chain: ground seeded below DEVELOPMENT_MIN_SECURITY
+    used to be undevelopable forever, and so could never carry its own logistics
+    capacity."""
+    corp_map = _map()
+    _corp_territory(
+        corp_map,
+        "iron_home",
+        security=DEVELOPMENT_MIN_SECURITY - 1,
+        surveillance=DEVELOPMENT_MIN_SURVEILLANCE,
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={PRIVATE_SECURITY_ID})
+    assert "iron_home" not in {t.id for t in development_targets(corp_state, corp_map)}
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert "iron_home" in {t.id for t in development_targets(corp_state, corp_map)}
+
+
+def test_raise_security_raises_defense_strength():
+    """Security is half of defense_strength, so the bump is a defensive purchase
+    as well as a development one — which is what prices it above the Surveillance
+    bump."""
+    corp_map = _map()
+    territory = _corp_territory(corp_map, "iron_home", security=1)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000, researched={PRIVATE_SECURITY_ID})
+    before = defense_strength(territory, corp_state)
+    assert raise_security(corp_state, corp_map, "iron_home") is True
+    assert defense_strength(territory, corp_state) == before + 1
 
 
 # --- Development, gated on Security + Surveillance ----------------------------
@@ -1963,9 +2167,9 @@ def test_optimized_workforce_adds_income_bonus():
 def test_supply_chain_halves_expansion_base_cost():
     from shadowguy.corp_turn import SUPPLY_CHAIN_ID, SUPPLY_CHAIN_EXPANSION_BASE
     territory = _territory("neutral", value=1)
-    base = expansion_cost(territory)
+    base = expansion_cost(territory, None, None)
     corp_state = CorpState(faction_id=IRONCLAD, researched={SUPPLY_CHAIN_ID})
-    discounted = expansion_cost(territory, corp_state)
+    discounted = expansion_cost(territory, corp_state, None)
     assert discounted == SUPPLY_CHAIN_EXPANSION_BASE + EXPANSION_COST_PER_VALUE
     assert discounted < base
 
@@ -2031,39 +2235,21 @@ def test_fundraise_pays_nothing_to_a_corp_holding_nothing():
     assert fundraise(corp_state, corp_map) is None
 
 
-def test_levy_trades_a_point_of_development_for_cash():
-    corp_map = _map()
-    territory = corp_map.territories["iron_home"]
-    territory.modifiers[TerritoryModifier.DEVELOPMENT] = 2
+def test_fundraise_amount_is_capped_at_logistics_capacity():
+    """Uncapped, fundraising scaled with the same district count logistics_strain
+    punishes, and one free action out-raised a sprawling corp's whole daily strain
+    — which cancels the brake. It pays per *supplied* district instead."""
+    over_capacity = LOGISTICS_BASE_CAPACITY + 20
+    corp_map = _held_map(over_capacity)
     corp_state = CorpState(faction_id=IRONCLAD, cash=0)
-
-    raised = levy(corp_state, corp_map, "iron_home")
-
-    assert raised == LEVY_PER_VALUE * territory.value
-    assert corp_state.cash == raised
-    assert territory.modifiers[TerritoryModifier.DEVELOPMENT] == 1
-    assert corp_state.action_points == 2 - AP_COST
-
-
-def test_levy_targets_skip_undeveloped_and_unowned_districts():
-    corp_map = _map()
-    corp_map.territories["iron_home"].modifiers[TerritoryModifier.DEVELOPMENT] = 1
-    corp_map.territories["neutral_a"].modifiers[TerritoryModifier.DEVELOPMENT] = 5
-    corp_state = CorpState(faction_id=IRONCLAD)
-
-    assert [t.id for t in levy_targets(corp_state, corp_map)] == ["iron_home"]
-    # iron_second is held but flat, neutral_a is developed but not ours.
-    assert levy(corp_state, corp_map, "iron_second") is None
-    assert levy(corp_state, corp_map, "neutral_a") is None
-    assert corp_state.action_points == 2
-
-
-def test_levy_is_a_worse_deal_than_the_development_it_strips():
-    """Levying back a district the corp paid DEVELOPMENT_BUMP_COST to build up must
-    lose money, or the pair becomes a cash pump."""
-    corp_map = _map()
-    for territory in corp_map.territories.values():
-        assert levy_amount(territory) < DEVELOPMENT_BUMP_COST
+    capacity = logistics_capacity(corp_state, corp_map)
+    assert capacity < over_capacity
+    assert fundraise_amount(corp_state, corp_map) == FUNDRAISE_PER_TERRITORY * capacity
+    # A corp inside its capacity is unaffected — every district it holds counts.
+    inside = _held_map(LOGISTICS_BASE_CAPACITY)
+    assert fundraise_amount(corp_state, inside) == (
+        FUNDRAISE_PER_TERRITORY * LOGISTICS_BASE_CAPACITY
+    )
 
 
 def test_survey_reads_a_bordering_district_for_free():
