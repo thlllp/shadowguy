@@ -21,16 +21,15 @@ before reading any function here:
   Most actions cost 1 AP: expand_into, attack_territory, deploy_operatives,
   train_employees, build_lab, build_efficiency_upgrade, build_research_facility,
   build_academy, and operative tasking (tail/gather_intel/sabotage/investigate).
-- **Whatever cash/RP has piled up.** research_technology and the two territory
-  bumps (raise_surveillance, raise_development) deliberately do NOT touch
+- **Whatever cash/RP has piled up.** research_technology and the three territory
+  bumps (raise_security, raise_surveillance, raise_development) deliberately do NOT touch
   action_points — RP and cash are their own pacing gates, and double-gating
   them behind action points would make researching compete with expanding for
   no design reason.
 
-Three actions cost AP and nothing else, so a corp that's out of cash still has
+Two actions cost AP and nothing else, so a corp that's out of cash still has
 something to spend the day on: fundraise (an emergency valve, only under
-FUNDRAISE_CASH_CEILING), levy (Development traded back for cash) and survey
-(gather_intel's recon without the operative).
+FUNDRAISE_CASH_CEILING) and survey (gather_intel's recon without the operative).
 
 Each faction is seeded one RESEARCH_FACILITY and one ACADEMY (corpmap.add_research_facility
 /add_academy, called by the generator). A corp can come to hold two of a kind
@@ -91,9 +90,34 @@ TERRITORY_INCOME_PER_VALUE = 15
 # district to take a real decision instead of a formality.
 #
 # Net income can go negative for a corp holding a lot of poor ground; that is
-# deliberate (fundraise and levy both cost only AP, so a corp can always dig out).
+# deliberate (fundraise costs only AP, so a broke corp can always dig out).
 # Measured in tools/corp_econ_sim.py -- see Corp economy in DESIGN.md.
 TERRITORY_UPKEEP = 15
+
+# --- Logistics ---------------------------------------------------------------
+# Upkeep prices a district; logistics prices the *supply line* to it. A corp
+# supports LOGISTICS_BASE_CAPACITY districts outright, plus one more for every
+# LOGISTICS_DEVELOPMENT_PER_SLOT points of Development standing on the ground it
+# already holds (plus whatever the logistics technologies add). Districts past
+# that capacity are the sprawl, and each one costs more than the one before it:
+# the first district over capacity costs LOGISTICS_STRAIN_COST/day, the second
+# twice that, the nth n times, so the total strain is triangular in the overage.
+#
+# The quadratic is the whole point, and it's the same argument
+# EXPANSION_SPRAWL_DIVISOR makes about price: income scales linearly with
+# districts, so any linear penalty just shifts the intercept and a corp still
+# out-earns it by taking more ground. Growing faster than income is what makes
+# holding ground you haven't developed an actual loss.
+#
+# Development is what buys the capacity back, which is what aims this at the
+# behaviour it's meant to discourage: corp-held Development lands at roughly the
+# district's value (corpmap._development), so value-1 ground contributes ~1 of
+# the 4 points it costs to support itself while value-3 ground nearly pays its
+# own way, and raise_development (DEVELOPMENT_BUMP_COST) is the lever for the
+# rest. Grabbing weak neutral blocks fast is exactly the play this taxes.
+LOGISTICS_BASE_CAPACITY = 12
+LOGISTICS_DEVELOPMENT_PER_SLOT = 4
+LOGISTICS_STRAIN_COST = 3
 
 # Mirrors corpmap.safehouse_price's base + per-value shape: a richer neutral
 # territory costs more to move into.
@@ -262,6 +286,10 @@ SUPPLY_CHAIN_ID = "supply_chain"
 CONSOLIDATED_HOLDINGS_ID = "consolidated_holdings"
 FORTIFIED_DEFENSES_ID = "fortified_defenses"
 RESEARCH_EXPANSION_ID = "research_expansion"
+LOGISTICS_NETWORK_ID = "logistics_network"
+PRIVATE_SECURITY_ID = "private_security"
+RAPID_RESPONSE_ID = "rapid_response"
+MARTIAL_LAW_ID = "martial_law"
 TOTAL_WAR_ID = "total_war"
 DEEP_SURVEILLANCE_PROTOCOL_ID = "deep_surveillance_protocol"
 ACCELERATED_METABOLISM_ID = "accelerated_metabolism"
@@ -380,7 +408,7 @@ _TECHNOLOGY_ROWS = (
         "(they go to ground).",
         None,
     ),
-    # --- 3 public techs (all-faction, no faction gate) ------------------------
+    # --- 7 public techs (all-faction, no faction gate) ------------------------
     (
         CONSOLIDATED_HOLDINGS_ID,
         "Consolidated Holdings",
@@ -406,6 +434,46 @@ _TECHNOLOGY_ROWS = (
         (),
         "Each research lab seats {expanded_scientist} additional scientist, "
         "raising capacity from {base_capacity} to {expanded_capacity} per lab.",
+        None,
+    ),
+    (
+        PRIVATE_SECURITY_ID,
+        "Private Security Force",
+        15,
+        (),
+        "You can pay {security_cost}eb to raise Security by 1 in any district you "
+        f"hold that isn't already at {MODIFIER_MAX} — the only way Security ever "
+        "goes back *up* after a district is seeded, and what gets a block past "
+        "the Development threshold.",
+        None,
+    ),
+    (
+        RAPID_RESPONSE_ID,
+        "Rapid Response Teams",
+        25,
+        (PRIVATE_SECURITY_ID,),
+        "Raising Security costs {rapid_response_security_cost}eb instead of "
+        "{security_cost}eb.",
+        None,
+    ),
+    (
+        MARTIAL_LAW_ID,
+        "Martial Law",
+        40,
+        (RAPID_RESPONSE_ID,),
+        "You can raise Security one level beyond the normal cap (to "
+        "{extended_security_max}), costing {extended_security_cost}eb for that "
+        "final level.",
+        None,
+    ),
+    (
+        LOGISTICS_NETWORK_ID,
+        "Logistics Network",
+        20,
+        (),
+        "Your supply lines support {logistics_network_capacity} more districts "
+        "before they strain (base {logistics_base_capacity}, plus 1 per "
+        "{logistics_development_per_slot} Development across the ground you hold).",
         None,
     ),
     # --- Ironclad Dynamics (WEAPONS) -------------------------------------------
@@ -510,7 +578,8 @@ _TECHNOLOGY_ROWS = (
         35,
         ("optimized_workforce",),
         "Expanding into neutral territory costs half as much (base cost "
-        "{base_expansion}eb → {supply_chain_expansion}eb).",
+        "{base_expansion}eb → {supply_chain_expansion}eb), and your supply lines "
+        "support {supply_chain_capacity} more districts before they strain.",
         "faction_prometheus",
     ),
     (
@@ -573,7 +642,7 @@ DEVELOPMENT_BUMP_COST = 800
 # --- Free actions -------------------------------------------------------------
 # Everything above spends cash as well as AP, so a broke corp used to have both
 # its action points and nothing to put them on: the operative moves are the only
-# cash-free ones, and operatives themselves are bought at the Academy. The three
+# cash-free ones, and operatives themselves are bought at the Academy. The two
 # below cost 1 AP and 0eb.
 
 # Emergency fundraising: eb per district held, offered only while the corp's cash
@@ -587,12 +656,6 @@ FUNDRAISE_PER_TERRITORY = 25
 # valve too — raising the opening purse 1500 -> 2000 also let a corp fundraise
 # 500eb further up than before. This is the value it had at that STARTING_CASH.
 FUNDRAISE_CASH_CEILING = 1500
-
-# Levy: eb per point of a district's value, paid for with a point of its
-# Development. Deliberately lossy against DEVELOPMENT_BUMP_COST in both
-# directions — selling a built-up block back off is a bad trade, just a
-# survivable one.
-LEVY_PER_VALUE = 100
 
 # Each Brains tier replaces both per-head research rates outright rather than
 # adding to them — a flat better rate, not a stacking bonus, so there's one
@@ -644,14 +707,38 @@ EXTENDED_SURVEILLANCE_DETECTION = 0.80
 # Chance that a successful detection disrupts the target's current activity.
 INTERCEPTION_CHANCE = 0.25
 
-# --- Three more public techs: Consolidated Holdings, Fortified Defenses, Research
-# Expansion.
+# --- Four more public techs: Consolidated Holdings, Fortified Defenses, Research
+# Expansion, Logistics Network.
 # Fundraising yield per territory when Consolidated Holdings is researched.
 CONSOLIDATED_FUNDRAISE_PER_TERRITORY = 35
 # Bonus on the defense contest die when Fortified Defenses is researched.
 FORTIFIED_DEFENSES_BONUS = 1
 # Extra scientist capacity per lab when Research Expansion is researched.
 RESEARCH_EXPANSION_BONUS = 1
+# --- Private Security Force / Rapid Response Teams / Martial Law --------------
+# Security used to be write-once upward: _corp_modifiers seeded it and only
+# sabotage and a runner's completed job (jobs.JOB_SECURITY_HIT) ever moved it,
+# both downward — which left DEVELOPMENT_MIN_SECURITY as a wall a district either
+# cleared at generation or never cleared at all. This chain is the lever,
+# and it's public rather than faction-gated because Development (and so logistics
+# capacity) hangs off it — every corp needs a route to building its ground up,
+# not just Ironclad.
+#
+# Priced above SURVEILLANCE_BUMP_COST because Security pays twice: it's half of
+# defense_strength *and* the gate on raise_development. Same repeatable,
+# cash-only, no-AP shape as the Surveillance bump.
+SECURITY_BUMP_COST = 500
+# Discounted bump with Rapid Response Teams — the Counter-Intelligence of this
+# chain, a price break on an ability Private Security Force already granted.
+RAPID_RESPONSE_SECURITY_COST = 300
+# Martial Law's level beyond MODIFIER_MAX, and what that final bump costs.
+EXTENDED_SECURITY_MAX = 6
+EXTENDED_SECURITY_COST = 900
+
+# Districts of logistics capacity Logistics Network adds — the all-faction route
+# to holding wide, worth ~40 Development points on the ground (see
+# LOGISTICS_DEVELOPMENT_PER_SLOT) for 20 RP.
+LOGISTICS_NETWORK_CAPACITY = 10
 
 # --- Ironclad Dynamics: Hardened Garrison / Shock Assault --------------------
 # Multiplier applied to garrison in defense_strength when Hardened Garrison is
@@ -683,6 +770,10 @@ STIMS_OPERATIVE_DAYS = 3
 WORKFORCE_INCOME_BONUS = 5
 # Halved expansion base cost with Supply Chain researched.
 SUPPLY_CHAIN_EXPANSION_BASE = EXPANSION_COST_BASE // 2
+# Districts of logistics capacity Supply Chain adds on top of its discount. The
+# expansion discount and the capacity are the same idea priced twice — cheaper to
+# take ground, cheaper to keep it — which is what makes Prometheus the wide corp.
+SUPPLY_CHAIN_LOGISTICS_CAPACITY = 5
 
 # --- Ironclad: Total War ---------------------------------------------------
 TOTAL_WAR_BONUS = 2
@@ -752,6 +843,14 @@ _TECHNOLOGY_DESCRIPTION_ARGS = dict(
     accelerated_operative_days=ACCELERATED_OPERATIVE_DAYS,
     market_monopoly_income=MARKET_MONOPOLY_INCOME_BONUS,
     tithes_income=TITHES_INCOME_BONUS,
+    security_cost=SECURITY_BUMP_COST,
+    rapid_response_security_cost=RAPID_RESPONSE_SECURITY_COST,
+    extended_security_max=EXTENDED_SECURITY_MAX,
+    extended_security_cost=EXTENDED_SECURITY_COST,
+    logistics_network_capacity=LOGISTICS_NETWORK_CAPACITY,
+    logistics_base_capacity=LOGISTICS_BASE_CAPACITY,
+    logistics_development_per_slot=LOGISTICS_DEVELOPMENT_PER_SLOT,
+    supply_chain_capacity=SUPPLY_CHAIN_LOGISTICS_CAPACITY,
 )
 
 # A row's prereqs must already have been seen — i.e. defined earlier in
@@ -997,7 +1096,7 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
 
 def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     """Daily income from every territory the player's faction holds, **net of
-    TERRITORY_UPKEEP per district**, plus
+    TERRITORY_UPKEEP per district and of logistics_strain**, plus
     whichever of the surveillance chain's per-territory bonuses are researched
     (WORKER_SURVEILLANCE_INCOME_BONUS, then PANOPTICON_GRID_INCOME_BONUS, then
     SHADOW_ECONOMY_INCOME_BONUS — summed, not replaced, unlike the Brains
@@ -1019,7 +1118,39 @@ def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     if has_technology(corp_state, TITHES_ID):
         bonus += TITHES_INCOME_BONUS
     gross = sum(TERRITORY_INCOME_BASE + bonus + TERRITORY_INCOME_PER_VALUE * t.value for t in owned)
-    return gross - TERRITORY_UPKEEP * len(owned)
+    return gross - TERRITORY_UPKEEP * len(owned) - logistics_strain(corp_state, corp_map)
+
+
+def logistics_capacity(corp_state: CorpState, corp_map: CorpMap) -> int:
+    """How many districts this corp's supply lines support without straining:
+    LOGISTICS_BASE_CAPACITY, plus one per LOGISTICS_DEVELOPMENT_PER_SLOT points of
+    Development summed across the ground it holds, plus the logistics
+    technologies.
+
+    Development is counted over held districts only — neutral ground's Development
+    belongs to nobody, and a district's contribution goes with it when a rival
+    takes it."""
+    development = sum(
+        t.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+        for t in _owned_territories(corp_state, corp_map)
+    )
+    capacity = LOGISTICS_BASE_CAPACITY + development // LOGISTICS_DEVELOPMENT_PER_SLOT
+    if has_technology(corp_state, LOGISTICS_NETWORK_ID):
+        capacity += LOGISTICS_NETWORK_CAPACITY
+    if has_technology(corp_state, SUPPLY_CHAIN_ID):
+        capacity += SUPPLY_CHAIN_LOGISTICS_CAPACITY
+    return capacity
+
+
+def logistics_strain(corp_state: CorpState, corp_map: CorpMap) -> int:
+    """Daily cash the corp bleeds running more districts than it can supply — 0
+    while it's inside logistics_capacity, and triangular in the overage past it
+    (the nth district over capacity costs n × LOGISTICS_STRAIN_COST). Charged in
+    collect_income alongside TERRITORY_UPKEEP."""
+    over = len(_owned_territories(corp_state, corp_map)) - logistics_capacity(corp_state, corp_map)
+    if over <= 0:
+        return 0
+    return LOGISTICS_STRAIN_COST * over * (over + 1) // 2
 
 
 def owned_research_facilities(corp_state: CorpState, corp_map: CorpMap) -> list[Location]:
@@ -1226,6 +1357,64 @@ def raise_surveillance(corp_state: CorpState, corp_map: CorpMap, territory_id: s
     return True
 
 
+def effective_security_max(corp_state: CorpState) -> int:
+    """Highest Security level this corp can reach. Normally MODIFIER_MAX (5);
+    Martial Law raises it to EXTENDED_SECURITY_MAX (6). Mirrors
+    effective_surveillance_max."""
+    if has_technology(corp_state, MARTIAL_LAW_ID):
+        return EXTENDED_SECURITY_MAX
+    return MODIFIER_MAX
+
+
+def security_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
+    """Districts the corp holds whose Security isn't already at its effective
+    maximum. Empty until Private Security Force is researched — the tech grants
+    the ability at all, same as Worker Surveillance does for Surveillance."""
+    if not has_technology(corp_state, PRIVATE_SECURITY_ID):
+        return []
+    ceiling = effective_security_max(corp_state)
+    return [
+        t
+        for t in _owned_territories(corp_state, corp_map)
+        if t.modifiers.get(TerritoryModifier.SECURITY, 0) < ceiling
+    ]
+
+
+def security_bump_cost(corp_state: CorpState, territory: Territory) -> int:
+    """Cost to raise this territory's Security by 1. Rapid Response Teams drops
+    the base cost; the extended level (5→6, Martial Law required) costs
+    EXTENDED_SECURITY_COST regardless."""
+    level = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+    if level >= MODIFIER_MAX:
+        return EXTENDED_SECURITY_COST
+    if has_technology(corp_state, RAPID_RESPONSE_ID):
+        return RAPID_RESPONSE_SECURITY_COST
+    return SECURITY_BUMP_COST
+
+
+def raise_security(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> bool:
+    """Pay the level-appropriate Security bump cost to raise one held district's
+    Security by 1 — the corp's only way to move Security after generation, and so
+    the only way ground seeded below DEVELOPMENT_MIN_SECURITY ever becomes
+    developable.
+
+    Repeatable within a day (cash is the only gate), so like raise_surveillance
+    and raise_development this never touches action_points. Fails closed if the
+    tech isn't researched, the district isn't a legal target, or the corp can't
+    afford it."""
+    if territory_id not in {t.id for t in security_targets(corp_state, corp_map)}:
+        return False
+    territory = corp_map.territories[territory_id]
+    cost = security_bump_cost(corp_state, territory)
+    if cost > corp_state.cash:
+        return False
+    corp_state.cash -= cost
+    territory.modifiers[TerritoryModifier.SECURITY] = (
+        territory.modifiers.get(TerritoryModifier.SECURITY, 0) + 1
+    )
+    return True
+
+
 def sightings_log_cap(corp_state: CorpState) -> int:
     """How many entries the sightings log holds. Counter-Intelligence doubles it."""
     if has_technology(corp_state, COUNTER_INTELLIGENCE_ID):
@@ -1319,9 +1508,20 @@ def fundraise_amount(corp_state: CorpState, corp_map: CorpMap) -> int:
     """What one round of emergency fundraising would raise: FUNDRAISE_PER_TERRITORY
     per district held (or CONSOLIDATED_FUNDRAISE_PER_TERRITORY when Consolidated
     Holdings is researched). 0 for a corp holding nothing (which is a lost run
-    anyway — see corp_defeated)."""
+    anyway — see corp_defeated).
+
+    **Counted over supplied districts, not held ones** — capped at
+    logistics_capacity. Without the cap this scales linearly with exactly the
+    district count logistics_strain punishes, and cancels it: a corp 40 districts
+    past its capacity was raising more in one free action than the whole day's
+    strain, every day, while still expanding. A corp can only shake down ground
+    its own supply lines actually reach."""
     per_territory = CONSOLIDATED_FUNDRAISE_PER_TERRITORY if has_technology(corp_state, CONSOLIDATED_HOLDINGS_ID) else FUNDRAISE_PER_TERRITORY
-    return per_territory * len(_owned_territories(corp_state, corp_map))
+    supplied = min(
+        len(_owned_territories(corp_state, corp_map)),
+        logistics_capacity(corp_state, corp_map),
+    )
+    return per_territory * supplied
 
 
 def can_fundraise(corp_state: CorpState, corp_map: CorpMap) -> bool:
@@ -1342,42 +1542,6 @@ def fundraise(corp_state: CorpState, corp_map: CorpMap) -> int | None:
     if corp_state.action_points < AP_COST or not can_fundraise(corp_state, corp_map):
         return None
     amount = fundraise_amount(corp_state, corp_map)
-    corp_state.cash += amount
-    corp_state.action_points -= AP_COST
-    return amount
-
-
-def levy_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
-    """Districts the corp holds with Development left to strip — the mirror of
-    development_targets, which lists the ones with room to build up."""
-    return [
-        t
-        for t in _owned_territories(corp_state, corp_map)
-        if t.modifiers.get(TerritoryModifier.DEVELOPMENT, 0) > 0
-    ]
-
-
-def levy_amount(territory: Territory) -> int:
-    """What levying this district would raise: LEVY_PER_VALUE per point of its value."""
-    return LEVY_PER_VALUE * territory.value
-
-
-def levy(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> int | None:
-    """Spend the day's action point to strip a point of Development off a held
-    district for cash, costing nothing up front. Bigger than fundraising and not
-    gated on being broke — it's paid for out of the block itself, and Development
-    is what prices runner-side lodging and safehouses (corpmap.lodging_cost /
-    safehouse_price), so a levied district gets cheaper to live in.
-
-    Returns the eb raised, or None (nothing mutated, no AP spent) on no AP or a
-    district that isn't held or has no Development left to take."""
-    if corp_state.action_points < AP_COST:
-        return None
-    if territory_id not in {t.id for t in levy_targets(corp_state, corp_map)}:
-        return None
-    territory = corp_map.territories[territory_id]
-    amount = levy_amount(territory)
-    territory.modifiers[TerritoryModifier.DEVELOPMENT] -= 1
     corp_state.cash += amount
     corp_state.action_points -= AP_COST
     return amount
@@ -1413,12 +1577,18 @@ def survey(corp_state: CorpState, corp_map: CorpMap, territory_id: str) -> Terri
 
 
 def expansion_cost(
-    territory: Territory, corp_state: CorpState | None = None, corp_map: CorpMap | None = None
+    territory: Territory, corp_state: CorpState | None, corp_map: CorpMap | None
 ) -> int:
     """What claiming this district costs, scaled by how much ground the corp
     already holds (EXPANSION_SPRAWL_DIVISOR). `corp_map` is what the sprawl
-    multiplier is counted from; omitting it prices the district as if the corp held
-    nothing, which is only right for a preview that has no corp behind it."""
+    multiplier is counted from; passing None for either prices the district as if
+    the corp held nothing, which is only right for a preview that has no corp
+    behind it.
+
+    Both parameters are **required, not defaulted**: the sprawl multiplier is the
+    whole point of this function at any real call site, and a defaulted-away
+    corp_map would let a caller quietly display a price the corp will never be
+    charged. A preview passes `None, None` and says so."""
     base = EXPANSION_COST_BASE
     if corp_state is not None and has_technology(corp_state, SUPPLY_CHAIN_ID):
         base = SUPPLY_CHAIN_EXPANSION_BASE
