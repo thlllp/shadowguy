@@ -983,6 +983,20 @@ _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
         ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, 0, "3 uses"),
         ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, 0, "unlimited"),
         ("fade", "Fade", 520, 1, 2, 0, 0, 0, 0, 0, False, False, False, False, 2, 0, "2 uses"),
+        # The passive half of the branch: no action row, no charges, the bonus just
+        # folds into matrix.py's matching base formula for as long as the program is
+        # installed. They cost a slot rather than a turn — a Burner Deck has exactly
+        # one, so taking a passive there means going into the run with no action
+        # program at all. Priced inside the action band (260-520) for that reason,
+        # not above it. Spike is the deliberately small one: damage_bonus applies
+        # bare-handed too (see player_attack_damage), where +1 is already a doubling
+        # of BARE_JACK_DAMAGE. Not balance-simulated — tools/matrix_sim.py runs a
+        # straight Attack loop and reads its numbers through matrix.py's own helpers,
+        # so it *will* pick these up, but no pass has been run against them yet.
+        ("bulwark", "Bulwark", 420, 1, 0, 4, 0, 0, 0, 0, False, False, False, False, 0, 0, "+4 integrity"),
+        ("baffle", "Baffle", 380, 1, 0, 0, 2, 0, 0, 0, False, False, False, False, 0, 0, "+2 firewall"),
+        ("lattice", "Lattice", 460, 1, 0, 0, 0, 2, 0, 0, False, False, False, False, 0, 0, "+2 soak"),
+        ("spike", "Spike", 440, 1, 0, 0, 0, 0, 1, 0, False, False, False, False, 0, 0, "+1 damage"),
     ],
 }
 

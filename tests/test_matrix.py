@@ -51,14 +51,15 @@ from shadowguy.matrix import (
     take_run_turn,
     usable_analyze_program,
 )
-from shadowguy.shops import PROGRAMS_BY_ID, STOLEN_DATASHARD_ID, InventoryItem, Program
+from shadowguy.shops import ITEMS_BY_ID, PROGRAMS_BY_ID, STOLEN_DATASHARD_ID, InventoryItem, Program
 
 from helpers import AlwaysOne, AlwaysSix, ForcedChance
 
 SEEDS = range(150)
 
-# Every program in today's catalog (sleaze/extract/analyze) is action-shaped, and each
-# tests its own specific behavior further down. Where a test only cares about the
+# Today's catalog is five action programs (sleaze/extract/analyze/icebreaker/fade) and
+# four passive ones (bulwark/baffle/lattice/spike), and each tests its own specific
+# behavior further down. Where a test only cares about the
 # generic *mechanism* (a passive bonus folding into a base formula, an action program
 # with some other guaranteed effect) rather than any one program's flavor, it builds a
 # synthetic Program and monkeypatches it into PROGRAMS_BY_ID for the test's duration --
@@ -517,6 +518,48 @@ def test_icebreaker_deals_guaranteed_no_roll_damage_and_stays_offered_untracked(
     # still offered afterward, with no charge count in its label
     action_again = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
     assert "unlimited" in action_again.label.lower()
+
+
+# --- the catalog's passive programs -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "program_id,field",
+    [
+        ("bulwark", "integrity_bonus"),
+        ("baffle", "firewall_bonus"),
+        ("lattice", "soak_bonus"),
+        ("spike", "damage_bonus"),
+    ],
+)
+def test_each_catalog_passive_moves_its_own_formula_and_no_other(program_id, field):
+    """The mechanism is covered generically above with a synthetic Program; what these
+    pin is the *wiring* -- that each real catalog row sets the field it claims to, so a
+    mis-typed column in _PROGRAM_ROWS (which is positional) can't silently make Bulwark
+    grant soak."""
+    program = PROGRAMS_BY_ID[program_id]
+    assert program.uses_per_fight == 0, "a passive program is defined by having no charges"
+    bare = _char(logic=1, deck_id="burner_deck")
+    equipped = _char(logic=1, deck_id="burner_deck", installed_programs=[program_id])
+    formulas = {
+        "integrity_bonus": player_integrity,
+        "firewall_bonus": firewall_defense,
+        "soak_bonus": firewall_soak,
+        "damage_bonus": player_attack_damage,
+    }
+    for name, formula in formulas.items():
+        delta = formula(equipped) - formula(bare)
+        expected = getattr(program, field) if name == field else 0
+        assert delta == expected, f"{program_id} moved {name} by {delta}, expected {expected}"
+
+
+def test_a_passive_fits_a_burner_deck_but_leaves_no_room_for_anything_else():
+    """The whole cost of a passive is the slot. A Burner Deck has exactly one, so
+    taking one means going in with no action program at all -- which is what keeps an
+    always-on bonus from being strictly better than a charge."""
+    deck = ITEMS_BY_ID["burner_deck"]
+    assert deck.program_slots == 1
+    assert all(PROGRAMS_BY_ID[pid].ram_cost == 1 for pid in ("bulwark", "baffle", "lattice", "spike"))
 
 
 # --- Fade (Program.action_fade) ---------------------------------------------------
