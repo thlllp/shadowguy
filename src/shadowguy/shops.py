@@ -206,6 +206,23 @@ class Item:
     ammo: AmmoKind | None = None
     magazine: int = 0
 
+    @property
+    def passive_slots(self) -> int:
+        """A second, separate pool for passive programs only (Program.is_passive),
+        on top of program_slots. Every deck carries at least one.
+
+        A passive is firmware, not something you swap for a charge mid-run, and
+        making the two compete meant a Burner Deck's single slot turned "take a
+        passive" into "go in with no action program at all" -- so the interesting
+        loadout choice never got made, at the tier where it should bite hardest.
+
+        Derived rather than stored because every deck takes the same 1 today, and the
+        rows are positional (Item(*row)) -- a real field would make every deck row
+        spell out smartlinked/ammo/magazine first to reach it. Give it a field the
+        moment one deck should carry two.
+        """
+        return 1 if self.program_slots else 0
+
 
 @dataclass
 class InventoryItem:
@@ -971,6 +988,13 @@ class Program:
     min_standing: int = 0
     tag: str = ""
 
+    @property
+    def is_passive(self) -> bool:
+        """Passive or action — the one distinction, derived from uses_per_fight rather
+        than stored twice. Both capacity (Item.passive_slots vs program_slots) and
+        effect (matrix._passive_bonus vs an offered MatrixAction) route on this."""
+        return self.uses_per_fight == 0
+
 
 # id, name, price, ram_cost, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
 # damage_bonus, action_damage, action_skip_ice, action_sleaze, action_extract,
@@ -983,6 +1007,22 @@ _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
         ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, 0, "3 uses"),
         ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, 0, "unlimited"),
         ("fade", "Fade", 520, 1, 2, 0, 0, 0, 0, 0, False, False, False, False, 2, 0, "2 uses"),
+        # The passive half of the branch: no action row, no charges, the bonus just
+        # folds into matrix.py's matching base formula for as long as the program is
+        # installed. They ride in Item.passive_slots, a pool of their own that every
+        # deck carries — so a passive never costs an action program its slot, and
+        # cash is the only gate on one. Priced inside the action band (260-520) all
+        # the same: an action program is a thing you *do*, and a passive that priced
+        # above them would read as the upgrade rather than the other half of the
+        # loadout. Spike is the deliberately small one: damage_bonus applies
+        # bare-handed too (see player_attack_damage), where +1 is already a doubling
+        # of BARE_JACK_DAMAGE. Not balance-simulated — tools/matrix_sim.py runs a
+        # straight Attack loop and reads its numbers through matrix.py's own helpers,
+        # so it *will* pick these up, but no pass has been run against them yet.
+        ("bulwark", "Bulwark", 420, 1, 0, 4, 0, 0, 0, 0, False, False, False, False, 0, 0, "+4 integrity"),
+        ("baffle", "Baffle", 380, 1, 0, 0, 2, 0, 0, 0, False, False, False, False, 0, 0, "+2 firewall"),
+        ("lattice", "Lattice", 460, 1, 0, 0, 0, 2, 0, 0, False, False, False, False, 0, 0, "+2 soak"),
+        ("spike", "Spike", 440, 1, 0, 0, 0, 0, 1, 0, False, False, False, False, 0, 0, "+1 damage"),
     ],
 }
 

@@ -299,7 +299,12 @@ class ShopScreen(PanelNav, BackScreen):
             if program.min_standing > standing:
                 continue
             price = buy_price(program.price, standing)
-            label = f"Buy {program.name} — {price}eb"
+            # Program.tag is what the row has to tell them apart by: a name and a
+            # price alone can't say whether this is a passive bonus or a two-charge
+            # action, and the Cyberdeck screen (where the effect *is* spelled out) is
+            # only reachable after buying.
+            effect = f" ({program.tag})" if program.tag else ""
+            label = f"Buy {program.name}{effect} — {price}eb"
             if program.id in character.owned_programs:
                 label += " — owned"
             elif character.cash < price:

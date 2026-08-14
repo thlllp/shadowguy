@@ -9,7 +9,10 @@ from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
 from shadowguy.inventory import (
     active_deck_entry,
+    free_passive_slots,
+    free_program_slots,
     install_program,
+    installed_programs_for,
     reload_weapon,
     rounds_needed,
     toggle_equip,
@@ -153,29 +156,42 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
             return result
 
         entry, item = active
+        # Two pools, drawn as one row of boxes: program_slots for action programs,
+        # then item.passive_slots for passive ones. installed_programs is a single
+        # flat list, so split it by Program.is_passive rather than by position --
+        # indexing it positionally would put a passive in an action box (and drop
+        # whatever overflowed past program_slots off the display entirely).
+        action_progs = [p for p in installed_programs_for(entry) if not p.is_passive]
+        passive_progs = [p for p in installed_programs_for(entry) if p.is_passive]
         total = item.program_slots
-        installed = entry.installed_programs
-        used_ram = sum(
-            PROGRAMS_BY_ID[pid].ram_cost for pid in installed if pid in PROGRAMS_BY_ID
-        )
+        passive_total = item.passive_slots
         logic = item.bonuses.get("logic", 0)
-        free_slots = total - used_ram
+        free_slots = free_program_slots(item, entry)
+        free_passive = free_passive_slots(item, entry)
 
         result.append("  ")
         result.append(item.name, style="bold cyan")
         result.append(f"  \u2500\u2500  Logic +{logic}", style="dim")
-        result.append(f"  \u2500\u2500  {free_slots}/{total} slots free\n\n", style="dim")
+        result.append(f"  \u2500\u2500  {free_slots}/{total} slots free", style="dim")
+        result.append(f"  \u2500\u2500  {free_passive}/{passive_total} passive\n\n", style="dim")
 
         SLOT_WIDTH = 26
 
         slots: list[tuple[str, Program | None, int]] = []
         for i in range(total):
-            pid = installed[i] if i < len(installed) else None
-            prog = PROGRAMS_BY_ID.get(pid) if pid else None
+            prog = action_progs[i] if i < len(action_progs) else None
             slots.append(("occupied" if prog else "empty", prog, i + 1))
+        for i in range(passive_total):
+            prog = passive_progs[i] if i < len(passive_progs) else None
+            slots.append(("passive" if prog else "passive_empty", prog, total + i + 1))
 
         def _slot_color(kind: str) -> str:
-            return "green" if kind == "occupied" else "dim"
+            # Passive slots read cyan so the two pools are tellable apart at a glance
+            # -- they are drawn in one row, and "why can't I put Sleaze there" is the
+            # question the colour has to answer.
+            if kind == "occupied":
+                return "green"
+            return "cyan" if kind.startswith("passive") else "dim"
 
         result.append("  ")
         for kind, _, _ in slots:
@@ -184,7 +200,7 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
 
         result.append("  ")
         for kind, _, num in slots:
-            label = f"SLOT {num}"
+            label = f"PASSIVE {num}" if kind.startswith("passive") else f"SLOT {num}"
             pad = SLOT_WIDTH - 3 - len(label)
             result.append(f"\u2502 {label}{' ' * pad}\u2502  ", style=_slot_color(kind))
         result.append("\n")
@@ -194,11 +210,12 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
             if prog:
                 name = prog.name[:SLOT_WIDTH - 4]
                 pad = SLOT_WIDTH - 3 - len(name)
-                result.append(f"\u2502 {name}{' ' * pad}\u2502  ", style="bold green")
+                style = "bold cyan" if kind.startswith("passive") else "bold green"
+                result.append(f"\u2502 {name}{' ' * pad}\u2502  ", style=style)
             else:
                 label = "--- EMPTY ---"
                 pad = SLOT_WIDTH - 3 - len(label)
-                result.append(f"\u2502 {label}{' ' * pad}\u2502  ", style="dim")
+                result.append(f"\u2502 {label}{' ' * pad}\u2502  ", style=_slot_color(kind))
         result.append("\n")
 
         result.append("  ")

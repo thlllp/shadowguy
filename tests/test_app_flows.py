@@ -1637,6 +1637,12 @@ def test_buy_deck_and_program_then_install_via_cyberdeck_screen():
             assert len(app.character.inventory) == 1
             deck_index = 0
 
+            # The row has to say what the program *does*: nine of them are on this
+            # shelf now, and the Cyberdeck screen that spells out the effect is only
+            # reachable after buying (Program.tag, shop_screens' program row).
+            sleaze_row = app.screen.query_one("#buyp_sleaze", ListItem).query_one(Static)
+            assert "(2 uses)" in sleaze_row.content
+
             await pilot.click("#buyp_sleaze")
             await pilot.pause()
             assert "sleaze" in app.character.owned_programs
