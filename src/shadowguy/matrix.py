@@ -118,8 +118,10 @@ SECURITY_PER_FAILED_EXTRACT = 1
 # precisely because it's the only relief valve there is: security is otherwise a one-way
 # ratchet, and an unlimited Fade would make every other source of it free. No roll (same
 # category as action_damage), floored at SECURITY_FLOOR — you can get back to invisible
-# but never below it. First-slice numbers, not balance-simulated — see CLAUDE.md's
-# convention for flagging that.
+# but never below it. Running one *at* the floor costs no charge (see _use_program):
+# the action list can't see security, so an inert Fade would otherwise be a trap that
+# eats half the program's run. First-slice numbers, not balance-simulated — see
+# CLAUDE.md's convention for flagging that.
 SECURITY_FLOOR = 0.0
 
 # Below this, a freshly engaged node's guardian plays it neutral — same as any ordinary
@@ -758,6 +760,14 @@ def _use_program(state: MatrixState, program: Program, rng: random.Random) -> No
     see SECURITY_FLOOR. action_sleaze and action_extract are rolled, unlike the other
     three — see _sleaze/_extract. A program with unlimited uses (uses_per_fight < 0) has
     no charge to spend."""
+    if program.action_fade and state.security <= SECURITY_FLOOR:
+        # Nothing to scrub. The round still passes — the same as a missed intrusion —
+        # but the charge doesn't: Fade has two for a whole run, and
+        # available_matrix_actions can't warn that this one would be inert (it sees
+        # the character and program_uses, never MatrixState.security). Every other
+        # program either has something to do whenever it's offered or is unlimited-use.
+        state.log.append(f"{program.name} finds nothing to scrub — the host has no trace of you yet.")
+        return
     if program.uses_per_fight > 0:
         state.program_uses[program.id] = state.program_uses.get(program.id, 0) - 1
     if program.action_damage:
@@ -776,11 +786,9 @@ def _use_program(state: MatrixState, program: Program, rng: random.Random) -> No
     elif program.action_fade:
         before = state.security
         state.security = max(SECURITY_FLOOR, state.security - program.action_fade)
-        scrubbed = before - state.security
         state.log.append(
-            f"{program.name} rewrites the host's logs. Security falls {scrubbed:g} to {state.security:g}."
-            if scrubbed
-            else f"{program.name} finds nothing to scrub — the host has no trace of you yet."
+            f"{program.name} rewrites the host's logs. "
+            f"Security falls {before - state.security:g} to {state.security:g}."
         )
 
 

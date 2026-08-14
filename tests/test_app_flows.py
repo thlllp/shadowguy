@@ -1410,6 +1410,125 @@ def test_tactical_stabilize_key_patches_a_downed_hire_and_the_fight_reports_thei
     run(body())
 
 
+def test_map_local_boxes_lay_out_two_wide():
+    """#map_local_boxes is a 2-column grid: with more than one box in the strip, the
+    second sits beside the first (same row, further right) rather than under it. A
+    collapsed box is one title line, so a single column spent the strip's bounded
+    height on whitespace."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await pilot.pause()
+            # A district with at least two boxes to place beside each other -- every
+            # territory gets a Fixers box, so one location is enough for a pair.
+            crowded = max(
+                app.corp_map.territories.values(), key=lambda t: len(t.locations)
+            )
+            assert crowded.locations, "need a territory with locations to lay out"
+            app.character.location_id = crowded.id
+
+            app.push_screen(CorpMapScreen())
+            await _settle_map_boxes(pilot, app.screen)
+
+            boxes = list(app.screen.query("#map_local_boxes > Collapsible"))
+            assert len(boxes) >= 2
+            first, second = boxes[0].region, boxes[1].region
+            assert second.y == first.y, "second box wrapped to its own row"
+            assert second.x > first.x
+
+    run(body())
+
+
+def test_map_corp_actions_lay_out_two_wide():
+    """corp_only's strip matches the Locals one -- two action rows per line. Geometry
+    only; the arrow keys over that geometry are
+    test_map_corp_actions_arrows_follow_the_grid, and a clicked row still resolving is
+    test_corp_only_map_offers_territory_actions_for_the_cursor."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            ours = app.corp_state.faction_id
+            target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
+            app.corp_state.operatives = 4
+            # Broke, so free_action_rows offers fundraise (can_fundraise gates it off
+            # for a solvent corp) -- a second row beside the district's deploy.
+            app.corp_state.cash = 0
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            rows = list(screen.query_one("#map_corp_actions", ListView).children)
+            assert len(rows) >= 2
+            first, second = rows[0].region, rows[1].region
+            assert second.y == first.y, "second action row wrapped to its own line"
+            assert second.x > first.x
+
+    run(body())
+
+
+def test_map_corp_actions_arrows_follow_the_grid():
+    """Focused, the two-wide strip owns all four arrows (GridListView): right steps to
+    the neighbouring row, and the map cursor stays put. Unbound, "right" bubbled to
+    CorpMapScreen's own binding and moved the cursor to the next district -- which
+    rebuilds this panel with that district's actions, losing the row being aimed at."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            ours = app.corp_state.faction_id
+            target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
+            app.corp_state.operatives = 4
+            app.corp_state.cash = 0  # see the two_wide test: fundraise is the second row
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            strip = screen.query_one("#map_corp_actions", ListView)
+            assert len(strip.children) >= 2
+            strip.focus()
+            strip.index = 0
+            await _settle(pilot)
+
+            await pilot.press("right")
+            await pilot.pause()
+            assert strip.index == 1
+            assert screen.selected_id == target, "map cursor moved instead of the highlight"
+
+            await pilot.press("left")
+            await pilot.pause()
+            assert strip.index == 0
+            assert screen.selected_id == target
+
+            # A row move off the end doesn't slide sideways into the other column.
+            await pilot.press("up")
+            await pilot.pause()
+            assert strip.index == 0
+
+    run(body())
+
+
 def test_shop_screen_buy_flow_spends_cash_and_adds_inventory():
     async def body():
         app = ShadowguyApp()
