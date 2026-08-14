@@ -82,7 +82,7 @@ Switching between runner and corp is optional and meant to be difficult — a ru
 
 - No meta-progression between runs (for now). Each run starts fresh.
 - Runner mode ends when the character dies.
-- Corp mode ends when the corp is destroyed, taken over, or the character is assassinated.
+- Corp mode ends when the corp holds no territory at all (`corp_turn.corp_defeated`, checked on the day tick in `app.py` after the rivals have moved) — in a hybrid runner+corp run too, not just `corp_only`.
 
 ### Game systems — see `DESIGN.md`
 
@@ -223,7 +223,11 @@ Leaf modules, and why each has to stay one:
 
 ### Save versions
 
-`saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change. What each bump added:
+`saves.SAVE_VERSION` is the coarse guard on pickled runs: bump it on any breaking state change.
+
+What does **not** need a bump: save state stores catalog entries by **id** (`Character.installed_cyberware` holds cyberware ids, `owned_programs`/`installed_programs` hold program ids), so adding a row *or a field* to a frozen catalog dataclass changes no pickled shape. Renaming an existing id does — see v59.
+
+What each bump added:
 
 | v | Change |
 |---|---|
@@ -282,12 +286,14 @@ Leaf modules, and why each has to stay one:
 
 ### Verifying changes
 
-A real test suite exists (`tests/`, 26 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
+A real test suite exists (`tests/`, 27 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap_gen.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
+- **Forcing a *contest*** (corp conflict, where both sides roll) — both dice come off the same rng, so `AlwaysSix`/`AlwaysOne` fix them *equal* and the capture collapses to the deterministic `committed > defense`. Useful, but it means neither helper can bias one side of a contest against the other.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
-- Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky.
+- **UI tests on a generated map must not assume map shape** — e.g. that the player's corp borders a rival, or that a given district has a shop. The map is unseeded per run (`ShadowguyApp.rng` is a bare `random.Random()`), so construct the situation the test needs and re-run it 15–20× to confirm stability.
+- Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky. **`app.rng` is not that seed**: it's threaded through map/job *generation* only, while `checks.resolve_check` falls back to module-level `random` when passed no rng — so seeding `app.rng` does not control the dice.
 
 ### Known Textual gotchas hit so far
 
@@ -298,4 +304,5 @@ A real test suite exists (`tests/`, 26 test files plus `conftest.py`/`helpers.py
 - Mouse hit-testing on a text blob: handle `on_mouse_move` and call `event.get_content_offset(widget)`, returning an `Offset` inside the widget's content or `None` when the pointer is outside it — `None` is the signal to clear hover state. Mouse events bubble to the `Screen`, so the handler fires for the whole screen.
 - `Static` has **no** `.renderable` attribute in Textual 8 (it did in older versions); current content is `.content`. Only matters when asserting on widget contents in tests.
 - **A layout-affecting mutation needs two pauses before a coordinate click or hover, not one.** `click()`/`hover()` read the target's `.region` once up front, then pause between the events they post — and `Pilot.pause()` *ends* by calling `screen._on_timer_update()`, which is what runs a pending layout. A single pause after the mutation can still leave the click aimed pre-layout, delivered post-layout. First found on cold boot: `run_test()` hands back a pilot before the first layout has run, which moved `TitleMenu`'s `#new_game` between y=18 and y=17 and opened Load Game instead of New Game in ~2% of runs. Recurred on an already-mounted screen expanding a `Collapsible` and calling `scroll_end()` back to back before clicking the revealed row — one pause per mutation wasn't enough there either, and it took down two different tests in CI before the pattern was traced (`test_shop_screen_buy_flow_spends_cash_and_adds_inventory`, `test_buy_deck_and_program_then_install_via_cyberdeck_screen`). **Way out:** `tests/test_app_flows.py`'s `_settle(pilot)` (two pauses) after *any* layout-affecting mutation — boot, expand/collapse, scroll — that precedes a coordinate-based click or hover. A plain `push_screen()` mid-test still settles inside one pause (measured 150/150 stable); it's specifically expand/scroll-then-click sequences that need the second pause too.
+- `push_screen_wait` raises `NoActiveWorker` outside a worker context. The house pattern for a modal pick is `push_screen(screen, callback)` instead — which is why nothing in `src/` calls `push_screen_wait`.
 - **A frequent `app.notify()` toast makes `tests/test_app_flows.py` flaky.** Toasts render in an overlay, and `pilot.click(selector)` clicks *screen coordinates* — a live toast can sit on top of the target and swallow the click, so unrelated tests start failing intermittently in different places each run. A day-tick notification that fires on most days is enough to do it. Gate frequent notifications on something the player actually has (e.g. `Character.discovered_fixers`) rather than firing them unconditionally.
