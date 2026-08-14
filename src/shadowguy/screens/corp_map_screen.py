@@ -89,6 +89,43 @@ from .shop_screens import (
 
 TRAVEL_HOURS_COST = 2.0
 
+# How many columns #map_corp_actions lays its rows out in. Kept beside GridListView
+# rather than read back off the CSS (Textual exposes no such reader) -- change one and
+# change the other, or the arrow keys stop matching what's on screen.
+CORP_ACTION_COLUMNS = 2
+
+
+class GridListView(ListView):
+    """A ListView laid out as a multi-column grid (#map_corp_actions).
+
+    A plain ListView is a single column, so its index-based nav *is* its geometry:
+    down moves one row visually. Lay the same rows out two-wide and the two come
+    apart -- down would step to the row on the *right*, and left/right wouldn't be
+    handled at all. ListView binds neither, so they'd bubble to CorpMapScreen's own
+    left/right bindings and move the *map cursor* instead, rebuilding this very
+    panel with another district's actions out from under the player.
+
+    So remap: left/right step one index (the neighbour in the row), up/down step a
+    whole row of `columns`. A move that would land outside the list is simply not
+    made (ListView's own cursor_up/cursor_down stop at the ends the same way) --
+    *not* clamped to the nearest valid index, which for a row move would silently
+    slide the highlight sideways into the other column.
+    """
+
+    BINDINGS = [
+        Binding("up", "grid_move(-1, True)", "Up", show=False),
+        Binding("down", "grid_move(1, True)", "Down", show=False),
+        Binding("left", "grid_move(-1, False)", "Left", show=False),
+        Binding("right", "grid_move(1, False)", "Right", show=False),
+    ]
+
+    columns = CORP_ACTION_COLUMNS
+
+    def action_grid_move(self, delta: int, by_row: bool) -> None:
+        target = (self.index or 0) + delta * (self.columns if by_row else 1)
+        if 0 <= target < len(self.children):
+            self.index = target
+
 # How many item names a Local box's "For sale" preview spells out before falling
 # back to "+N more" -- WEAPON_SHOP alone stocks 20+ items, too many to list in a box.
 _STOCK_PREVIEW_COUNT = 5
@@ -242,14 +279,23 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
     }
 
     #map_corp_actions {
+        /* Two-wide to match #map_local_boxes -- the two are the same strip in the
+        two modes (see #map_corp_actions_scroll), so they lay out the same way.
+        grid-size must stay in step with GridListView.columns, which is what
+        remaps the arrow keys onto this layout. */
+        layout: grid;
+        grid-size: 2;
+        grid-gutter: 0 2;
         height: auto;
     }
 
     #map_local_boxes {
-        /* Single-column: each expanded location box takes the full width so
-        the nested Gig collapsible (approaches + skills) has room to breathe. */
+        /* Two-wide: a collapsed box is one title line, so a single column spent
+        most of the strip's bounded height on whitespace. Half-width is still
+        enough for an expanded box's nested Gig collapsible (approaches +
+        skills) to read, and the strip scrolls internally when one runs tall. */
         layout: grid;
-        grid-size: 1;
+        grid-size: 2;
         grid-gutter: 1 2;
         height: auto;
         padding: 0 1;
@@ -315,7 +361,7 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
                 yield Static(markup=False, id="territory_summary")
                 yield ListView(id="activities")
                 yield ScrollableContainer(Grid(id="map_local_boxes"), id="map_local_boxes_scroll")
-                yield ScrollableContainer(ListView(id="map_corp_actions"), id="map_corp_actions_scroll")
+                yield ScrollableContainer(GridListView(id="map_corp_actions"), id="map_corp_actions_scroll")
                 yield Static(id="corp_info")
                 yield Collapsible(
                     ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
