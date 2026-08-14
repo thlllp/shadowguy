@@ -660,6 +660,11 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             self.rendered = render_ascii_map(corp_map, self.selected_id, character.location_id)
             self._render_key = key
         text = Text(self.rendered.text)
+        # Dimmed before anything else styles over them: a break marker sits between
+        # two districts you *can't* walk between, so it's information the eye should
+        # find when it looks for it, not a 260-district field of bright x's.
+        for brk in self.rendered.break_spans:
+            text.stylize("bright_black", brk.offset, brk.offset + brk.end - brk.start)
         for span in self.rendered.spans:
             territory = corp_map.territories[span.territory_id]
             color = OWNER_COLORS.get(territory.owner)

@@ -556,6 +556,21 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
 
 CONNECTOR_WIDTH = 4
 
+# Drawn between two districts that sit next to each other on the grid but share no
+# connection. Without it a missing link is rendered as blank space -- exactly what a
+# hole in the blob (no district there at all) looks like -- so the map gave the
+# player no way to tell "you can't walk from here to there" from "there is nothing
+# there". Deliberately a different glyph from the "-"/"|" of a real link rather than
+# a colour difference, since the map is read as text first.
+BREAK_MARKER = "x"
+# How wide the horizontal break reads (the vertical one is a single character, the
+# way its "|" counterpart is). Guarded rather than derived at every use site: the
+# renderer drops BREAK_MARKER into a single cell of the vertical connector line, so
+# a multi-character marker would silently push that whole line out of alignment.
+BREAK_WIDTH = 2
+if len(BREAK_MARKER) != 1:
+    raise ValueError("BREAK_MARKER must be a single character")
+
 
 @dataclass(frozen=True)
 class NodeSpan:
@@ -585,6 +600,10 @@ class RenderedMap:
     text: str
     spans: list[NodeSpan]
     connector_spans: list[ConnectorSpan] = field(default_factory=list)
+    # Grid-adjacent pairs with no connection between them (BREAK_MARKER). Kept
+    # apart from connector_spans, which are the real links a travel path is
+    # highlighted along -- a break is never part of a path.
+    break_spans: list[ConnectorSpan] = field(default_factory=list)
 
     def territory_at(self, line: int, column: int) -> str | None:
         for span in self.spans:
@@ -616,6 +635,7 @@ def render_ascii_map(
     lines: list[str] = []
     spans: list[NodeSpan] = []
     connector_spans: list[ConnectorSpan] = []
+    break_spans: list[ConnectorSpan] = []
     for row in range(max_row + 1):
         node_cells = []
         for col in range(max_col + 1):
@@ -634,9 +654,32 @@ def render_ascii_map(
                 )
             right = by_pos.get((col + 1, row))
             linked = bool(t and right and right.id in t.connections)
-            connector = "-" * CONNECTOR_WIDTH if linked else " " * CONNECTOR_WIDTH
+            broken = bool(t and right) and not linked
             is_last_col = col == max_col
-            padded = label.ljust(col_width[col], "-" if linked else " ")
+            # Everything between this label and the next one: the cell's own padding
+            # plus the connector. Filled as one run rather than padding-then-connector
+            # so a break lands in the *middle of the gap*, the way a link's dashes span
+            # all of it -- centered in the connector alone, the marker hugs the right
+            # district on a wide column and reads as attached to it.
+            gap_width = col_width[col] - len(label) + (0 if is_last_col else CONNECTOR_WIDTH)
+            if linked:
+                gap = "-" * gap_width
+            elif broken:
+                gap = (BREAK_MARKER * BREAK_WIDTH).center(gap_width)
+            else:
+                gap = " " * gap_width
+            if broken:
+                marker_start = col_offset[col] + len(label) + gap.index(BREAK_MARKER)
+                break_spans.append(
+                    ConnectorSpan(
+                        territory_a=t.id,
+                        territory_b=right.id,
+                        line=len(lines),
+                        start=marker_start,
+                        end=marker_start + BREAK_WIDTH,
+                        offset=0,
+                    )
+                )
             if linked:
                 connector_spans.append(
                     ConnectorSpan(
@@ -648,7 +691,7 @@ def render_ascii_map(
                         offset=0,
                     )
                 )
-            node_cells.append(padded + ("" if is_last_col else connector))
+            node_cells.append(label + gap)
         lines.append("".join(node_cells).rstrip())
 
         if row == max_row:
@@ -657,18 +700,19 @@ def render_ascii_map(
         for col in range(max_col + 1):
             t = by_pos.get((col, row))
             below = by_pos.get((col, row + 1))
-            if t and below and below.id in t.connections:
-                connector_line[col_offset[col] + 1] = "|"
-                connector_spans.append(
-                    ConnectorSpan(
-                        territory_a=t.id,
-                        territory_b=below.id,
-                        line=len(lines),
-                        start=col_offset[col] + 1,
-                        end=col_offset[col] + 2,
-                        offset=0,
-                    )
-                )
+            if not (t and below):
+                continue
+            linked = below.id in t.connections
+            connector_line[col_offset[col] + 1] = "|" if linked else BREAK_MARKER
+            span = ConnectorSpan(
+                territory_a=t.id,
+                territory_b=below.id,
+                line=len(lines),
+                start=col_offset[col] + 1,
+                end=col_offset[col] + 2,
+                offset=0,
+            )
+            (connector_spans if linked else break_spans).append(span)
         lines.append("".join(connector_line).rstrip())
 
     line_start = {}
@@ -688,19 +732,25 @@ def render_ascii_map(
         for span in spans
     ]
 
-    connector_spans = [
-        ConnectorSpan(
-            territory_a=cs.territory_a,
-            territory_b=cs.territory_b,
-            line=cs.line,
-            start=cs.start,
-            end=cs.end,
-            offset=line_start[cs.line] + cs.start,
-        )
-        for cs in connector_spans
-    ]
+    def _placed(entries: list[ConnectorSpan]) -> list[ConnectorSpan]:
+        return [
+            ConnectorSpan(
+                territory_a=cs.territory_a,
+                territory_b=cs.territory_b,
+                line=cs.line,
+                start=cs.start,
+                end=cs.end,
+                offset=line_start[cs.line] + cs.start,
+            )
+            for cs in entries
+        ]
 
-    return RenderedMap(text="\n".join(lines), spans=spans, connector_spans=connector_spans)
+    return RenderedMap(
+        text="\n".join(lines),
+        spans=spans,
+        connector_spans=_placed(connector_spans),
+        break_spans=_placed(break_spans),
+    )
 
 def _clamp(level: int) -> int:
     return max(0, min(MODIFIER_MAX, level))
