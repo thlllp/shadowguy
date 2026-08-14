@@ -220,17 +220,40 @@ async def _scroll_into_view(pilot, screen, selector: str) -> None:
     exact point pilot.click aims at (`_get_mouse_message_arguments` posts the event at
     `target.region.offset + offset`, not at the widget's centre). A row overlapping the
     strip by one line can still have its corner outside it, and the click then lands on
-    whatever is at that point instead."""
+    whatever is at that point instead.
+
+    Scroll through the strip itself, with `top=True`, rather than asking the row to
+    `scroll_visible`. The strip's `border-top` makes its `region.height` (14) one
+    larger than its `container_size.height` (13), and a bottom-aligned scroll settles
+    against `region` -- landing the row one line below the last *content* row, outside
+    the very rectangle this function then checks. Measured mid-failure: `scroll_y=5`
+    against a `max_scroll_y` of 19, with the row needing only 6. It was always
+    reachable; the scroll stopped one short. Aligning to the top instead never touches
+    that bottom edge. Two-wide boxes are what made this bite ~17% of runs: a tall
+    expanded box now shares a grid row with a short one, so the rows below it land on
+    the fold far more often.
+    """
     strip = screen.query_one("#map_local_boxes_scroll")
     await _settle(pilot)
     await _settle(pilot)
     for _ in range(5):
+        # Drain any pending rebuild first: _drain_map_local_boxes remounts every box,
+        # which resets the strip's scroll to 0 and would silently undo the scroll below.
+        await _settle_map_boxes(pilot, screen)
         widget = screen.query_one(selector)
         if strip.region.contains_point(widget.region.offset):
             return
-        widget.scroll_visible(animate=False)
+        strip.scroll_to_widget(widget, animate=False, top=True)
         await _settle(pilot)
-    raise AssertionError(f"{selector} is still outside #map_local_boxes_scroll after scrolling")
+    # Report the scroll state, not just the failure: the two numbers that matter are
+    # scroll_y against max_scroll_y (is the row reachable at all?) and region.height
+    # against container_size.height (the border-top's off-by-one, above).
+    raise AssertionError(
+        f"{selector} is still outside #map_local_boxes_scroll after scrolling — "
+        f"strip={strip.region} content_h={strip.container_size.height} "
+        f"scroll_y={strip.scroll_y}/{strip.max_scroll_y} "
+        f"target={screen.query_one(selector).region}"
+    )
 
 
 async def _settle_map_boxes(pilot, screen) -> None:
