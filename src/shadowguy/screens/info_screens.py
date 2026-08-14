@@ -223,6 +223,8 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
                     bonus_parts.append("analyze")
                 if prog.action_skip_ice:
                     bonus_parts.append("skip")
+                if prog.action_fade:
+                    bonus_parts.append(f"-{prog.action_fade} sec")
                 if bonus_parts:
                     detail = ", ".join(bonus_parts)
                 elif prog.uses_per_fight == 0:

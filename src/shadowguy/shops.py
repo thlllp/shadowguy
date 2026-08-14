@@ -967,20 +967,22 @@ class Program:
     action_sleaze: bool = False  # attempt to talk the target ICE down instead of fighting it
     action_extract: bool = False  # roll an attack against a DATA/CACHE node's ICE, ignoring its soak
     action_analyze: bool = False  # navigation-mode only: read a connected node's role without visiting it
+    action_fade: int = 0  # points of MatrixState.security scrubbed back off, no roll
     min_standing: int = 0
     tag: str = ""
 
 
 # id, name, price, ram_cost, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
 # damage_bonus, action_damage, action_skip_ice, action_sleaze, action_extract,
-# action_analyze, min_standing, tag. First-slice catalog, not yet balance-simulated —
-# see CLAUDE.md's convention for flagging that.
+# action_analyze, action_fade, min_standing, tag. First-slice catalog, not yet
+# balance-simulated — see CLAUDE.md's convention for flagging that.
 _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.COMPUTER_STORE: [
-        ("sleaze", "Sleaze", 320, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, "2 uses"),
-        ("extract", "Extract", 360, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, "unlimited"),
-        ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, "3 uses"),
-        ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, "unlimited"),
+        ("sleaze", "Sleaze", 320, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, 0, "2 uses"),
+        ("extract", "Extract", 360, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, 0, "unlimited"),
+        ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, 0, "3 uses"),
+        ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, 0, "unlimited"),
+        ("fade", "Fade", 520, 1, 2, 0, 0, 0, 0, 0, False, False, False, False, 2, 0, "2 uses"),
     ],
 }
 
@@ -1004,6 +1006,7 @@ for _p in PROGRAMS_BY_ID.values():
         _p.action_sleaze,
         _p.action_extract,
         _p.action_analyze,
+        _p.action_fade,
     )
     if _p.uses_per_fight == 0:
         if any(_action_fields):
@@ -1014,7 +1017,7 @@ for _p in PROGRAMS_BY_ID.values():
         if sum(bool(f) for f in _action_fields) != 1:
             raise ValueError(
                 f"{_p.id}: an action program must set exactly one of "
-                "action_damage/action_skip_ice/action_sleaze/action_extract/action_analyze"
+                "action_damage/action_skip_ice/action_sleaze/action_extract/action_analyze/action_fade"
             )
 
 # A HOSPITAL (corpmap.LocationKind.HOSPITAL) heals over time, not on the spot: each day
