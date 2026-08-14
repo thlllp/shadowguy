@@ -18,6 +18,7 @@ from shadowguy.matrix import (
     ATTACK_SKILL,
     EXTRACT_SKILL,
     MIN_READY_CYBERCOMBAT,
+    SECURITY_FLOOR,
     SECURITY_HOSTILE_THRESHOLD,
     SECURITY_PER_FAILED_EXTRACT,
     MatrixActionKind,
@@ -516,6 +517,57 @@ def test_icebreaker_deals_guaranteed_no_roll_damage_and_stays_offered_untracked(
     # still offered afterward, with no charge count in its label
     action_again = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
     assert "unlimited" in action_again.label.lower()
+
+
+# --- Fade (Program.action_fade) ---------------------------------------------------
+
+
+def test_fade_is_the_priciest_program_and_charge_capped():
+    fade = PROGRAMS_BY_ID["fade"]
+    assert fade.uses_per_fight > 0  # never unlimited -- see SECURITY_FLOOR's note
+    assert fade.price > max(p.price for p in PROGRAMS_BY_ID.values() if p.id != "fade")
+
+
+def test_fade_lowers_security_with_no_roll_and_spends_a_charge():
+    program = PROGRAMS_BY_ID["fade"]
+    c = _char(deck_id="burner_deck", installed_programs=[program.id])
+    state = start_matrix(c, (ICE_BY_ID["black_ice"],), Drop.NONE, random.Random(0))
+    state.security = SECURITY_HOSTILE_THRESHOLD + 1
+    before = state.security
+    action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
+    # Any rng at all: a fade is unrolled, so the result can't depend on the dice.
+    take_matrix_turn(state, action, random.Random(7))
+    assert state.security == before - program.action_fade
+    assert state.program_uses[program.id] == program.uses_per_fight - 1
+
+
+def test_fade_floors_at_zero_rather_than_going_negative():
+    program = PROGRAMS_BY_ID["fade"]
+    c = _char(deck_id="burner_deck", installed_programs=[program.id])
+    state = start_matrix(c, (ICE_BY_ID["black_ice"],), Drop.NONE, random.Random(0))
+    state.security = 0.0
+    action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
+    take_matrix_turn(state, action, random.Random(0))
+    assert state.security == SECURITY_FLOOR
+
+
+def test_fading_under_the_threshold_restores_neutral_node_openings():
+    """SECURITY_HOSTILE_THRESHOLD is re-read at every engagement, not latched -- which
+    is what makes a Fade worth carrying past the point security first crosses it."""
+    program = PROGRAMS_BY_ID["fade"]
+    c = _char(logic=6, matrix_rank=6, deck_id="zetatech_rig", installed_programs=[program.id])
+    run = start_matrix_run(c, _hand_built_network(), Drop.NONE, random.Random(1))
+    move_to(run, "slave", random.Random(1))
+    move_to(run, "ic", random.Random(1))
+    _clear_node(run, random.Random(1))
+    run.fight.security = SECURITY_HOSTILE_THRESHOLD
+    action = next(a for a in available_matrix_actions(c, run.fight.program_uses) if a.program is program)
+    take_matrix_turn(run.fight, action, random.Random(1))
+    assert run.fight.security < SECURITY_HOSTILE_THRESHOLD
+    log_before = len(run.fight.log)
+    move_to(run, "data", random.Random(1))
+    assert run.fight.log[log_before] == "ICE lights up ahead."
+    assert not any("already briefed" in line for line in run.fight.log[log_before:])
 
 
 # --- roster / tiers ---------------------------------------------------------

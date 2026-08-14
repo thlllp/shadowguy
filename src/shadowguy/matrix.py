@@ -105,19 +105,30 @@ SLEAZE_MAX_SHIFT = 0.28  # caps the swing so no outcome ever fully vanishes
 
 # Extract (Program.action_extract) has unlimited uses per fight (Program.uses_per_fight
 # == -1, see EXTRACT_UNLIMITED_USES) rather than a charge cap — MatrixState.security is
-# the cost instead: every missed Extract roll raises it, and it never comes back down
-# this fight. Uncapped on purpose (see MatrixState.security) — spamming Extract stays
+# the cost instead: every missed Extract roll raises it, and nothing but a charge of the
+# Fade program (Program.action_fade) takes it back off. Uncapped on purpose (see
+# MatrixState.security) — spamming Extract stays
 # free in charges but gets riskier the more it misses. First-slice numbers, not
 # balance-simulated — see CLAUDE.md's convention for flagging that.
 EXTRACT_UNLIMITED_USES = -1
 SECURITY_PER_FAILED_EXTRACT = 1
 
+# Fade (Program.action_fade) is the one thing that walks MatrixState.security back down —
+# scrubbing your own trail out of the host's logs. Charge-capped rather than unlimited
+# precisely because it's the only relief valve there is: security is otherwise a one-way
+# ratchet, and an unlimited Fade would make every other source of it free. No roll (same
+# category as action_damage), floored at SECURITY_FLOOR — you can get back to invisible
+# but never below it. First-slice numbers, not balance-simulated — see CLAUDE.md's
+# convention for flagging that.
+SECURITY_FLOOR = 0.0
+
 # Below this, a freshly engaged node's guardian plays it neutral — same as any ordinary
 # node hop, no opening bite. At or above it, security has tipped the whole network onto
 # alert: every *new* node you engage (MatrixRunState._enter_node) opens hostile
 # (Drop.ENEMY, the same opening bite an ambush-gone-wrong hands you), not just the run's
-# very first guardian. Security never comes back down mid-run, so once you cross this
-# there's no un-tripping it for the rest of the crawl. First-slice number, not
+# very first guardian. Checked fresh at every engagement rather than latched, so a Fade
+# (Program.action_fade) that drops security back under the line un-trips it for the nodes
+# after it — nothing else in the run can. First-slice number, not
 # balance-simulated — see CLAUDE.md's convention for flagging that.
 SECURITY_HOSTILE_THRESHOLD = 3
 
@@ -394,6 +405,8 @@ def _program_label(program: Program, uses_left: int | None) -> str:
         effect = "sleaze the ICE"
     elif program.action_extract:
         effect = "extract data (no soak)"
+    elif program.action_fade:
+        effect = f"-{program.action_fade} security"
     else:
         effect = "skip ICE"
     # uses_left is None only for an unlimited-use program (EXTRACT_UNLIMITED_USES) —
@@ -486,7 +499,8 @@ class MatrixState:
     # rolls (see _extract) add whole points on top of that. It makes every ICE hit
     # harder to dodge (see _ice_bite, which floors it to a whole die bonus) rather
     # than gating anything outright, so leaning on either source gets riskier instead
-    # of just running out.
+    # of just running out. The Fade program (Program.action_fade) is the sole thing
+    # that walks it back down, floored at SECURITY_FLOOR — everything else only adds.
     security: float = 0.0
 
     @property
@@ -739,9 +753,11 @@ def _use_program(state: MatrixState, program: Program, rng: random.Random) -> No
     """Spend one charge of an installed action program. action_damage lands with no
     roll — the whole point of a guaranteed program action is that it's not a check,
     unlike the ordinary ATTACK. action_skip_ice reuses ice_skip_rounds, the same
-    free-round mechanism Drop.PLAYER's clean breach already grants. action_sleaze and
-    action_extract are rolled, unlike the other two — see _sleaze/_extract. A program
-    with unlimited uses (uses_per_fight < 0) has no charge to spend."""
+    free-round mechanism Drop.PLAYER's clean breach already grants. action_fade is the
+    third unrolled one, and the only action anywhere that lowers MatrixState.security —
+    see SECURITY_FLOOR. action_sleaze and action_extract are rolled, unlike the other
+    three — see _sleaze/_extract. A program with unlimited uses (uses_per_fight < 0) has
+    no charge to spend."""
     if program.uses_per_fight > 0:
         state.program_uses[program.id] = state.program_uses.get(program.id, 0) - 1
     if program.action_damage:
@@ -757,6 +773,15 @@ def _use_program(state: MatrixState, program: Program, rng: random.Random) -> No
         _sleaze(state, program, rng)
     elif program.action_extract:
         _extract(state, program, rng)
+    elif program.action_fade:
+        before = state.security
+        state.security = max(SECURITY_FLOOR, state.security - program.action_fade)
+        scrubbed = before - state.security
+        state.log.append(
+            f"{program.name} rewrites the host's logs. Security falls {scrubbed:g} to {state.security:g}."
+            if scrubbed
+            else f"{program.name} finds nothing to scrub — the host has no trace of you yet."
+        )
 
 
 def _ice_phase(state: MatrixState, rng: random.Random) -> None:
