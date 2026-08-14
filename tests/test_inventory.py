@@ -4,6 +4,7 @@ from shadowguy.character import Character
 from shadowguy.inventory import (
     active_deck_entry,
     equipped_travel_reduction,
+    free_passive_slots,
     free_program_slots,
     install_program,
     installed_programs_for,
@@ -83,9 +84,18 @@ def test_use_consumable_heal_capped_once_per_day():
 
 ONE_SLOT_DECK = ITEMS_BY_ID["burner_deck"]
 TWO_SLOT_DECK = ITEMS_BY_ID["cracked_cyberdeck"]
-_CATALOG_PROGRAMS = sorted(PROGRAMS_BY_ID.values(), key=lambda p: p.id)
-PROGRAM_A = _CATALOG_PROGRAMS[0]
-PROGRAM_B = _CATALOG_PROGRAMS[1]
+# Action programs specifically: passives draw on Item.passive_slots, a separate pool,
+# so a capacity test built on one would be measuring the wrong budget. (Picking the
+# first two ids outright used to work, and stopped the day the catalog grew a passive
+# whose id sorts second.)
+_ACTION_PROGRAMS = sorted(
+    (p for p in PROGRAMS_BY_ID.values() if not p.is_passive), key=lambda p: p.id
+)
+PROGRAM_A = _ACTION_PROGRAMS[0]
+PROGRAM_B = _ACTION_PROGRAMS[1]
+PASSIVE_PROGRAM = sorted(
+    (p for p in PROGRAMS_BY_ID.values() if p.is_passive), key=lambda p: p.id
+)[0]
 
 
 def _char_with_deck(deck=ONE_SLOT_DECK, cash=100_000):
@@ -125,6 +135,45 @@ def test_install_program_installs_and_free_program_slots_updates():
     assert installed_programs_for(c.inventory[0]) == [PROGRAM_A]
 
 
+def test_every_deck_carries_a_passive_slot_on_top_of_its_program_slots():
+    """The floor, asserted over the whole catalog rather than the two decks these
+    tests happen to use: a deck with nowhere to put a passive would make the entire
+    passive branch unreachable on that rung of the ladder."""
+    decks = [item for item in ITEMS_BY_ID.values() if item.program_slots]
+    assert decks
+    assert all(deck.passive_slots >= 1 for deck in decks)
+    assert all(item.passive_slots == 0 for item in ITEMS_BY_ID.values() if not item.program_slots)
+
+
+def test_a_passive_does_not_consume_an_action_slot():
+    """The whole point of the separate pool. A Burner Deck has one program slot; a
+    passive installed on it must leave that slot free for an action program."""
+    c = _char_with_deck(ONE_SLOT_DECK)
+    buy_program(c, PASSIVE_PROGRAM.id)
+    buy_program(c, PROGRAM_A.id)
+    assert install_program(c, 0, PASSIVE_PROGRAM.id).startswith("Installed")
+    assert free_program_slots(ONE_SLOT_DECK, c.inventory[0]) == ONE_SLOT_DECK.program_slots
+    assert free_passive_slots(ONE_SLOT_DECK, c.inventory[0]) == 0
+    # ...and the action program still fits alongside it.
+    assert install_program(c, 0, PROGRAM_A.id).startswith("Installed")
+    assert set(c.inventory[0].installed_programs) == {PASSIVE_PROGRAM.id, PROGRAM_A.id}
+
+
+def test_a_second_passive_is_refused_even_with_action_slots_free(monkeypatch):
+    """The pools don't spill into each other in either direction: a full passive slot
+    can't borrow the action capacity sitting empty beside it."""
+    other = Program(id="test_passive_two", name="Test Passive Two", price=0, soak_bonus=1)
+    monkeypatch.setitem(PROGRAMS_BY_ID, other.id, other)
+    c = _char_with_deck(TWO_SLOT_DECK)  # 2 action slots, 1 passive
+    buy_program(c, PASSIVE_PROGRAM.id)
+    c.owned_programs.add(other.id)
+    install_program(c, 0, PASSIVE_PROGRAM.id)
+    message = install_program(c, 0, other.id)
+    assert "no free passive slots" in message.lower()
+    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 2  # untouched
+    assert other.id not in c.inventory[0].installed_programs
+
+
 def test_install_program_refuses_beyond_capacity():
     c = _char_with_deck(ONE_SLOT_DECK)  # 1 slot
     buy_program(c, PROGRAM_A.id)
@@ -139,7 +188,10 @@ def test_program_ram_cost_is_charged_against_capacity_not_just_program_count(mon
     """Every catalog program costs 1 RAM today, so this only bites once something
     doesn't -- built with a synthetic higher-cost program to prove free_program_slots
     actually sums ram_cost rather than just counting installed programs."""
-    heavy = Program(id="test_heavy", name="Test Heavy", price=0, ram_cost=2, integrity_bonus=1)
+    heavy = Program(
+        id="test_heavy", name="Test Heavy", price=0, ram_cost=2,
+        uses_per_fight=3, action_damage=1,  # action-shaped: this is a program_slots test
+    )
     monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
     c = _char_with_deck(TWO_SLOT_DECK)
     c.owned_programs.add(heavy.id)
@@ -156,7 +208,10 @@ def test_install_program_refuses_when_ram_cost_exceeds_partial_free_capacity(mon
     be positive (some room left) but still less than the incoming program's own
     ram_cost, and install_program must refuse that too, not just the exactly-full or
     completely-empty cases."""
-    heavy = Program(id="test_heavy", name="Test Heavy", price=0, ram_cost=2, integrity_bonus=1)
+    heavy = Program(
+        id="test_heavy", name="Test Heavy", price=0, ram_cost=2,
+        uses_per_fight=3, action_damage=1,  # action-shaped: this is a program_slots test
+    )
     monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
     c = _char_with_deck(TWO_SLOT_DECK)  # 2 slots
     buy_program(c, PROGRAM_A.id)

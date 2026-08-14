@@ -553,13 +553,16 @@ def test_each_catalog_passive_moves_its_own_formula_and_no_other(program_id, fie
         assert delta == expected, f"{program_id} moved {name} by {delta}, expected {expected}"
 
 
-def test_a_passive_fits_a_burner_deck_but_leaves_no_room_for_anything_else():
-    """The whole cost of a passive is the slot. A Burner Deck has exactly one, so
-    taking one means going in with no action program at all -- which is what keeps an
-    always-on bonus from being strictly better than a charge."""
+def test_a_passive_rides_along_with_a_full_burner_deck():
+    """A passive draws on Item.passive_slots, not program_slots -- so even the
+    one-slot Burner Deck runs a passive *and* an action program. Capacity is covered
+    properly in test_inventory.py; what this pins is that the matrix half sees the
+    passive's bonus while the action program is still installed beside it."""
     deck = ITEMS_BY_ID["burner_deck"]
-    assert deck.program_slots == 1
-    assert all(PROGRAMS_BY_ID[pid].ram_cost == 1 for pid in ("bulwark", "baffle", "lattice", "spike"))
+    assert deck.program_slots == 1 and deck.passive_slots == 1
+    bare = _char(logic=1, deck_id="burner_deck", installed_programs=["sleaze"])
+    both = _char(logic=1, deck_id="burner_deck", installed_programs=["sleaze", "bulwark"])
+    assert player_integrity(both) == player_integrity(bare) + PROGRAMS_BY_ID["bulwark"].integrity_bonus
 
 
 # --- Fade (Program.action_fade) ---------------------------------------------------
