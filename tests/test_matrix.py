@@ -541,14 +541,23 @@ def test_fade_lowers_security_with_no_roll_and_spends_a_charge():
     assert state.program_uses[program.id] == program.uses_per_fight - 1
 
 
-def test_fade_floors_at_zero_rather_than_going_negative():
+def test_fade_at_the_floor_costs_no_charge():
+    """Nothing to scrub means nothing spent. available_matrix_actions can't see
+    security, so it offers Fade regardless -- refunding the charge is what keeps an
+    inert one from eating half the program's run with no warning."""
     program = PROGRAMS_BY_ID["fade"]
     c = _char(deck_id="burner_deck", installed_programs=[program.id])
     state = start_matrix(c, (ICE_BY_ID["black_ice"],), Drop.NONE, random.Random(0))
     state.security = 0.0
     action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
     take_matrix_turn(state, action, random.Random(0))
-    assert state.security == SECURITY_FLOOR
+    assert state.security == SECURITY_FLOOR  # never negative
+    assert state.program_uses.get(program.id, program.uses_per_fight) == program.uses_per_fight
+    # Still fully charged for a real fade later in the run.
+    state.security = 4.0
+    action = next(a for a in available_matrix_actions(c, state.program_uses) if a.program is program)
+    take_matrix_turn(state, action, random.Random(0))
+    assert state.program_uses[program.id] == program.uses_per_fight - 1
 
 
 def test_fading_under_the_threshold_restores_neutral_node_openings():
