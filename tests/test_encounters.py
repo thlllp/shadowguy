@@ -16,6 +16,7 @@ from shadowguy.encounters import (
     toll_for,
 )
 from shadowguy.gangs import GANGS
+from shadowguy.shops import APPS_BY_ID, buy_app
 
 from helpers import ForcedChance
 
@@ -32,6 +33,21 @@ MISS = ForcedChance(0.99)  # 0.99 >= chance -> never triggers
 
 def test_toll_escalates_by_band():
     assert [toll_for(s) for s in (-1, -2, -3, -4)] == [40, 70, 100, 130]
+
+
+def test_toll_discount_is_subtracted_and_floored_at_zero():
+    assert toll_for(-1, discount=10) == 30
+    assert toll_for(-1, discount=1000) == 0
+
+
+def test_an_owned_streetline_app_discounts_the_toll():
+    c = Character(name="t", cash=100_000)
+    c.adjust_gang_standing(GANG_ID, -2)
+    streetline = APPS_BY_ID["app_streetline"]
+    buy_app(c, streetline.id)
+    enc = roll_gang_encounter(c, _territory(GANG_ID), HIT)
+    assert enc.toll == toll_for(-2, streetline.toll_discount)
+    assert enc.toll < toll_for(-2)
 
 
 def test_no_encounter_when_standing_is_non_negative():

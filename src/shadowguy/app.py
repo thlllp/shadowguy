@@ -31,6 +31,7 @@ from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.menu_screens import BuildSelectScreen, QuitMenu, TitleMenu
 from shadowguy.security import resolve_security_night
+from shadowguy.shops import owned_app_bonus
 from shadowguy.surveillance import resolve_surveillance_day
 
 
@@ -165,13 +166,18 @@ class ShadowguyApp(App):
         CorpScreen to preview it on the menu item. Free under an active security
         contract here, same as an owned home (corpmap.lodging_cost), and free outright
         in a corp-only game: there's no runner body paying for a flophouse, and travel
-        is a free reposition there for exactly that reason."""
+        is a free reposition there for exactly that reason. Cut further by an owned
+        NestFinder app (shops.owned_app_bonus's "lodging_discount"), the one place
+        that formula applies."""
         if self.corp_only:
             return 0
         character = self.character
         here = self.corp_map.territories[character.location_id]
         active_here = any(c.territory_id == character.location_id for c in character.security_contracts)
-        return 0 if active_here else lodging_cost(here)
+        if active_here:
+            return 0
+        discount = owned_app_bonus(character, "lodging_discount")
+        return round(lodging_cost(here) * (1 - discount))
 
     def _rest_hours(self) -> int:
         """How long the next Rest will actually run: REST_HOURS_COST, unless the

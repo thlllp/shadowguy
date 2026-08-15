@@ -1284,6 +1284,64 @@ def unload_on_disposal(character: "Character", item: Item) -> None:
 
 
 @dataclass(frozen=True)
+class AppStoreApp:
+    """A one-time-purchase Phone app (screens/info_screens.py's AppStoreScreen) — bought
+    once into Character.owned_apps, never installed/equipped/removed, its bonus applying
+    for the rest of the run just by being owned. No location or standing gate, unlike
+    every other catalog here: it's a phone app, reachable from anywhere the Phone is,
+    the same way Contacts/Web/Messages already are.
+
+    Exactly one of the three bonus fields is meaningfully set per app (enforced at
+    import, below): travel_reduction stacks additively with a Slot.VEHICLE item's own
+    (screens/corp_map_screen.py's _travel_hours), lodging_discount cuts a flat fraction
+    off ShadowguyApp.rest_cost's corpmap.lodging_cost call, toll_discount subtracts flat
+    eb off encounters.toll_for. Kept as three narrow fields rather than one generic
+    "effect" — there are only three consumers and each reads a different formula."""
+
+    id: str
+    name: str
+    price: int
+    tag: str = ""
+    travel_reduction: float = 0.0
+    lodging_discount: float = 0.0
+    toll_discount: int = 0
+
+
+# id, name, price, tag, travel_reduction, lodging_discount, toll_discount. First-slice
+# catalog, not balance-simulated.
+APP_STORE_CATALOG: list[AppStoreApp] = [
+    AppStoreApp("app_rideshare", "RideShare+", 500, "-10% travel time", travel_reduction=0.10),
+    AppStoreApp("app_nestfinder", "NestFinder", 400, "-25% lodging cost", lodging_discount=0.25),
+    AppStoreApp("app_streetline", "StreetLine", 450, "-25eb gang tolls", toll_discount=25),
+]
+APPS_BY_ID = {app.id: app for app in APP_STORE_CATALOG}
+
+if len(APPS_BY_ID) != len(APP_STORE_CATALOG):
+    raise ValueError("APP_STORE_CATALOG has duplicate ids")
+for _app in APP_STORE_CATALOG:
+    if sum(bool(bonus) for bonus in (_app.travel_reduction, _app.lodging_discount, _app.toll_discount)) != 1:
+        raise ValueError(f"{_app.id}: exactly one bonus field must be set")
+
+
+def owned_app_bonus(character: "Character", field_name: str) -> float:
+    """Summed bonus across every AppStoreApp `character` owns with `field_name` set --
+    the App Store's one generic reader, shared by every consumer instead of one
+    near-identical helper per field (travel_reduction/lodging_discount/toll_discount)."""
+    return sum(getattr(app, field_name) for app in APP_STORE_CATALOG if app.id in character.owned_apps)
+
+
+def buy_app(character: "Character", app_id: str) -> str:
+    app = APPS_BY_ID[app_id]
+    if app_id in character.owned_apps:
+        return f"Already own {app.name}."
+    if character.cash < app.price:
+        return f"Can't afford {app.name} ({app.price}eb)."
+    character.cash -= app.price
+    character.owned_apps.add(app_id)
+    return f"Bought {app.name} for {app.price}eb."
+
+
+@dataclass(frozen=True)
 class Ammo:
     """A box of rounds, sold at a WEAPON_SHOP. Its own small catalog rather than an Item
     (ammo is never equipped and takes no slot) or a Consumable (it isn't used in a single

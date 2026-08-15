@@ -298,6 +298,11 @@ class Character:
     # installed on any deck by itself — see inventory.install_program/InventoryItem.
     # installed_programs. Mirrors discovered_fixers' shape: a set of owned ids.
     owned_programs: set[str] = field(default_factory=set)
+    # App ids (shops.APPS_BY_ID) bought from the Phone's App Store — a one-time
+    # purchase, never installed/equipped/removed, its bonus (shops.owned_app_bonus)
+    # applying for the rest of the run just by being owned. Mirrors owned_programs'
+    # shape: a flat set of owned ids.
+    owned_apps: set[str] = field(default_factory=set)
     # stat name -> bonus from a used Chem, active until the next rest().
     temp_bonuses: dict[str, int] = field(default_factory=dict)
     # skill id (shadowguy.skills.SKILLS_BY_ID) -> rank. Every skill starts at

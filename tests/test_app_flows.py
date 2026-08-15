@@ -54,7 +54,7 @@ from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet
 from shadowguy.screens.burglary_screens import EntrancePickScreen
 from shadowguy.screens.combat_screen import CombatScreen
-from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen
+from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen, _travel_hours
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
     AP_COST,
@@ -118,6 +118,7 @@ from shadowguy.fishing import FISHING_HOURS_COST
 from shadowguy.scene import BurglaryStage, Outcome, SceneKind, TacticalStage
 from shadowguy.screens.info_screens import (
     AlarmClockScreen,
+    AppStoreScreen,
     ContactsScreen,
     CorpWebsiteScreen,
     CyberdeckScreen,
@@ -148,6 +149,7 @@ from shadowguy.shops import (
     MOD_CATALOG,
     SCAVENGE_MATERIALS,
     Slot,
+    buy_app,
     buy_item,
 )
 from shadowguy.workshop import CRAFT_RECIPES, SCAVENGE_HOURS_COST
@@ -1800,6 +1802,34 @@ def test_corp_only_travel_is_free_and_instant():
     run(body())
 
 
+def test_owned_rideshare_app_stacks_with_a_vehicles_own_travel_reduction():
+    character = Character(name="t", cash=100_000)
+    base = _travel_hours(character)
+    assert base == TRAVEL_HOURS_COST
+    buy_app(character, "app_rideshare")
+    with_app = _travel_hours(character)
+    assert with_app < base
+    assert buy_item(character, ITEMS_BY_ID["beater_bike"])
+    assert _travel_hours(character) < with_app
+
+
+def test_an_owned_nestfinder_app_discounts_rest_cost():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            priciest = max(app.corp_map.territories.values(), key=lodging_cost)
+            app.character.location_id = priciest.id
+            base = app.rest_cost()
+            assert base > 0
+            app.character.cash = 10_000
+            buy_app(app.character, "app_nestfinder")
+            assert "app_nestfinder" in app.character.owned_apps
+            assert app.rest_cost() < base
+
+    run(body())
+
+
 def test_corp_only_rest_waives_lodging_regardless_of_location():
     async def body():
         app = ShadowguyApp()
@@ -2655,7 +2685,7 @@ def test_corp_map_screen_corp_sections_stack_top_to_bottom():
     run(body())
 
 
-def test_phone_screen_lists_four_apps_in_a_grid():
+def test_phone_screen_lists_five_apps_in_a_grid():
     async def body():
         app = ShadowguyApp()
         async with app.run_test(size=(80, 60)) as pilot:
@@ -2669,6 +2699,7 @@ def test_phone_screen_lists_four_apps_in_a_grid():
                 "app_web",
                 "app_alarm",
                 "app_messages",
+                "app_app_store",
             ]
 
     run(body())
@@ -2687,6 +2718,7 @@ def test_phone_app_tiles_open_their_own_screens():
                 ("app_web", WebScreen),
                 ("app_alarm", AlarmClockScreen),
                 ("app_messages", MessagesScreen),
+                ("app_app_store", AppStoreScreen),
             ):
                 app.push_screen(PhoneScreen())
                 await pilot.pause()
@@ -3602,6 +3634,34 @@ def test_corp_website_screen_renders_faction_events_most_recent_first():
             assert f"Day 7 — Unveiled new technology: {TECHNOLOGIES[0].name}." in str(labels[0])
             territory_name = app.corp_map.territories[territory_id].name
             assert f"Day 3 — Expanded operations into {territory_name}." in str(labels[1])
+
+    run(body())
+
+
+def test_app_store_screen_buy_flow_spends_cash_and_marks_owned():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            app.character.cash = 10_000
+            cash_before = app.character.cash
+
+            app.push_screen(AppStoreScreen())
+            await pilot.pause()
+            app_list = app.screen.query_one("#app_store_list", ListView)
+            app_list.focus()
+            app_list.index = next(
+                i for i, item in enumerate(app_list.children) if item.id == "buy_app_rideshare"
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert "app_rideshare" in app.character.owned_apps
+            assert app.character.cash < cash_before
+            # Re-listed as owned, not offered for sale again.
+            app_list = app.screen.query_one("#app_store_list", ListView)
+            assert any(item.id == "owned_app_rideshare" for item in app_list.children)
 
     run(body())
 

@@ -24,12 +24,14 @@ from shadowguy.inventory import (
 from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
 from shadowguy.runners import RivalRunner
 from shadowguy.shops import (
+    APP_STORE_CATALOG,
     AmmoKind,
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
     PROGRAMS_BY_ID,
     Program,
     bonus_text,
+    buy_app,
     effective_item,
     loaded_rounds,
 )
@@ -623,10 +625,45 @@ class MessagesScreen(RefreshOnResume, BackScreen):
         await _replace_items(self.query_one("#messages_list", ListView), message_items)
 
 
+class AppStoreScreen(RefreshOnResume, BackScreen):
+    """Buy a one-time Phone app (shops.APP_STORE_CATALOG) into Character.owned_apps --
+    no location, no owner, no standing gate, unlike every other catalog screen: it's
+    reachable from the Phone itself, same as Contacts/Web/Messages."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield CharacterSheet(self.app.character)
+        yield ListView(id="app_store_list")
+        yield Footer()
+
+    async def _refresh(self) -> None:
+        character = self.app.character
+        items = []
+        for app in APP_STORE_CATALOG:
+            if app.id in character.owned_apps:
+                label = f"{app.name} — owned ({app.tag})"
+                items.append(ListItem(Static(label), id=f"owned_{app.id}"))
+                continue
+            label = f"Buy {app.name} — {app.price}eb ({app.tag})"
+            if character.cash < app.price:
+                label += " — can't afford"
+            items.append(ListItem(Static(label), id=f"buy_{app.id}"))
+        await _replace_items(self.query_one("#app_store_list", ListView), items)
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id.startswith("buy_"):
+            self.notify(buy_app(self.app.character, item_id.removeprefix("buy_")))
+            self.query_one(CharacterSheet).refresh()
+            await self._refresh()
+
+
 class PhoneScreen(BackScreen):
     """The runner's handheld — a phone's home screen: a 3-column grid of app
-    shortcuts (ContactsScreen, WebScreen, AlarmClockScreen, MessagesScreen), each
-    opening as its own screen rather than expanding inline."""
+    shortcuts (ContactsScreen, WebScreen, AlarmClockScreen, MessagesScreen,
+    AppStoreScreen), each opening as its own screen rather than expanding inline."""
 
     BINDINGS = MENU_BACK_BINDINGS
 
@@ -635,6 +672,7 @@ class PhoneScreen(BackScreen):
         ("web", "Web", WebScreen),
         ("alarm", "Alarm Clock", AlarmClockScreen),
         ("messages", "Messages", MessagesScreen),
+        ("app_store", "App Store", AppStoreScreen),
     ]
 
     CSS = """

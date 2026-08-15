@@ -8,6 +8,8 @@ from shadowguy.character import Character
 from shadowguy.checks import CRITICAL_MARGIN, pool_for_difficulty
 from shadowguy.shops import (
     AMMO_BY_KIND,
+    APP_STORE_CATALOG,
+    APPS_BY_ID,
     AmmoKind,
     CATALOG,
     ITEMS_BY_ID,
@@ -28,6 +30,7 @@ from shadowguy.shops import (
     WeaponModSlot,
     bonus_text,
     buy_ammo,
+    buy_app,
     buy_consumable,
     buy_item,
     buy_price,
@@ -35,6 +38,7 @@ from shadowguy.shops import (
     effective_item,
     grant_item,
     loaded_rounds,
+    owned_app_bonus,
     sell_item,
     sell_price,
     slot_usage,
@@ -220,6 +224,51 @@ def test_vehicle_catalog_has_the_three_expected_reductions():
     assert beater.travel_reduction == 0.10
     assert coupe.travel_reduction == 0.20
     assert towncar.travel_reduction == 0.25
+
+
+# --- App Store (shops.APP_STORE_CATALOG / buy_app / owned_app_bonus) ---
+
+RIDESHARE = APPS_BY_ID["app_rideshare"]
+
+
+def test_app_store_catalog_each_row_sets_exactly_one_bonus():
+    for app in APP_STORE_CATALOG:
+        set_bonuses = sum(bool(b) for b in (app.travel_reduction, app.lodging_discount, app.toll_discount))
+        assert set_bonuses == 1
+
+
+def test_buy_app_adds_to_owned_pool_and_charges_cash():
+    c = Character(name="t", cash=100_000)
+    before = c.cash
+    message = buy_app(c, RIDESHARE.id)
+    assert RIDESHARE.id in c.owned_apps
+    assert c.cash == before - RIDESHARE.price
+    assert RIDESHARE.name in message
+
+
+def test_buy_app_refuses_if_already_owned():
+    c = Character(name="t", cash=100_000)
+    buy_app(c, RIDESHARE.id)
+    before = c.cash
+    message = buy_app(c, RIDESHARE.id)
+    assert c.cash == before
+    assert "already own" in message.lower()
+
+
+def test_buy_app_refuses_when_cannot_afford():
+    c = Character(name="t", cash=0)
+    message = buy_app(c, RIDESHARE.id)
+    assert RIDESHARE.id not in c.owned_apps
+    assert "afford" in message.lower()
+
+
+def test_owned_app_bonus_sums_only_owned_apps_with_that_field_set():
+    c = Character(name="t", cash=100_000)
+    assert owned_app_bonus(c, "travel_reduction") == 0
+    buy_app(c, RIDESHARE.id)
+    assert owned_app_bonus(c, "travel_reduction") == RIDESHARE.travel_reduction
+    # Owning it doesn't leak into an unrelated field.
+    assert owned_app_bonus(c, "lodging_discount") == 0
 
 
 def test_pipe_pistol_is_the_smartlinked_weapon():
