@@ -114,7 +114,8 @@ def free_passive_slots(item: Item, entry: InventoryItem) -> int:
 def effective_ram_max(character: "Character", item: Item) -> int:
     """A deck's Item.ram_max, stretched by the runner's own Computer rank
     (RAM_SKILL/RAM_PER_SKILL_RANK) — the gear sets the floor, the skill raises it."""
-    return item.ram_max + skill_value(character, RAM_SKILL) // RAM_PER_SKILL_RANK
+    bonus = skill_value(character, RAM_SKILL) // RAM_PER_SKILL_RANK
+    return item.ram_max + max(0, bonus)
 
 
 def free_ram(character: "Character", item: Item, entry: InventoryItem) -> int:

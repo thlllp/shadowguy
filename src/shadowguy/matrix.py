@@ -188,8 +188,8 @@ _ICE_ROWS = (
     # security_per_round lever as Sentinel — Sentinel's own doc calls it "a guardian that
     # never bites integrity, just logs presence"; a spider is that, flavored human, and
     # (Program.detect) unconditionally flagged once revealed.
-    ("spider_watcher", "Spider (Watcher)", 5, 1, 11, 1, 1, 0.4, True),
-    ("spider_handler", "Spider (Handler)", 7, 2, 13, 2, 2, 0.5, True),
+    ("spider_watcher", "Spider (Watcher)", 5, 0, 11, 0, 1, 0.4, True),
+    ("spider_handler", "Spider (Handler)", 7, 0, 13, 0, 2, 0.5, True),
 )
 
 ICE = [Ice(*row) for row in _ICE_ROWS]
