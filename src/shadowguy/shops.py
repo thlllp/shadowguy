@@ -1297,8 +1297,8 @@ class AppStoreApp:
     every other catalog here: it's a phone app, reachable from anywhere the Phone is,
     the same way Contacts/Web/Messages already are.
 
-    Exactly one of the six effect fields is meaningfully set per app (enforced at
-    import, below) — five numeric bonuses plus job_alert, a reveal flag rather than a
+    Exactly one of the ten effect fields is meaningfully set per app (enforced at
+    import, below) — nine numeric bonuses plus job_alert, a reveal flag rather than a
     formula input (the same "one field carved out of the numeric shape" exception
     Program.detect already sets for a passive program). Kept as narrow fields rather
     than one generic "effect" — each has exactly one consumer reading a different
@@ -1313,6 +1313,9 @@ class AppStoreApp:
     | standing_bonus | Character.adjust_local_standing/adjust_gang_standing, a positive-delta-only multiplier |
     | shop_discount | shops.buy_price, stacks additively with the standing discount |
     | job_alert | screens/info_screens.py's WebScreen Search list, reveals a job's best-case payout |
+    | xp_rep_bonus | Character.gain_experience/adjust_rep, a positive-delta-only multiplier |
+    | trust_bonus | Character.adjust_fixer_trust, a positive-delta-only multiplier |
+    | fatigue_reduction | Character.on_new_day's daily fatigue growth, a multiplier (never below 0) |
     """
 
     id: str
@@ -1326,6 +1329,9 @@ class AppStoreApp:
     standing_bonus: float = 0.0
     shop_discount: float = 0.0
     job_alert: bool = False
+    xp_rep_bonus: float = 0.0
+    trust_bonus: float = 0.0
+    fatigue_reduction: float = 0.0
 
 
 _APP_EFFECT_FIELDS = (
@@ -1336,6 +1342,9 @@ _APP_EFFECT_FIELDS = (
     "standing_bonus",
     "shop_discount",
     "job_alert",
+    "xp_rep_bonus",
+    "trust_bonus",
+    "fatigue_reduction",
 )
 
 # id, name, price, tag, then one of the effect fields above. First-slice catalog, not
@@ -1343,13 +1352,16 @@ _APP_EFFECT_FIELDS = (
 APP_STORE_CATALOG: list[AppStoreApp] = [
     AppStoreApp("app_rideshare", "RideShare+", 250, "-15% travel time", travel_reduction=0.15),
     AppStoreApp("app_nestfinder", "NestFinder", 200, "-35% lodging cost", lodging_discount=0.35),
-    AppStoreApp("app_streetline", "StreetLine", 225, "-35eb gang tolls", toll_discount=35),
+    AppStoreApp("app_streetline", "StreetLine", 225, "-50eb gang tolls", toll_discount=50),
     AppStoreApp(
-        "app_ghostline", "Ghostline", 250, "-5pp corp detection chance", detection_reduction=0.05
+        "app_ghostline", "Ghostline", 250, "-8pp corp detection chance", detection_reduction=0.08
     ),
-    AppStoreApp("app_networker", "Networker", 250, "+20% standing gained", standing_bonus=0.20),
-    AppStoreApp("app_bankroll", "BankRoll", 300, "-8% shop prices", shop_discount=0.08),
-    AppStoreApp("app_gigfeed", "GigFeed", 200, "shows a job's best payout", job_alert=True),
+    AppStoreApp("app_networker", "Networker", 250, "+35% standing gained", standing_bonus=0.35),
+    AppStoreApp("app_bankroll", "BankRoll", 300, "-14% shop prices", shop_discount=0.14),
+    AppStoreApp("app_gigfeed", "GigFeed", 150, "shows a job's best payout", job_alert=True),
+    AppStoreApp("app_portfolio", "Portfolio", 275, "+20% XP and rep gained", xp_rep_bonus=0.20),
+    AppStoreApp("app_rolodex", "Rolodex", 225, "+25% fixer trust gained", trust_bonus=0.25),
+    AppStoreApp("app_calmmind", "CalmMind", 250, "-30% daily fatigue buildup", fatigue_reduction=0.30),
 ]
 APPS_BY_ID = {app.id: app for app in APP_STORE_CATALOG}
 

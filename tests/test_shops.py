@@ -7,6 +7,7 @@ import pytest
 from shadowguy.character import Character
 from shadowguy.checks import CRITICAL_MARGIN, pool_for_difficulty
 from shadowguy.shops import (
+    _APP_EFFECT_FIELDS,
     AMMO_BY_KIND,
     APP_STORE_CATALOG,
     APPS_BY_ID,
@@ -232,17 +233,8 @@ RIDESHARE = APPS_BY_ID["app_rideshare"]
 
 
 def test_app_store_catalog_each_row_sets_exactly_one_bonus():
-    fields = (
-        "travel_reduction",
-        "lodging_discount",
-        "toll_discount",
-        "detection_reduction",
-        "standing_bonus",
-        "shop_discount",
-        "job_alert",
-    )
     for app in APP_STORE_CATALOG:
-        set_bonuses = sum(bool(getattr(app, field)) for field in fields)
+        set_bonuses = sum(bool(getattr(app, field)) for field in _APP_EFFECT_FIELDS)
         assert set_bonuses == 1
 
 

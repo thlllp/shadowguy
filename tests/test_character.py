@@ -296,6 +296,47 @@ def test_an_owned_networker_app_does_not_soften_a_standing_loss():
     assert c.gang_standing_with("gang_x") == -10
 
 
+def test_an_owned_portfolio_app_boosts_xp_and_rep_gains_only():
+    portfolio = APPS_BY_ID["app_portfolio"]
+    c = Character(name="t", cash=100_000)
+    buy_app(c, portfolio.id)
+    c.gain_experience(10)
+    c.adjust_rep(10)
+    assert c.experience == round(10 * (1 + portfolio.xp_rep_bonus))
+    assert c.rep == round(10 * (1 + portfolio.xp_rep_bonus))
+    c.adjust_rep(-10)
+    assert c.rep == round(10 * (1 + portfolio.xp_rep_bonus)) - 10
+
+
+def test_an_owned_rolodex_app_boosts_fixer_trust_gains_only():
+    rolodex = APPS_BY_ID["app_rolodex"]
+    c = Character(name="t", cash=100_000)
+    buy_app(c, rolodex.id)
+    c.adjust_fixer_trust("fixer_x", 10)
+    assert c.trust_with("fixer_x") == round(10 * (1 + rolodex.trust_bonus))
+    c.adjust_fixer_trust("fixer_x", -100)
+    assert c.trust_with("fixer_x") == round(10 * (1 + rolodex.trust_bonus)) - 100
+
+
+def test_an_owned_calmmind_app_softens_daily_fatigue_growth():
+    """A single overdue tick's gain (1) rounds the same with or without the
+    discount, so this compounds a few ticks (like test_fatigue_growth_compounds)
+    until the reduction is big enough to show up."""
+    calmmind = APPS_BY_ID["app_calmmind"]
+    without = Character(name="t")
+    without.elapsed_hours = FATIGUE_GRACE_HOURS + 1
+
+    with_app = Character(name="t", cash=100_000)
+    buy_app(with_app, calmmind.id)
+    with_app.elapsed_hours = FATIGUE_GRACE_HOURS + 1
+
+    for _ in range(6):
+        without.on_new_day(without.day)
+        with_app.on_new_day(with_app.day)
+
+    assert with_app.fatigue < without.fatigue
+
+
 def test_advantage_bank_is_per_job_and_consumed_once():
     c = Character(name="t")
     assert c.advantage_for("job_1") == 0
