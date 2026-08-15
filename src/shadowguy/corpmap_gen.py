@@ -4,7 +4,8 @@ Everything here is generation-time only — the grid the city is a blob on, grow
 that blob (`_grow_region`), wiring it up (`_connect`), racing one contiguous bloc
 per faction across it (`_grow_blocs`), scattering gang turf, planting the out-of-band
 places every map needs exactly so many of (`_plan_injections`: hospitals, HQs,
-research facilities, academies, gang dens, junkyards, docks, slums, outskirts), and naming every district,
+research facilities, academies, gang dens, junkyards, docks, slums, outskirts, Amy's
+Place and the other two guaranteed unique bars), and naming every district,
 storefront and person in one.
 
 The arrow points one way: this imports `corpmap` for the model it fills in, and
@@ -504,6 +505,28 @@ def _make_amys_place(territory_id: str, rng: random.Random) -> Location:
     )
 
 
+# Two more guaranteed unique bars, one per map each, same footing as Amy's Place —
+# except plain LocationKind.BAR, since neither is tied to a fixer (Amy's Place is the
+# one exception create_fixers seats a fixer at). A fixed name each rather than the
+# usual prefix+suffix roll (_unique_location_name), the same way Amy's Place's name
+# is fixed. (id_slug, name) pairs, id_slug used to build the Location id.
+SPECIAL_BARS = (("blue_dolphin", "The Blue Dolphin"), ("dorothys", "Dorothy's"))
+SPECIAL_BARS_BY_SLUG = dict(SPECIAL_BARS)
+
+
+def _make_special_bar(territory_id: str, id_slug: str, rng: random.Random) -> Location:
+    """One of SPECIAL_BARS: a guaranteed unique LocationKind.BAR with a fixed name,
+    placed out of band like Amy's Place — but ordinary bar characters
+    (_make_characters), since nothing seats a specific fixer here."""
+    location_id = f"{territory_id}_{id_slug}"
+    return Location(
+        id=location_id,
+        name=SPECIAL_BARS_BY_SLUG[id_slug],
+        kind=LocationKind.BAR,
+        characters=_make_characters(location_id, LocationKind.BAR, rng),
+    )
+
+
 ENCAMPMENT_ROLES = ("squatter", "street dweller", "encampment elder", "tent resident")
 
 
@@ -675,6 +698,7 @@ class _InjectionPlan:
     junkyard_ids: set[str]
     docks_ids: set[str]
     amys_place_id: str
+    special_bar_ids: dict[str, str]
     slum_ids: set[str]
     outskirts_ids: set[str]
 
@@ -702,12 +726,28 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         raise ValueError("_plan_injections: no neutral tile left for Amy's Place")
     amys_place_id = rng.choice(amy_candidates)
 
+    # The other two guaranteed unique bars (SPECIAL_BARS): reserved right alongside
+    # Amy's Place, same neutral pool, minus Amy's Place's own tile and each other.
+    special_bar_candidates = [tid for tid in amy_candidates if tid != amys_place_id]
+    if len(special_bar_candidates) < len(SPECIAL_BARS):
+        raise ValueError(
+            f"_plan_injections: only {len(special_bar_candidates)} neutral tiles left "
+            f"for {len(SPECIAL_BARS)} special bars"
+        )
+    special_bar_ids = dict(
+        zip(
+            rng.sample(special_bar_candidates, len(SPECIAL_BARS)),
+            (id_slug for id_slug, _ in SPECIAL_BARS),
+            strict=True,
+        )
+    )
+
     # Slums: exactly SLUM_COUNT neutral territories, inhabited entirely by houseless
     # people in encampments — no shops, no gang presence. Picked from the same neutral
     # pool as Amy's Place, minus gang turf (a slum can't also be gang ground).
     slum_candidates = [
         tid for tid in amy_candidates
-        if tid != amys_place_id and tid not in gang_ids
+        if tid != amys_place_id and tid not in special_bar_ids and tid not in gang_ids
     ]
     if len(slum_candidates) < SLUM_COUNT:
         raise ValueError(
@@ -723,7 +763,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         tid for tid in neutral_ids
         if _on_grid_edge(id_to_cell[tid])
         and tid not in hospital_ids and tid not in den_ids
-        and tid != amys_place_id and tid not in slum_ids
+        and tid != amys_place_id and tid not in special_bar_ids and tid not in slum_ids
         and tid not in gang_ids
     ]
     if len(outskirts_candidates) < OUTSKIRTS_COUNT:
@@ -734,7 +774,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
     outskirts_ids = set(rng.sample(outskirts_candidates, OUTSKIRTS_COUNT))
 
     # Junkyards draw from neutral ground only, and skip any tile already reserved for
-    # a hospital, gang den, Amy's Place or a slum: those already stack to the
+    # a hospital, gang den, Amy's Place, a special bar or a slum: those already stack to the
     # reserved-slot ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
     # MIN_LOCATIONS_PER_TERRITORY == 2) — a third reservation on the same tile would
     # make generate_corp_map's `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop
@@ -742,7 +782,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
     junkyard_candidates = [
         tid for tid in neutral_ids
         if tid not in hospital_ids and tid not in den_ids
-        and tid != amys_place_id and tid not in slum_ids
+        and tid != amys_place_id and tid not in special_bar_ids and tid not in slum_ids
         and tid not in outskirts_ids
     ]
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
@@ -783,6 +823,7 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         junkyard_ids=junkyard_ids,
         docks_ids=docks_ids,
         amys_place_id=amys_place_id,
+        special_bar_ids=special_bar_ids,
         slum_ids=slum_ids,
         outskirts_ids=outskirts_ids,
     )
@@ -830,6 +871,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid in plan.junkyard_ids)
             + (tid in plan.docks_ids)
             + (tid == plan.amys_place_id)
+            + (tid in plan.special_bar_ids)
         )
         if is_slum:
             count = 0
@@ -872,6 +914,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     for tid in plan.slum_ids:
         territories[tid].locations.append(_make_encampment(tid, rng, used_names))
     territories[plan.amys_place_id].locations.append(_make_amys_place(plan.amys_place_id, rng))
+    for tid, id_slug in plan.special_bar_ids.items():
+        territories[tid].locations.append(_make_special_bar(tid, id_slug, rng))
     for tid, faction_id in plan.hq_ids.items():
         territories[tid].locations.append(_make_hq(tid, FACTIONS_BY_ID[faction_id], rng))
     for tid, faction_id in plan.research_ids.items():
