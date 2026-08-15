@@ -469,3 +469,31 @@ def test_apply_outcome_ignores_a_security_delta_with_no_target_territory(corp_ma
     before = {tid: t.modifiers[TerritoryModifier.SECURITY] for tid, t in corp_map.territories.items()}
     apply_outcome(Character(name="t"), Outcome(text="", security_delta=-1), scene, corp_map)
     assert {tid: t.modifiers[TerritoryModifier.SECURITY] for tid, t in corp_map.territories.items()} == before
+
+
+def test_apply_outcome_tallies_a_grudge_on_negative_standing(corp_map):
+    """A job that sours the player's standing with a faction is what rivals.py's
+    gang-bribe trigger counts as a hit landed on that faction."""
+    faction_id = FACTIONS[0].id
+    scene = Scene(
+        id="s",
+        title="t",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        target_faction_id=faction_id,
+    )
+    apply_outcome(Character(name="t"), Outcome(text="", standing_delta=-2), scene, corp_map)
+    assert corp_map.faction_grudge[faction_id] == 1
+    apply_outcome(Character(name="t"), Outcome(text="", standing_delta=-2), scene, corp_map)
+    assert corp_map.faction_grudge[faction_id] == 2
+
+
+def test_apply_outcome_does_not_tally_a_grudge_on_positive_standing(corp_map):
+    faction_id = FACTIONS[1].id  # a faction untouched by the negative-delta test above
+    scene = Scene(
+        id="s",
+        title="t",
+        stages={"start": Stage(id="start", prompt="p", choices=[])},
+        target_faction_id=faction_id,
+    )
+    apply_outcome(Character(name="t"), Outcome(text="", standing_delta=2), scene, corp_map)
+    assert faction_id not in corp_map.faction_grudge

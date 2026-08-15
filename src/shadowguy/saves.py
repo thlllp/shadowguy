@@ -274,7 +274,7 @@ SAVE_SUFFIX = ".save"
 # Sanctuary bloc and its CorpMap.relations (seeded from relations.ENTITY_IDS at
 # generation) holds no faction_sanctuary pair at all, so any relations.relation lookup
 # reaching that id would KeyError on a bare dict index.
-SAVE_VERSION = 71
+SAVE_VERSION = 72
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller.
