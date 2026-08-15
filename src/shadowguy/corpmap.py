@@ -268,6 +268,11 @@ class CorpMap:
     # Hand-built test fixtures that don't care about faction/gang standing can omit
     # this; corpmap_gen.generate_corp_map always fills it via generate_relations.
     relations: Relations = field(default_factory=dict)
+    # Per-faction tally of jobs that have landed a negative standing_delta on
+    # them (scene.apply_outcome) — a rough "how many times has this runner hit
+    # us" count. rivals.resolve_rival_day reads and resets it when a faction
+    # bribes a gang in retaliation; nothing else consumes it.
+    faction_grudge: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for territory in self.territories.values():

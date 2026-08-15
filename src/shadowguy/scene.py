@@ -428,6 +428,10 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene, corp_map
         shift = standing_shift(scene.target_faction_id, outcome.standing_delta)
         for faction_id, delta in shift.items():
             character.adjust_standing(faction_id, delta)
+        if outcome.standing_delta < 0 and scene.target_faction_id is not None:
+            corp_map.faction_grudge[scene.target_faction_id] = (
+                corp_map.faction_grudge.get(scene.target_faction_id, 0) + 1
+            )
     if outcome.fixer_trust_delta:
         character.adjust_fixer_trust(scene.target_fixer_id, outcome.fixer_trust_delta)
     if outcome.local_standing_delta:

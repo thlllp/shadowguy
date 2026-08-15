@@ -27,11 +27,14 @@ from shadowguy.corp_turn import TECHNOLOGIES, FactionEvent
 from shadowguy.corpmap import CorpMap, Location, LocationKind, Territory
 from shadowguy.factions import FACTIONS
 from shadowguy.fixer import Fixer, JobOffer, expire_offers
+from shadowguy.gangs import GANGS
 from shadowguy.jobs import JobTiming
 from shadowguy.rivals import (
     AI_GARRISON_CAP,
     AI_TERRITORIES_PER_ATTACKER,
     EXPANSION_CHANCE,
+    GRUDGE_BRIBE_GANG_STANDING_DELTA,
+    GRUDGE_BRIBE_THRESHOLD,
     MIN_AI_ATTACK_FORCE,
     RECOVERY_DAYS,
     RIVAL_RESEARCH_CHANCE,
@@ -42,6 +45,7 @@ from shadowguy.rivals import (
     RunnerState,
     _attack_force,
     _pick_attack_target,
+    _pick_bribe_gang,
     _reinforce,
     resolve_rival_day,
 )
@@ -603,6 +607,52 @@ def test_pick_attack_target_falls_back_without_relations():
     having none rather than raising on a missing pair."""
     corp_map = _contested_map()
     assert _pick_attack_target(corp_map, IRONCLAD, ["ghost_home"], None, random.Random(0)) == "ghost_home"
+
+
+def test_relations_bias_which_gang_a_faction_bribes():
+    """The mirror of test_relations_bias_which_rival_a_faction_moves_on: a faction
+    reaches for the gang it already gets on with, not one it dislikes."""
+    relations = {frozenset((IRONCLAD, gang.id)): 0 for gang in GANGS}
+    relations[frozenset((IRONCLAD, "gang_splice_row"))] = 2  # liked -> weight 4
+    relations[frozenset((IRONCLAD, "gang_undertow"))] = -2  # disliked -> weight 0 -> floored 1
+    rng = random.Random(0)
+    picks = [_pick_bribe_gang(IRONCLAD, relations, rng) for _ in range(1000)]
+    assert picks.count("gang_splice_row") > picks.count("gang_undertow") * 3
+
+
+def test_pick_bribe_gang_falls_back_without_relations():
+    rng = random.Random(0)
+    assert _pick_bribe_gang(IRONCLAD, None, rng) in {g.id for g in GANGS}
+
+
+def test_a_faction_below_the_grudge_threshold_never_bribes():
+    corp_map = _map()
+    corp_map.faction_grudge[IRONCLAD] = GRUDGE_BRIBE_THRESHOLD - 1
+    character = Character(name="t")
+    actions = resolve_rival_day(character, corp_map, day=1, rng=HIT)
+    assert _faction_action(actions, IRONCLAD).bribe is None
+    assert character.gang_standing == {}
+
+
+def test_a_faction_past_the_grudge_threshold_bribes_a_gang_on_a_hit():
+    corp_map = _map()
+    corp_map.faction_grudge[IRONCLAD] = GRUDGE_BRIBE_THRESHOLD
+    character = Character(name="t")
+    actions = resolve_rival_day(character, corp_map, day=1, rng=HIT)
+    action = _faction_action(actions, IRONCLAD)
+    assert action.bribe in {g.id for g in GANGS}
+    assert character.gang_standing_with(action.bribe) == -GRUDGE_BRIBE_GANG_STANDING_DELTA
+    assert corp_map.faction_grudge[IRONCLAD] == 0
+
+
+def test_a_faction_past_the_grudge_threshold_does_not_bribe_on_a_miss():
+    corp_map = _map()
+    corp_map.faction_grudge[IRONCLAD] = GRUDGE_BRIBE_THRESHOLD
+    character = Character(name="t")
+    actions = resolve_rival_day(character, corp_map, day=1, rng=MISS)
+    assert _faction_action(actions, IRONCLAD).bribe is None
+    assert corp_map.faction_grudge[IRONCLAD] == GRUDGE_BRIBE_THRESHOLD
+    assert character.gang_standing == {}
 
 
 def test_the_players_faction_takes_no_turn_but_is_still_attackable():

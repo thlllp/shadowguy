@@ -74,11 +74,18 @@ something to report for a corp the player isn't running. Both that and a
 territory claim get appended to a caller-owned `faction_events` blog log via
 corp_turn.log_faction_event.
 
-Leaf-ish: imports character/corpmap/corp_turn/factions/relations/runners, never
-scene or app. The fixer board is reached through a TYPE_CHECKING-only import (the same
-trick fixer.py itself uses for Character) — a runner only ever reads an
+Leaf-ish: imports character/corpmap/corp_turn/factions/gangs/relations/runners,
+never scene or app. The fixer board is reached through a TYPE_CHECKING-only import
+(the same trick fixer.py itself uses for Character) — a runner only ever reads an
 offer's timing and marks it taken, so nothing here needs fixer/scene at
 runtime.
+
+A faction that has taken enough hits from the player (CorpMap.faction_grudge,
+tallied by scene.apply_outcome whenever a job lands negative standing on it) can
+also, per day, bribe a gang into turning on the runner — see _pick_bribe_gang.
+It's the mirror of _pick_attack_target: instead of weighting toward a rival it
+already dislikes, it weights toward a gang it already gets on with (its hired
+muscle), and instead of taking ground it docks the runner's gang_standing.
 """
 
 import copy
@@ -106,6 +113,7 @@ from shadowguy.corpmap import (
     expansion_candidates,
 )
 from shadowguy.factions import FACTIONS
+from shadowguy.gangs import GANGS
 from shadowguy.relations import Relations, relation
 from shadowguy.runners import RIVAL_RUNNERS, RivalRunner, buy_gear, complete_job
 
@@ -145,6 +153,22 @@ MIN_AI_ATTACK_FORCE = 2
 # there's nobody else to hit. This is the first thing to read relations at all —
 # it was seeded at generation and consumed by nothing.
 RELATION_TARGET_BIAS = 3
+
+# --- Gang bribes --------------------------------------------------------------
+# A faction becomes eligible to bribe a gang against the runner once
+# CorpMap.faction_grudge (tallied by scene.apply_outcome) reaches this many
+# hits. First-slice number, not balance-simulated.
+GRUDGE_BRIBE_THRESHOLD = 3
+# Per eligible faction, per day.
+GRUDGE_BRIBE_CHANCE = 0.25
+# How hard the bribed gang turns on the runner — a straight hit to
+# Character.gang_standing, same axis encounters.py already reads for
+# toll-vs-attack odds.
+GRUDGE_BRIBE_GANG_STANDING_DELTA = 15
+# How much relations.py's seeded corp-vs-gang standing sways which gang gets
+# bribed. Mirrors RELATION_TARGET_BIAS, but a faction reaches for a gang it
+# already gets on with (its hired muscle) rather than one it dislikes.
+BRIBE_GANG_BIAS = 2
 
 # Per faction, per day; only rolled when a Technology is available to it (prereqs
 # met, not already "researched" — see rival_researched below). Deliberately not
@@ -294,6 +318,9 @@ class RivalAction:
     # onto) because expanding and attacking are separate rolls, not one choice —
     # a faction can do both on the same day.
     attack: AttackResult | None = None
+    # Faction only: the gang id it bribed against the runner today, if it did —
+    # see _pick_bribe_gang. Independent of the other rolls, same as attack.
+    bribe: str | None = None
 
 
 def _has_bar(corp_map: CorpMap, territory_id: str) -> bool:
@@ -345,6 +372,21 @@ def _pick_attack_target(
         for t in candidates
     ]
     return rng.choices(candidates, weights=weights)[0]
+
+
+def _pick_bribe_gang(faction_id: str, relations: Relations | None, rng: random.Random) -> str:
+    """Which gang a faction pays off to turn on the runner. Weighted by how well
+    it already gets on with each gang (relations.relation) — the mirror of
+    _pick_attack_target's dislike-first weighting, since a bribe reaches for
+    hired muscle you're already friendly with, not a stranger.
+
+    Weights are (relation + BRIBE_GANG_BIAS), floored at 1 so every gang stays
+    reachable. Falls back to a flat pick when the map carries no relations at
+    all (hand-built test fixtures omit them)."""
+    if relations is None:
+        return rng.choice(GANGS).id
+    weights = [max(1, relation(relations, faction_id, gang.id) + BRIBE_GANG_BIAS) for gang in GANGS]
+    return rng.choices(GANGS, weights=weights)[0].id
 
 
 def _faction_attack(
@@ -577,9 +619,23 @@ def resolve_rival_day(
                     from_faction_id=attack.defender_id,
                 ),
             )
+        bribe = None
+        if (
+            corp_map.faction_grudge.get(faction.id, 0) >= GRUDGE_BRIBE_THRESHOLD
+            and rng.random() < GRUDGE_BRIBE_CHANCE
+        ):
+            bribe = _pick_bribe_gang(faction.id, corp_map.relations or None, rng)
+            character.adjust_gang_standing(bribe, -GRUDGE_BRIBE_GANG_STANDING_DELTA)
+            corp_map.faction_grudge[faction.id] = 0
+
         actions.append(
             RivalAction(
-                kind="faction", actor_id=faction.id, day=day, territory_id=target_id, attack=attack
+                kind="faction",
+                actor_id=faction.id,
+                day=day,
+                territory_id=target_id,
+                attack=attack,
+                bribe=bribe,
             )
         )
 

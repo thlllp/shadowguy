@@ -292,6 +292,13 @@ class ShadowguyApp(App):
         ]
         if taken:
             self.notify(f"Word on the street: {', '.join(taken)}.")
+        for action in today_actions:
+            if action.bribe is not None:
+                faction = FACTIONS_BY_ID[action.actor_id]
+                gang = GANGS_BY_ID[action.bribe]
+                self.notify(
+                    f"{faction.name} paid off {gang.name} to turn on you.", severity="warning"
+                )
         if self.corp_state and not self._corp_day_tick(day, today_actions):
             return  # the corp was broken up; the run is over
 
