@@ -9,8 +9,10 @@ from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
 from shadowguy.inventory import (
     active_deck_entry,
+    effective_ram_max,
     free_passive_slots,
     free_program_slots,
+    free_ram,
     install_program,
     installed_programs_for,
     reload_weapon,
@@ -168,12 +170,15 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
         logic = item.bonuses.get("logic", 0)
         free_slots = free_program_slots(item, entry)
         free_passive = free_passive_slots(item, entry)
+        ram_max = effective_ram_max(character, item)
+        ram_free = free_ram(character, item, entry)
 
         result.append("  ")
         result.append(item.name, style="bold cyan")
         result.append(f"  \u2500\u2500  Logic +{logic}", style="dim")
         result.append(f"  \u2500\u2500  {free_slots}/{total} slots free", style="dim")
-        result.append(f"  \u2500\u2500  {free_passive}/{passive_total} passive\n\n", style="dim")
+        result.append(f"  \u2500\u2500  {free_passive}/{passive_total} passive", style="dim")
+        result.append(f"  \u2500\u2500  {ram_free}/{ram_max} RAM free\n\n", style="dim")
 
         SLOT_WIDTH = 26
 
@@ -279,7 +284,10 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
             tag = " [active]" if index == active_index else ""
             items.append(
                 ListItem(
-                    Static(f"{state} \u2014 {item.name}{tag} ({item.program_slots} slots)"),
+                    Static(
+                        f"{state} \u2014 {item.name}{tag} "
+                        f"({item.program_slots} slots, {effective_ram_max(character, item)} RAM)"
+                    ),
                     id=f"toggle_{index}",
                 )
             )
@@ -298,7 +306,7 @@ class CyberdeckScreen(EquipToggleMixin, RefreshOnResume, BackScreen):
                     if program:
                         items.append(
                             ListItem(
-                                Static(f"  \uff0b Install {program.name}"),
+                                Static(f"  \uff0b Install {program.name} ({program.ram_cost} RAM)"),
                                 id=f"install_{index}_{program_id}",
                             )
                         )

@@ -23,7 +23,7 @@ it, and reaching 0 is cyberpsychosis, which ends the run.
 
 Every Cyberware carries a `humanity_cost`, and the sum across everything
 installed can never exceed the ceiling -- the same "capacity caps a purchase"
-shape inventory.free_program_slots enforces for a deck's RAM. `humanity_cost`
+shape inventory.free_ram enforces for a deck's RAM. `humanity_cost`
 is a float (Smartlink costs 0.5) rather than an int -- same reason
 corp_turn.CorpState.research_points is a float once Brains 2's fractional rates
 enter the picture -- so free_humanity can land on a half-point remainder

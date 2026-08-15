@@ -192,9 +192,11 @@ class Item:
     # Short flavor tag shown in parentheses on shop/inventory listings, e.g.
     # "old tech" for a pre-war pipe pistol. Empty string = no tag.
     tag: str = ""
-    # How many Programs a cyberdeck can carry into the matrix at once. Only
-    # meaningful when slot is None (the "a None slot is a deck" convention
-    # inventory.equipped_deck_rating already relies on) — enforced at import.
+    # How many Programs a cyberdeck can carry into the matrix at once — a flat count,
+    # one whole slot per program regardless of what it costs to run (see Program.
+    # ram_cost for that second, separate cost). Only meaningful when slot is None (the
+    # "a None slot is a deck" convention inventory.equipped_deck_rating already relies
+    # on) — enforced at import.
     program_slots: int = 0
     # Whether this weapon carries a smartgun interface — only meaningful (and only
     # valid, enforced at import) on a gun (skill in FIREARM_SKILLS). combat.py's
@@ -212,6 +214,13 @@ class Item:
     # already folds damage — so read the effective item, not the catalog one.
     ammo: AmmoKind | None = None
     magazine: int = 0
+    # A deck's second, separate budget: not a slot count but a capacity pool, spent in
+    # Program.ram_cost per installed program (action and passive share this one pool,
+    # unlike program_slots/passive_slots) — see inventory.free_ram. Only meaningful on
+    # a deck (program_slots > 0) — enforced at import, same convention as program_slots
+    # itself. Set from the _DECK_RAM side table when CATALOG is built (the ammo/
+    # magazine pattern above), never written in a _CATALOG_ROWS tuple.
+    ram_max: int = 0
 
     @property
     def passive_slots(self) -> int:
@@ -496,8 +505,27 @@ def _with_ammo(item: Item) -> Item:
     return item if loading is None else replace(item, ammo=loading[0], magazine=loading[1])
 
 
+# A deck's Item.ram_max, keyed by id — the capacity Program.ram_cost draws against
+# (inventory.free_ram), separate from program_slots' flat per-program count. Roughly
+# double each deck's program_slots plus a little, so a full slot loadout of the
+# heavier catalog programs (ram_cost up to 3) still fits without maxing every slot on
+# the cheapest options. First-slice numbers, not balance-simulated — see CLAUDE.md's
+# convention for flagging that.
+_DECK_RAM: dict[str, int] = {
+    "pawned_deck": 3,
+    "burner_deck": 4,
+    "cracked_cyberdeck": 6,
+    "zetatech_rig": 10,
+}
+
+
+def _with_ram(item: Item) -> Item:
+    ram_max = _DECK_RAM.get(item.id)
+    return item if ram_max is None else replace(item, ram_max=ram_max)
+
+
 CATALOG: dict[LocationKind, list[Item]] = {
-    kind: [_with_ammo(Item(*row)) for row in rows] for kind, rows in _CATALOG_ROWS.items()
+    kind: [_with_ram(_with_ammo(Item(*row))) for row in rows] for kind, rows in _CATALOG_ROWS.items()
 }
 
 # Loot-only items: never stocked in any shop's buy catalog (ShopScreen only ever
@@ -543,6 +571,13 @@ if set(_WEAPON_AMMO) - set(ITEMS_BY_ID):
     raise ValueError(
         f"_WEAPON_AMMO names unknown items: {sorted(set(_WEAPON_AMMO) - set(ITEMS_BY_ID))}"
     )
+
+# Same reverse-direction guard as _WEAPON_AMMO's, for _DECK_RAM: a stale id here would
+# otherwise silently never apply (_with_ram's .get() swallows it), and the "a deck must
+# set ram_max" check above would then fire on the real deck row instead of pointing at
+# the typo.
+if set(_DECK_RAM) - set(ITEMS_BY_ID):
+    raise ValueError(f"_DECK_RAM names unknown items: {sorted(set(_DECK_RAM) - set(ITEMS_BY_ID))}")
 
 
 class WeaponModSlot(Enum):
@@ -889,6 +924,12 @@ for _item in ITEMS_BY_ID.values():
         raise ValueError(f"{_item.id}: program_slots is only valid on a deck (slot is None)")
     if _item.program_slots < 0:
         raise ValueError(f"{_item.id}: program_slots must be >= 0")
+    if _item.ram_max and not _item.program_slots:
+        raise ValueError(f"{_item.id}: ram_max is only valid on a deck (program_slots > 0)")
+    if _item.program_slots and not _item.ram_max:
+        raise ValueError(f"{_item.id}: a deck (program_slots > 0) must set ram_max")
+    if _item.ram_max < 0:
+        raise ValueError(f"{_item.id}: ram_max must be >= 0")
     if _item.smartlinked and _item.skill not in FIREARM_SKILLS:
         raise ValueError(f"{_item.id}: smartlinked is only valid on a gun ({sorted(FIREARM_SKILLS)})")
     # Ammo and magazine are all-or-nothing, and belong to exactly the ranged weapons.
@@ -965,6 +1006,13 @@ for _c in CONSUMABLES_BY_ID.values():
 class Program:
     """Software installed on a cyberdeck's program_slots, for use in matrix.py fights.
 
+    Two separate costs gate an install (inventory.install_program): one whole
+    program_slots/passive_slots slot regardless of size (a flat count — see Item.
+    program_slots), and ram_cost against the deck's own Item.ram_max (inventory.
+    free_ram, boosted by the runner's Computer skill) — a program that fits the slot
+    can still be too heavy for what RAM is left. Action and passive programs draw on
+    the same RAM pool even though they draw on different slot pools.
+
     uses_per_fight is what tells passive from active apart, derived rather than a
     separate kind field: 0 means the bonus fields below apply continuously while
     installed on the runner's active deck (matrix.active_deck_entry); nonzero means it
@@ -978,7 +1026,7 @@ class Program:
     id: str
     name: str
     price: int
-    ram_cost: int = 1  # how much of a deck's program_slots capacity this eats when installed
+    ram_cost: int = 1  # RAM this program eats from Item.ram_max, on top of its flat program_slots cost
     uses_per_fight: int = 0
     # Passive-only (meaningful when uses_per_fight == 0):
     integrity_bonus: int = 0
@@ -994,6 +1042,11 @@ class Program:
     action_fade: int = 0  # points of MatrixState.security scrubbed back off, no roll
     min_standing: int = 0
     tag: str = ""
+    # Passive, but not one of the numeric bonus fields above: unconditionally flags a
+    # spider-guarded node once revealed, and (skill-gated on Computer) also names the
+    # guardian — see matrix.py's _guardian_tag. Kept separate from integrity_bonus/etc
+    # since it's a reveal, not a formula input.
+    detect: bool = False
 
     @property
     def is_passive(self) -> bool:
@@ -1005,15 +1058,15 @@ class Program:
 
 # id, name, price, ram_cost, uses_per_fight, integrity_bonus, firewall_bonus, soak_bonus,
 # damage_bonus, action_damage, action_skip_ice, action_sleaze, action_extract,
-# action_analyze, action_fade, min_standing, tag. First-slice catalog, not yet
+# action_analyze, action_fade, min_standing, tag, detect. First-slice catalog, not yet
 # balance-simulated — see CLAUDE.md's convention for flagging that.
 _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
     LocationKind.COMPUTER_STORE: [
-        ("sleaze", "Sleaze", 320, 1, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, 0, "2 uses"),
-        ("extract", "Extract", 360, 1, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, 0, "unlimited"),
+        ("sleaze", "Sleaze", 320, 2, 2, 0, 0, 0, 0, 0, False, True, False, False, 0, 0, "2 uses"),
+        ("extract", "Extract", 360, 2, -1, 0, 0, 0, 0, 0, False, False, True, False, 0, 0, "unlimited"),
         ("analyze", "Analyze", 260, 1, 3, 0, 0, 0, 0, 0, False, False, False, True, 0, 0, "3 uses"),
-        ("icebreaker", "Icebreaker", 340, 1, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, 0, "unlimited"),
-        ("fade", "Fade", 520, 1, 2, 0, 0, 0, 0, 0, False, False, False, False, 2, 0, "2 uses"),
+        ("icebreaker", "Icebreaker", 340, 3, -1, 0, 0, 0, 0, 5, False, False, False, False, 0, 0, "unlimited"),
+        ("fade", "Fade", 520, 3, 2, 0, 0, 0, 0, 0, False, False, False, False, 2, 0, "2 uses"),
         # The passive half of the branch: no action row, no charges, the bonus just
         # folds into matrix.py's matching base formula for as long as the program is
         # installed. They ride in Item.passive_slots, a pool of their own that every
@@ -1026,10 +1079,30 @@ _PROGRAM_ROWS: dict[LocationKind, list[tuple]] = {
         # of BARE_JACK_DAMAGE. Not balance-simulated — tools/matrix_sim.py runs a
         # straight Attack loop and reads its numbers through matrix.py's own helpers,
         # so it *will* pick these up, but no pass has been run against them yet.
-        ("bulwark", "Bulwark", 420, 1, 0, 4, 0, 0, 0, 0, False, False, False, False, 0, 0, "+4 integrity"),
-        ("baffle", "Baffle", 380, 1, 0, 0, 2, 0, 0, 0, False, False, False, False, 0, 0, "+2 firewall"),
-        ("lattice", "Lattice", 460, 1, 0, 0, 0, 2, 0, 0, False, False, False, False, 0, 0, "+2 soak"),
-        ("spike", "Spike", 440, 1, 0, 0, 0, 0, 1, 0, False, False, False, False, 0, 0, "+1 damage"),
+        ("bulwark", "Bulwark", 420, 2, 0, 4, 0, 0, 0, 0, False, False, False, False, 0, 0, "+4 integrity"),
+        ("baffle", "Baffle", 380, 2, 0, 0, 2, 0, 0, 0, False, False, False, False, 0, 0, "+2 firewall"),
+        ("lattice", "Lattice", 460, 3, 0, 0, 0, 2, 0, 0, False, False, False, False, 0, 0, "+2 soak"),
+        ("spike", "Spike", 440, 2, 0, 0, 0, 0, 1, 0, False, False, False, False, 0, 0, "+1 damage"),
+        (
+            "detect",
+            "Detect",
+            400,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            False,
+            False,
+            False,
+            False,
+            0,
+            0,
+            "reveals guardians",
+            True,
+        ),
     ],
 }
 

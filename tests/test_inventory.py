@@ -1,11 +1,14 @@
 """Tests for inventory.py: equip state, cyberdeck programs, and using a consumable."""
 
+from helpers import character_with_skill_value
+
 from shadowguy.character import Character
 from shadowguy.inventory import (
     active_deck_entry,
     equipped_travel_reduction,
     free_passive_slots,
     free_program_slots,
+    free_ram,
     install_program,
     installed_programs_for,
     toggle_equip,
@@ -184,43 +187,65 @@ def test_install_program_refuses_beyond_capacity():
     assert "no free program slots" in message.lower()
 
 
-def test_program_ram_cost_is_charged_against_capacity_not_just_program_count(monkeypatch):
-    """Every catalog program costs 1 RAM today, so this only bites once something
-    doesn't -- built with a synthetic higher-cost program to prove free_program_slots
-    actually sums ram_cost rather than just counting installed programs."""
+def _char_with_deck_zero_computer(deck=ONE_SLOT_DECK, cash=100_000):
+    """Like _char_with_deck, but Computer forced to exactly 0 -- so
+    inventory.effective_ram_max(character, item) == item.ram_max, with no skill bonus
+    to account for. RAM tests need that determinism; the plain slot tests above don't
+    care, so they keep using the ordinary fresh Character."""
+    c = character_with_skill_value("computer", 0)
+    c.cash = cash
+    assert buy_item(c, deck)
+    return c
+
+
+def test_program_ram_cost_is_charged_against_ram_not_slots(monkeypatch):
+    """Program.ram_cost gates a deck's RAM budget (free_ram/Item.ram_max) -- a pool
+    separate from program_slots, which is now a flat one-slot-per-program count and
+    doesn't care how heavy a program is. Built with a synthetic program whose ram_cost
+    exactly fills TWO_SLOT_DECK's ram_max, to prove free_ram actually sums ram_cost
+    rather than free_program_slots absorbing it the way it used to."""
     heavy = Program(
-        id="test_heavy", name="Test Heavy", price=0, ram_cost=2,
+        id="test_heavy", name="Test Heavy", price=0, ram_cost=TWO_SLOT_DECK.ram_max,
         uses_per_fight=3, action_damage=1,  # action-shaped: this is a program_slots test
     )
     monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
-    c = _char_with_deck(TWO_SLOT_DECK)
+    c = _char_with_deck_zero_computer(TWO_SLOT_DECK)
+    entry = c.inventory[0]
     c.owned_programs.add(heavy.id)
-    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 2
+    assert free_program_slots(TWO_SLOT_DECK, entry) == 2
+    assert free_ram(c, TWO_SLOT_DECK, entry) == TWO_SLOT_DECK.ram_max
     install_program(c, 0, heavy.id)
-    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 0  # one ram_cost=2 program fills a 2-slot deck
+    assert free_program_slots(TWO_SLOT_DECK, entry) == 1  # one slot gone, flat count
+    assert free_ram(c, TWO_SLOT_DECK, entry) == 0  # ram_cost fully spent the RAM budget
     buy_program(c, PROGRAM_A.id)
     message = install_program(c, 0, PROGRAM_A.id)
-    assert "no free program slots" in message.lower()
+    assert "ram" in message.lower()
+    assert PROGRAM_A.id not in entry.installed_programs
+    assert free_program_slots(TWO_SLOT_DECK, entry) == 1  # the free slot was never the blocker
 
 
-def test_install_program_refuses_when_ram_cost_exceeds_partial_free_capacity(monkeypatch):
-    """The weaker, easier-to-miss case than "no room at all": free_program_slots can
-    be positive (some room left) but still less than the incoming program's own
-    ram_cost, and install_program must refuse that too, not just the exactly-full or
-    completely-empty cases."""
+def test_install_program_refuses_when_ram_cost_exceeds_partial_free_ram(monkeypatch):
+    """The weaker, easier-to-miss case than "no RAM at all": free_ram can be positive
+    (some room left) but still less than the incoming program's own ram_cost, and
+    install_program must refuse that too, not just the exactly-full or
+    completely-empty cases -- even though a program_slots slot is sitting free."""
     heavy = Program(
-        id="test_heavy", name="Test Heavy", price=0, ram_cost=2,
+        id="test_heavy", name="Test Heavy", price=0, ram_cost=TWO_SLOT_DECK.ram_max,
         uses_per_fight=3, action_damage=1,  # action-shaped: this is a program_slots test
     )
     monkeypatch.setitem(PROGRAMS_BY_ID, heavy.id, heavy)
-    c = _char_with_deck(TWO_SLOT_DECK)  # 2 slots
+    c = _char_with_deck_zero_computer(TWO_SLOT_DECK)  # 2 slots
+    entry = c.inventory[0]
     buy_program(c, PROGRAM_A.id)
-    install_program(c, 0, PROGRAM_A.id)  # uses 1 RAM, leaving 1 free
-    assert free_program_slots(TWO_SLOT_DECK, c.inventory[0]) == 1
+    install_program(c, 0, PROGRAM_A.id)  # spends PROGRAM_A.ram_cost, leaving some RAM free
+    free_before = free_ram(c, TWO_SLOT_DECK, entry)
+    assert 0 < free_before < heavy.ram_cost
+    assert free_program_slots(TWO_SLOT_DECK, entry) == 1  # a slot is free
     c.owned_programs.add(heavy.id)
-    message = install_program(c, 0, heavy.id)  # needs 2 RAM, only 1 free
-    assert "no free program slots" in message.lower()
-    assert heavy.id not in c.inventory[0].installed_programs
+    message = install_program(c, 0, heavy.id)  # needs more RAM than is left
+    assert "ram" in message.lower()
+    assert heavy.id not in entry.installed_programs
+    assert free_program_slots(TWO_SLOT_DECK, entry) == 1  # untouched by the RAM refusal
 
 
 def test_install_program_refuses_on_a_non_deck_item():
