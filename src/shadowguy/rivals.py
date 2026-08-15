@@ -41,7 +41,8 @@ their productive time (a job, legwork, or shopping), block 1 is next (the
 bar, or laying low), block 2 is always RESTING. What a runner is doing now
 depends on when you look, via RunnerState.activities (one RunnerActivity per
 block) and RunnerState.current(hour_of_day). Only block 0 can move them
-(LEGWORK wanders one hop, WORKING relocates to the job site) or touch
+(LEGWORK wanders one hop, weighted toward a bar via _pick_legwork_hop rather
+than a blind uniform pick; WORKING relocates to the job site) or touch
 anything outside this module; block 1 carries block 0's activity over
 unchanged when it was WORKING — a job can run long — otherwise rolls the bar
 against laying low. State lives in a caller-owned
@@ -90,6 +91,7 @@ muscle), and instead of taking ground it docks the runner's gang_standing.
 
 import copy
 import random
+from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
@@ -186,7 +188,7 @@ class RunnerActivity(StrEnum):
     rest stay put."""
 
     WORKING = "working"  # took a job off a fixer's board and is running it
-    LEGWORK = "legwork"  # asking around, casing ground — the old blind wander
+    LEGWORK = "legwork"  # asking around, casing ground — the wander, biased toward a bar
     SHOPPING = "shopping"  # spending their own cash up the runners.GEAR_LADDERS
     LAYING_LOW = "laying_low"  # off the grid for a block
     DRINKING = "drinking"  # at a bar in their current territory
@@ -323,8 +325,47 @@ class RivalAction:
     bribe: str | None = None
 
 
+_BAR_KINDS = (LocationKind.BAR, LocationKind.AMYS_PLACE)
+
+
 def _has_bar(corp_map: CorpMap, territory_id: str) -> bool:
-    return any(loc.kind is LocationKind.BAR for loc in corp_map.territories[territory_id].locations)
+    """Amy's Place counts as a bar here too — it's a unique fixer bar
+    (corpmap_gen._make_amys_place), just modelled as its own LocationKind so
+    Amy can be seated there unconditionally."""
+    return any(loc.kind in _BAR_KINDS for loc in corp_map.territories[territory_id].locations)
+
+
+def _distance_to_nearest_bar(corp_map: CorpMap) -> dict[str, int]:
+    """BFS hop-distance from every territory to its nearest bar territory
+    (_has_bar), over CorpMap's own connection graph — not the tactical grid,
+    which this module never touches. Multi-source: every bar territory starts
+    at distance 0. Feeds _pick_legwork_hop's gravitation bias; computed once
+    per day rather than once per runner."""
+    distances = {tid: 0 for tid in corp_map.territories if _has_bar(corp_map, tid)}
+    queue = deque(distances)
+    while queue:
+        current = queue.popleft()
+        for neighbor in corp_map.territories[current].connections:
+            if neighbor not in distances:
+                distances[neighbor] = distances[current] + 1
+                queue.append(neighbor)
+    return distances
+
+
+# How hard LEGWORK's random hop pulls toward the nearest bar. Each neighbor is
+# weighted (BAR_GRAVITY_BIAS - distance_to_nearest_bar), floored at 1 so a hop
+# leading away from every bar stays possible — a bias, not a beeline, the same
+# shape as RELATION_TARGET_BIAS/BRIBE_GANG_BIAS above.
+BAR_GRAVITY_BIAS = 3
+
+
+def _pick_legwork_hop(connections: list[str], bar_distances: dict[str, int], rng: random.Random) -> str:
+    """Which neighbor LEGWORK wanders to — runners gravitate toward a bar
+    without the wander stopping being a wander. A territory unreachable from
+    any bar (bar_distances has no entry) weights the same as one exactly
+    BAR_GRAVITY_BIAS hops out: floored to the same 1 either way."""
+    weights = [max(1, BAR_GRAVITY_BIAS - bar_distances.get(t, BAR_GRAVITY_BIAS)) for t in connections]
+    return rng.choices(connections, weights=weights)[0]
 
 
 def _faction_territories(corp_map: CorpMap, faction_id: str) -> list:
@@ -463,6 +504,7 @@ def _runner_turn(
     fixers: list["Fixer"],
     day: int,
     rng: random.Random,
+    bar_distances: dict[str, int],
 ) -> "JobOffer | None":
     """Resolve one runner's day across its three blocks, mutating `state` in
     place and returning the offer they took, if any — the caller needs the
@@ -479,7 +521,11 @@ def _runner_turn(
     touches anything outside this module — and falls back to legwork or
     shopping, which is also what decides whether they move. Block 1 carries a
     WORKING block 0 straight through (a job can run long) or rolls the bar
-    against laying low. Block 2 is always RESTING."""
+    against laying low. Block 2 is always RESTING.
+
+    bar_distances is the caller's _distance_to_nearest_bar(corp_map), computed
+    once per day rather than once per runner — LEGWORK's hop reads it to
+    gravitate toward a bar (_pick_legwork_hop)."""
     state.job_title = None
     if state.recovery_days > 0:
         state.recovery_days -= 1
@@ -508,7 +554,7 @@ def _runner_turn(
         elif block0 is RunnerActivity.LEGWORK:
             connections = corp_map.territories[state.territory_id].connections
             if connections:
-                state.territory_id = rng.choice(connections)
+                state.territory_id = _pick_legwork_hop(connections, bar_distances, rng)
 
     if block0 is RunnerActivity.WORKING:
         block1 = RunnerActivity.WORKING
@@ -652,6 +698,7 @@ def resolve_rival_day(
                     faction.id,
                     FactionEvent(kind="technology", day=day, technology_id=technology.id),
                 )
+    bar_distances = _distance_to_nearest_bar(corp_map)
     for runner in runners:
         # On your crew, dead, or in a cell: either way they aren't out working the city
         # today (Character.runner_available covers the last two).
@@ -661,7 +708,7 @@ def resolve_rival_day(
         if state is None:
             state = RunnerState(territory_id=rng.choice(list(corp_map.territories)))
             rival_runner_states[runner.id] = state
-        taken = _runner_turn(runner, state, corp_map, fixers, day, rng)
+        taken = _runner_turn(runner, state, corp_map, fixers, day, rng, bar_distances)
         actions.append(
             RivalAction(
                 kind="runner",

@@ -29,6 +29,7 @@ from shadowguy.corpmap_gen import (
     MIN_START_DEGREE,
     OUTSKIRTS_COUNT,
     SLUM_COUNT,
+    SPECIAL_BARS,
     TERRITORIES_PER_FACTION,
     TERRITORY_COUNT,
     TILES_PER_DOCKS,
@@ -310,6 +311,42 @@ def test_amys_place_never_shares_a_tile_with_a_junkyard_docks_hospital_or_gang_d
     assert LocationKind.DOCKS not in kinds
     assert LocationKind.HOSPITAL not in kinds
     assert LocationKind.GANG_DEN not in kinds
+
+
+def _special_bars(corp_map):
+    special_names = {name for _, name in SPECIAL_BARS}
+    return [
+        (territory, location)
+        for territory in corp_map.territories.values()
+        for location in territory.locations
+        if location.kind == LocationKind.BAR and location.name in special_names
+    ]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_exactly_one_of_each_special_bar_on_neutral_non_start_ground(seed):
+    corp_map = _generated_map(seed)
+    special_bars = _special_bars(corp_map)
+    assert sorted(location.name for _territory, location in special_bars) == sorted(
+        name for _, name in SPECIAL_BARS
+    )
+    for territory, _location in special_bars:
+        assert territory.owner == "neutral"
+        assert territory.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_special_bars_never_share_a_tile_with_amys_place_each_other_or_a_hospital(seed):
+    corp_map = _generated_map(seed)
+    amy_territory, _location = _amys_places(corp_map)[0]
+    special_bars = _special_bars(corp_map)
+    territory_ids = [territory.id for territory, _location in special_bars]
+    assert len(set(territory_ids)) == len(territory_ids)
+    for territory, _location in special_bars:
+        assert territory.id != amy_territory.id
+        kinds = {loc.kind for loc in territory.locations}
+        assert LocationKind.HOSPITAL not in kinds
+        assert LocationKind.GANG_DEN not in kinds
 
 
 @pytest.mark.parametrize("seed", SEEDS)

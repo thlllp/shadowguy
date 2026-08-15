@@ -32,6 +32,7 @@ from shadowguy.jobs import JobTiming
 from shadowguy.rivals import (
     AI_GARRISON_CAP,
     AI_TERRITORIES_PER_ATTACKER,
+    BAR_GRAVITY_BIAS,
     EXPANSION_CHANCE,
     GRUDGE_BRIBE_GANG_STANDING_DELTA,
     GRUDGE_BRIBE_THRESHOLD,
@@ -44,8 +45,11 @@ from shadowguy.rivals import (
     RunnerActivity,
     RunnerState,
     _attack_force,
+    _distance_to_nearest_bar,
+    _has_bar,
     _pick_attack_target,
     _pick_bribe_gang,
+    _pick_legwork_hop,
     _reinforce,
     resolve_rival_day,
 )
@@ -653,6 +657,45 @@ def test_a_faction_past_the_grudge_threshold_does_not_bribe_on_a_miss():
     assert _faction_action(actions, IRONCLAD).bribe is None
     assert corp_map.faction_grudge[IRONCLAD] == GRUDGE_BRIBE_THRESHOLD
     assert character.gang_standing == {}
+
+
+def test_has_bar_counts_amys_place_too():
+    """Amy's Place is a unique fixer bar, just modelled as its own LocationKind
+    -- it should count as a bar for LEGWORK's gravitation and DRINKING alike."""
+    corp_map = _map()
+    corp_map.territories["neutral_a"].locations.append(
+        Location(id="loc_amy", name="Amy's Place", kind=LocationKind.AMYS_PLACE)
+    )
+    assert _has_bar(corp_map, "neutral_a")
+    assert not _has_bar(corp_map, "iron_home")
+
+
+def test_distance_to_nearest_bar_is_a_bfs_over_the_connection_graph():
+    """start -- iron_home -- neutral_a(bar); ghost_home/merid_home are isolated
+    (unreachable, so absent from the result)."""
+    corp_map = _map()
+    corp_map.territories["neutral_a"].locations.append(
+        Location(id="loc_bar", name="The Rusted Halo", kind=LocationKind.BAR)
+    )
+    distances = _distance_to_nearest_bar(corp_map)
+    assert distances == {"neutral_a": 0, "iron_home": 1, "start": 2, "neutral_gang": 2}
+
+
+def test_pick_legwork_hop_gravitates_toward_the_nearer_bar():
+    """The mirror of test_relations_bias_which_rival_a_faction_moves_on: LEGWORK's
+    hop favors whichever neighbor sits closer to a bar, statistically rather than
+    always."""
+    bar_distances = {"near": 0, "far": BAR_GRAVITY_BIAS}
+    rng = random.Random(0)
+    picks = [_pick_legwork_hop(["near", "far"], bar_distances, rng) for _ in range(1000)]
+    assert picks.count("near") > picks.count("far") * 2
+
+
+def test_pick_legwork_hop_survives_a_neighbor_with_no_known_distance():
+    """A territory unreachable from any bar (absent from bar_distances) has to
+    weight sanely rather than KeyError -- floored to the same 1 as a neighbor
+    exactly BAR_GRAVITY_BIAS hops out."""
+    assert _pick_legwork_hop(["unknown"], {}, random.Random(0)) == "unknown"
 
 
 def test_the_players_faction_takes_no_turn_but_is_still_attackable():
