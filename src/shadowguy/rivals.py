@@ -6,13 +6,15 @@ Called once per day from ShadowguyApp's day tick (app._apply_day_tick, fired by
 app.spend_time whenever elapsed time crosses midnight), the same tick that pays
 crew wages and refreshes gigs/offers.
 
-A faction gets three separate rolls a day, not one choice between them:
+A faction gets four separate rolls a day, not one choice between them:
   - expansion onto neutral ground bordering its own (claim_territory /
     corpmap.expansion_candidates),
-  - reinforcement of its thinnest district (_reinforce), and
+  - reinforcement of its thinnest district (_reinforce),
   - an attack on a bordering rival (_faction_attack), settled through
     corp_turn.resolve_attack — the same dice the player's own attack_territory
-    rolls, so the AI is never fighting a different war than the player is.
+    rolls, so the AI is never fighting a different war than the player is, and
+  - once it's taken enough hits from the player, a bribe against the runner's
+    own standing with a gang instead of a rival (_pick_bribe_gang — see below).
 
 That last one is the conflict layer this module used to defer ("taking a rival
 faction's own territory is a bigger mechanic, left for later"). It is what makes
