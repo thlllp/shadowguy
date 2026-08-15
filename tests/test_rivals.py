@@ -51,6 +51,7 @@ from shadowguy.rivals import (
     _pick_bribe_gang,
     _pick_legwork_hop,
     _reinforce,
+    bar_at,
     resolve_rival_day,
 )
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID
@@ -668,6 +669,19 @@ def test_has_bar_counts_amys_place_too():
     )
     assert _has_bar(corp_map, "neutral_a")
     assert not _has_bar(corp_map, "iron_home")
+
+
+def test_bar_at_finds_an_amys_place_only_territory():
+    """The regression this covers: ContactsScreen._status and CorpMapScreen's
+    _territory_bar both read bar_at now instead of a bare next(kind==BAR) with no
+    default, which used to StopIteration on a territory whose only bar-kind
+    location was Amy's Place (unreachable before _has_bar counted it, reachable
+    now that LEGWORK gravitates runners toward it too)."""
+    corp_map = _map()
+    amy = Location(id="loc_amy", name="Amy's Place", kind=LocationKind.AMYS_PLACE)
+    corp_map.territories["neutral_a"].locations.append(amy)
+    assert bar_at(corp_map, "neutral_a") is amy
+    assert bar_at(corp_map, "iron_home") is None
 
 
 def test_distance_to_nearest_bar_is_a_bfs_over_the_connection_graph():

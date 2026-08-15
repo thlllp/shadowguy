@@ -343,12 +343,16 @@ for _specialty_kind in LOCATION_KIND_FOR_SPECIALTY.values():
         )
 
 
-def _location_kinds(owner: str, rng: random.Random, count: int) -> list[LocationKind]:
+def _location_kinds(
+    owner: str, rng: random.Random, count: int, exclude: frozenset[LocationKind] = frozenset()
+) -> list[LocationKind]:
     faction = FACTIONS_BY_ID.get(owner)
     if faction is None:
         # Neutral ground and the player's block carry no corp's stamp. Hospitals aren't
         # in ROLLED_KINDS — they're placed to a fixed density in generate_corp_map.
-        return rng.sample(list(ROLLED_KINDS), k=count)
+        # exclude is how a SPECIAL_BARS tile keeps its own filler roll from
+        # independently drawing an ordinary LocationKind.BAR too (see generate_corp_map).
+        return rng.sample([kind for kind in ROLLED_KINDS if kind not in exclude], k=count)
     owned_kind = LOCATION_KIND_FOR_SPECIALTY[faction.specialty]
     filler = rng.sample(_filler_pool(owned_kind), k=count - SPECIALTY_LOCATIONS)
     return [owned_kind] * SPECIALTY_LOCATIONS + filler
@@ -384,10 +388,11 @@ def _unique_location_name(kind: LocationKind, rng: random.Random, used_names: se
 
 
 def _make_locations(
-    territory_id: str, owner: str, rng: random.Random, used_names: set[str], count: int
+    territory_id: str, owner: str, rng: random.Random, used_names: set[str], count: int,
+    exclude: frozenset[LocationKind] = frozenset(),
 ) -> list[Location]:
     locations = []
-    for index, kind in enumerate(_location_kinds(owner, rng, count)):
+    for index, kind in enumerate(_location_kinds(owner, rng, count, exclude)):
         location_id = f"{territory_id}_loc{index}"
         locations.append(
             Location(
@@ -883,10 +888,18 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             modifiers = outskirts_modifiers()
         else:
             modifiers = make_modifiers(owner, values[cell], rng)
+        # A SPECIAL_BARS tile's own filler roll must not draw an ordinary
+        # LocationKind.BAR too — the guaranteed unique bar is appended separately
+        # below, and a second, generic bar on the same tile would shadow it on any
+        # first-match lookup (rivals._has_bar, ContactsScreen/CorpMapScreen's "the
+        # bar here").
+        exclude = frozenset({LocationKind.BAR}) if tid in plan.special_bar_ids else frozenset()
         territories[tid] = Territory(
             id=tid, name=name, x=x, y=y, owner=owner, value=values[cell],
             connections=sorted(ids[other] for other in region if frozenset((cell, other)) in edges),
-            locations=_make_locations(tid, owner, rng, used_names, count) if count > 0 else [],
+            locations=(
+                _make_locations(tid, owner, rng, used_names, count, exclude) if count > 0 else []
+            ),
             modifiers=modifiers,
             # Never a gang id on a slum or outskirts: the candidate filters above exclude gang turf.
             gang_id=plan.gang_ids.get(tid),

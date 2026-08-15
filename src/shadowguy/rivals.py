@@ -109,6 +109,7 @@ from shadowguy.corp_turn import (
 )
 from shadowguy.corpmap import (
     CorpMap,
+    Location,
     LocationKind,
     attack_candidates,
     claim_territory,
@@ -328,11 +329,23 @@ class RivalAction:
 _BAR_KINDS = (LocationKind.BAR, LocationKind.AMYS_PLACE)
 
 
+def bar_at(corp_map: CorpMap, territory_id: str) -> Location | None:
+    """The one bar a DRINKING runner is shown at here, first by list order —
+    Amy's Place counts too (it's a unique fixer bar, corpmap_gen._make_amys_place,
+    just modelled as its own LocationKind so Amy can be seated there
+    unconditionally). The single source of truth for "is/where is the bar" —
+    _has_bar below, and screens/info_screens.py's ContactsScreen._status /
+    screens/corp_map_screen.py's CorpMapScreen._territory_bar both read this
+    rather than re-deriving it, since a territory can hold more than one bar-kind
+    Location (an ordinary rolled bar plus a corpmap_gen.SPECIAL_BARS one) and
+    RunnerState only tracks a territory, never a specific Location within it."""
+    return next(
+        (loc for loc in corp_map.territories[territory_id].locations if loc.kind in _BAR_KINDS), None
+    )
+
+
 def _has_bar(corp_map: CorpMap, territory_id: str) -> bool:
-    """Amy's Place counts as a bar here too — it's a unique fixer bar
-    (corpmap_gen._make_amys_place), just modelled as its own LocationKind so
-    Amy can be seated there unconditionally."""
-    return any(loc.kind in _BAR_KINDS for loc in corp_map.territories[territory_id].locations)
+    return bar_at(corp_map, territory_id) is not None
 
 
 def _distance_to_nearest_bar(corp_map: CorpMap) -> dict[str, int]:

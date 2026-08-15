@@ -336,6 +336,17 @@ def test_exactly_one_of_each_special_bar_on_neutral_non_start_ground(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
+def test_a_special_bar_tile_never_also_rolls_an_ordinary_bar(seed):
+    """A SPECIAL_BARS tile's own filler roll must not independently draw a second,
+    ordinary LocationKind.BAR -- that would shadow the guaranteed unique bar on
+    any first-match lookup (rivals.bar_at, ContactsScreen, CorpMapScreen)."""
+    corp_map = _generated_map(seed)
+    for territory, _location in _special_bars(corp_map):
+        bar_locations = [loc for loc in territory.locations if loc.kind == LocationKind.BAR]
+        assert len(bar_locations) == 1
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_special_bars_never_share_a_tile_with_amys_place_each_other_or_a_hospital(seed):
     corp_map = _generated_map(seed)
     amy_territory, _location = _amys_places(corp_map)[0]

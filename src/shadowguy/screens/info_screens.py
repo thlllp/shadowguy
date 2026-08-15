@@ -5,7 +5,6 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 
 from shadowguy.character import CORE_STATS, HOURS_PER_DAY, MAX_SKILL_RANK, Character
 from shadowguy.corp_turn import TECHNOLOGIES_BY_ID, FactionEvent
-from shadowguy.corpmap import LocationKind
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID, Faction
 from shadowguy.inventory import (
     active_deck_entry,
@@ -21,7 +20,7 @@ from shadowguy.inventory import (
     uninstall_program,
     use_consumable,
 )
-from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity
+from shadowguy.rivals import ACTIVITY_LABELS, RunnerActivity, bar_at
 from shadowguy.runners import RivalRunner
 from shadowguy.shops import (
     AmmoKind,
@@ -434,10 +433,9 @@ class ContactsScreen(PanelNav, RefreshOnResume, BackScreen):
         if current is RunnerActivity.WORKING and state.job_title:
             return f"{territory.name}, running {state.job_title}"
         if current is RunnerActivity.DRINKING:
-            # rivals.py only picks DRINKING in a territory that has a bar, so
-            # naming it here is safe — and much better flavor than "drinking".
-            bar = next(loc for loc in territory.locations if loc.kind is LocationKind.BAR)
-            return f"{territory.name}, drinking at {bar.name}"
+            bar = bar_at(self.app.corp_map, state.territory_id)
+            if bar is not None:
+                return f"{territory.name}, drinking at {bar.name}"
         return f"{territory.name}, {ACTIVITY_LABELS[current]}"
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:

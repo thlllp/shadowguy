@@ -28,7 +28,7 @@ from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.cybernetics import catalog_for_standing
-from shadowguy.rivals import RunnerActivity
+from shadowguy.rivals import RunnerActivity, bar_at
 from shadowguy.scene import Scene
 from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG
 
@@ -1096,9 +1096,9 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
 
     def _territory_bar(self, territory: Territory) -> Location | None:
         """The one bar rival runners are ever placed at (rivals.py's DRINKING
-        activity only tracks a territory, not a specific Location) -- matches
-        ContactsScreen._status's own pick when a territory has more than one."""
-        return next((loc for loc in territory.locations if loc.kind == LocationKind.BAR), None)
+        activity only tracks a territory, not a specific Location) -- rivals.bar_at
+        is the single source of truth here, shared with ContactsScreen._status."""
+        return bar_at(self.app.corp_map, territory.id)
 
     def _fixers_box(self, fixers_here: list) -> Collapsible:
         if fixers_here:
