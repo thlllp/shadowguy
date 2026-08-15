@@ -87,6 +87,15 @@ EXTRACT_SKILL = "computer"
 # action beside it rolls Infer, which is reading your *opponent* mid-fight.
 NODE_ANALYZE_SKILL = "computer"
 
+# Detect (Program.detect, passive): a spider-guarded node is flagged the moment it's
+# otherwise revealed, no roll, no skill gate — that half is the "passively detect
+# spiders" ask. Naming *any* guardian (spider or plain ICE) additionally needs Computer
+# at this rank — the same skill NODE_ANALYZE_SKILL reads a node's role with, since this
+# is the same "finding information from outside" trade. First-slice number, not
+# balance-simulated — see CLAUDE.md's convention for flagging that.
+DETECT_SKILL = "computer"
+DETECT_ID_THRESHOLD = 6
+
 
 # Sleaze (Program.action_sleaze): try to talk a node's ICE into treating the runner as
 # a valid user instead of fighting it. Deliberately *not* the normal opposed dice pool
@@ -157,6 +166,11 @@ class Ice:
     damage: int  # integrity off you on a hit, before the roll's margin
     soak: int  # added to the ICE's soak roll against your intrusion
     security_per_round: float = 0.0  # if set, drains security instead of integrity — see above
+    # A human defender (a "spider") rather than software — flavor plus what Program.detect
+    # keys off (_guardian_tag): a spider-guarded node is flagged regardless of skill, since
+    # a spider triggered coordinates the rest of the network, same security-ratchet lever
+    # as Sentinel above. First-slice tag, room to grow spider-specific behavior later.
+    human: bool = False
 
 
 # id, name, integrity, attack, defense, damage, soak, security_per_round. Watchdogs are
@@ -170,6 +184,12 @@ _ICE_ROWS = (
     ("tracer", "Tracer", 5, 2, 12, 3, 1),
     ("black_ice", "Black ICE", 8, 3, 13, 3, 3),
     ("sentinel", "Sentinel ICE", 5, 0, 11, 0, 1, 0.3),
+    # Spiders: human security hackers standing a node rather than software, on the same
+    # security_per_round lever as Sentinel — Sentinel's own doc calls it "a guardian that
+    # never bites integrity, just logs presence"; a spider is that, flavored human, and
+    # (Program.detect) unconditionally flagged once revealed.
+    ("spider_watcher", "Spider (Watcher)", 5, 1, 11, 1, 1, 0.4, True),
+    ("spider_handler", "Spider (Handler)", 7, 2, 13, 2, 2, 0.5, True),
 )
 
 ICE = [Ice(*row) for row in _ICE_ROWS]
@@ -179,7 +199,7 @@ ICE_BY_ID = {ice.id: ice for ice in ICE}
 # combat.ENEMY_TIERS, and the count is the real difficulty lever here too.
 ICE_TIERS: dict[int, tuple[list[str], tuple[int, int]]] = {
     0: (["watchdog", "sentry", "sentinel"], (1, 2)),
-    1: (["sentry", "tracer", "sentinel"], (1, 2)),
+    1: (["sentry", "tracer", "sentinel", "spider_watcher", "spider_handler"], (1, 2)),
     2: (["tracer", "black_ice"], (2, 3)),
 }
 
@@ -899,7 +919,35 @@ def connected_nodes(run: MatrixRunState) -> list[MatrixNode]:
 MATRIX_CONNECTOR_WIDTH = 4
 
 
-def _matrix_node_label(node: MatrixNode, current_id: str, cleared_ids: set[str], revealed_ids: set[str]) -> str:
+def _installed_detect(character: Character) -> Program | None:
+    """The installed Detect program (Program.detect), if any. Passive, so unlike
+    Analyze there's no charge to gate on — it just changes what _guardian_tag prints
+    for an already-revealed guarded node."""
+    return next((p for p in _installed_programs(character) if p.detect), None)
+
+
+def _guardian_tag(ice: Ice, character: Character | None) -> str:
+    """What a revealed, uncleared guarded node's label calls its guardian. No Detect
+    installed (or no character, e.g. a bare label call): the generic "guard", same as
+    before Detect existed. With Detect: "spider" replaces "guard" unconditionally for a
+    human guardian (Ice.human) — the passive spider-detection half — and, only once
+    DETECT_SKILL clears DETECT_ID_THRESHOLD, the guardian's name is appended too."""
+    detect = _installed_detect(character) if character is not None else None
+    if detect is None:
+        return "guard"
+    tag = "spider" if ice.human else "guard"
+    if skill_value(character, DETECT_SKILL) >= DETECT_ID_THRESHOLD:
+        tag = f"{tag}:{ice.name}"
+    return tag
+
+
+def _matrix_node_label(
+    node: MatrixNode,
+    current_id: str,
+    cleared_ids: set[str],
+    revealed_ids: set[str],
+    character: Character | None = None,
+) -> str:
     marker = "@" if node.id == current_id else " "
     if node.id not in revealed_ids:
         # Role AND guarded/clear status are both part of a node's "value" — showing
@@ -910,7 +958,7 @@ def _matrix_node_label(node: MatrixNode, current_id: str, cleared_ids: set[str],
     if node.id in cleared_ids:
         parts.append("clear")
     elif node.ice is not None:
-        parts.append("guard")
+        parts.append(_guardian_tag(node.ice, character))
     return f"{marker}[{' '.join(parts)}]"
 
 
@@ -1001,7 +1049,7 @@ def render_matrix_network(run: MatrixRunState) -> str:
 
     def label(node_id: str) -> str:
         return _matrix_node_label(
-            network.nodes[node_id], run.current_node_id, run.cleared_node_ids, run.revealed_node_ids
+            network.nodes[node_id], run.current_node_id, run.cleared_node_ids, run.revealed_node_ids, run.character
         )
 
     col_width = {}

@@ -27,9 +27,18 @@ from shadowguy.shops import (
     loaded_rounds,
     fits_in_slot,
 )
+from shadowguy.skills import skill_value
 
 if TYPE_CHECKING:
     from shadowguy.character import Character
+
+# A deck's RAM budget (Item.ram_max) stretches with the runner's own aptitude, the same
+# "the gear tells you what you're capable of, the skill tells you how well" split
+# elsewhere in the game — Computer, since it's the same "finding/using information"
+# skill matrix.py's own navigation-mode reads (NODE_ANALYZE_SKILL, DETECT_SKILL) already
+# lean on. First-slice numbers, not balance-simulated — see CLAUDE.md's convention.
+RAM_SKILL = "computer"
+RAM_PER_SKILL_RANK = 3
 
 
 def equipped_bonus(inventory: list[InventoryItem], stat: str) -> int:
@@ -85,27 +94,41 @@ def installed_programs_for(entry: InventoryItem) -> list[Program]:
 
 
 def free_program_slots(item: Item, entry: InventoryItem) -> int:
-    """How much of this deck's program_slots capacity is still free. Spent in
-    Program.ram_cost per installed program, not a flat one-program-per-slot count —
-    every program costs 1 RAM today, so this reads identically to a plain count until
-    something costs more.
+    """How many of this deck's program_slots are still free — a flat count, one whole
+    slot per installed program regardless of what it costs to run (see free_ram for
+    the second, separate budget that size does gate).
 
     Action programs only: passives draw on Item.passive_slots instead, a separate
     pool, so installing one never costs a charge its slot."""
-    used = sum(program.ram_cost for program in installed_programs_for(entry) if not program.is_passive)
+    used = sum(1 for program in installed_programs_for(entry) if not program.is_passive)
     return item.program_slots - used
 
 
 def free_passive_slots(item: Item, entry: InventoryItem) -> int:
     """The passive counterpart to free_program_slots, over Item.passive_slots. Same
-    RAM accounting, separate budget — see the property for why the two don't share."""
-    used = sum(program.ram_cost for program in installed_programs_for(entry) if program.is_passive)
+    flat-count accounting, separate budget — see the property for why the two don't share."""
+    used = sum(1 for program in installed_programs_for(entry) if program.is_passive)
     return item.passive_slots - used
+
+
+def effective_ram_max(character: "Character", item: Item) -> int:
+    """A deck's Item.ram_max, stretched by the runner's own Computer rank
+    (RAM_SKILL/RAM_PER_SKILL_RANK) — the gear sets the floor, the skill raises it."""
+    return item.ram_max + skill_value(character, RAM_SKILL) // RAM_PER_SKILL_RANK
+
+
+def free_ram(character: "Character", item: Item, entry: InventoryItem) -> int:
+    """How much of this deck's RAM budget is still free. Action and passive programs
+    draw on the same pool here, unlike program_slots/passive_slots — RAM is the
+    deck's raw capacity, not a count of what kind of program is plugged in."""
+    used = sum(program.ram_cost for program in installed_programs_for(entry))
+    return effective_ram_max(character, item) - used
 
 
 def install_program(character: "Character", inventory_index: int, program_id: str) -> str:
     """Install an owned Program onto inventory[inventory_index] (must be a deck with a
-    free slot). Free and instant — capacity is the only gate, no skill check."""
+    free slot and enough free RAM). Free and instant — capacity is the only gate, no
+    check to roll."""
     if program_id not in character.owned_programs:
         return "You don't own that program."
     entry = character.inventory[inventory_index]
@@ -115,10 +138,12 @@ def install_program(character: "Character", inventory_index: int, program_id: st
     program = PROGRAMS_BY_ID[program_id]
     if program_id in entry.installed_programs:
         return f"{program.name} is already installed on {item.name}."
-    free = free_passive_slots(item, entry) if program.is_passive else free_program_slots(item, entry)
-    if program.ram_cost > free:
+    free_slots = free_passive_slots(item, entry) if program.is_passive else free_program_slots(item, entry)
+    if free_slots <= 0:
         kind = "passive" if program.is_passive else "program"
         return f"{item.name} has no free {kind} slots."
+    if program.ram_cost > free_ram(character, item, entry):
+        return f"{item.name} doesn't have enough free RAM for {program.name}."
     entry.installed_programs.append(program_id)
     return f"Installed {program.name} on {item.name}."
 
