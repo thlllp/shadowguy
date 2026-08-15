@@ -375,6 +375,17 @@ class Character:
     def _adjust_dict(d: dict[str, int], key: str, delta: int) -> None:
         d[key] = d.get(key, 0) + delta
 
+    def _boost_gain(self, delta: int, field_name: str) -> int:
+        """A positive `delta` boosted by an owned App Store app's `field_name`
+        bonus (shops.owned_app_bonus) — never softens a loss, which is why every
+        caller is itself an *_delta adjuster rather than this being folded into
+        owned_app_bonus. The one place that rule lives, shared by every
+        gain-only app (Networker/Rolodex/Portfolio) instead of a copy of this
+        `if`/`round` per field."""
+        if delta > 0:
+            return round(delta * (1 + owned_app_bonus(self, field_name)))
+        return delta
+
     def standing_with(self, faction_id: str) -> int:
         return self.standing.get(faction_id, 0)
 
@@ -385,24 +396,24 @@ class Character:
         return self.fixer_trust.get(fixer_id, 0)
 
     def adjust_fixer_trust(self, fixer_id: str, delta: int) -> None:
+        # An owned Rolodex app boosts a gain, never softens a loss.
+        delta = self._boost_gain(delta, "trust_bonus")
         self._adjust_dict(self.fixer_trust, fixer_id, delta)
 
     def local_standing_with(self, character_id: str) -> int:
         return self.local_standing.get(character_id, 0)
 
     def adjust_local_standing(self, character_id: str, delta: int) -> None:
-        # An owned Networker app (shops.owned_app_bonus's "standing_bonus") boosts a
-        # gain, never softens a loss -- gang_standing gets the same treatment below.
-        if delta > 0:
-            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
+        # An owned Networker app boosts a gain, never softens a loss -- gang_standing
+        # gets the same treatment below.
+        delta = self._boost_gain(delta, "standing_bonus")
         self._adjust_dict(self.local_standing, character_id, delta)
 
     def gang_standing_with(self, gang_id: str) -> int:
         return self.gang_standing.get(gang_id, 0)
 
     def adjust_gang_standing(self, gang_id: str, delta: int) -> None:
-        if delta > 0:
-            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
+        delta = self._boost_gain(delta, "standing_bonus")
         self._adjust_dict(self.gang_standing, gang_id, delta)
 
     def discover_fixer(self, fixer_id: str) -> None:
@@ -574,6 +585,9 @@ class Character:
         self.stun = max(0, self.stun + delta)
 
     def adjust_rep(self, delta: int) -> None:
+        # An owned Portfolio app boosts a gain, never softens a loss -- same field
+        # gain_experience reads below.
+        delta = self._boost_gain(delta, "xp_rep_bonus")
         self.rep = max(REP_FLOOR, self.rep + delta)
 
     def add_temp_bonus(self, stat: str, amount: int) -> None:
@@ -760,7 +774,7 @@ class Character:
         return True
 
     def gain_experience(self, amount: int) -> None:
-        self.experience += amount
+        self.experience += self._boost_gain(amount, "xp_rep_bonus")
 
     def grant_crew_experience(self, runner_id: str, amount: int) -> None:
         self._adjust_dict(self.crew_experience, runner_id, amount)
@@ -840,7 +854,11 @@ class Character:
         self.health_kit_used_today = False
         self.temp_bonuses = {}
         if self.elapsed_hours - self.last_rest_hour > FATIGUE_GRACE_HOURS:
-            self.fatigue += 1 + self.fatigue // FATIGUE_GROWTH_DIVISOR
+            gain = 1 + self.fatigue // FATIGUE_GROWTH_DIVISOR
+            # An owned CalmMind app (shops.owned_app_bonus's "fatigue_reduction")
+            # softens the day's fatigue gain -- optional, so tools/fatigue_sim.py's
+            # baseline cadence (no apps in play) is unaffected.
+            self.fatigue += max(0, round(gain * (1 - owned_app_bonus(self, "fatigue_reduction"))))
         self.accepted_jobs = [
             job
             for job in self.accepted_jobs
