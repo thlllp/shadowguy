@@ -11,3 +11,6 @@ wheels/
 
 # graphify knowledge-graph output
 graphify-out/
+
+# Claude Code skill plugin lockfile (local tooling)
+skills-lock.json
