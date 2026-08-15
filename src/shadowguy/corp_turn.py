@@ -217,8 +217,8 @@ class Sighting:
     """One Surveillance hit: a known runner (the player, or a runners.RivalRunner)
     that surveillance.py caught inside this corp's own territory on a given day.
 
-    Plain data, the same reason scene.Role holds no jobs.StageType rather than a
-    real jobs.StageType field: corp_turn.py stays a leaf (imports corpmap only),
+    Plain data, the same reason scene.Role holds no job_archetypes.StageType rather than a
+    real job_archetypes.StageType field: corp_turn.py stays a leaf (imports corpmap only),
     so surveillance.py -- which does the actual detecting, and needs CorpState in
     turn -- can hold a list of these on CorpState without corp_turn.py importing
     surveillance.py back (that would be a cycle)."""

@@ -32,7 +32,7 @@ class Role:
     """A crew position on a job: a beat someone could cover, the kind of specialist who
     fits it, and whether they'd work it on-site or from afar.
 
-    Plain data on purpose — it holds display strings, not jobs.StageType, so it can live
+    Plain data on purpose — it holds display strings, not job_archetypes.StageType, so it can live
     here on the Scene without scene.py importing jobs (which imports scene). jobs.py owns
     the *derivation* (from each stage's beat and its lead approach's skill); this is just
     the record. Descriptive for now: recruiting a runner to fill a role comes later, and
@@ -275,7 +275,7 @@ class Scene:
     # Empty for gigs/legwork. Descriptive for now — nothing fills them yet.
     roles: list[Role] = field(default_factory=list)
     # Roster caps for hiring crew onto this job (Character.hire_for_job), carried over
-    # from jobs.JobArchetype.max_on_site/max_support at generation. None means uncapped —
+    # from job_archetypes.JobArchetype.max_on_site/max_support at generation. None means uncapped —
     # today's default for every archetype except Burglary/Data Heist/Wetwork. on_site
     # counts the player, so a cap of 1 leaves no on-site hire slot at all.
     max_on_site: int | None = None

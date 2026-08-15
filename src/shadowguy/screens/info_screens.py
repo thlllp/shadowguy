@@ -503,7 +503,7 @@ class WebScreen(RefreshOnResume, BackScreen):
 
 class CorpWebsiteScreen(RefreshOnResume, BackScreen):
     """One megacorp's own site, reached by tapping its row in WebScreen: a
-    one-line masthead plus a blog of recent corp_turn.FactionEvents (territory
+    one-line masthead plus a blog of recent corp_turn.FactionEvent (territory
     claimed, technology researched) for that faction — most-recent-first,
     same source app.faction_events every faction's site reads from, whether
     the player runs that corp or not."""

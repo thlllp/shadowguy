@@ -3,7 +3,7 @@
 A small hand-authored roster, like fixer.FIXER_ROSTER and factions.FACTIONS. These
 started as rivals-only (identity, no relationship value); recruiting is the mechanic
 that changes that -- you meet them at bars (corpmap.LocationKind.BAR) and pay to bring
-them on. `archetype` is their specialist and matches jobs.SPECIALIST_FOR_STAT's values
+them on. `archetype` is their specialist and matches job_archetypes.SPECIALIST_FOR_STAT's values
 exactly (Netrunner / Solo / Infiltrator), so a runner slots straight onto the crew role
 their archetype fits. `rating` is how good they are at that specialty -- an effective
 skill_value the run-time crew effect will roll once that increment lands.
@@ -477,13 +477,13 @@ class SupportProgram:
     rating-4 hire can only probe, a rating-8 hire can burn a guard's chrome.
 
     `difficulty` is checks.resolve_check's ordinary scale. `trace_on_failure` is what a
-    miss costs -- see tactical.TRACE_CAP. Nothing costs trace on a success: getting in
+    miss costs -- see support.TRACE_CAP. Nothing costs trace on a success: getting in
     and out clean is the whole skill.
     """
 
     id: str
     name: str
-    task: str  # tactical.SupportTaskKind's value -- the effect this program grants
+    task: str  # support.SupportTaskKind's value -- the effect this program grants
     min_rating: int
     difficulty: int
     trace_on_failure: int

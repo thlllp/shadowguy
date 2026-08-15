@@ -508,7 +508,7 @@ class Character:
 
     def crew_support(self, job_id: str) -> list[CrewHire]:
         """Of crew_working, the ones working it from somewhere else — the complement of
-        crew_on_site. What they actually do is tactical.Support: the player directs them
+        crew_on_site. What they actually do is support.Support: the player directs them
         at the building from a side menu, on the hacker's own turn rather than theirs."""
         return [hire for hire in self.crew_working(job_id) if not hire.on_site]
 

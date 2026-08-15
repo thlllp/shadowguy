@@ -109,6 +109,7 @@ measures**, and update the DESIGN.md figures with what it prints.
 | `matrix_sim.py` | ICE fights, presets × `ICE_TIERS` | Matrix |
 | `conflict_sim.py` | `resolve_attack` grid + a multi-faction map sim | Corp conflict |
 | `fatigue_sim.py` | rest cadence × job length over 60 days | Fatigue |
+| `corp_econ_sim.py` | 6 policies × 30 maps to day 120, a day loop rather than a Monte Carlo | Corp economy balance |
 
 **A harness that recomputes game math instead of calling it will lie.**
 `matrix_sim.py` reads `player_integrity`/`firewall_defense`/`firewall_soak`/
@@ -116,7 +117,9 @@ measures**, and update the DESIGN.md figures with what it prints.
 earlier version that hard-zeroed soak and used the bare deck rating as damage
 reported a tier that was never that lethal. Same rule for the AI's day in
 `conflict_sim.py`: reinforcement is one roll per faction (`rivals._reinforce`),
-not one per district. Import the real function wherever there is one.
+not one per district. `corp_econ_sim.py` calls `corp_turn.advance_corp_day` rather
+than open-coding the day tick it is measuring. Import the real function wherever
+there is one.
 
 ### Codebase layout
 
@@ -229,10 +232,9 @@ Leaf modules, and why each has to stay one:
 - **`saves.py`** — imports no game classes.
 - **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
 - **`workshop.py`** — imports `shops.py` and nothing else from the package; only `screens/shop_screens.py` imports *it*. The split is retail vs. making: everything in `shops.py` is a cash-and-standing transaction over a catalog, everything here is a skill roll over scavenged materials. The mod **catalog** (`Mod`/`MOD_CATALOG`/`MODS_BY_ID`/`WEAPON_MOD_SLOTS`/`STOCK_MOD_IDS`) stays in `shops.py` — `buy_item` seeds a bought gun's slots from it and `effective_item` folds installed mods into the stats `combat.py` reads, so a `shops → workshop` edge would be a cycle.
-
 - **`job_archetypes.py`** — imports `character`/`scene`/`skills` and nothing else from the package; `jobs.py` imports *it*, never the reverse. The split is table vs. pass over the table: authoring a new archetype row is a different kind of change from retuning what the generator does with one. `PARTIAL_POOL_SIZE` lives here rather than in `jobs.py` because the import-time guard on pool width reads it, and `DAMAGE_FOR_DELTA` because `Approach.failure_damage` does.
 
-`scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
+`scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `job_archetypes.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
 
 ### Save versions
 
