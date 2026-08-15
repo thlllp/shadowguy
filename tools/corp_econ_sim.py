@@ -57,7 +57,7 @@ from shadowguy.corp_turn import (
     CorpState,
     EmployeeCategory,
     TECHNOLOGIES,
-    advance_training,
+    advance_corp_day,
     assistant_capacity,
     build_efficiency_upgrade,
     build_lab,
@@ -389,14 +389,12 @@ def run_once(
             )
         if not _owned(corp_state, corp_map):
             break  # corp_defeated — only reachable with --rivals
-        income = collect_income(corp_state, corp_map)
-        corp_state.cash += income
-        research = collect_research(corp_state, corp_map)
-        corp_state.research_points += research
-        corp_state.action_points = 2
-        advance_training(corp_state, day)
-        result.total_income += income
-        result.total_research += research
+        # The real day tick, not a re-derivation of it — see the harness rule in
+        # CLAUDE.md. Collects income and research, refills the action points and lands
+        # a finished training batch, all in the order app._corp_day_tick gets them.
+        corp_day = advance_corp_day(corp_state, corp_map, day)
+        result.total_income += corp_day.income
+        result.total_research += corp_day.research
 
         # --- Spend the day -------------------------------------------------
         _spend_research(corp_state, result, day, tech_order)
@@ -429,8 +427,8 @@ def run_once(
                 territories=len(_owned(corp_state, corp_map)),
                 cash=corp_state.cash,
                 research_points=corp_state.research_points,
-                income=income,
-                research=research,
+                income=corp_day.income,
+                research=corp_day.research,
                 scientists=corp_state.scientists,
                 assistants=corp_state.research_assistants,
                 labs=(facility.labs_built or 0) if facility else 0,

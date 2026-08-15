@@ -461,7 +461,7 @@ JUNKYARD_ROLE = "scrapper"
 
 def _make_junkyard(territory_id: str, rng: random.Random, used_names: set[str]) -> Location:
     """A rare scavenging spot on unclaimed ground — one scrapper, no shop, no gig/job/
-    legwork surface (see shops.scavenge for its one action). Placed out of band like the
+    legwork surface (see workshop.scavenge for its one action). Placed out of band like the
     hospital (see TILES_PER_JUNKYARD / _plan_injections), never rolled as filler."""
     location_id = f"{territory_id}_junkyard"
     return Location(

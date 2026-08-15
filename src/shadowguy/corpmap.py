@@ -78,7 +78,7 @@ PLAYER_OWNED_KINDS = (LocationKind.APARTMENT, LocationKind.SAFEHOUSE)
 # _make_hq / app.CorpHQScreen), each gang's den (see _make_gang_den), each corp's
 # research facility (see add_research_facility / corp_turn.collect_research), each
 # corp's academy (see _make_academy / corp_turn.train_employees), a rare scavenging
-# spot on unclaimed ground (see _make_junkyard / shops.scavenge), and a rare fishing
+# spot on unclaimed ground (see _make_junkyard / workshop.scavenge), and a rare fishing
 # spot on unclaimed ground (see _make_docks / fishing.generate_fishing_trip). None of
 # these is player-owned, so they're a separate group from PLAYER_OWNED_KINDS.
 UNROLLED_KINDS = (
@@ -221,7 +221,7 @@ class Location:
     # scientist working this facility. Starts at 0.
     efficiency_upgrades: int | None = None
     # PLAYER_OWNED_KINDS only (APARTMENT/SAFEHOUSE): whether this place has a
-    # workshop (see shops.install_mod/craft_consumable, screens.SafehouseScreen).
+    # workshop (see workshop.install_mod/craft_consumable, screens.SafehouseScreen).
     # None everywhere else, same convention as research_tier. The apartment is
     # injected already True (corpmap_gen.py); add_safehouse below starts a new
     # safehouse at False, built later via build_workshop.
@@ -531,6 +531,27 @@ def territory_distance(corp_map: CorpMap, from_id: str, to_id: str) -> int:
 def unowned_territory_ids(corp_map: CorpMap) -> list[str]:
     """Every territory id still held by nobody — neutral ground."""
     return [t.id for t in corp_map.territories.values() if t.owner == "neutral"]
+
+
+def corp_target_territories(corp_map: CorpMap) -> list[Territory]:
+    """Every district a real corp holds that has somewhere in it worth sending a
+    runner — id-sorted, so a caller's rng.choice is reproducible for a seed.
+
+    Both work generators pick their mark this way (jobs.generate_job's corp target,
+    security.generate_security_contract's guarded site) and used to each carry their
+    own copy of the query. The location filter is the part worth having in one place:
+    a corp that expands onto a slum holds a district generated with no locations but
+    its encampment (see Slums & encampments in DESIGN.md), and a caller that forgets
+    to exclude those hits an empty rng.choice on the site pick instead."""
+    return sorted(
+        (
+            t
+            for t in corp_map.territories.values()
+            if t.owner in FACTIONS_BY_ID
+            and any(loc.kind in GENERATED_KINDS for loc in t.locations)
+        ),
+        key=lambda t: t.id,
+    )
 
 
 def _owner_tag(owner: str) -> str:

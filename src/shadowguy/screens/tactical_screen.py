@@ -66,7 +66,7 @@ _CREW_FATE_TEXT = {
 
 class GrenadePickScreen(ModalScreen):
     """Which carried grenade to throw, when there's more than one kind — the tactical
-    counterpart of GangTollScreen's pay/refuse pick (corp_map_screen.py), same
+    counterpart of map_encounters.TollScreen's pay/refuse pick, same
     dismiss-a-value shape. Dismisses the chosen Character.consumables index, or None
     if cancelled. Skipped entirely when the runner carries exactly one kind (see
     TacticalScreen.action_throw_grenade) — no need to ask when there's nothing to ask."""
@@ -105,7 +105,7 @@ class HackerPickScreen(ModalScreen):
     there's only one option -- no need to ask when there's nothing to ask. Dismisses the
     chosen runners.SupportProgram, or None if cancelled.
 
-    Only tasks with something to point at are ever in the list (tactical.support_tasks),
+    Only tasks with something to point at are ever in the list (support.support_tasks),
     so every row here is one the player can actually pick.
     """
 
@@ -220,7 +220,7 @@ class TacticalScreen(Screen):
         # supplied by whoever opened the fight — the crew is the Character's, not the
         # stage's, so a hire made after the job was generated still shows up.
         self.allies = list(allies)
-        # tactical.Support for the remote hacker backing this job, or None if nobody is.
+        # support.Support for the remote hacker backing this job, or None if nobody is.
         # Same "read off the Character when the fight opens" rule as allies.
         self.support = support
         self.state = None
@@ -315,7 +315,7 @@ class TacticalScreen(Screen):
 
     def action_direct_hacker(self) -> None:
         """Tell the hacker to do something. Costs the player nothing -- no move, no
-        action -- because it's their turn being spent, not yours (see tactical.Support).
+        action -- because it's their turn being spent, not yours (see support.Support).
         What it can cost is the trace, and only on a miss."""
         state = self.state
         if state.is_over or state.aim_cursor is not None:

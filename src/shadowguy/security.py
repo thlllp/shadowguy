@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from shadowguy.checks import CheckResult, CheckRoll, day_tier, resolve_check, resolve_rng
-from shadowguy.corpmap import GENERATED_KINDS, CorpMap
+from shadowguy.corpmap import GENERATED_KINDS, CorpMap, corp_target_territories
 from shadowguy.factions import FACTIONS_BY_ID, standing_shift
 from shadowguy.skills import skill_for, skill_value
 
@@ -114,16 +114,8 @@ def generate_security_contract(
 ) -> SecurityContract:
     rng = resolve_rng(rng)
     # The mark is a real corp, guarded at a district it actually holds this run —
-    # same targeting as jobs.generate_job.
-    held = sorted(
-        (
-            t for t in corp_map.territories.values()
-            if t.owner in FACTIONS_BY_ID
-            and any(loc.kind in GENERATED_KINDS for loc in t.locations)
-        ),
-        key=lambda t: t.id,
-    )
-    territory = rng.choice(held)
+    # same targeting as jobs.generate_job, through the same query.
+    territory = rng.choice(corp_target_territories(corp_map))
     faction = FACTIONS_BY_ID[territory.owner]
     location = rng.choice([loc for loc in territory.locations if loc.kind in GENERATED_KINDS])
     tier = day_tier(day, len(DIFFICULTY_BASE))

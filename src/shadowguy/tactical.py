@@ -383,6 +383,46 @@ def ally_spawns(grid: Grid, player_start: Coord, count: int, taken: frozenset[Co
     return found
 
 
+def _player_unit(character: Character, coord: Coord) -> Unit:
+    """The player's Unit. `stats` stays None and `health` unused — the player's health
+    lives on the Character (see Unit's docstring)."""
+    return Unit(
+        name=character.name,
+        side=Side.PLAYER,
+        coord=coord,
+        speed=PLAYER_SPEED,
+        quickness=player_quickness(character),
+    )
+
+
+def _npc_unit(stats: Enemy, side: Side, coord: Coord, speed: int, *, alerted: bool = True) -> Unit:
+    """Any combatant who isn't the player, built off its combat.Enemy stat block. A
+    hostile and a hired runner are the same construction — `Enemy` is really "a
+    combatant who isn't the player" — differing only in side, move budget and whether
+    they start knowing there's a fight on (a burglary's guards don't)."""
+    return Unit(
+        name=stats.name,
+        side=side,
+        coord=coord,
+        speed=speed,
+        quickness=stats.quickness,
+        stats=stats,
+        health=stats.health,
+        alerted=alerted,
+    )
+
+
+def _ally_units(grid: Grid, origin: Coord, allies: list[Enemy], taken: frozenset[Coord]) -> list[Unit]:
+    """The hired runners who came along, placed around `origin`. Any that don't fit sit
+    the fight out — ally_spawns returns fewer coords than allies and the zip is
+    deliberately non-strict."""
+    spawns = ally_spawns(grid, origin, len(allies), taken)
+    return [
+        _npc_unit(ally, Side.ALLY, coord, ALLY_SPEED)
+        for ally, coord in zip(allies, spawns, strict=False)
+    ]
+
+
 def start_tactical(
     character: Character,
     grid: Grid,
@@ -394,40 +434,11 @@ def start_tactical(
     """Set up a fight: place the player, each enemy, and any hired runner who came along
     (`allies`, stat blocks from combat.crew_stats — they spawn around the player via
     ally_spawns, and any that don't fit sit the fight out), then open the player's turn."""
-    units = [
-        Unit(
-            name=character.name,
-            side=Side.PLAYER,
-            coord=player_start,
-            speed=PLAYER_SPEED,
-            quickness=player_quickness(character),
-        )
+    units = [_player_unit(character, player_start)]
+    units += [
+        _npc_unit(enemy, Side.ENEMY, coord, ENEMY_SPEED) for enemy, coord in enemy_placements
     ]
-    for enemy, coord in enemy_placements:
-        units.append(
-            Unit(
-                name=enemy.name,
-                side=Side.ENEMY,
-                coord=coord,
-                speed=ENEMY_SPEED,
-                quickness=enemy.quickness,
-                stats=enemy,
-                health=enemy.health,
-            )
-        )
-    spawns = ally_spawns(grid, player_start, len(allies), frozenset(u.coord for u in units))
-    for ally, coord in zip(allies, spawns, strict=False):
-        units.append(
-            Unit(
-                name=ally.name,
-                side=Side.ALLY,
-                coord=coord,
-                speed=ALLY_SPEED,
-                quickness=ally.quickness,
-                stats=ally,
-                health=ally.health,
-            )
-        )
+    units += _ally_units(grid, player_start, allies, frozenset(u.coord for u in units))
     state = TacticalState(character=character, grid=grid, units=units, exits=frozenset(exits))
     _begin_player_turn(state)
     return state
@@ -467,40 +478,19 @@ def start_burglary(
     # level they entered by; _enter_level swaps the rest in as they're walked into.
     for level_index, coord in building.guards:
         state.off_level_units.setdefault(level_index, []).append(
-            Unit(
-                name=guard.name,
-                side=Side.ENEMY,
-                coord=coord,
-                speed=ENEMY_SPEED,
-                quickness=guard.quickness,
-                stats=guard,
-                health=guard.health,
-                alerted=False,
-            )
+            _npc_unit(guard, Side.ENEMY, coord, ENEMY_SPEED, alerted=False)
         )
-    player = Unit(
-        name=character.name,
-        side=Side.PLAYER,
-        coord=spawn[1],
-        speed=PLAYER_SPEED,
-        quickness=player_quickness(character),
+    crew = _ally_units(
+        state.grid,
+        spawn[1],
+        allies,
+        frozenset(u.coord for u in state.off_level_units.get(spawn[0], [])),
     )
-    spawns = ally_spawns(
-        state.grid, spawn[1], len(allies), frozenset(u.coord for u in state.off_level_units.get(spawn[0], []))
-    )
-    crew = [
-        Unit(
-            name=ally.name,
-            side=Side.ALLY,
-            coord=coord,
-            speed=ALLY_SPEED,
-            quickness=ally.quickness,
-            stats=ally,
-            health=ally.health,
-        )
-        for ally, coord in zip(allies, spawns, strict=False)
+    state.units = [
+        _player_unit(character, spawn[1]),
+        *state.off_level_units.pop(spawn[0], []),
+        *crew,
     ]
-    state.units = [player, *state.off_level_units.pop(spawn[0], []), *crew]
     _begin_player_turn(state)
     return state
 

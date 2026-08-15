@@ -49,29 +49,31 @@ from shadowguy.shops import (
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
-    CRAFT_RECIPES,
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     MOD_CATALOG,
     MODS_BY_ID,
     PROGRAM_CATALOG,
-    SCAVENGE_HOURS_COST,
     WEAPON_MOD_SLOTS,
-    WORKSHOP_HOURS_COST,
     bonus_text,
     buy_consumable,
     buy_ammo,
     buy_item,
     buy_price,
     buy_program,
-    craft_consumable,
     hospital_stay,
+    sell_item,
+    sell_price,
+)
+from shadowguy.workshop import (
+    CRAFT_RECIPES,
+    SCAVENGE_HOURS_COST,
+    WORKSHOP_HOURS_COST,
+    craft_consumable,
     install_mod,
     install_refusal,
     remove_mod,
     scavenge,
-    sell_item,
-    sell_price,
 )
 
 from . import (
@@ -480,7 +482,7 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
     Nothing to do here until it has a workshop (Location.workshop_built) — the
     apartment starts with one, a safehouse is built here for WORKSHOP_BUILD_COST.
     Once built: install/remove a Mod on an owned weapon or wearable (shops.MOD_CATALOG,
-    rolls Armorer), or craft a Consumable from scavenged materials (shops.CRAFT_RECIPES,
+    rolls Armorer), or craft a Consumable from scavenged materials (workshop.CRAFT_RECIPES,
     rolls Chemistry)."""
 
     BINDINGS = MENU_BACK_BINDINGS
@@ -510,7 +512,7 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
         for index, entry in enumerate(character.inventory):
             item = ITEMS_BY_ID[entry.item_id]
             named_layout = bool(WEAPON_MOD_SLOTS.get(item.skill, ()))
-            # One filter for both layouts: shops.install_refusal owns every rule about
+            # One filter for both layouts: workshop.install_refusal owns every rule about
             # what fits where, so a new slot type is taught to it alone. Affording it
             # is deliberately not one of those rules — an unaffordable row is shown
             # and labelled, the way every other shop row is.

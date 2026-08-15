@@ -173,7 +173,7 @@ SAVE_SUFFIX = ".save"
 # gained `locks`/`cameras`. A pre-v48 pickled Level/Building (inside an accepted Burglary
 # or Wetwork job) lacks all three fields.
 # v49 added per-archetype job roster caps: character.CrewHire gained `on_site`, and
-# scene.Scene gained `max_on_site`/`max_support` (set from jobs.JobArchetype at
+# scene.Scene gained `max_on_site`/`max_support` (set from job_archetypes.JobArchetype at
 # generation). A pre-v49 pickled CrewHire or Scene (inside accepted_jobs or Character.crew)
 # lacks all three fields.
 # v50 is the one bump with no new state at all: the grid primitives moved out of

@@ -9,7 +9,7 @@ couldn't. Validation is deferred to first access of ARCHETYPES / ARCHETYPES_BY_I
 so an unaffordable preset still fails early (the creation screen is the first thing
 the game uses) but importing the module alone doesn't construct a Character.
 
-(Not to be confused with jobs.JobArchetype, which is a template for a *job*.)
+(Not to be confused with job_archetypes.JobArchetype, which is a template for a *job*.)
 """
 
 from dataclasses import dataclass

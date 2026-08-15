@@ -1,15 +1,39 @@
-"""Procedural generation of job Scenes offered by Fixers."""
+"""Procedural generation of job Scenes offered by Fixers.
+
+The *table* this generates from — the stage model, the nine archetypes, the risk
+curve, and everything checked about them at import — is job_archetypes.py. This
+module is the pass over it: pick a mark, draw a subset of each stage's pool, price
+the result, and build the Scene.
+"""
 
 import random
 import uuid
 from dataclasses import dataclass
-from enum import StrEnum
 
-from shadowguy.character import CORE_STATS
 from shadowguy.checks import day_tier, resolve_rng
 from shadowguy.combat import ENEMY_TIERS, roll_enemies
-from shadowguy.corpmap import GENERATED_KINDS, LOCATION_SKILL, CorpMap, LocationKind, territory_distance
-from shadowguy.factions import FACTIONS_BY_ID
+from shadowguy.corpmap import (
+    GENERATED_KINDS,
+    LOCATION_SKILL,
+    CorpMap,
+    Location,
+    LocationKind,
+    Territory,
+    corp_target_territories,
+    territory_distance,
+)
+from shadowguy.factions import FACTIONS_BY_ID, Faction
+from shadowguy.job_archetypes import (
+    ARCHETYPES,
+    FULL_POOL_CHANCE,
+    OPTIONAL_STAGE_CHANCE,
+    PARTIAL_POOL_SIZE,
+    Approach,
+    JobArchetype,
+    JobStage,
+    _role_for_stage,
+    archetype_specialist,
+)
 from shadowguy.matrix import ICE_TIERS, generate_matrix_network
 from shadowguy.scene import (
     BurglaryStage,
@@ -18,8 +42,6 @@ from shadowguy.scene import (
     Entrance,
     MatrixStage,
     Outcome,
-    Posture,
-    Role,
     Scene,
     SceneKind,
     Stage,
@@ -68,15 +90,6 @@ if set(ICE_TIERS) != set(range(len(DIFFICULTY_BASE))):
 # to finish than 3-stage ones for the same money.)
 STAGE_DIFFICULTY_RAMP = 2
 
-# A stage offers a subset of its pool, not the whole thing: how many ways in this
-# particular job happens to have is part of what makes one offer better than another.
-# FULL_POOL_CHANCE of the time you get every approach; otherwise you get exactly
-# PARTIAL_POOL_SIZE of them — an exact count, not a floor, so widening a pool adds
-# approaches the full-pool roll can reach but does not make the partial draw any
-# wider. It doubles as the minimum pool size, since a pool must have at least this
-# many to draw from (guarded at import).
-PARTIAL_POOL_SIZE = 2
-FULL_POOL_CHANCE = 0.35
 
 # Standing lost with the corp you just robbed, on a completed job.
 JOB_STANDING_HIT = -2
@@ -164,61 +177,12 @@ def _cover_density(kind: LocationKind) -> float:
     return _TACTICAL_COVER_BY_KIND.get(kind, _DEFAULT_COVER_DENSITY)
 
 
-class StageType(StrEnum):
-    """What a stage *is*, not just what it rolls.
-
-    Every archetype walks the same arc — get there, do the thing, get out — with
-    its own pools and prose for each beat. The type is the semantic handle on a
-    stage: it's what lets a job say "this one has a nasty exfil" rather than
-    "this one has a stage_2", and it is the intended hook for hired support later
-    (a netrunner covers your OBJECTIVE, muscle covers your EXFIL). Nothing reads
-    it that way yet — today it carries the prompt and marks which stages are
-    optional.
-    """
-
-    APPROACH = "approach"  # get to the job
-    OBJECTIVE = "objective"  # do the thing you came to do
-    COMPLICATION = "complication"  # it stops going to plan
-    EXFIL = "exfil"  # be somewhere else
-
-
-# Stage type -> the chance it shows up at all. A type in here is optional and rolled
-# for at generation, so a job runs 3 or 4 stages; a type absent from it is mandatory.
-# The chance lives *with* the type rather than beside it as a lone COMPLICATION_CHANCE:
-# a second optional type would otherwise silently inherit the complication's odds.
-# Membership is the "is this optional?" test, so there is one table here, not two that
-# have to agree. The last stage of an archetype must be mandatory (the payout rides on
-# the final stage) — guarded below.
-OPTIONAL_STAGE_CHANCE = {StageType.COMPLICATION: 0.4}
-
 # REWARD_BASE prices a job with no complication. One that has one is a longer job
 # with an extra check's worth of blood in it, so it pays this much more per extra
 # stage — otherwise the fixer board would quietly price identical-looking offers the
 # same while one of them is strictly worse.
 REWARD_PER_EXTRA_STAGE = 0.3
 
-
-# The risk curve: how much health a failed approach costs, by how much easier than
-# the stage's base difficulty it was. This is the *only* place job damage is set —
-# an Approach's damage is derived from its difficulty_delta, never written next to
-# it, so "the easy way in is the one that hurts" is structural and a row physically
-# cannot be tuned out of the gradient.
-#
-# Calibrated against job *length*: a job runs 3-4 stages, and an off-stat specialist
-# takes the bloody route on most of them, so a body-1 runner's 15 health is the
-# budget these numbers spend. Doubling them is how you get a 13% death rate on a
-# routine job — re-run the balance sim if you touch this.
-DAMAGE_FOR_DELTA = {
-    1: 1,  # hard and clean
-    0: 2,
-    -1: 3,
-    -2: 4,  # easy and bloody
-}
-
-if sorted(DAMAGE_FOR_DELTA, reverse=True) != sorted(
-    DAMAGE_FOR_DELTA, key=lambda d: DAMAGE_FOR_DELTA[d]
-):
-    raise ValueError("DAMAGE_FOR_DELTA must hurt more the easier the check gets")
 
 # A guard's sightline catching a burglary's interior walk (scene.BurglaryStage.spotted)
 # costs a flat, modest hit — deliberately on the low end of DAMAGE_FOR_DELTA, since it
@@ -232,631 +196,6 @@ BURGLARY_SPOTTED_DAMAGE = 2
 # pays, for getting in messily rather than cleanly.
 MESSY_ENTRY_MULTIPLIER = 0.5
 
-
-@dataclass(frozen=True)
-class Approach:
-    """One way through a job stage: a skill, and how hard/bloody that way is.
-
-    difficulty_delta shifts the stage's rolled difficulty, and it alone fixes the
-    health cost (failure_damage; a critical failure deals the same and goes loud):
-    the cheap check is always the one that hurts. A stage rolls its base difficulty
-    *once* and every approach is offset from it, so a delta means the same thing on
-    every job.
-    """
-
-    skill: str  # a skill id (skills.SKILLS_BY_ID)
-    difficulty_delta: int
-    flavor: str
-
-    @property
-    def failure_damage(self) -> int:
-        return DAMAGE_FOR_DELTA[self.difficulty_delta]
-
-
-@dataclass(frozen=True)
-class JobStage:
-    """One beat of a job: what kind of beat it is, how it reads, and the ways through.
-
-    `approaches` is a *pool*, not the offer — generate_job draws a subset of it.
-    `prompt` is a format string over verb/faction/territory/location/target; the
-    fields are checked at import so a bad one can't KeyError mid-generation.
-    """
-
-    type: StageType
-    prompt: str
-    approaches: tuple[Approach, ...]
-    # True only for Burglary's and Wetwork's APPROACH stages (set at ARCHETYPES
-    # construction, see below, not authored per-row) -- tells generate_job to build
-    # this stage as a scene.BurglaryStage (entrance diagram + interior walk) instead
-    # of a plain Choice list. `approaches` stays meaningful either way: it still feeds
-    # each Entrance's skill/difficulty/flavor and is still subject to the same
-    # import-time pool-size/cross-stat guards below.
-    burglary: bool = False
-
-
-@dataclass
-class JobArchetype:
-    name: str
-    verb: str
-    stages: tuple[JobStage, ...]
-    # True only for Data Heist (set at ARCHETYPES construction, not authored per-row) --
-    # a whole-job property, unlike JobStage.burglary's per-stage one: it makes *every*
-    # fight beside a stage a scene.MatrixStage (a fight against ICE, resolved in matrix.py)
-    # instead of gunmen, and suppresses the tactical/abstract roll for the job. A remote
-    # hack has no body in the building, so there's nobody to meet in meatspace.
-    matrix: bool = False
-    # Flat hours cost overriding the shared tier-based default (8/12, see
-    # generate_job) -- None for every archetype except Bodyguard, which is meant to
-    # be a low-time-commitment job regardless of tier (see that row's comment).
-    hours_cost: int | None = None
-    # True only for Bodyguard (set at ARCHETYPES construction, not authored per-row)
-    # -- a whole-job property, unlike JobStage.burglary's per-stage one: every stage
-    # rolls VIGILANCE_THREAT_CHANCE for whether anything even happens at all, rather
-    # than always presenting its pool. Quiet legs become a scene.Stage.narration
-    # beat: no roll, nothing to click, just prose and a Continue.
-    vigilance: bool = False
-    # True only for Wetwork (set at ARCHETYPES construction, not authored per-row) --
-    # tells generate_job to pick its burglary stage's structure from WETWORK_STRUCTURE
-    # (always a private COMPOUND) instead of BURGLARY_STRUCTURE[location.kind], since
-    # the target is holed up in their own place rather than broken into as the job
-    # site's own business.
-    wetwork: bool = False
-    # Roster caps for hiring crew onto this job, carried onto the generated Scene and
-    # enforced by Character.hire_for_job. None means uncapped (every archetype but the
-    # three set at ARCHETYPES construction below). max_on_site counts the player.
-    max_on_site: int | None = None
-    max_support: int | None = None
-
-
-# name, verb, then one row per stage: (StageType, prompt, approach pool).
-# Approach row: (skill id, difficulty delta, flavor). The damage is not written here
-# — it falls out of the delta via DAMAGE_FOR_DELTA.
-#
-# Each pool holds a hard/clean, a middling, and an easy/bloody way through, sitting
-# on three *different* core stats — checked at import below. That is the whole point
-# of the table: a stage whose approaches share a stat is not a choice, it's a
-# formality that one build passes twice and the rest fail once. It also means no
-# build walks every stage of every job, and a runner who is wrong for a stage can
-# still buy their way past it with health.
-#
-# A generated job offers a *subset* of each pool (see PARTIAL_POOL_SIZE), so two
-# Heists are not the same Heist: one may leave the door open for your build and the
-# next may not. Pools therefore want to stay wider than PARTIAL_POOL_SIZE — a pool of
-# exactly two never varies.
-#
-# Every archetype walks APPROACH -> OBJECTIVE -> (COMPLICATION) -> EXFIL, except
-# Burglary and Wetwork, whose only stage is APPROACH: the rest of the beat (the
-# vault, the sensor, getting out) plays out inside the BurglaryStage's own building
-# instead of as separate Choice stages after it (see their own rows' comments). The
-# complication is optional (OPTIONAL_STAGE_CHANCE), so an ordinary job is 3 or 4
-# stages, and it is where the job turns on you rather than merely resisting you.
-_ARCHETYPE_ROWS = (
-    (
-        "Heist",
-        "break into",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("stealth", 1, "Slip past the perimeter unseen"),
-                    ("forgery", 0, "Badge in on credentials you wrote yourself"),
-                    ("toughness", -2, "Go straight through the fence and eat the hits"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You're inside {location}. {target} sits behind the last real lock.",
-                (
-                    ("hack", 1, "Crack the ice around the prize"),
-                    ("infiltration", 0, "Work the vault's locks by hand"),
-                    ("lift", -2, "Put the case through with a wrecking bar"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "A patrol that shouldn't be on the roster doubles back down the corridor.",
-                (
-                    ("listening", 1, "Track them by sound and stay a room ahead"),
-                    ("intimidation", 0, "Freeze the one who sees you"),
-                    ("grapple", -2, "Put them on the floor before they can call it in"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have {target}. Now you have to be somewhere else.",
-                (
-                    ("dodge", 1, "Slip the cordon before it closes"),
-                    ("deception", 0, "Walk out past the response team like you belong there"),
-                    ("lift", -2, "Force the loading shutter and go"),
-                ),
-            ),
-        ),
-    ),
-    (
-        "Extraction",
-        "extract a target from",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("deception", 1, "Walk in as staff nobody thinks to question"),
-                    ("tactics", 0, "Time your approach to the shift change"),
-                    ("acrobatics", -1, "Come in over the roofline"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You've found them. Getting them to move is a separate problem.",
-                (
-                    ("grapple", 1, "Put the target down and carry them out"),
-                    ("intimidation", 0, "Make it very clear they are leaving with you"),
-                    ("toughness", -2, "Take what the room does to you and keep hold of them"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "The target panics, and panic is loud.",
-                (
-                    ("intuition", 1, "See it coming in their eyes and get ahead of it"),
-                    ("negotiations", 0, "Cut them a deal on the spot"),
-                    ("sturdy", -2, "Take them off their feet and keep moving"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have them. Now get them off {faction}'s ground.",
-                (
-                    ("forgery", 1, "Badge the two of you through the checkpoint"),
-                    ("running", 0, "Carry them, and don't stop"),
-                    ("blades", -2, "Cut through the cordon"),
-                ),
-            ),
-        ),
-    ),
-    (
-        "Sabotage",
-        "sabotage",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("stealth", 1, "Come in through the service ducts"),
-                    ("infer", 0, "Read the plant's layout and walk straight to it"),
-                    ("toughness", -2, "Come through the loading door and dare them to stop you"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "The machinery is in front of you. It has to fail, and not while you're stood here.",
-                (
-                    ("tinkering", 1, "Rig the hardware to fail hours from now"),
-                    ("sleight_of_hand", 0, "Palm the charge onto it as you walk past"),
-                    ("lift", -2, "Wreck the machinery by hand"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "A coolant line lets go, and a tech comes to find out why.",
-                (
-                    ("pattern_seeking", 1, "Spot the cascade before it reaches you"),
-                    ("fortitude", 0, "Ride out the chemical wash and keep working"),
-                    ("grapple", -2, "Put the tech in a locker"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "It's going to go, and you are still inside {location}.",
-                (
-                    ("running", 1, "Run, and keep running until the sirens fade"),
-                    ("dodge", 0, "Slip the response team in the stairwell"),
-                    ("grapple", -2, "Put down whoever is closest and keep moving"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # A specialist job: every beat leads with an logic skill, which is what
-        # archetype_specialist() reads to call it Netrunner work — and what makes
-        # generate_job keep that lead through the partial draw. The other two approaches
-        # on each beat still sit on different stats, so this is a job a Solo can take and
-        # bleed through, not one they're locked out of.
-        "Intrusion",
-        "breach",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("recon", 1, "Map their netarch from the outside before you touch it"),
-                    ("forgery", 0, "Spoof a contractor's credentials onto the access list"),
-                    ("toughness", -2, "Splice the trunk line by hand and eat the feedback"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You're in their architecture. {target} sits behind black ICE.",
-                (
-                    ("hack", 1, "Break the ICE around it"),
-                    ("sleight_of_hand", 0, "Jack a physical tap straight into the terminal"),
-                    ("lift", -2, "Pull the drive out of the rack and take it with you"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "A trace program wakes up and starts walking back down your connection.",
-                (
-                    ("infer", 1, "Read the trace's shape and stay ahead of it"),
-                    ("listening", 0, "Catch the subroutine's rhythm and time your jumps"),
-                    ("fortitude", -2, "Tank the neural feedback and keep working"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have {target}. Their logs still say you were ever here.",
-                (
-                    ("tinkering", 1, "Scrub the logs and back out the way you came"),
-                    ("stealth", 0, "Pull the tap and walk before the sweep reaches you"),
-                    ("intimidation", -2, "Let them watch you go, and dare them to follow"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # A second specialist job, and (like Burglary) a single-stage one: its only
-        # beat is the APPROACH, played out as a BurglaryStage (the `burglary` flag
-        # below, set at ARCHETYPES construction) -- entrance diagram, then an
-        # interior walk to the target, always inside a private COMPOUND regardless
-        # of the job site's own kind (WETWORK_STRUCTURE), so this stage's flavor
-        # strings are short entrance captions, not sentences, same as Burglary's.
-        # Reaching the target *is* the whole job -- there is no separate
-        # objective/complication/exfil beat once you're in, the way there used to
-        # be: the building's own guards, cameras and locked doors already carry
-        # that risk, and a second helping of abstract choices after the walk read
-        # as unrelated to the building you just broke into. Where Intrusion is the
-        # Netrunner's quiet way through a system, Wetwork is the Solo's loud way
-        # through people -- grapple's lead (strength) is what archetype_specialist()
-        # reads as this job's contract. The other two approaches sit on different
-        # stats, so it's a job a Netrunner or Infiltrator can take and bleed through
-        # rather than one they're locked out of.
-        "Wetwork",
-        "strong-arm",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("grapple", 1, "Perimeter Wall"),
-                    ("infer", 0, "Service Entrance"),
-                    ("intimidation", -2, "Front Gate"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # A generic archetype, same as Heist/Extraction/Sabotage (mixed stat leads,
-        # no specialist) and, like Wetwork, a single-stage archetype: the ARCHETYPES
-        # comprehension below flags this row's lone APPROACH stage burglary=True,
-        # which tells generate_job to build it as a scene.BurglaryStage (an entrance
-        # diagram, then an interior walk) instead of a Choice list -- see jobs.py's
-        # generate_job and screens/burglary_screens.py. Reaching the target inside
-        # is the whole job; there is deliberately no separate objective/complication/
-        # exfil beat after the walk (there used to be one of each) -- the vault lock,
-        # the motion sensor, and getting back out are already what the building's
-        # locked doors, cameras and guarded exits *are*, so a second round of
-        # abstract choices once you're already inside just read as disconnected from
-        # the building you broke into. archetype_specialist() special-cases this row
-        # (see its own docstring): with only one stage left, its lead alone would
-        # otherwise misread as a specialist's contract, when the pool is deliberately
-        # mixed-stat. The APPROACH row's flavor strings are deliberately short node
-        # captions ("Front Door"), not sentences like every other row's -- they
-        # become the diagram's labels, not a line in a list, and that's the one place
-        # this table departs from the others' voice.
-        "Burglary",
-        "burgle",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("forgery", 1, "Front Door"),
-                    ("stealth", 0, "Back Window"),
-                    ("lift", -2, "Loading Dock"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # A second Netrunner specialist (every beat leads with `hack`, so
-        # archetype_specialist() reads Netrunner and pins the lead through the partial
-        # draw, same as Intrusion). What's structurally different is the ARCHETYPES
-        # comprehension below flags the *whole* archetype matrix=True: this is a remote
-        # hack, so the fight beside every stage is ICE (a scene.MatrixStage, resolved in
-        # matrix.py) rather than muscle, and losing one is ejection -> the contract
-        # blown, never death (see generate_job and screens/matrix_screen.py). Where
-        # Intrusion is netrunning that resolves as ordinary checks and meat fights, a
-        # Data Heist's signature is that its fights *are* matrix combat. It's shown to
-        # every build, with a cyberdeck/Hack warning (matrix.matrix_readiness) rather
-        # than a lockout: a non-hacker can take it and bleed against the ICE.
-        "Data Heist",
-        "crack",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("hack", 1, "Slip through a seam in the perimeter ICE"),
-                    ("stealth", 0, "Ghost past the watchdogs on a spoofed handshake"),
-                    ("toughness", -2, "Brute-force the gateway and eat the feedback"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You're inside their architecture. {target} sits behind the datastore's black ICE.",
-                (
-                    ("hack", 1, "Peel the black ICE apart, layer by layer"),
-                    ("infiltration", 0, "Pick the datastore's logical locks by hand"),
-                    ("toughness", -2, "Crash the node and rip the data as it falls"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "A tracer program wakes and starts walking back up your connection.",
-                (
-                    ("hack", 1, "Loop the tracer back on itself"),
-                    ("dodge", 0, "Bounce your signal through a dozen dead relays"),
-                    ("fortitude", -2, "Tank the neural feedback and keep working"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have {target}. Their logs still say you were never here.",
-                (
-                    ("hack", 1, "Scrub the logs and back out clean"),
-                    ("deception", 0, "Leave a false trail pointing at a rival crew"),
-                    ("acrobatics", -2, "Yank the jack and ride the dumpshock out"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # A three-stage job, not four: no COMPLICATION row at all, so a Bodyguard
-        # contract is always exactly APPROACH -> OBJECTIVE -> EXFIL -- meet the
-        # client, the exposed stop, get them home. Every stage also carries
-        # vigilance=True (set in the ARCHETYPES comprehension below), so most legs
-        # pass with nothing to click at all (see VIGILANCE_THREAT_CHANCE) rather than
-        # forcing a check at every single stop; when a threat does roll, it's a full
-        # stage with the pool below. Leads with perception (a second Infiltrator
-        # specialist alongside Recon -- "on the lookout" is what this job is), but
-        # strength/combat skills get real weight too as the way to actually deal with
-        # what you spotted, not just spot it.
-        "Bodyguard",
-        "guard",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("sight", 1, "Clock the meet point before they arrive"),
-                    ("negotiations", 0, "Talk the client into moving on your timeline, not theirs"),
-                    ("toughness", -2, "Push through the crowd at their side and eat the jostling"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You're at {location}, and your principal is exposed for exactly as long as you let them be.",
-                (
-                    ("pattern_seeking", 1, "Spot the one face that's shown up twice"),
-                    ("tactics", 0, "Read the room's exits before you need one"),
-                    ("grapple", -2, "Put a hand on the first person who gets too close"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "Your principal is still breathing. Getting them clear is the last part of the job.",
-                (
-                    ("listening", 1, "Hear the follow before it closes the distance"),
-                    ("intimidation", 0, "Make it very clear this isn't worth it"),
-                    ("blades", -2, "Put down whoever's still following and keep walking"),
-                ),
-            ),
-        ),
-    ),
-    (
-        # The Infiltrator specialist (every beat leads with a perception skill, which
-        # SPECIALIST_FOR_STAT maps to Infiltrator) -- Netrunner has two of these
-        # (Intrusion, Data Heist), Bodyguard above is the other Infiltrator job.
-        # Perception is also the most underused stat in the generic pool (see the
-        # balance notes in DESIGN.md), so leading every beat with it does double duty:
-        # it gives Infiltrator a contract of their own and it's the direct fix for that
-        # gap. The other two approaches on each beat still sit on different stats, same
-        # as every other specialist archetype.
-        "Recon",
-        "case",
-        (
-            (
-                StageType.APPROACH,
-                "You need to {verb} {faction} at {location}, in {territory}, to reach {target}.",
-                (
-                    ("sight", 1, "Pick your vantage before anyone knows you're watching"),
-                    ("forgery", 0, "Walk in on a badge that says you belong"),
-                    ("toughness", -2, "Push through wherever the crowd's thinnest"),
-                ),
-            ),
-            (
-                StageType.OBJECTIVE,
-                "You've got eyes on {target}. Getting the read you actually need means holding position.",
-                (
-                    ("pattern_seeking", 1, "Read the rotation until you know it cold"),
-                    ("infer", 0, "Piece together what the layout's telling you"),
-                    ("lift", -2, "Force the one lock that's actually in your way"),
-                ),
-            ),
-            (
-                StageType.COMPLICATION,
-                "Something moves that wasn't supposed to be there.",
-                (
-                    ("listening", 1, "Catch the change in the chatter before it catches you"),
-                    ("stealth", 0, "Go still and let it pass you by"),
-                    ("intimidation", -2, "Brazen it out before anyone thinks to ask"),
-                ),
-            ),
-            (
-                StageType.EXFIL,
-                "You have what you came for. Getting clear without being made is the other half of the job.",
-                (
-                    ("intuition", 1, "Feel the exit clear before you take it"),
-                    ("deception", 0, "Walk out looking like you belong"),
-                    ("acrobatics", -2, "Take the fast way down and don't look back"),
-                ),
-            ),
-        ),
-    ),
-)
-
-ARCHETYPES = [
-    JobArchetype(
-        name=name,
-        verb=verb,
-        stages=tuple(
-            JobStage(
-                type=stage_type,
-                prompt=prompt,
-                approaches=tuple(Approach(*approach) for approach in approaches),
-                burglary=(name in ("Burglary", "Wetwork") and stage_type is StageType.APPROACH),
-            )
-            for stage_type, prompt, approaches in stages
-        ),
-        matrix=(name == "Data Heist"),
-        hours_cost=4 if name == "Bodyguard" else None,
-        vigilance=(name == "Bodyguard"),
-        wetwork=(name == "Wetwork"),
-        # Burglary: you plus one support. Data Heist: solo, no crew at all -- the
-        # netrunner works it alone. Wetwork: up to two hires beside you, plus support.
-        max_on_site=1 if name in ("Burglary", "Data Heist") else 3 if name == "Wetwork" else None,
-        max_support=0 if name == "Data Heist" else 1 if name in ("Burglary", "Wetwork") else None,
-    )
-    for name, verb, stages in _ARCHETYPE_ROWS
-]
-
-# Everything the table can get wrong, caught at import rather than mid-generation.
-#
-# A typo'd skill id fails here, not mid-roll, and so does a difficulty_delta that
-# DAMAGE_FOR_DELTA doesn't price — the risk curve is the only source of job damage, so
-# a delta off the end of it has no damage at all. A pool too small to draw
-# PARTIAL_POOL_SIZE from would make rng.sample raise, and a one-approach stage is
-# not a choice at all — it's the regression this table exists to prevent. Neither is
-# a stage whose approaches share a core stat: a job stage is a gate every build has
-# to pass, so two approaches on one stat hand that stat's runner a second bite and
-# everyone else nothing. Checking the stat rule across the whole *pool* means it
-# holds for every subset the generator can draw. (Gigs are optional and
-# self-selected, so they're allowed to be themed on one stat; see
-# gigs._GIG_TEMPLATES.)
-_PROMPT_FIELDS = {
-    "verb": "",
-    "faction": "",
-    "territory": "",
-    "location": "",
-    "target": "",
-}
-
-for _archetype in ARCHETYPES:
-    if not _archetype.stages:
-        raise ValueError(f"{_archetype.name}: a job needs at least one stage")
-    # The cash, rep and standing all ride on whichever stage ends up last. If that
-    # stage could be dropped as optional, the payout would silently move with it.
-    if _archetype.stages[-1].type in OPTIONAL_STAGE_CHANCE:
-        raise ValueError(
-            f"{_archetype.name}: the last stage carries the payout and cannot be optional, "
-            f"got {_archetype.stages[-1].type}"
-        )
-    for _stage in _archetype.stages:
-        _stage.prompt.format(**_PROMPT_FIELDS)  # unknown field: fail here, not mid-job
-        if len(_stage.approaches) < PARTIAL_POOL_SIZE:
-            raise ValueError(
-                f"{_archetype.name}/{_stage.type}: a stage pool needs at least "
-                f"{PARTIAL_POOL_SIZE} approaches to draw from, got {len(_stage.approaches)}"
-            )
-        for _approach in _stage.approaches:
-            # Approach.failure_damage only reads DAMAGE_FOR_DELTA when a job is being
-            # generated, so an off-curve delta would KeyError at a fixer refresh.
-            if _approach.difficulty_delta not in DAMAGE_FOR_DELTA:
-                raise ValueError(
-                    f"{_archetype.name}/{_stage.type}: {_approach.skill!r} has no damage on the "
-                    f"risk curve for difficulty_delta {_approach.difficulty_delta}, "
-                    f"which must be one of {sorted(DAMAGE_FOR_DELTA, reverse=True)}"
-                )
-        _stats = [skill_for(approach.skill).stat for approach in _stage.approaches]
-        if len(set(_stats)) != len(_stats):
-            raise ValueError(
-                f"{_archetype.name}/{_stage.type}: a job stage's approaches must sit on "
-                f"different core stats, got {_stats}"
-            )
-
-
-# The runner archetype (runners.py) that fits a beat, keyed by the core stat its lead
-# approach rolls: the hack-and-data specialist, the muscle, the finesse operator. A job's
-# roles (Scene.roles) are *derived* from this rather than hand-mapped per beat, so a beat's
-# specialist is always whatever skill actually leads it — an Extraction's grab-the-target
-# objective reads as muscle, a Heist's crack-the-ice one as a netrunner, from the same table.
-SPECIALIST_FOR_STAT = {
-    "logic": "Netrunner",
-    "strength": "Solo",
-    "body": "Solo",
-    "agility": "Infiltrator",
-    "perception": "Infiltrator",
-    "cool": "Infiltrator",
-}
-if set(SPECIALIST_FOR_STAT) != set(CORE_STATS):
-    raise ValueError("SPECIALIST_FOR_STAT must map every core stat to a runner archetype")
-
-# Skills a specialist can work from afar — the netrunner in the car. A beat led by one of
-# these is a REMOTE role; every other beat is worked ON_SITE (see scene.Posture).
-REMOTE_SKILLS = frozenset({"hack"})
-
-
-def archetype_specialist(archetype: JobArchetype) -> str | None:
-    """The runner archetype this job is *for*, or None if it's generic work.
-
-    Derived from the leads rather than tabulated, for the same reason Scene.roles is: a
-    job every one of whose beats leads with the same specialist doesn't merely suit them,
-    it *is* their contract, and a field saying otherwise could only ever drift from the
-    approaches actually in the table.
-
-    This is what buys the specialist their lane. A generated job draws a subset of each
-    pool (PARTIAL_POOL_SIZE), so a lead can be withheld — fine for generic work, where
-    "which ways in this job happens to have" is the point, but it would make a Netrunner
-    job that offers no netrunning. generate_job keeps the lead for these; the rest of the
-    pool is drawn as normal, so two Intrusions still aren't the same Intrusion.
-
-    Burglary is special-cased ahead of the derivation below: it's down to a single
-    stage (see its own row's comment), so "every stage's lead agrees" would otherwise
-    trivially agree with itself and misread deliberately mixed-stat work (forgery's
-    lead is on `cool`) as an Infiltrator contract. Wetwork needs no such carve-out —
-    its own lone stage's lead (`grapple`, strength) already agrees with what every one
-    of its stages led with before this collapsed to one.
-    """
-    if archetype.name == "Burglary":
-        return None
-    specialists = {
-        SPECIALIST_FOR_STAT[skill_for(stage.approaches[0].skill).stat]
-        for stage in archetype.stages
-    }
-    return specialists.pop() if len(specialists) == 1 else None
-
-
-def _role_for_stage(job_stage: JobStage) -> Role:
-    """The crew position a beat offers, derived from its lead (cleanest) approach: the
-    specialist is whoever that skill's stat points to, and the posture is remote if the
-    skill can be worked over the net (REMOTE_SKILLS), else on-site. Derived from the full
-    template pool's lead, not the offer's drawn subset, so a beat's role is the same
-    regardless of which approaches this particular offer happens to include."""
-    lead = job_stage.approaches[0].skill
-    stat = skill_for(lead).stat
-    posture = Posture.REMOTE if lead in REMOTE_SKILLS else Posture.ON_SITE
-    return Role(beat=job_stage.type.value, specialist=SPECIALIST_FOR_STAT[stat], posture=posture)
 
 
 @dataclass
@@ -979,301 +318,378 @@ if set(BURGLARY_STRUCTURE) != set(GENERATED_KINDS):
 WETWORK_STRUCTURE = BuildingKind.COMPOUND
 
 
+@dataclass(frozen=True)
+class _JobPlan:
+    """Everything about a job that is settled before any one stage is built: which
+    archetype it is, who it's against and where, and what a clean run of it pays.
+
+    Exists so the per-stage builders below can be top-level functions instead of
+    closures. Every one of them needs the same handful of whole-job facts (the tier's
+    reward, the mark's name for the prompt, whether this beat is the last one), and
+    the stage loop used to carry them by closing over five nested defs, which is what
+    made generate_job 295 lines with no seam in it.
+
+    Frozen and index-addressed: the stage builders ask the plan for stage i's id, the
+    id of the stage after it, and the id of the fight beside it, rather than being
+    handed three pre-computed strings. That keeps "stage_0..n are contiguous and the
+    last one carries the payout" a single rule stated here rather than arithmetic
+    repeated in each builder.
+    """
+
+    rng: random.Random
+    archetype: JobArchetype
+    specialist: str | None
+    faction: Faction
+    territory: Territory
+    location: Location
+    target: str
+    tier: int
+    difficulty_base: int
+    reward_base: int
+    job_stages: tuple[JobStage, ...]
+
+    def stage_id(self, index: int) -> str:
+        return f"stage_{index}"
+
+    def fight_id(self, index: int) -> str:
+        return f"{self.stage_id(index)}_fight"
+
+    def is_last(self, index: int) -> bool:
+        return index == len(self.job_stages) - 1
+
+    def next_stage(self, index: int) -> str | None:
+        return None if self.is_last(index) else self.stage_id(index + 1)
+
+    def prompt(self, template: str) -> str:
+        """A stage's authored prose, filled in with this job's mark. The fields are
+        the ones job_archetypes checks every prompt against at import."""
+        return template.format(
+            verb=self.archetype.verb,
+            faction=self.faction.name,
+            territory=self.territory.name,
+            location=self.location.name,
+            target=self.target,
+        )
+
+    def difficulty(self, index: int) -> int:
+        """The stage's base difficulty, rolled once for the whole stage: every approach
+        is offset from this same number, so an Approach's difficulty_delta means the
+        same thing on every job. The ramp is spread across however many stages this job
+        turned out to have (STAGE_DIFFICULTY_RAMP)."""
+        ramp = (
+            round(STAGE_DIFFICULTY_RAMP * index / (len(self.job_stages) - 1)) if index else 0
+        )
+        return self.difficulty_base + ramp + self.rng.randint(-1, 2)
+
+    def payout(self, text: str, multiplier: float, rep: int, index: int) -> Outcome:
+        """What passing stage `index` is worth. Only the last stage pays: everywhere
+        else the Outcome just carries the job on to the next one."""
+        last = self.is_last(index)
+        return Outcome(
+            text=text,
+            next_stage=self.next_stage(index),
+            cash_delta=int(self.reward_base * multiplier) if last else 0,
+            experience_delta=int(JOB_XP_BASE[self.tier] * multiplier) if last else 0,
+            rep_delta=rep if last else 0,
+            standing_delta=JOB_STANDING_HIT if last else 0,
+            fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
+            security_delta=JOB_SECURITY_HIT if last else 0,
+        )
+
+
+def _pick_mark(corp_map: CorpMap, rng: random.Random) -> tuple[Territory, Faction, Location]:
+    """Who this job is against and where. The mark is a real corp, hit in a district it
+    actually holds on this run's map — and one with somewhere in it to actually hit. A
+    corp that expands onto a slum holds a district generated with no locations but its
+    encampment (see Slums & encampments in DESIGN.md), which would leave the site pick
+    empty.
+
+    Never the runner's own place either: if they've bought a safehouse in this corp
+    district, it's not a job site (and carries none of the LOCATION_SKILL/legwork tables
+    a site needs) — which is what GENERATED_KINDS filters both halves on."""
+    territory = rng.choice(corp_target_territories(corp_map))
+    location = rng.choice([loc for loc in territory.locations if loc.kind in GENERATED_KINDS])
+    return territory, FACTIONS_BY_ID[territory.owner], location
+
+
+def _approach_failure(plan: _JobPlan, index: int, approach: Approach, text: str) -> Outcome:
+    return Outcome(
+        text=text,
+        health_delta=-approach.failure_damage,
+        next_stage=plan.next_stage(index),
+        # Only the last stage's plain failure ends the job with nothing to
+        # show for it — everywhere else next_stage carries it on, so this
+        # is 0 there, same as payout()'s cash/rep/standing.
+        fixer_trust_delta=JOB_FAILURE_TRUST_HIT if plan.is_last(index) else 0,
+        rep_delta=JOB_FAILURE_REP_HIT if plan.is_last(index) else 0,
+    )
+
+
+def _entrance_failure(plan: _JobPlan, index: int, approach: Approach, text: str) -> Outcome:
+    """A burglary/wetwork Entrance's plain failure -- unlike _approach_failure,
+    this still pays out (at a reduced rate), because APPROACH is this job's
+    *only* stage: it's simultaneously the first check and the one payout()
+    calls "last", and every other archetype's last-stage plain failure paying
+    nothing is fine *because* it only happens after several earlier stages
+    already went well. Here it would happen on the very first roll every time,
+    making the walk that follows pointless regardless of how it goes -- and the
+    text itself ("you're in") already says the break-in still succeeds, just
+    messily, not that the job is blown. A critical failure is still the real
+    botched case (_approach_critical_failure): no reward, straight to the fight."""
+    outcome = plan.payout(text, MESSY_ENTRY_MULTIPLIER, 0, index)
+    outcome.health_delta = -approach.failure_damage
+    return outcome
+
+
+def _approach_critical_failure(plan: _JobPlan, index: int, approach: Approach) -> Outcome:
+    # The one branch that doesn't just cost health and carry on: you're
+    # made, and they arrive holding the initiative. Note it deals the
+    # *plain* failure damage, not the doubled hit a critical used to deal:
+    # the fight is the critical failure's punishment, and charging both
+    # stacked a double-damage hit under a squad that opens with a free
+    # round — which is a nat-1 killing a light build outright.
+    return Outcome(
+        text="It goes bad, fast. Someone hits the alarm.",
+        health_delta=-approach.failure_damage,
+        next_stage=plan.fight_id(index),
+    )
+
+
+def _ambush_kwargs(plan: _JobPlan, index: int) -> dict:
+    # The guaranteed way through, whatever the pool draw left you: forcing
+    # your way in is always loud, so every result routes straight to the
+    # fight — same door AMBUSH_LABEL opens on every other stage.
+    fight_id = plan.fight_id(index)
+    return {
+        "label": f"{AMBUSH_LABEL} ({skill_for(AMBUSH_SKILL).name})",
+        "skill": AMBUSH_SKILL,
+        "difficulty": AMBUSH_DIFFICULTY,
+        "success": Outcome(text="You pick your moment.", next_stage=fight_id),
+        "failure": Outcome(text="You move too early.", next_stage=fight_id),
+        "critical_failure": Outcome(text="You walk straight into them.", next_stage=fight_id),
+    }
+
+
+def _draw_approaches(plan: _JobPlan, job_stage: JobStage) -> list[Approach]:
+    """Which ways through this job happens to leave open. Kept in pool order so
+    the clean approach still reads before the bloody one."""
+    pool = job_stage.approaches
+    if plan.rng.random() < FULL_POOL_CHANCE:
+        return list(pool)
+    if plan.specialist is not None:
+        # A specialist job promises its specialist a way through every beat, so the
+        # lead — the approach that makes it their job at all — survives the draw and
+        # only the rest is sampled. Same draw size as any other partial pool.
+        return [
+            pool[0],
+            *sorted(plan.rng.sample(pool[1:], PARTIAL_POOL_SIZE - 1), key=pool.index),
+        ]
+    return sorted(plan.rng.sample(pool, PARTIAL_POOL_SIZE), key=pool.index)
+
+
+def _quiet_stage(plan: _JobPlan, index: int) -> Stage:
+    """A vigilance beat where nothing happens. Nothing to click, nothing to fail:
+    most legs of an escort should pass without incident rather than forcing a check
+    at every stop (see VIGILANCE_THREAT_CHANCE). Decided before any pool/difficulty
+    work, since a quiet stage needs none of it -- and no fight beside this stage
+    either, since with no roll nothing can ever route to one."""
+    return Stage(
+        id=plan.stage_id(index),
+        prompt="",  # narration carries the prose; a narration stage has no choices
+        choices=[],
+        narration=plan.payout(VIGILANCE_QUIET_TEXT, 1.0, 1, index),
+    )
+
+
+def _burglary_stage(plan: _JobPlan, index: int, approaches: list[Approach], difficulty: int) -> Stage:
+    """A Burglary or Wetwork APPROACH: each approach becomes an Entrance (a
+    diagram node, not a list row), landing the runner at a distinct spawn
+    inside a freshly generated building — several levels of it, with the
+    score (or the target) somewhere inside.
+
+    The building is generated *with the job* and lives inside its Scene: it is
+    never a corpmap.Location, so a target adds nothing to the map the player
+    walks around, and it goes away when the job is finished or expires.
+    Burglary's structure comes from the site's own kind (BURGLARY_STRUCTURE),
+    so breaking into a data haven doesn't hand you somebody's bedrooms; Wetwork
+    always drops the runner at a COMPOUND (WETWORK_STRUCTURE) regardless of the
+    site, since the target is holed up in their own place, not the job site's."""
+    job_stage = plan.job_stages[index]
+    kind = (
+        WETWORK_STRUCTURE
+        if plan.archetype.wetwork
+        else BURGLARY_STRUCTURE[plan.location.kind]
+    )
+    building = generate_building(plan.rng, entrance_count=len(approaches), kind=kind)
+    entrances = [
+        Entrance(
+            label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+            skill=approach.skill,
+            difficulty=difficulty + approach.difficulty_delta,
+            spawn=spawn,
+            success=plan.payout("It goes clean.", 1.0, 1, index),
+            failure=_entrance_failure(plan, index, approach, "It gets messy, but you're in."),
+            critical_success=plan.payout(
+                "Flawless. Nobody even looks up.", 1.5, 2, index,
+            ),
+            critical_failure=_approach_critical_failure(plan, index, approach),
+        )
+        for approach, spawn in zip(approaches, building.entrance_spawns, strict=True)
+    ]
+    entrances.append(Entrance(spawn=building.objective, **_ambush_kwargs(plan, index)))
+    return Stage(
+        id=plan.stage_id(index),
+        prompt="",  # the BurglaryStage carries the prose; a burglary stage has no choices
+        choices=[],
+        burglary=BurglaryStage(
+            prompt=plan.prompt(job_stage.prompt),
+            entrances=tuple(entrances),
+            building=building,
+            bailed=Outcome(
+                text="You back out the way you came, empty-handed.",
+                health_delta=-BURGLARY_SPOTTED_DAMAGE,
+                next_stage=plan.fight_id(index),
+            ),
+            guard=plan.rng.choice(roll_enemies(plan.tier, plan.rng)),
+        ),
+    )
+
+
+def _choice_stage(plan: _JobPlan, index: int, approaches: list[Approach], difficulty: int) -> Stage:
+    """The ordinary beat: the drawn pool as a list of Choices, plus the ambush."""
+    choices = [
+        Choice(
+            label=f"{approach.flavor} ({skill_for(approach.skill).name})",
+            skill=approach.skill,
+            difficulty=difficulty + approach.difficulty_delta,
+            success=plan.payout("It goes clean.", 1.0, 1, index),
+            failure=_approach_failure(plan, index, approach, "It gets messy, but you push on."),
+            critical_success=plan.payout(
+                "Flawless. You walk out with more than you bargained for.", 1.5, 2, index,
+            ),
+            critical_failure=_approach_critical_failure(plan, index, approach),
+        )
+        for approach in approaches
+    ]
+    choices.append(Choice(**_ambush_kwargs(plan, index)))
+    return Stage(
+        id=plan.stage_id(index),
+        prompt=plan.prompt(plan.job_stages[index].prompt),
+        choices=choices,
+    )
+
+
+def _fight_stage(plan: _JobPlan, index: int) -> Stage:
+    """The fight beside every stage, reached by the ambush choice or a critical
+    failure. Both Outcomes are the same whether it's a grid set-piece or an ICE
+    run — only where they're packaged (and who turns up) differs. A matrix job
+    fields ICE and no gunmen, so roll_enemies isn't called for it (nobody's in
+    the building), and its "escape" is being ejected."""
+    fight_id = plan.fight_id(index)
+    escape = Outcome(
+        text="You get out with your skin. The job is blown.",
+        fixer_trust_delta=JOB_FAILURE_TRUST_HIT,
+        rep_delta=JOB_FAILURE_REP_HIT,
+    )
+    if plan.archetype.matrix:
+        return Stage(
+            id=fight_id,
+            prompt="",  # the MatrixStage carries the prose; a fight stage has no choices
+            choices=[],
+            matrix=MatrixStage(
+                prompt=MATRIX_FIGHT_PROMPT.format(
+                    faction=plan.faction.name, location=plan.location.name
+                ),
+                network=generate_matrix_network(plan.tier, plan.rng),
+                victory=plan.payout("You seize the data and the ICE goes dark.", 1.0, 1, index),
+                escape=escape,
+            ),
+        )
+    enemies = roll_enemies(plan.tier, plan.rng)
+    tac = generate_map(
+        plan.rng, len(enemies), cover_density=_cover_density(plan.location.kind)
+    )
+    return Stage(
+        id=fight_id,
+        prompt="",  # the TacticalStage carries the prose
+        choices=[],
+        tactical=TacticalStage(
+            prompt=FIGHT_PROMPT.format(faction=plan.faction.name, location=plan.location.name),
+            grid=tac.grid,
+            player_start=tac.player_start,
+            enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
+            victory=plan.payout("They stop coming. You finish what you came for.", 1.0, 1, index),
+            escape=escape,
+            exits=tac.exits,
+        ),
+    )
+
+
 def generate_job(
     day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
 ) -> tuple[Scene, JobTiming]:
     rng = resolve_rng(rng)
     archetype = rng.choice(ARCHETYPES)
-    specialist = archetype_specialist(archetype)
-    # The mark is a real corp, hit in a district it actually holds on this run's map —
-    # and one with somewhere in it to actually hit. A corp that expands onto a slum
-    # holds a district generated with no locations but its encampment (see Slums &
-    # encampments in DESIGN.md), which would leave the site pick below empty.
-    held = sorted(
-        (
-            t for t in corp_map.territories.values()
-            if t.owner in FACTIONS_BY_ID
-            and any(loc.kind in GENERATED_KINDS for loc in t.locations)
-        ),
-        key=lambda t: t.id,
-    )
-    territory = rng.choice(held)
-    faction = FACTIONS_BY_ID[territory.owner]
-    # Never the runner's own place: if they've bought a safehouse in this corp district,
-    # it's not a job site (and carries none of the LOCATION_SKILL/legwork tables a site
-    # needs).
-    location = rng.choice([loc for loc in territory.locations if loc.kind in GENERATED_KINDS])
+    territory, faction, location = _pick_mark(corp_map, rng)
+    # Drawn here rather than inside the _JobPlan below so the rng is consumed in the
+    # same order it always was — the optional-stage rolls come after the mark.
     target = rng.choice(TARGETS)
     tier = _tier_for_day(day)
-    difficulty_base = DIFFICULTY_BASE[tier]
-    if archetype.hours_cost is not None:
-        hours_cost = archetype.hours_cost
-    else:
-        hours_cost = 8 if tier == 0 else 12
-
-    job_id = f"job_{uuid.uuid4().hex[:8]}"
     # Which beats this job actually has. An optional stage that doesn't make the cut
     # is gone before any ids are handed out, so stage_0..n stay contiguous.
-    job_stages = [
+    job_stages = tuple(
         stage
         for stage in archetype.stages
         if stage.type not in OPTIONAL_STAGE_CHANCE
         or rng.random() < OPTIONAL_STAGE_CHANCE[stage.type]
-    ]
+    )
     mandatory = sum(1 for s in archetype.stages if s.type not in OPTIONAL_STAGE_CHANCE)
     extra_stages = len(job_stages) - mandatory
-    reward_base = int(REWARD_BASE[tier] * (1 + REWARD_PER_EXTRA_STAGE * extra_stages))
-    stage_ids = [f"stage_{i}" for i in range(len(job_stages))]
-    stages: dict[str, Stage] = {}
-
-    for i, job_stage in enumerate(job_stages):
-        is_last = i == len(stage_ids) - 1
-        next_stage = None if is_last else stage_ids[i + 1]
-        fight_id = f"{stage_ids[i]}_fight"
-
-        def _payout(text: str, multiplier: float, rep: int, ns: str | None, last: bool) -> Outcome:
-            return Outcome(
-                text=text,
-                next_stage=ns,
-                cash_delta=int(reward_base * multiplier) if last else 0,
-                experience_delta=int(JOB_XP_BASE[tier] * multiplier) if last else 0,
-                rep_delta=rep if last else 0,
-                standing_delta=JOB_STANDING_HIT if last else 0,
-                fixer_trust_delta=FIXER_TRUST_GAIN if last else 0,
-                security_delta=JOB_SECURITY_HIT if last else 0,
-            )
-
-        if archetype.vigilance and rng.random() >= VIGILANCE_THREAT_CHANCE:
-            # Nothing to click, nothing to fail: most legs of an escort should pass
-            # without incident rather than forcing a check at every stop (see
-            # VIGILANCE_THREAT_CHANCE). Decided before any pool/difficulty work below,
-            # since a quiet stage needs none of it -- and no fight beside this stage
-            # either, since with no roll nothing can ever route to one.
-            stages[stage_ids[i]] = Stage(
-                id=stage_ids[i],
-                prompt="",  # narration carries the prose; a narration stage has no choices
-                choices=[],
-                narration=_payout(VIGILANCE_QUIET_TEXT, 1.0, 1, next_stage, is_last),
-            )
-            continue
-
-        # Which ways through this job happens to leave open. Kept in pool order so
-        # the clean approach still reads before the bloody one.
-        pool = job_stage.approaches
-        if rng.random() < FULL_POOL_CHANCE:
-            approaches = list(pool)
-        elif specialist is not None:
-            # A specialist job promises its specialist a way through every beat, so the
-            # lead — the approach that makes it their job at all — survives the draw and
-            # only the rest is sampled. Same draw size as any other partial pool.
-            approaches = [
-                pool[0],
-                *sorted(rng.sample(pool[1:], PARTIAL_POOL_SIZE - 1), key=pool.index),
-            ]
-        else:
-            approaches = sorted(rng.sample(pool, PARTIAL_POOL_SIZE), key=pool.index)
-        # Rolled once for the stage: every approach is offset from the same number,
-        # so an Approach's difficulty_delta means the same thing on every job.
-        ramp = round(STAGE_DIFFICULTY_RAMP * i / (len(job_stages) - 1)) if i else 0
-        difficulty = difficulty_base + ramp + rng.randint(-1, 2)
-
-        def _approach_failure(approach: Approach, text: str) -> Outcome:
-            return Outcome(
-                text=text,
-                health_delta=-approach.failure_damage,
-                next_stage=next_stage,
-                # Only the last stage's plain failure ends the job with nothing to
-                # show for it — everywhere else next_stage carries it on, so this
-                # is 0 there, same as _payout()'s cash/rep/standing.
-                fixer_trust_delta=JOB_FAILURE_TRUST_HIT if is_last else 0,
-                rep_delta=JOB_FAILURE_REP_HIT if is_last else 0,
-            )
-
-        def _entrance_failure(approach: Approach, text: str) -> Outcome:
-            """A burglary/wetwork Entrance's plain failure -- unlike _approach_failure,
-            this still pays out (at a reduced rate), because APPROACH is this job's
-            *only* stage: it's simultaneously the first check and the one _payout()
-            calls "last", and every other archetype's last-stage plain failure paying
-            nothing is fine *because* it only happens after several earlier stages
-            already went well. Here it would happen on the very first roll every time,
-            making the walk that follows pointless regardless of how it goes -- and the
-            text itself ("you're in") already says the break-in still succeeds, just
-            messily, not that the job is blown. A critical failure is still the real
-            botched case (_approach_critical_failure): no reward, straight to the fight."""
-            outcome = _payout(text, MESSY_ENTRY_MULTIPLIER, 0, next_stage, is_last)
-            outcome.health_delta = -approach.failure_damage
-            return outcome
-
-        def _approach_critical_failure(approach: Approach) -> Outcome:
-            # The one branch that doesn't just cost health and carry on: you're
-            # made, and they arrive holding the initiative. Note it deals the
-            # *plain* failure damage, not the doubled hit a critical used to deal:
-            # the fight is the critical failure's punishment, and charging both
-            # stacked a double-damage hit under a squad that opens with a free
-            # round — which is a nat-1 killing a light build outright.
-            return Outcome(
-                text="It goes bad, fast. Someone hits the alarm.",
-                health_delta=-approach.failure_damage,
-                next_stage=fight_id,
-            )
-
-        def _ambush_kwargs() -> dict:
-            # The guaranteed way through, whatever the pool draw left you: forcing
-            # your way in is always loud, so every result routes straight to the
-            # fight — same door AMBUSH_LABEL opens on every other stage.
-            return {
-                "label": f"{AMBUSH_LABEL} ({skill_for(AMBUSH_SKILL).name})",
-                "skill": AMBUSH_SKILL,
-                "difficulty": AMBUSH_DIFFICULTY,
-                "success": Outcome(text="You pick your moment.", next_stage=fight_id),
-                "failure": Outcome(text="You move too early.", next_stage=fight_id),
-                "critical_failure": Outcome(text="You walk straight into them.", next_stage=fight_id),
-            }
-
-        if job_stage.burglary:
-            # A Burglary or Wetwork APPROACH: each approach becomes an Entrance (a
-            # diagram node, not a list row), landing the runner at a distinct spawn
-            # inside a freshly generated building — several levels of it, with the
-            # score (or the target) somewhere inside.
-            #
-            # The building is generated *with the job* and lives inside its Scene: it is
-            # never a corpmap.Location, so a target adds nothing to the map the player
-            # walks around, and it goes away when the job is finished or expires.
-            # Burglary's structure comes from the site's own kind (BURGLARY_STRUCTURE),
-            # so breaking into a data haven doesn't hand you somebody's bedrooms; Wetwork
-            # always drops the runner at a COMPOUND (WETWORK_STRUCTURE) regardless of the
-            # site, since the target is holed up in their own place, not the job site's.
-            kind = WETWORK_STRUCTURE if archetype.wetwork else BURGLARY_STRUCTURE[location.kind]
-            building = generate_building(rng, entrance_count=len(approaches), kind=kind)
-            entrances = [
-                Entrance(
-                    label=f"{approach.flavor} ({skill_for(approach.skill).name})",
-                    skill=approach.skill,
-                    difficulty=difficulty + approach.difficulty_delta,
-                    spawn=spawn,
-                    success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
-                    failure=_entrance_failure(approach, "It gets messy, but you're in."),
-                    critical_success=_payout(
-                        "Flawless. Nobody even looks up.", 1.5, 2, next_stage, is_last,
-                    ),
-                    critical_failure=_approach_critical_failure(approach),
-                )
-                for approach, spawn in zip(approaches, building.entrance_spawns, strict=True)
-            ]
-            entrances.append(Entrance(spawn=building.objective, **_ambush_kwargs()))
-            stages[stage_ids[i]] = Stage(
-                id=stage_ids[i],
-                prompt="",  # the BurglaryStage carries the prose; a burglary stage has no choices
-                choices=[],
-                burglary=BurglaryStage(
-                    prompt=job_stage.prompt.format(
-                        verb=archetype.verb,
-                        faction=faction.name,
-                        territory=territory.name,
-                        location=location.name,
-                        target=target,
-                    ),
-                    entrances=tuple(entrances),
-                    building=building,
-                    bailed=Outcome(
-                        text="You back out the way you came, empty-handed.",
-                        health_delta=-BURGLARY_SPOTTED_DAMAGE,
-                        next_stage=fight_id,
-                    ),
-                    guard=rng.choice(roll_enemies(tier, rng)),
-                ),
-            )
-        else:
-            choices = [
-                Choice(
-                    label=f"{approach.flavor} ({skill_for(approach.skill).name})",
-                    skill=approach.skill,
-                    difficulty=difficulty + approach.difficulty_delta,
-                    success=_payout("It goes clean.", 1.0, 1, next_stage, is_last),
-                    failure=_approach_failure(approach, "It gets messy, but you push on."),
-                    critical_success=_payout(
-                        "Flawless. You walk out with more than you bargained for.",
-                        1.5, 2, next_stage, is_last,
-                    ),
-                    critical_failure=_approach_critical_failure(approach),
-                )
-                for approach in approaches
-            ]
-            choices.append(Choice(**_ambush_kwargs()))
-
-            stages[stage_ids[i]] = Stage(
-                id=stage_ids[i],
-                prompt=job_stage.prompt.format(
-                    verb=archetype.verb,
-                    faction=faction.name,
-                    territory=territory.name,
-                    location=location.name,
-                    target=target,
-                ),
-                choices=choices,
-            )
-        # The fight beside every stage, reached by the ambush choice or a critical
-        # failure. Both Outcomes are the same whether it's a grid set-piece or an ICE
-        # run — only where they're packaged (and who turns up) differs. A matrix job
-        # fields ICE and no gunmen, so roll_enemies isn't called for it (nobody's in
-        # the building), and its "escape" is being ejected.
-        fight_victory = _payout("They stop coming. You finish what you came for.", 1.0, 1, next_stage, is_last)
-        fight_escape = Outcome(
-            text="You get out with your skin. The job is blown.",
-            fixer_trust_delta=JOB_FAILURE_TRUST_HIT,
-            rep_delta=JOB_FAILURE_REP_HIT,
-        )
-        if archetype.matrix:
-            fight = Stage(
-                id=fight_id,
-                prompt="",  # the MatrixStage carries the prose; a fight stage has no choices
-                choices=[],
-                matrix=MatrixStage(
-                    prompt=MATRIX_FIGHT_PROMPT.format(faction=faction.name, location=location.name),
-                    network=generate_matrix_network(tier, rng),
-                    victory=_payout("You seize the data and the ICE goes dark.", 1.0, 1, next_stage, is_last),
-                    escape=fight_escape,
-                ),
-            )
-            stages[fight_id] = fight
-            continue
-        enemies = roll_enemies(tier, rng)
-        fight_prompt = FIGHT_PROMPT.format(faction=faction.name, location=location.name)
-        tac = generate_map(rng, len(enemies), cover_density=_cover_density(location.kind))
-        fight = Stage(
-            id=fight_id,
-            prompt="",  # the TacticalStage carries the prose
-            choices=[],
-            tactical=TacticalStage(
-                prompt=fight_prompt,
-                grid=tac.grid,
-                player_start=tac.player_start,
-                enemies=tuple(zip(enemies, tac.enemy_spawns, strict=True)),
-                victory=fight_victory,
-                escape=fight_escape,
-                exits=tac.exits,
-            ),
-        )
-        stages[fight_id] = fight
-
-    scene = Scene(
-        id=job_id,
-        title=f"{archetype.name}: {faction.name} ({territory.name})",
-        kind=SceneKind.JOB,
-        hours_cost=hours_cost,
-        start_stage=stage_ids[0],
-        stages=stages,
-        target_faction_id=faction.id,
-        target_territory_id=territory.id,
-        target_location_id=location.id,
-        target_fixer_id=fixer_id,
-        # One crew position per beat this job actually has (job_stages, after the optional
-        # complication is rolled), so the roles match the stages the runner will play.
-        roles=[_role_for_stage(job_stage) for job_stage in job_stages],
-        max_on_site=archetype.max_on_site,
-        max_support=archetype.max_support,
+    plan = _JobPlan(
+        rng=rng,
+        archetype=archetype,
+        specialist=archetype_specialist(archetype),
+        faction=faction,
+        territory=territory,
+        location=location,
+        target=target,
+        tier=tier,
+        difficulty_base=DIFFICULTY_BASE[tier],
+        reward_base=int(REWARD_BASE[tier] * (1 + REWARD_PER_EXTRA_STAGE * extra_stages)),
+        job_stages=job_stages,
     )
-    return scene, _random_timing(day, rng)
+
+    stages: dict[str, Stage] = {}
+    for index, job_stage in enumerate(job_stages):
+        if archetype.vigilance and rng.random() >= VIGILANCE_THREAT_CHANCE:
+            stages[plan.stage_id(index)] = _quiet_stage(plan, index)
+            continue
+        approaches = _draw_approaches(plan, job_stage)
+        difficulty = plan.difficulty(index)
+        build = _burglary_stage if job_stage.burglary else _choice_stage
+        stages[plan.stage_id(index)] = build(plan, index, approaches, difficulty)
+        stages[plan.fight_id(index)] = _fight_stage(plan, index)
+
+    return (
+        Scene(
+            id=f"job_{uuid.uuid4().hex[:8]}",
+            title=f"{archetype.name}: {faction.name} ({territory.name})",
+            kind=SceneKind.JOB,
+            hours_cost=archetype.hours_cost if archetype.hours_cost is not None else (8 if tier == 0 else 12),
+            start_stage=plan.stage_id(0),
+            stages=stages,
+            target_faction_id=faction.id,
+            target_territory_id=territory.id,
+            target_location_id=location.id,
+            target_fixer_id=fixer_id,
+            # One crew position per beat this job actually has (job_stages, after the optional
+            # complication is rolled), so the roles match the stages the runner will play.
+            roles=[_role_for_stage(job_stage) for job_stage in job_stages],
+            max_on_site=archetype.max_on_site,
+            max_support=archetype.max_support,
+        ),
+        _random_timing(day, rng),
+    )
 
 
 # How each kind of place is scouted, in flavor text. The skill itself lives in

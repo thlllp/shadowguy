@@ -6,12 +6,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
 from textual.geometry import Region
-from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.character import Character
-from shadowguy.abstract_combat import CombatOutcome
-from shadowguy.combat import Drop
 from shadowguy.corp_turn import owned_academy, owned_research_facility
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
@@ -24,19 +21,6 @@ from shadowguy.corpmap import (
     owner_label,
     render_ascii_map,
     travel_path,
-    unowned_territory_ids,
-)
-from shadowguy.encounters import (
-    ARREST_CASH_PCT,
-    ARREST_HOURS,
-    ARREST_STANDING_HIT,
-    CorpEncounter,
-    GangEncounter,
-    TOLL_STANDING_GAIN,
-    corp_security_encounter,
-    gang_attack,
-    roll_corp_encounter,
-    roll_gang_encounter,
 )
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.fixer import AMY_FIXER_ID, discover_fixers_here
@@ -52,11 +36,9 @@ from . import (
     MENU_QUIT_BINDINGS,
     BackScreen,
     CharacterSheet,
-    _menu_css,
     _replace_items,
     matrix_warning,
 )
-from .combat_screen import CombatScreen
 from .corp_screen import (
     NO_CORP_TEXT,
     CorpActionsMixin,
@@ -72,6 +54,7 @@ from .corp_screen import (
     territory_rows,
 )
 from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
+from .map_encounters import EncounterMixin
 from .scene_screen import SceneScreen
 from .shop_screens import (
     BarScreen,
@@ -156,7 +139,7 @@ _CORP_CATEGORIES = [
 ]
 
 
-class CorpMapScreen(CorpActionsMixin, BackScreen):
+class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     """The home screen for both a runner and a corp-only run, with a left-side
     category sidebar (hidden on the _FULL_WIDTH_CATEGORIES tabs, which take the whole
     width). The main content area shows the map by default; selecting an inline
@@ -1016,137 +999,6 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
             self.selected_id = self.hovered_id
             self._refresh_map_view()
 
-    # ── gang encounters ─────────────────────────────────────────────────────
-
-    def _maybe_gang_encounter(self) -> bool:
-        """Roll for a gang encounter at the character's current district. Returns
-        whether one fired, so _walk_travel_path knows to stop there rather than
-        carry on to the next hop."""
-        character = self.app.character
-        territory = self.app.corp_map.territories[character.location_id]
-        encounter = roll_gang_encounter(character, territory, self.app.rng)
-        if encounter is None:
-            return False
-        self._pending_gang = encounter.gang
-        if encounter.toll is None:
-            self._start_gang_fight(encounter.gang)
-        else:
-            self.app.push_screen(GangTollScreen(encounter), self._on_toll)
-        return True
-
-    def _on_toll(self, paid: bool) -> None:
-        if paid:
-            character = self.app.character
-            character.adjust_gang_standing(self._pending_gang.id, TOLL_STANDING_GAIN)
-            new_standing = character.gang_standing_with(self._pending_gang.id)
-            self.notify(
-                f"You pay off {self._pending_gang.name} and move on. "
-                f"Standing with them rises to {new_standing}."
-            )
-        else:
-            self._start_gang_fight(self._pending_gang)
-
-    def _start_gang_fight(self, gang) -> None:
-        self._gang_encounter = gang_attack(gang, self.app.rng)
-        self.app.push_screen(
-            CombatScreen(self._gang_encounter, Drop.ENEMY), self._on_gang_combat_end
-        )
-
-    def _on_gang_combat_end(self, result: CombatOutcome) -> None:
-        character = self.app.character
-        if result is CombatOutcome.DEAD:
-            self.app.exit(message=f"{character.name} has died. Game over.")
-            return
-        if result is CombatOutcome.KNOCKED_OUT:
-            roll = self.app.rng.randint(1, 6)
-            if roll <= 2:
-                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
-                return
-            character.cash //= 2
-            character.health = 1
-            self.notify("You came to in an alley, lighter a few creds.")
-            return
-        outcome = (
-            self._gang_encounter.victory
-            if result is CombatOutcome.VICTORY
-            else self._gang_encounter.escape
-        )
-        self.notify(outcome.text)
-
-    # ── corp territory encounters ─────────────────────────────────────────────
-
-    def _maybe_corp_encounter(self) -> bool:
-        """Roll for a corp encounter at the character's current district. Returns
-        whether one fired, so _walk_travel_path knows to stop. Mirrors
-        _maybe_gang_encounter — detection gate, toll-or-attack, same shape."""
-        character = self.app.character
-        territory = self.app.corp_map.territories[character.location_id]
-        encounter = roll_corp_encounter(character, territory, self.app.rng)
-        if encounter is None:
-            return False
-        self._pending_corp = encounter
-        if encounter.fine is None:
-            self._start_corp_fight(encounter)
-        else:
-            self.app.push_screen(CorpTollScreen(encounter), self._on_corp_toll)
-        return True
-
-    def _on_corp_toll(self, paid: bool) -> None:
-        character = self.app.character
-        enc = self._pending_corp
-        if paid:
-            character.cash -= enc.fine
-            character.adjust_standing(enc.faction.id, -1)
-            expel_id = getattr(self, "_prev_territory_id", None)
-            if expel_id is not None:
-                character.location_id = expel_id
-                self._do_refresh_map()
-            self.notify(
-                f"{enc.faction.name} security escorts you out of {enc.territory_name}."
-            )
-        else:
-            self._start_corp_fight(enc)
-
-    def _start_corp_fight(self, encounter: CorpEncounter) -> None:
-        self._corp_encounter = corp_security_encounter(
-            encounter.faction, encounter.territory_name, self.app.rng
-        )
-        self.app.push_screen(
-            CombatScreen(self._corp_encounter, Drop.ENEMY), self._on_corp_combat_end
-        )
-
-    def _on_corp_combat_end(self, result: CombatOutcome) -> None:
-        character = self.app.character
-        if result is CombatOutcome.DEAD:
-            self.app.exit(message=f"{character.name} has died. Game over.")
-            return
-        encounter = self._pending_corp
-        if result is CombatOutcome.KNOCKED_OUT:
-            roll = self.app.rng.randint(1, 6)
-            if roll <= 2:
-                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
-                return
-            lost = int(character.cash * ARREST_CASH_PCT)
-            character.cash -= lost
-            character.adjust_standing(encounter.faction.id, ARREST_STANDING_HIT)
-            self.app.spend_time(ARREST_HOURS)
-            unowned = unowned_territory_ids(self.app.corp_map)
-            character.location_id = (
-                unowned[0] if unowned else self.app.corp_map.player_start_id
-            )
-            self._do_refresh_map()
-            self.notify(
-                f"{encounter.faction.name} holds you for hours, then dumps you on the street. "
-                f"Lighter by {lost}eb."
-            )
-            return
-        outcome = (
-            self._corp_encounter.victory
-            if result is CombatOutcome.VICTORY
-            else self._corp_encounter.escape
-        )
-        self.notify(outcome.text)
-
     def _push_location_screen(self, location, territory) -> None:
         if location.kind in SHOP_KINDS:
             self.app.push_screen(ShopScreen(location))
@@ -1408,71 +1260,3 @@ class CorpMapScreen(CorpActionsMixin, BackScreen):
         await _replace_items(
             self.query_one("#surveillance_list", ListView), sighting_rows(corp_state, corp_map)
         )
-
-
-class GangTollScreen(ModalScreen):
-    BINDINGS = [("escape", "refuse", "Refuse")]
-    CSS = _menu_css("GangTollScreen", "toll_dialog")
-
-    def __init__(self, encounter: GangEncounter) -> None:
-        super().__init__()
-        self.encounter = encounter
-
-    def compose(self) -> ComposeResult:
-        enc = self.encounter
-        can_pay = self.app.character.cash >= enc.toll
-        pay_label = f"Pay {enc.toll}eb" if can_pay else f"Pay {enc.toll}eb — can't cover it"
-        yield Vertical(
-            Static(f"{enc.gang.name} block your way — {enc.toll}eb to pass."),
-            ListView(
-                ListItem(Static(pay_label), id="pay"),
-                ListItem(Static("Refuse — they'll come at you"), id="refuse"),
-            ),
-            id="toll_dialog",
-        )
-
-    def action_refuse(self) -> None:
-        self.dismiss(False)
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        character = self.app.character
-        if event.item.id == "pay" and character.cash >= self.encounter.toll:
-            character.cash -= self.encounter.toll
-            self.dismiss(True)
-        else:
-            self.dismiss(False)
-
-
-class CorpTollScreen(ModalScreen):
-    BINDINGS = [("escape", "refuse", "Refuse")]
-    CSS = _menu_css("CorpTollScreen", "toll_dialog")
-
-    def __init__(self, encounter: CorpEncounter) -> None:
-        super().__init__()
-        self.encounter = encounter
-
-    def compose(self) -> ComposeResult:
-        enc = self.encounter
-        can_pay = self.app.character.cash >= enc.fine
-        pay_label = f"Pay {enc.fine}eb" if can_pay else f"Pay {enc.fine}eb — can't cover it"
-        yield Vertical(
-            Static(
-                f"{enc.faction.name} security stops you in {enc.territory_name} — "
-                f"pay {enc.fine}eb and leave, or they'll take you in."
-            ),
-            ListView(
-                ListItem(Static(pay_label), id="pay"),
-                ListItem(Static("Refuse — they'll come at you"), id="refuse"),
-            ),
-            id="toll_dialog",
-        )
-
-    def action_refuse(self) -> None:
-        self.dismiss(False)
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        character = self.app.character
-        if event.item.id == "pay" and character.cash >= self.encounter.fine:
-            self.dismiss(True)
-        else:
-            self.dismiss(False)

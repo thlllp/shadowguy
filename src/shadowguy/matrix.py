@@ -244,7 +244,7 @@ if MATRIX_NETWORK_TIERS.keys() != ICE_TIERS.keys():
     raise ValueError("MATRIX_NETWORK_TIERS must cover the same tiers as ICE_TIERS")
 
 # Chance of an extra edge between any two nodes beyond the guaranteed spine —
-# corpmap.EXTRA_EDGE_CHANCE's role, here: branches and loops instead of one corridor.
+# corpmap_gen.EXTRA_EDGE_CHANCE's role, here: branches and loops instead of one corridor.
 EXTRA_NODE_EDGE_CHANCE = 0.2
 
 
