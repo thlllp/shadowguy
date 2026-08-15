@@ -262,7 +262,7 @@ class ShopScreen(PanelNav, BackScreen):
         for item in CATALOG.get(self.location.kind, []):
             if item.min_standing > standing:
                 continue
-            price = buy_price(item.price, standing)
+            price = buy_price(item.price, standing, character)
             bonus = bonus_text(item)
             label = f"Buy {item.name} — {price}eb" + (f" ({bonus})" if bonus else "")
             if character.cash < price:
@@ -272,7 +272,7 @@ class ShopScreen(PanelNav, BackScreen):
         for consumable in CONSUMABLE_CATALOG.get(self.location.kind, []):
             if consumable.min_standing > standing:
                 continue
-            price = buy_price(consumable.price, standing)
+            price = buy_price(consumable.price, standing, character)
             label = f"Buy {consumable.name} — {price}eb"
             if character.cash < price:
                 label += " — can't afford"
@@ -281,7 +281,7 @@ class ShopScreen(PanelNav, BackScreen):
         # Ammo is its own catalog (not an Item, not a Consumable). The reserve count rides
         # on the label so a runner can see what they already have without leaving the shop.
         for ammo in AMMO_CATALOG.get(self.location.kind, []):
-            price = buy_price(ammo.price, standing)
+            price = buy_price(ammo.price, standing, character)
             held = character.ammo.get(ammo.kind.value, 0)
             label = f"Buy {ammo.name} ({ammo.rounds}) — {price}eb — {held} held"
             if character.cash < price:
@@ -300,7 +300,7 @@ class ShopScreen(PanelNav, BackScreen):
         for program in PROGRAM_CATALOG.get(self.location.kind, []):
             if program.min_standing > standing:
                 continue
-            price = buy_price(program.price, standing)
+            price = buy_price(program.price, standing, character)
             # Program.tag is what the row has to tell them apart by: a name and a
             # price alone can't say whether this is a passive bonus or a two-charge
             # action, and the Cyberdeck screen (where the effect *is* spelled out) is

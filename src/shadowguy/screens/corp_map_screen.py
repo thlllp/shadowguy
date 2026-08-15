@@ -30,7 +30,7 @@ from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.cybernetics import catalog_for_standing
 from shadowguy.rivals import RunnerActivity
 from shadowguy.scene import Scene
-from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG
+from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG, owned_app_bonus
 
 from . import (
     MENU_QUIT_BINDINGS,
@@ -115,7 +115,10 @@ _STOCK_PREVIEW_COUNT = 5
 
 
 def _travel_hours(character: Character) -> float:
-    return TRAVEL_HOURS_COST * (1 - equipped_travel_reduction(character.inventory))
+    reduction = equipped_travel_reduction(character.inventory) + owned_app_bonus(
+        character, "travel_reduction"
+    )
+    return TRAVEL_HOURS_COST * (1 - reduction)
 
 
 _RUNNER_CATEGORIES = [

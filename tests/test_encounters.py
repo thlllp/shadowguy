@@ -8,22 +8,34 @@ import random
 from types import SimpleNamespace
 
 from shadowguy.character import Character
+from shadowguy.corpmap import TerritoryModifier
 from shadowguy.encounters import (
     ATTACK_STANDING,
+    CORP_SPOTTED_BASE,
     GANG_ENCOUNTER_CHANCE,
     gang_attack,
+    roll_corp_encounter,
     roll_gang_encounter,
     toll_for,
 )
+from shadowguy.factions import FACTIONS
 from shadowguy.gangs import GANGS
+from shadowguy.shops import APPS_BY_ID, buy_app
 
 from helpers import ForcedChance
 
 GANG_ID = GANGS[0].id
+FACTION_ID = FACTIONS[0].id
 
 
 def _territory(gang_id):
     return SimpleNamespace(gang_id=gang_id)
+
+
+def _corp_territory(owner, surveillance=0):
+    return SimpleNamespace(
+        owner=owner, name="Test District", modifiers={TerritoryModifier.SURVEILLANCE: surveillance}
+    )
 
 
 HIT = ForcedChance(0.0)  # 0.0 < chance -> always triggers
@@ -32,6 +44,41 @@ MISS = ForcedChance(0.99)  # 0.99 >= chance -> never triggers
 
 def test_toll_escalates_by_band():
     assert [toll_for(s) for s in (-1, -2, -3, -4)] == [40, 70, 100, 130]
+
+
+def test_toll_discount_is_subtracted_and_floored_at_zero():
+    assert toll_for(-1, discount=10) == 30
+    assert toll_for(-1, discount=1000) == 0
+
+
+def test_an_owned_streetline_app_discounts_the_toll():
+    c = Character(name="t", cash=100_000)
+    c.adjust_gang_standing(GANG_ID, -2)
+    streetline = APPS_BY_ID["app_streetline"]
+    buy_app(c, streetline.id)
+    enc = roll_gang_encounter(c, _territory(GANG_ID), HIT)
+    assert enc.toll == toll_for(-2, streetline.toll_discount)
+    assert enc.toll < toll_for(-2)
+
+
+def test_an_owned_ghostline_app_can_drop_the_corp_spotted_roll_below_the_chance():
+    """A roll strictly between the discounted and undiscounted chance (at
+    surveillance 0, that's between CORP_SPOTTED_BASE - detection_reduction and
+    CORP_SPOTTED_BASE) hits without Ghostline and misses with it -- the reduction
+    is real, not just present."""
+    ghostline = APPS_BY_ID["app_ghostline"]
+    roll_value = CORP_SPOTTED_BASE - ghostline.detection_reduction / 2
+    assert 0 < roll_value < CORP_SPOTTED_BASE
+    roll = ForcedChance(roll_value)
+
+    without = Character(name="t")
+    without.adjust_standing(FACTION_ID, -1)
+    assert roll_corp_encounter(without, _corp_territory(FACTION_ID), roll) is not None
+
+    with_app = Character(name="t", cash=100_000)
+    with_app.adjust_standing(FACTION_ID, -1)
+    buy_app(with_app, ghostline.id)
+    assert roll_corp_encounter(with_app, _corp_territory(FACTION_ID), roll) is None
 
 
 def test_no_encounter_when_standing_is_non_negative():

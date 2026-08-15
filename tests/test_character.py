@@ -2,7 +2,7 @@
 
 import pytest
 
-from shadowguy.shops import ITEMS_BY_ID, STOCK_MOD_IDS, WEAPON_MOD_SLOTS, InventoryItem
+from shadowguy.shops import APPS_BY_ID, ITEMS_BY_ID, STOCK_MOD_IDS, WEAPON_MOD_SLOTS, InventoryItem, buy_app
 from shadowguy.character import (
     BASE_HEALTH,
     CORE_STATS,
@@ -274,6 +274,26 @@ def test_standing_and_local_standing_and_trust_default_to_zero_and_adjust():
     assert c.standing_with("faction_x") == 3
     assert c.local_standing_with("char_x") == -2
     assert c.trust_with("fixer_x") == 1
+
+
+def test_an_owned_networker_app_boosts_positive_local_and_gang_standing_gains():
+    networker = APPS_BY_ID["app_networker"]
+    c = Character(name="t", cash=100_000)
+    buy_app(c, networker.id)
+    c.adjust_local_standing("char_x", 10)
+    c.adjust_gang_standing("gang_x", 10)
+    assert c.local_standing_with("char_x") == round(10 * (1 + networker.standing_bonus))
+    assert c.gang_standing_with("gang_x") == round(10 * (1 + networker.standing_bonus))
+
+
+def test_an_owned_networker_app_does_not_soften_a_standing_loss():
+    networker = APPS_BY_ID["app_networker"]
+    c = Character(name="t", cash=100_000)
+    buy_app(c, networker.id)
+    c.adjust_local_standing("char_x", -10)
+    c.adjust_gang_standing("gang_x", -10)
+    assert c.local_standing_with("char_x") == -10
+    assert c.gang_standing_with("gang_x") == -10
 
 
 def test_advantage_bank_is_per_job_and_consumed_once():

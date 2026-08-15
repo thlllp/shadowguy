@@ -49,10 +49,16 @@ def _standing_discount(standing: int) -> float:
     return max(-STANDING_PRICE_CAP, min(STANDING_PRICE_CAP, standing * STANDING_PRICE_STEP))
 
 
-def buy_price(base: int, standing: int) -> int:
+def buy_price(base: int, standing: int, character: "Character | None" = None) -> int:
     """What you pay for a `base`-priced item at a shop whose owner you have `standing`
-    with. Higher standing is cheaper, negative is a markup; never below 1eb."""
-    return max(1, round(base * (1 - _standing_discount(standing))))
+    with. Higher standing is cheaper, negative is a markup; never below 1eb. `character`
+    is optional (every pre-existing call site omits it) so an owned BankRoll app's flat
+    shop_discount (owned_app_bonus) stacks additively on top of the standing discount —
+    it isn't capped by STANDING_PRICE_CAP, which bounds standing alone."""
+    discount = _standing_discount(standing)
+    if character is not None:
+        discount += owned_app_bonus(character, "shop_discount")
+    return max(1, round(base * (1 - discount)))
 
 
 def sell_price(base: int, standing: int) -> int:
@@ -1156,7 +1162,7 @@ def buy_program(character: "Character", program_id: str, standing: int = 0) -> s
         return f"{program.name} isn't available to you yet."
     if program_id in character.owned_programs:
         return f"Already own {program.name}."
-    price = buy_price(program.price, standing)
+    price = buy_price(program.price, standing, character)
     if character.cash < price:
         return f"Can't afford {program.name} ({price}eb)."
     character.cash -= price
@@ -1201,7 +1207,7 @@ def stock_mod_ids(item: Item) -> list[str]:
 def buy_item(character: "Character", item: Item, standing: int = 0) -> bool:
     if standing < item.min_standing:
         return False
-    price = buy_price(item.price, standing)
+    price = buy_price(item.price, standing, character)
     if character.cash < price:
         return False
     character.cash -= price
@@ -1284,6 +1290,95 @@ def unload_on_disposal(character: "Character", item: Item) -> None:
 
 
 @dataclass(frozen=True)
+class AppStoreApp:
+    """A one-time-purchase Phone app (screens/info_screens.py's AppStoreScreen) — bought
+    once into Character.owned_apps, never installed/equipped/removed, its bonus applying
+    for the rest of the run just by being owned. No location or standing gate, unlike
+    every other catalog here: it's a phone app, reachable from anywhere the Phone is,
+    the same way Contacts/Web/Messages already are.
+
+    Exactly one of the six effect fields is meaningfully set per app (enforced at
+    import, below) — five numeric bonuses plus job_alert, a reveal flag rather than a
+    formula input (the same "one field carved out of the numeric shape" exception
+    Program.detect already sets for a passive program). Kept as narrow fields rather
+    than one generic "effect" — each has exactly one consumer reading a different
+    formula:
+
+    | field | consumer |
+    |---|---|
+    | travel_reduction | screens/corp_map_screen.py's _travel_hours, stacks additively with a Slot.VEHICLE item's own |
+    | lodging_discount | ShadowguyApp.rest_cost's corpmap.lodging_cost call |
+    | toll_discount | encounters.toll_for, a flat eb subtraction |
+    | detection_reduction | encounters.roll_corp_encounter's spotted chance |
+    | standing_bonus | Character.adjust_local_standing/adjust_gang_standing, a positive-delta-only multiplier |
+    | shop_discount | shops.buy_price, stacks additively with the standing discount |
+    | job_alert | screens/info_screens.py's WebScreen Search list, reveals a job's best-case payout |
+    """
+
+    id: str
+    name: str
+    price: int
+    tag: str = ""
+    travel_reduction: float = 0.0
+    lodging_discount: float = 0.0
+    toll_discount: int = 0
+    detection_reduction: float = 0.0
+    standing_bonus: float = 0.0
+    shop_discount: float = 0.0
+    job_alert: bool = False
+
+
+_APP_EFFECT_FIELDS = (
+    "travel_reduction",
+    "lodging_discount",
+    "toll_discount",
+    "detection_reduction",
+    "standing_bonus",
+    "shop_discount",
+    "job_alert",
+)
+
+# id, name, price, tag, then one of the effect fields above. First-slice catalog, not
+# balance-simulated.
+APP_STORE_CATALOG: list[AppStoreApp] = [
+    AppStoreApp("app_rideshare", "RideShare+", 250, "-15% travel time", travel_reduction=0.15),
+    AppStoreApp("app_nestfinder", "NestFinder", 200, "-35% lodging cost", lodging_discount=0.35),
+    AppStoreApp("app_streetline", "StreetLine", 225, "-35eb gang tolls", toll_discount=35),
+    AppStoreApp(
+        "app_ghostline", "Ghostline", 250, "-5pp corp detection chance", detection_reduction=0.05
+    ),
+    AppStoreApp("app_networker", "Networker", 250, "+20% standing gained", standing_bonus=0.20),
+    AppStoreApp("app_bankroll", "BankRoll", 300, "-8% shop prices", shop_discount=0.08),
+    AppStoreApp("app_gigfeed", "GigFeed", 200, "shows a job's best payout", job_alert=True),
+]
+APPS_BY_ID = {app.id: app for app in APP_STORE_CATALOG}
+
+if len(APPS_BY_ID) != len(APP_STORE_CATALOG):
+    raise ValueError("APP_STORE_CATALOG has duplicate ids")
+for _app in APP_STORE_CATALOG:
+    if sum(bool(getattr(_app, _field)) for _field in _APP_EFFECT_FIELDS) != 1:
+        raise ValueError(f"{_app.id}: exactly one effect field must be set")
+
+
+def owned_app_bonus(character: "Character", field_name: str) -> float:
+    """Summed bonus across every AppStoreApp `character` owns with `field_name` set --
+    the App Store's one generic reader, shared by every consumer instead of one
+    near-identical helper per field."""
+    return sum(getattr(app, field_name) for app in APP_STORE_CATALOG if app.id in character.owned_apps)
+
+
+def buy_app(character: "Character", app_id: str) -> str:
+    app = APPS_BY_ID[app_id]
+    if app_id in character.owned_apps:
+        return f"Already own {app.name}."
+    if character.cash < app.price:
+        return f"Can't afford {app.name} ({app.price}eb)."
+    character.cash -= app.price
+    character.owned_apps.add(app_id)
+    return f"Bought {app.name} for {app.price}eb."
+
+
+@dataclass(frozen=True)
 class Ammo:
     """A box of rounds, sold at a WEAPON_SHOP. Its own small catalog rather than an Item
     (ammo is never equipped and takes no slot) or a Consumable (it isn't used in a single
@@ -1324,7 +1419,7 @@ def buy_ammo(character: "Character", kind: AmmoKind, standing: int = 0) -> bool:
     """Buy one box, into the reserve pool. Nothing is loaded by this — the rounds go in
     the runner's pockets, and inventory.reload_weapon is what puts them in a gun."""
     ammo = AMMO_BY_KIND[kind]
-    price = buy_price(ammo.price, standing)
+    price = buy_price(ammo.price, standing, character)
     if character.cash < price:
         return False
     character.cash -= price
@@ -1335,7 +1430,7 @@ def buy_ammo(character: "Character", kind: AmmoKind, standing: int = 0) -> bool:
 def buy_consumable(character: "Character", consumable: Consumable, standing: int = 0) -> bool:
     if standing < consumable.min_standing:
         return False
-    price = buy_price(consumable.price, standing)
+    price = buy_price(consumable.price, standing, character)
     if character.cash < price:
         return False
     character.cash -= price

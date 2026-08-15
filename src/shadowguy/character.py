@@ -17,6 +17,7 @@ from shadowguy.shops import (
     InventoryItem,
     Item,
     grant_item,
+    owned_app_bonus,
     unload_on_disposal,
 )
 from shadowguy.skills import SKILLS, skill_for, skill_value
@@ -298,6 +299,11 @@ class Character:
     # installed on any deck by itself — see inventory.install_program/InventoryItem.
     # installed_programs. Mirrors discovered_fixers' shape: a set of owned ids.
     owned_programs: set[str] = field(default_factory=set)
+    # App ids (shops.APPS_BY_ID) bought from the Phone's App Store — a one-time
+    # purchase, never installed/equipped/removed, its bonus (shops.owned_app_bonus)
+    # applying for the rest of the run just by being owned. Mirrors owned_programs'
+    # shape: a flat set of owned ids.
+    owned_apps: set[str] = field(default_factory=set)
     # stat name -> bonus from a used Chem, active until the next rest().
     temp_bonuses: dict[str, int] = field(default_factory=dict)
     # skill id (shadowguy.skills.SKILLS_BY_ID) -> rank. Every skill starts at
@@ -385,12 +391,18 @@ class Character:
         return self.local_standing.get(character_id, 0)
 
     def adjust_local_standing(self, character_id: str, delta: int) -> None:
+        # An owned Networker app (shops.owned_app_bonus's "standing_bonus") boosts a
+        # gain, never softens a loss -- gang_standing gets the same treatment below.
+        if delta > 0:
+            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
         self._adjust_dict(self.local_standing, character_id, delta)
 
     def gang_standing_with(self, gang_id: str) -> int:
         return self.gang_standing.get(gang_id, 0)
 
     def adjust_gang_standing(self, gang_id: str, delta: int) -> None:
+        if delta > 0:
+            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
         self._adjust_dict(self.gang_standing, gang_id, delta)
 
     def discover_fixer(self, fixer_id: str) -> None:

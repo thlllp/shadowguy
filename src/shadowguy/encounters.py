@@ -9,7 +9,7 @@ None of this drives standing negative on its own; that belongs to job/gig comple
 This is the mechanism on top of the standing score — once a job hits a corp's reputation,
 entering their territory carries risk.
 
-Leaf-ish: imports character/combat/corpmap/factions/gangs/scene, never app or a screen.
+Leaf-ish: imports character/combat/corpmap/factions/gangs/scene/shops, never app or a screen.
 """
 
 import random
@@ -21,6 +21,7 @@ from shadowguy.corpmap import Territory, TerritoryModifier
 from shadowguy.factions import FACTIONS_BY_ID, Faction
 from shadowguy.gangs import GANGS_BY_ID, Gang
 from shadowguy.scene import Encounter, Outcome
+from shadowguy.shops import owned_app_bonus
 
 # Flat and deliberately not oppressive: a quarter of entries onto turf you're crosswise
 # with actually get stopped. The depth of the grudge sets the *stakes* (toll size, then a
@@ -40,9 +41,11 @@ ATTACK_STANDING = -5
 ENCOUNTER_ENEMY_TIER = 0
 
 
-def toll_for(standing: int) -> int:
-    """The fee a gang shakes you down for at `standing` (a toll band, -1..-4)."""
-    return TOLL_BASE + TOLL_STEP * (abs(standing) - 1)
+def toll_for(standing: int, discount: int = 0) -> int:
+    """The fee a gang shakes you down for at `standing` (a toll band, -1..-4), cut
+    (floored at 0) by an owned StreetLine app's flat eb discount (shops.owned_app_bonus's
+    "toll_discount")."""
+    return max(0, TOLL_BASE + TOLL_STEP * (abs(standing) - 1) - discount)
 
 
 @dataclass
@@ -66,7 +69,9 @@ def roll_gang_encounter(
     standing = character.gang_standing_with(gang_id)
     if standing >= 0 or rng.random() >= GANG_ENCOUNTER_CHANCE:
         return None
-    toll = None if standing <= ATTACK_STANDING else toll_for(standing)
+    toll = None
+    if standing > ATTACK_STANDING:
+        toll = toll_for(standing, int(owned_app_bonus(character, "toll_discount")))
     return GangEncounter(gang=GANGS_BY_ID[gang_id], standing=standing, toll=toll)
 
 
@@ -135,6 +140,10 @@ def roll_corp_encounter(
         return None
     surveillance = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
     chance = CORP_SPOTTED_BASE + CORP_SPOTTED_PER_SURVEILLANCE * surveillance
+    # An owned Ghostline app (shops.owned_app_bonus's "detection_reduction") shaves a
+    # flat amount off the spotted chance, floored at 0 -- the same shape StreetLine's
+    # toll_discount already cuts encounters.toll_for by.
+    chance = max(0.0, chance - owned_app_bonus(character, "detection_reduction"))
     if rng.random() >= chance:
         return None
     if standing <= CORP_ARREST_STANDING:
