@@ -34,6 +34,7 @@ from shadowguy.shops import (
     buy_app,
     effective_item,
     loaded_rounds,
+    owned_app_bonus,
 )
 from shadowguy.skills import SKILLS, skill_for
 
@@ -477,9 +478,23 @@ class WebScreen(RefreshOnResume, BackScreen):
         ]
         web_items.append(ListItem(Static("── Search ──"), id="web_search_header"))
         web_offers = [(fixer, offer) for fixer in established for offer in fixer.open_offers]
+        # An owned GigFeed app (shops.owned_app_bonus's "job_alert") appends each
+        # open offer's best-case payout (Scene.max_cash_reward) to its Search row --
+        # display only, no gate on which offers show up.
+        job_alert = bool(owned_app_bonus(character, "job_alert"))
         web_items += (
             [
-                ListItem(Static(f"{fixer.name} — {offer_label(character, offer)}"), id=f"weboffer_{offer.id}")
+                ListItem(
+                    Static(
+                        f"{fixer.name} — {offer_label(character, offer)}"
+                        + (
+                            f" (~{offer.scene.max_cash_reward}eb)"
+                            if job_alert and offer.taken_by is None
+                            else ""
+                        )
+                    ),
+                    id=f"weboffer_{offer.id}",
+                )
                 for fixer, offer in web_offers
             ]
             if web_offers

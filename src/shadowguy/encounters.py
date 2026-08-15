@@ -140,6 +140,10 @@ def roll_corp_encounter(
         return None
     surveillance = territory.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
     chance = CORP_SPOTTED_BASE + CORP_SPOTTED_PER_SURVEILLANCE * surveillance
+    # An owned Ghostline app (shops.owned_app_bonus's "detection_reduction") shaves a
+    # flat amount off the spotted chance, floored at 0 -- the same shape StreetLine's
+    # toll_discount already cuts encounters.toll_for by.
+    chance = max(0.0, chance - owned_app_bonus(character, "detection_reduction"))
     if rng.random() >= chance:
         return None
     if standing <= CORP_ARREST_STANDING:

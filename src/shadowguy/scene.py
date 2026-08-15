@@ -408,6 +408,22 @@ class Scene:
         )
         return max(0, -worst)
 
+    @property
+    def max_cash_reward(self) -> int:
+        """The most cash any path through this scene can pay out — max_cash_loss's
+        mirror, the ceiling instead of the stake. What WebScreen's Search list shows
+        next to a job once the runner owns the App Store's GigFeed app
+        (shops.owned_app_bonus's "job_alert")."""
+        best = max(
+            (
+                outcome.cash_delta
+                for stage in self.stages.values()
+                for outcome in self._stage_outcomes(stage)
+            ),
+            default=0,
+        )
+        return max(0, best)
+
 
 def apply_outcome(character: Character, outcome: Outcome, scene: Scene, corp_map: CorpMap) -> None:
     character.adjust_health(outcome.health_delta)

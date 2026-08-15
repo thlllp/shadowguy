@@ -232,8 +232,17 @@ RIDESHARE = APPS_BY_ID["app_rideshare"]
 
 
 def test_app_store_catalog_each_row_sets_exactly_one_bonus():
+    fields = (
+        "travel_reduction",
+        "lodging_discount",
+        "toll_discount",
+        "detection_reduction",
+        "standing_bonus",
+        "shop_discount",
+        "job_alert",
+    )
     for app in APP_STORE_CATALOG:
-        set_bonuses = sum(bool(b) for b in (app.travel_reduction, app.lodging_discount, app.toll_discount))
+        set_bonuses = sum(bool(getattr(app, field)) for field in fields)
         assert set_bonuses == 1
 
 
@@ -269,6 +278,21 @@ def test_owned_app_bonus_sums_only_owned_apps_with_that_field_set():
     assert owned_app_bonus(c, "travel_reduction") == RIDESHARE.travel_reduction
     # Owning it doesn't leak into an unrelated field.
     assert owned_app_bonus(c, "lodging_discount") == 0
+
+
+def test_buy_price_applies_an_owned_bankroll_discount_on_top_of_standing():
+    c = Character(name="t", cash=100_000)
+    bankroll = APPS_BY_ID["app_bankroll"]
+    without = buy_price(1000, 0)
+    buy_app(c, bankroll.id)
+    with_app = buy_price(1000, 0, c)
+    assert with_app < without
+    assert with_app == max(1, round(1000 * (1 - bankroll.shop_discount)))
+
+
+def test_buy_price_ignores_the_discount_when_no_character_is_passed():
+    """Every pre-existing call site omits character -- must keep working unchanged."""
+    assert buy_price(1000, 0) == 1000
 
 
 def test_pipe_pistol_is_the_smartlinked_weapon():

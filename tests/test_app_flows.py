@@ -3549,6 +3549,37 @@ def test_web_screen_lists_cross_fixer_offers_and_accepting_one_takes_it():
     run(body())
 
 
+def test_web_screen_shows_payout_only_with_an_owned_gigfeed_app():
+    """GigFeed (shops.owned_app_bonus's "job_alert") appends each open offer's
+    Scene.max_cash_reward to its Search row -- display only, gated on ownership,
+    not on which offers are listed."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = next(f for f in app.fixers if f.offers)
+            app.character.adjust_fixer_trust(fixer.id, 1)
+            offer = fixer.offers[0]
+
+            app.push_screen(WebScreen())
+            await pilot.pause()
+            web_list = app.screen.query_one("#web_list", ListView)
+            row = next(item for item in web_list.children if item.id == f"weboffer_{offer.id}")
+            assert f"~{offer.scene.max_cash_reward}eb" not in str(row.query_one(Static).content)
+
+            app.pop_screen()
+            app.character.cash = 10_000
+            buy_app(app.character, "app_gigfeed")
+            app.push_screen(WebScreen())
+            await pilot.pause()
+            web_list = app.screen.query_one("#web_list", ListView)
+            row = next(item for item in web_list.children if item.id == f"weboffer_{offer.id}")
+            assert f"~{offer.scene.max_cash_reward}eb" in str(row.query_one(Static).content)
+
+    run(body())
+
+
 def test_web_screen_omits_fixers_without_established_trust():
     async def body():
         app = ShadowguyApp()

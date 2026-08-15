@@ -17,6 +17,7 @@ from shadowguy.shops import (
     InventoryItem,
     Item,
     grant_item,
+    owned_app_bonus,
     unload_on_disposal,
 )
 from shadowguy.skills import SKILLS, skill_for, skill_value
@@ -390,12 +391,18 @@ class Character:
         return self.local_standing.get(character_id, 0)
 
     def adjust_local_standing(self, character_id: str, delta: int) -> None:
+        # An owned Networker app (shops.owned_app_bonus's "standing_bonus") boosts a
+        # gain, never softens a loss -- gang_standing gets the same treatment below.
+        if delta > 0:
+            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
         self._adjust_dict(self.local_standing, character_id, delta)
 
     def gang_standing_with(self, gang_id: str) -> int:
         return self.gang_standing.get(gang_id, 0)
 
     def adjust_gang_standing(self, gang_id: str, delta: int) -> None:
+        if delta > 0:
+            delta = round(delta * (1 + owned_app_bonus(self, "standing_bonus")))
         self._adjust_dict(self.gang_standing, gang_id, delta)
 
     def discover_fixer(self, fixer_id: str) -> None:
