@@ -141,7 +141,9 @@ src/shadowguy/
   support.py     the remote hacker backing a burglary. Imports tactical.py, never back
   matrix.py      fight surface 3: ICE, node networks, integrity pool, cyberdeck programs
 
-  jobs.py        job generation (9 archetypes) + JobTiming + per-job legwork + SmugglingJob
+  job_archetypes.py what a job is made of before it's rolled: the stage model, the 9
+                 authored archetypes, the risk curve, and the import-time table guards
+  jobs.py        job generation over that table + JobTiming + per-job legwork + SmugglingJob
   gigs.py        per-Location gig generation
   fishing.py     the Docks' one activity: generate_fishing_trip's cast/wait/reel Scene
   fixer.py       the Fixer roster holding job and security offers
@@ -163,11 +165,17 @@ src/shadowguy/
                  rival corps + a flavor-only rival research roll + the NPC runners' daily
                  activity turn (one of which takes a job off a fixer's board), once a day
   surveillance.py parallel resolution: detection rolls in the player corp's territory
+  corp_rules.py  the corp's base numbers: income/upkeep, logistics, expansion price,
+                 training cost+time, the lab/academy ladders, the contest dice
+  technologies.py the research tree: TECHNOLOGIES, the prereq chains, and the constants
+                 each tech's effect is worth. A leaf beside corp_rules
   corp_turn.py   the player's own Corp turn — CorpState, income/research, the daily action,
                  and the corp-vs-corp contest (resolve_attack) both sides settle through
 
-  shops.py       the retail catalogs (items, consumables, programs, ammo) + pricing +
+  shops.py       the retail catalogs (items, consumables, programs, ammo, mods) + pricing +
                  buy/sell transactions
+  workshop.py    making instead of buying: the Junkyard's scavenge, and a built
+                 workshop's two bench actions (fit a Mod, cook a Consumable)
   inventory.py   equip state, deck programs, reloading a gun and using a consumable --
                  what happens to a Character's inventory *after* shops.py adds to it
   cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC;
@@ -187,8 +195,10 @@ src/shadowguy/
                          remote-support menu)
     matrix_screen.py     MatrixScreen
     burglary_screens.py  EntrancePickScreen (the interior itself plays on TacticalScreen)
-    corp_map_screen.py   CorpMapScreen + GangTollScreen -- the home screen for both a
-                         runner and a corp-only run; no separate MainMenu any more
+    corp_map_screen.py   CorpMapScreen -- the home screen for both a runner and a
+                         corp-only run; no separate MainMenu any more
+    map_encounters.py    EncounterMixin + TollScreen: what stops a runner mid-travel,
+                         gang toll and corp security, toll-or-fight either way
     corp_screen.py       CorpScreen + ResearchTreeScreen + ForcePickScreen
     shop_screens.py      FixerOffers + Shop + Bar + CorpHQ + Hospital + RealEstate +
                          Safehouse + Junkyard + Docks + GangDen + Ripperdoc
@@ -213,11 +223,14 @@ Leaf modules, and why each has to stay one:
 - **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
 - **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`. `corpmap_gen.py` imports it and it never imports back; the modifier cluster (`make_modifiers` and friends) stays here rather than moving to the generator because `claim_territory` reseeds a district at runtime through it.
 - **`buildings.py`** — imports `grid` for the geometry and nothing else from the package; `scene`/`jobs`/`tactical` import *it*. `tactical.py` imports `Building`/`Lock` at runtime, no `TYPE_CHECKING` dance: extracting `grid.py` is what removed the cycle that used to need one.
-- **`corp_turn.py`** — imports `corpmap` only, never `scene`/`app`. `Sighting` lives here rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle. `resolve_attack` deliberately takes a bare `Territory` rather than a `CorpState`, which is what lets `rivals.py`'s AI factions (which have no `CorpState`) settle an attack through the same dice the player does.
+- **`corp_turn.py` / `corp_rules.py` / `technologies.py`** — one arrow, `corp_rules → technologies → corp_turn`, and none of them imports `scene`/`app`. The data is split out and the behaviour stays: `corp_rules` is the base numbers plus `EmployeeCategory`, `technologies` is the tech table plus what each tech's effect is worth (it imports the base rates because a description quotes the rate it replaces), and `corp_turn` is every function that spends them. **`corp_turn` re-exports everything it pulls back in**, deliberately — 14 files reach the corp system through `from shadowguy.corp_turn import ...`, and pickled saves name `shadowguy.corp_turn` for `CorpState`/`PendingRecruit`/`EmployeeCategory`, which unpickle resolves by `getattr` on that module (verified: enum identity survives, so the split needed no `SAVE_VERSION` bump). The dozen names with no reader inside `corp_turn` are re-exported explicitly with a redundant `as`. `Sighting` lives in `corp_turn` rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle. `resolve_attack` deliberately takes a bare `Territory` rather than a `CorpState`, which is what lets `rivals.py`'s AI factions (which have no `CorpState`) settle an attack through the same dice the player does.
 - **`relations.py`** — imports only `factions.py`/`gangs.py`. Read by `rivals._pick_attack_target`; nothing writes to it after generation.
 - **`gangs.py`** — turf placement and den staffing live in `corpmap.py` instead.
 - **`saves.py`** — imports no game classes.
 - **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
+- **`workshop.py`** — imports `shops.py` and nothing else from the package; only `screens/shop_screens.py` imports *it*. The split is retail vs. making: everything in `shops.py` is a cash-and-standing transaction over a catalog, everything here is a skill roll over scavenged materials. The mod **catalog** (`Mod`/`MOD_CATALOG`/`MODS_BY_ID`/`WEAPON_MOD_SLOTS`/`STOCK_MOD_IDS`) stays in `shops.py` — `buy_item` seeds a bought gun's slots from it and `effective_item` folds installed mods into the stats `combat.py` reads, so a `shops → workshop` edge would be a cycle.
+
+- **`job_archetypes.py`** — imports `character`/`scene`/`skills` and nothing else from the package; `jobs.py` imports *it*, never the reverse. The split is table vs. pass over the table: authoring a new archetype row is a different kind of change from retuning what the generator does with one. `PARTIAL_POOL_SIZE` lives here rather than in `jobs.py` because the import-time guard on pool width reads it, and `DAMAGE_FOR_DELTA` because `Approach.failure_damage` does.
 
 `scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `jobs.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
 

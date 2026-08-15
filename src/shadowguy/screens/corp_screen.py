@@ -466,6 +466,57 @@ def sighting_rows(corp_state: CorpState, corp_map) -> list[ListItem]:
     return rows
 
 
+def _owner_name(territory) -> str:
+    """Who holds this district, for a report line — a corp by name, nobody as prose."""
+    return (
+        FACTIONS_BY_ID[territory.owner].name
+        if territory.owner != "neutral"
+        else "neutral ground"
+    )
+
+
+# Rows that resolve to nothing: an empty-state placeholder, or a sighting line that's
+# there to be read (whatever can be *done* about one is a separate investigate_/tail_ row).
+INERT_ROW_IDS = frozenset({"no_sightings", "no_operations"})
+
+# Row prefix -> (the corp_turn call it makes over one district id, the line to print when
+# it takes, and whether a refusal can only ever be about money). The three modifier bumps
+# are cash-only: they deliberately don't spend an action point (see corp_turn's
+# two-budgets note), so "no action points remaining" would be a wrong answer for them.
+TERRITORY_ROWS: dict[str, tuple[object, str, bool]] = {
+    "secure_": (raise_security, "Security raised in {name}.", True),
+    "surveil_": (raise_surveillance, "Surveillance raised in {name}.", True),
+    "develop_": (raise_development, "{name} builds up. Development raised.", True),
+    "newacademy_": (build_academy, "New Academy standing in {name}.", False),
+    "rebuild_": (build_research_facility, "New Research Facility standing in {name}.", False),
+}
+
+# The same, for the rows that take no argument at all — the corp's own buildings, which
+# there is only ever one of to improve.
+CORP_ROWS: dict[str, tuple[object, str]] = {
+    "build_lab": (build_lab, "Built a new lab at the Research Facility."),
+    "build_efficiency": (build_efficiency_upgrade, "Upgraded the Research Facility's efficiency."),
+}
+
+# Everything with more to say than one line: prefix -> the CorpActionsMixin method that
+# owns it. No prefix here may be a prefix of another, or of a TERRITORY_ROWS key.
+ROW_METHODS: dict[str, str] = {
+    "expand_": "_row_expand",
+    "fundraise": "_row_fundraise",
+    "survey_": "_row_survey",
+    "train_": "_row_train",
+    "upgrade_academy": "_row_upgrade_academy",
+    "tail_": "_row_tail",
+    "intel_": "_row_intel",
+    "sabotage_": "_row_sabotage",
+}
+
+_ALL_ROW_PREFIXES = (*TERRITORY_ROWS, *ROW_METHODS)
+for _i, _prefix in enumerate(_ALL_ROW_PREFIXES):
+    if any(_other.startswith(_prefix) for _other in _ALL_ROW_PREFIXES[_i + 1:]):
+        raise ValueError(f"{_prefix!r} shadows a later row prefix — the first match wins")
+
+
 class CorpActionsMixin:
     """Every corp row's behaviour, shared by CorpScreen and CorpMapScreen — which show
     the same corp in two layouts (its own screen, and the corp-only run's Corp tab) and
@@ -490,220 +541,206 @@ class CorpActionsMixin:
         else:
             self.notify("Can't afford it.", severity="warning")
 
+    def _notify_cash_refusal(self) -> None:
+        """The refusal for the three rows that cost cash and *not* an action point (see
+        corp_turn's two-budgets note): raising Security, Surveillance or Development.
+        "No action points remaining" would be a lie on those — they never check it."""
+        self.notify("Can't afford it.", severity="warning")
+
     async def _handle_corp_selection(self, item_id: str) -> bool:
         """Resolve `item_id` if it's a corp row, and report whether it was one — so a
         host carrying rows of its own (CorpMapScreen's gigs, jobs, locations) can fall
         through to them. Read-only rows count as handled: there's nothing to do, but
-        nothing else should try either."""
-        if item_id.startswith("sighting_") or item_id in ("no_sightings", "no_operations"):
-            return True
+        nothing else should try either.
 
+        Four groups, in the order they're tried:
+
+        1. Rows that do nothing, or that own their own refresh (a sighting has none to
+           do; deploy/attack refresh from the far side of a pushed ForcePickScreen).
+        2. TERRITORY_ROWS — one corp_turn call over one district id, nothing else.
+        3. CORP_ROWS — one corp_turn call over no argument at all.
+        4. ROW_METHODS — the rest, each with enough of its own reading and reporting
+           to want a method.
+
+        Everything in groups 2-4 refreshes afterwards, pass or fail, which is what the
+        214-line if/elif this replaces did by falling out of the bottom of the chain.
+        """
+        if item_id in INERT_ROW_IDS or item_id.startswith("sighting_"):
+            return True
         if item_id.startswith("investigate_"):
-            idx = int(item_id.removeprefix("investigate_"))
-            sighting = self.app.corp_state.sightings[idx]
-            if investigate_sighting(self.app.corp_state, sighting, self.app.rng):
-                who = "you" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
-                faction_info = ""
-                if sighting.runner_faction_id:
-                    faction_info = f", affiliated with {sighting.runner_faction_id}"
-                if sighting.intercepted:
-                    faction_info += " — activity disrupted by Operation Intercept"
-                self.notify(
-                    f"Investigated sighting: {who} was in "
-                    f"{self.app.corp_map.territories[sighting.territory_id].name} on day "
-                    f"{sighting.day}{faction_info}."
-                )
-                await self._refresh_corp_view()
-            else:
-                self._notify_refusal()
+            await self._row_investigate(item_id.removeprefix("investigate_"))
             return True
-
         if item_id.startswith("corpinfo_"):
-            # Read-only rows: the takeover lives at the corp's HQ, not here.
+            # Read-only row: the takeover lives at the corp's HQ, not here.
             faction = FACTIONS_BY_ID[item_id.removeprefix("corpinfo_")]
             self.notify(f"Find {faction.name}'s HQ on the map and walk in.")
             return True
-
         if item_id.startswith("deploy_") or item_id.startswith("attack_"):
             await self._commit_operatives(item_id)
             return True
 
-        corp_state = self.app.corp_state
-        corp_map = self.app.corp_map
-
-        if item_id.startswith("expand_"):
-            territory_id = item_id.removeprefix("expand_")
-            if expand_into(corp_state, corp_map, territory_id, self.app.rng):
-                self.notify(f"Claimed {corp_map.territories[territory_id].name}.")
-                self._flash_territory_if_map(territory_id)
-                log_faction_event(
-                    self.app.faction_events,
-                    corp_state.faction_id,
-                    FactionEvent(
-                        kind="territory", day=self.app.character.day, territory_id=territory_id
-                    ),
-                )
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("secure_"):
-            territory_id = item_id.removeprefix("secure_")
-            if raise_security(corp_state, corp_map, territory_id):
-                self.notify(f"Security raised in {corp_map.territories[territory_id].name}.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-
-        elif item_id.startswith("surveil_"):
-            territory_id = item_id.removeprefix("surveil_")
-            if raise_surveillance(corp_state, corp_map, territory_id):
-                self.notify(f"Surveillance raised in {corp_map.territories[territory_id].name}.")
-            else:
-                self.notify("Can't afford it.", severity="warning")
-
-        elif item_id.startswith("develop_"):
-            territory_id = item_id.removeprefix("develop_")
-            if raise_development(corp_state, corp_map, territory_id):
-                self.notify(
-                    f"{corp_map.territories[territory_id].name} builds up. Development raised."
-                )
-            else:
-                self.notify("Can't afford it.", severity="warning")
-
-        elif item_id == "fundraise":
-            raised = fundraise(corp_state, corp_map)
-            if raised is not None:
-                self.notify(f"Emergency fundraising: +{raised}eb.")
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("survey_"):
-            territory = survey(corp_state, corp_map, item_id.removeprefix("survey_"))
-            if territory is not None:
-                owner_name = (
-                    FACTIONS_BY_ID[territory.owner].name
-                    if territory.owner != "neutral"
-                    else "neutral ground"
-                )
-                security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
-                self.notify(
-                    f"Survey of {territory.name} ({owner_name}): garrison "
-                    f"{territory.garrison}, Security {security}, value {territory.value}."
-                )
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("train_"):
-            category = EmployeeCategory(item_id.removeprefix("train_"))
-            if train_employees(corp_state, corp_map, category, self.app.character.day):
-                self.notify(
-                    f"Training a batch of {employee_plural(category)} — "
-                    f"ready in {TRAINING_DAYS[category]} days."
-                )
-            elif corp_state.pending_recruit is not None:
-                self.notify("The Academy's already training a batch.", severity="warning")
-            else:
-                self._notify_refusal()
-
-        elif item_id == "upgrade_academy":
-            if upgrade_academy(corp_state, corp_map):
-                academy = owned_academy(corp_state, corp_map)
-                self.notify(f"Academy expanded to tier {academy.academy_tier} — trains {academy.academy_tier} per batch.")
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("newacademy_"):
-            territory_id = item_id.removeprefix("newacademy_")
-            if build_academy(corp_state, corp_map, territory_id):
-                self.notify(f"New Academy standing in {corp_map.territories[territory_id].name}.")
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("rebuild_"):
-            territory_id = item_id.removeprefix("rebuild_")
-            if build_research_facility(corp_state, corp_map, territory_id):
-                self.notify(
-                    f"New Research Facility standing in {corp_map.territories[territory_id].name}."
-                )
-            else:
-                self._notify_refusal()
-
-        elif item_id == "build_lab":
-            if build_lab(corp_state, corp_map):
-                self.notify("Built a new lab at the Research Facility.")
-            else:
-                self._notify_refusal()
-
-        elif item_id == "build_efficiency":
-            if build_efficiency_upgrade(corp_state, corp_map):
-                self.notify("Upgraded the Research Facility's efficiency.")
-            else:
-                self._notify_refusal()
-
-        elif item_id.startswith("tail_"):
-            parts = item_id.removeprefix("tail_").split("_", 1)
-            sighting_day = int(parts[0])
-            actor_id = parts[1]
-            sighting = next(
-                (s for s in corp_state.sightings if s.day == sighting_day and s.actor_id == actor_id),
-                None,
-            )
-            if sighting is None:
-                self.notify("That sighting is no longer in the log.", severity="warning")
-            elif tail_runner(corp_state, sighting, self.app.rng):
-                who = RUNNERS_BY_ID[sighting.actor_id].name
-                faction_note = ""
-                if sighting.runner_faction_id:
-                    faction_note = f" ({sighting.runner_faction_id})"
-                self.notify(
-                    f"Tailing {who}{faction_note} — operative dispatched. "
-                    f"Intel: spotted in {corp_map.territories[sighting.territory_id].name} "
-                    f"on day {sighting.day}."
-                )
-            else:
-                self.notify("The tail lost their target. Operative dispatched anyway.")
-
-        elif item_id.startswith("intel_"):
-            territory_id = item_id.removeprefix("intel_")
-            if gather_intel(corp_state, corp_map, territory_id, self.app.rng):
-                territory = corp_map.territories[territory_id]
-                owner_name = (
-                    FACTIONS_BY_ID[territory.owner].name if territory.owner != "neutral" else "neutral ground"
-                )
-                modifier_parts = []
-                for mod in TerritoryModifier:
-                    val = territory.modifiers.get(mod, 0)
-                    if val:
-                        modifier_parts.append(f"{mod.value} {val}")
-                mods = ", ".join(modifier_parts) if modifier_parts else "none"
-                locations = ", ".join(
-                    f"{loc.name} ({loc.kind.value})" for loc in territory.locations
-                ) if territory.locations else "none"
-                self.notify(
-                    f"Intel on {territory.name} ({owner_name}): "
-                    f"garrison {territory.garrison}, modifiers [{mods}], "
-                    f"locations [{locations}]."
-                )
-            else:
-                self.notify("The operative came back empty-handed.")
-
-        elif item_id.startswith("sabotage_"):
-            territory_id = item_id.removeprefix("sabotage_")
-            result = sabotage(corp_state, corp_map, territory_id, self.app.rng)
-            if result is not None:
-                territory = corp_map.territories[territory_id]
-                security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
-                self.notify(
-                    f"Sabotage in {result}: Security reduced to {security}. "
-                    f"Operative exfiltrated — back tomorrow."
-                )
-            else:
-                self.notify("Sabotage failed — operative captured or killed.")
-
+        for prefix, (action, message, cash_only) in TERRITORY_ROWS.items():
+            if item_id.startswith(prefix):
+                self._run_territory_row(action, item_id.removeprefix(prefix), message, cash_only)
+                break
         else:
-            return False
+            if item_id in CORP_ROWS:
+                action, message = CORP_ROWS[item_id]
+                if action(self.app.corp_state, self.app.corp_map):
+                    self.notify(message)
+                else:
+                    self._notify_refusal()
+            else:
+                for prefix, method_name in ROW_METHODS.items():
+                    if item_id.startswith(prefix):
+                        await getattr(self, method_name)(item_id.removeprefix(prefix))
+                        break
+                else:
+                    return False
 
         await self._refresh_corp_view()
         return True
+
+    def _run_territory_row(self, action, territory_id: str, message: str, cash_only: bool) -> None:
+        """The shape five rows share outright: hand one district id to one corp_turn
+        function, and report what it did or why it wouldn't."""
+        if action(self.app.corp_state, self.app.corp_map, territory_id):
+            self.notify(message.format(name=self.app.corp_map.territories[territory_id].name))
+        elif cash_only:
+            self._notify_cash_refusal()
+        else:
+            self._notify_refusal()
+
+    # ── rows with logic of their own ────────────────────────────────────────
+
+    async def _row_investigate(self, index: str) -> None:
+        """Owns its refresh: a refused investigation leaves the log exactly as it was."""
+        sighting = self.app.corp_state.sightings[int(index)]
+        if not investigate_sighting(self.app.corp_state, sighting, self.app.rng):
+            self._notify_refusal()
+            return
+        who = "you" if sighting.kind == "player" else RUNNERS_BY_ID[sighting.actor_id].name
+        faction_info = ""
+        if sighting.runner_faction_id:
+            faction_info = f", affiliated with {sighting.runner_faction_id}"
+        if sighting.intercepted:
+            faction_info += " — activity disrupted by Operation Intercept"
+        self.notify(
+            f"Investigated sighting: {who} was in "
+            f"{self.app.corp_map.territories[sighting.territory_id].name} on day "
+            f"{sighting.day}{faction_info}."
+        )
+        await self._refresh_corp_view()
+
+    async def _row_expand(self, territory_id: str) -> None:
+        corp_state, corp_map = self.app.corp_state, self.app.corp_map
+        if not expand_into(corp_state, corp_map, territory_id, self.app.rng):
+            self._notify_refusal()
+            return
+        self.notify(f"Claimed {corp_map.territories[territory_id].name}.")
+        self._flash_territory_if_map(territory_id)
+        log_faction_event(
+            self.app.faction_events,
+            corp_state.faction_id,
+            FactionEvent(kind="territory", day=self.app.character.day, territory_id=territory_id),
+        )
+
+    async def _row_fundraise(self, _: str) -> None:
+        raised = fundraise(self.app.corp_state, self.app.corp_map)
+        if raised is None:
+            self._notify_refusal()
+            return
+        self.notify(f"Emergency fundraising: +{raised}eb.")
+
+    async def _row_survey(self, territory_id: str) -> None:
+        territory = survey(self.app.corp_state, self.app.corp_map, territory_id)
+        if territory is None:
+            self._notify_refusal()
+            return
+        security = territory.modifiers.get(TerritoryModifier.SECURITY, 0)
+        self.notify(
+            f"Survey of {territory.name} ({_owner_name(territory)}): garrison "
+            f"{territory.garrison}, Security {security}, value {territory.value}."
+        )
+
+    async def _row_train(self, category_id: str) -> None:
+        corp_state = self.app.corp_state
+        category = EmployeeCategory(category_id)
+        if train_employees(corp_state, self.app.corp_map, category, self.app.character.day):
+            self.notify(
+                f"Training a batch of {employee_plural(category)} — "
+                f"ready in {TRAINING_DAYS[category]} days."
+            )
+        elif corp_state.pending_recruit is not None:
+            self.notify("The Academy's already training a batch.", severity="warning")
+        else:
+            self._notify_refusal()
+
+    async def _row_upgrade_academy(self, _: str) -> None:
+        corp_state, corp_map = self.app.corp_state, self.app.corp_map
+        if not upgrade_academy(corp_state, corp_map):
+            self._notify_refusal()
+            return
+        academy = owned_academy(corp_state, corp_map)
+        self.notify(
+            f"Academy expanded to tier {academy.academy_tier} — "
+            f"trains {academy.academy_tier} per batch."
+        )
+
+    async def _row_tail(self, suffix: str) -> None:
+        corp_state, corp_map = self.app.corp_state, self.app.corp_map
+        sighting_day, actor_id = suffix.split("_", 1)
+        sighting = next(
+            (s for s in corp_state.sightings if s.day == int(sighting_day) and s.actor_id == actor_id),
+            None,
+        )
+        if sighting is None:
+            self.notify("That sighting is no longer in the log.", severity="warning")
+        elif tail_runner(corp_state, sighting, self.app.rng):
+            who = RUNNERS_BY_ID[sighting.actor_id].name
+            faction_note = f" ({sighting.runner_faction_id})" if sighting.runner_faction_id else ""
+            self.notify(
+                f"Tailing {who}{faction_note} — operative dispatched. "
+                f"Intel: spotted in {corp_map.territories[sighting.territory_id].name} "
+                f"on day {sighting.day}."
+            )
+        else:
+            self.notify("The tail lost their target. Operative dispatched anyway.")
+
+    async def _row_intel(self, territory_id: str) -> None:
+        corp_map = self.app.corp_map
+        if not gather_intel(self.app.corp_state, corp_map, territory_id, self.app.rng):
+            self.notify("The operative came back empty-handed.")
+            return
+        territory = corp_map.territories[territory_id]
+        modifier_parts = [
+            f"{mod.value} {territory.modifiers.get(mod, 0)}"
+            for mod in TerritoryModifier
+            if territory.modifiers.get(mod, 0)
+        ]
+        mods = ", ".join(modifier_parts) if modifier_parts else "none"
+        locations = (
+            ", ".join(f"{loc.name} ({loc.kind.value})" for loc in territory.locations)
+            if territory.locations
+            else "none"
+        )
+        self.notify(
+            f"Intel on {territory.name} ({_owner_name(territory)}): "
+            f"garrison {territory.garrison}, modifiers [{mods}], "
+            f"locations [{locations}]."
+        )
+
+    async def _row_sabotage(self, territory_id: str) -> None:
+        corp_map = self.app.corp_map
+        result = sabotage(self.app.corp_state, corp_map, territory_id, self.app.rng)
+        if result is None:
+            self.notify("Sabotage failed — operative captured or killed.")
+            return
+        security = corp_map.territories[territory_id].modifiers.get(TerritoryModifier.SECURITY, 0)
+        self.notify(
+            f"Sabotage in {result}: Security reduced to {security}. "
+            f"Operative exfiltrated — back tomorrow."
+        )
 
     async def _commit_operatives(self, item_id: str) -> None:
         """Check the two gates that make the pick pointless *before* asking anything,

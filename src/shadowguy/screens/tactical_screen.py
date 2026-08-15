@@ -66,7 +66,7 @@ _CREW_FATE_TEXT = {
 
 class GrenadePickScreen(ModalScreen):
     """Which carried grenade to throw, when there's more than one kind — the tactical
-    counterpart of GangTollScreen's pay/refuse pick (corp_map_screen.py), same
+    counterpart of map_encounters.TollScreen's pay/refuse pick, same
     dismiss-a-value shape. Dismisses the chosen Character.consumables index, or None
     if cancelled. Skipped entirely when the runner carries exactly one kind (see
     TacticalScreen.action_throw_grenade) — no need to ask when there's nothing to ask."""

@@ -15,10 +15,14 @@ from shadowguy.corpmap import (
 from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.gangs import GANGS
-from shadowguy.jobs import (
-    AMBUSH_LABEL,
+from shadowguy.job_archetypes import (
     ARCHETYPES,
     DAMAGE_FOR_DELTA,
+    SPECIALIST_FOR_STAT,
+    archetype_specialist,
+)
+from shadowguy.jobs import (
+    AMBUSH_LABEL,
     JOB_SECURITY_HIT,
     JOB_STANDING_HIT,
     JOB_XP_BASE,
@@ -27,10 +31,8 @@ from shadowguy.jobs import (
     SITE_DIFFICULTY,
     SMUGGLING_BASE_DEADLINE_DAYS,
     SMUGGLING_DEADLINE_DAYS_PER_HOP,
-    SPECIALIST_FOR_STAT,
     WETWORK_STRUCTURE,
     JobTiming,
-    archetype_specialist,
     generate_job,
     generate_legwork_for_job,
     generate_smuggling_job,

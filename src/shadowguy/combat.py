@@ -689,3 +689,37 @@ def attack_verbs(weapon: Item) -> tuple[str, str]:
     """This weapon's (miss, hit) verbs — "You {miss} them and miss." / "You {hit} them
     for N." See _ATTACK_VERBS."""
     return _ATTACK_VERBS.get(weapon.skill, _DEFAULT_ATTACK_VERBS)
+
+
+# --- Aftermath ---------------------------------------------------------------
+# What a fight leaves behind once it's over. Both rules here used to be written out
+# at each of the screens that needed them (SceneScreen's job/gig fights, CorpMapScreen's
+# gang and corp-security fights), which is how three copies of the same d6 ended up
+# with three different sets of consequences hanging off it.
+
+# A knocked-out runner rolls one d6 for whether they wake up at all. This or lower and
+# they don't — the run is over. Deliberately generous: being knocked out is already a
+# ruinous outcome (see mug_unconscious), and a 1-in-3 death on top of it is the harshest
+# number the game rolls anywhere, which is the point of it being a *separate* outcome
+# from dying in the fight rather than a softer version of it.
+KNOCKOUT_FATAL_MAX = 2
+# Above this, the runner comes out of it having lost less than they feared — flavor only,
+# read by the caller for which line to print.
+KNOCKOUT_ROUGH_MAX = 4
+
+
+def knockout_roll(rng: random.Random) -> int:
+    """The d6 a knocked-out runner wakes up on. Compare against KNOCKOUT_FATAL_MAX for
+    whether they woke at all, and KNOCKOUT_ROUGH_MAX for how badly it went. Returned
+    rather than resolved into a bool so a caller can read both off one roll — there is
+    exactly one roll per knockout, never two."""
+    return rng.randint(1, 6)
+
+
+def mug_unconscious(character: Character) -> None:
+    """Robbed while they were out: half the creds gone, awake on 1 health. The shared
+    consequence of going down anywhere the law isn't the one picking you up — a corp
+    arrest takes a smaller cut but takes the runner in (encounters.ARREST_CASH_PCT),
+    so it does its own thing rather than calling this."""
+    character.cash //= 2
+    character.health = 1

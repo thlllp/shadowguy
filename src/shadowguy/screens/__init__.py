@@ -182,6 +182,21 @@ PANEL_NAV_BINDINGS = [
     ("right", "focus_panel(1)", "Next panel"),
 ]
 
+def end_run_dead(app, character: Character) -> None:
+    """The runner is gone and the run is over. One function rather than the same
+    app.exit f-string at each of the seven places a fight, a stage outcome or a
+    knockout can end it — a screen deciding what "game over" *reads* like is exactly
+    the drift this prevents."""
+    app.exit(message=f"{character.name} has died. Game over.")
+
+
+def end_run_never_woke(app, character: Character) -> None:
+    """Knocked out and didn't come back up (combat.KNOCKOUT_FATAL_MAX). Distinct from
+    end_run_dead only in wording: the runner didn't lose the fight, they lost the
+    hours after it."""
+    app.exit(message=f"{character.name} didn't wake up. Game over.")
+
+
 # The two footer bindings almost every screen shares: "q" quits to the main menu
 # (app.action_quit_menu), "escape" pops the screen (BackScreen.action_back).
 MENU_QUIT_BINDINGS = [("q", "quit_menu", "Menu")]

@@ -113,7 +113,7 @@ from shadowguy.screens.menu_screens import (
 )
 from shadowguy.gangs import GANGS, GANGS_BY_ID
 from shadowguy.gigs import generate_gig
-from shadowguy.screens.corp_map_screen import GangTollScreen
+from shadowguy.screens.map_encounters import TollScreen
 from shadowguy.fishing import FISHING_HOURS_COST
 from shadowguy.scene import BurglaryStage, Outcome, SceneKind, TacticalStage
 from shadowguy.screens.info_screens import (
@@ -143,15 +143,14 @@ from shadowguy.shops import (
     AMMO_BY_KIND,
     AmmoKind,
     CATALOG,
-    CRAFT_RECIPES,
     HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
     MOD_CATALOG,
-    SCAVENGE_HOURS_COST,
     SCAVENGE_MATERIALS,
     Slot,
     buy_item,
 )
+from shadowguy.workshop import CRAFT_RECIPES, SCAVENGE_HOURS_COST
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, complete_job, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
@@ -3026,7 +3025,7 @@ def test_entering_gang_turf_at_minor_negative_prompts_a_toll_and_paying_deducts_
 
             # Arrived on the turf and got stopped for a toll.
             assert app.character.location_id == neighbor_id
-            assert isinstance(app.screen, GangTollScreen)
+            assert isinstance(app.screen, TollScreen)
 
             await pilot.click("#pay")
             await pilot.pause()
@@ -3052,7 +3051,7 @@ def test_toll_the_runner_cant_cover_falls_through_to_a_fight():
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, GangTollScreen)
+            assert isinstance(app.screen, TollScreen)
 
             # Trying to pay what you can't cover drops you into the fight instead.
             await pilot.click("#pay")

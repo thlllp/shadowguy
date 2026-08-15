@@ -6,7 +6,14 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from shadowguy.checks import CheckResult
 from shadowguy.abstract_combat import CombatOutcome
-from shadowguy.combat import crew_stats, drop_for_result
+from shadowguy.combat import (
+    KNOCKOUT_FATAL_MAX,
+    KNOCKOUT_ROUGH_MAX,
+    crew_stats,
+    drop_for_result,
+    knockout_roll,
+    mug_unconscious,
+)
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.matrix import MatrixOutcome
@@ -16,7 +23,13 @@ from shadowguy.scene import Scene, SceneKind, apply_outcome, resolve_choice, res
 from shadowguy.support import support_for
 from shadowguy.tactical import TacticalOutcome
 
-from . import MENU_QUIT_BINDINGS, CharacterSheet, _replace_items
+from . import (
+    MENU_QUIT_BINDINGS,
+    CharacterSheet,
+    _replace_items,
+    end_run_dead,
+    end_run_never_woke,
+)
 from .burglary_screens import EntrancePickScreen
 from .combat_screen import CombatScreen
 from .matrix_screen import MatrixScreen
@@ -96,7 +109,7 @@ class SceneScreen(Screen):
             prompt.styles.animate("background", value=Color(0, 0, 0, 0), duration=0.6)
 
         if not character.is_alive:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+            end_run_dead(self.app, character)
             return False
         return True
 
@@ -141,7 +154,7 @@ class SceneScreen(Screen):
     async def _on_tactical_end(self, result: TacticalOutcome) -> None:
         character = self.app.character
         if result is TacticalOutcome.DEAD:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+            end_run_dead(self.app, character)
             return
         stage = self._current_stage()
         outcome = stage.tactical.victory if result is TacticalOutcome.VICTORY else stage.tactical.escape
@@ -217,7 +230,7 @@ class SceneScreen(Screen):
         end it at all (see tactical._settle), so there's no VICTORY branch to write."""
         character = self.app.character
         if result is TacticalOutcome.DEAD:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+            end_run_dead(self.app, character)
             return
         if result is not TacticalOutcome.SECURED:
             # A fresh Outcome, never applied yet -- same shape as a fight ending. Walking
@@ -235,17 +248,20 @@ class SceneScreen(Screen):
     async def _on_combat_end(self, result: CombatOutcome) -> None:
         character = self.app.character
         if result is CombatOutcome.DEAD:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+            end_run_dead(self.app, character)
             return
 
         if result is CombatOutcome.KNOCKED_OUT:
-            roll = self.app.rng.randint(1, 6)
-            if roll <= 2:
-                self.app.exit(message=f"{character.name} didn't wake up. Game over.")
+            roll = knockout_roll(self.app.rng)
+            if roll <= KNOCKOUT_FATAL_MAX:
+                end_run_never_woke(self.app, character)
                 return
-            character.cash //= 2
-            character.health = 1
-            msg = "Most of your creds are gone." if roll <= 4 else "At least you're alive."
+            mug_unconscious(character)
+            msg = (
+                "Most of your creds are gone."
+                if roll <= KNOCKOUT_ROUGH_MAX
+                else "At least you're alive."
+            )
             self.notify("You came to in an alley. " + msg)
             if self.scene.kind == SceneKind.JOB:
                 character.adjust_fixer_trust(self.scene.target_fixer_id, JOB_FAILURE_TRUST_HIT)
@@ -266,7 +282,7 @@ class SceneScreen(Screen):
         character = self.app.character
         apply_outcome(character, outcome, self.scene, self.app.corp_map)
         if not character.is_alive:
-            self.app.exit(message=f"{character.name} has died. Game over.")
+            end_run_dead(self.app, character)
             return
         self._take_crew_cut(outcome)
         self.query_one(CharacterSheet).refresh()

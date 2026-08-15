@@ -12,12 +12,9 @@ from shadowguy.character import HOURS_PER_DAY, REST_HOURS_COST, Character
 from shadowguy.corp_turn import (
     CorpState,
     FactionEvent,
-    advance_training,
-    collect_income,
-    collect_research,
+    advance_corp_day,
     corp_defeated,
     employee_plural,
-    return_tasking_operatives,
 )
 from shadowguy.corpmap import lodging_cost
 from shadowguy.corpmap_gen import generate_corp_map
@@ -250,7 +247,9 @@ class ShadowguyApp(App):
 
     def _apply_day_tick(self, day: int, skip_night_effects: bool, protect_job_id: str | None = None) -> None:
         """Everything that fires on a day boundary, run once per boundary crossed by
-        whatever action crossed it."""
+        whatever action crossed it. Three phases, in order: the runner's own upkeep and
+        the world's overnight moves here, then the corp's day (_corp_day_tick), then
+        the night's watch (_resolve_security_night) unless the caller skipped it."""
         self.character.on_new_day(day, protect_job_id)
         expired = self.character.expire_smuggling_job(day, GANG_JOB_STANDING_GAIN)
         if expired is not None:
@@ -293,62 +292,72 @@ class ShadowguyApp(App):
         ]
         if taken:
             self.notify(f"Word on the street: {', '.join(taken)}.")
-        if self.corp_state:
-            # Reported before anything else the corp does today, because the rivals
-            # have already moved above: a district lost overnight is news the player
-            # needs whether or not it was the last one.
-            for lost in self._report_corp_attacks(today_actions):
-                self.notify(lost, severity="error")
-            if corp_defeated(self.corp_state, self.corp_map):
-                faction = FACTIONS_BY_ID[self.corp_state.faction_id]
-                self.exit(message=f"{faction.name} has been broken up. Game over.")
-                return
-            income = collect_income(self.corp_state, self.corp_map)
-            self.corp_state.cash += income
-            rp = collect_research(self.corp_state, self.corp_map)
-            self.corp_state.research_points += rp
-            self.corp_state.action_points = 2
-            parts = []
-            if income:
-                # Signed: net income goes negative on an overextended corp
-                # (TERRITORY_UPKEEP and corp_turn.logistics_strain), and "+-410eb"
-                # read as a bug rather than as the bill it is.
-                parts.append(f"{income:+d}eb")
-            if rp:
-                parts.append(f"+{rp:g}rp")
-            if parts:
-                self.notify(f"Day {day} income: {', '.join(parts)}.")
-            for action in today_actions:
-                if action.kind == "faction":
-                    name = FACTIONS_BY_ID[action.actor_id].name
-                    if action.attack is not None and action.attack.captured:
-                        target = self.corp_map.territories[action.attack.territory_id].name
-                        if action.attack.defender_id != self.corp_state.faction_id:
-                            loser = FACTIONS_BY_ID[action.attack.defender_id].name
-                            self.notify(f"{name} seized {target} from {loser}.")
-                    elif action.territory_id is not None:
-                        target = self.corp_map.territories[action.territory_id].name
-                        self.notify(f"{name} claimed {target}.")
-            trained = advance_training(self.corp_state, day)
-            if trained:
-                self.notify(
-                    f"Training complete: {trained.count} new "
-                    f"{employee_plural(trained.category)} report for duty."
-                )
-            returned = return_tasking_operatives(self.corp_state)
-            if returned:
-                self.notify(f"{returned} operative(s) returned from tasking.")
-            sightings = resolve_surveillance_day(
-                self.character, self.corp_map, self.corp_state, self.rival_runner_states, day, self.rng, self.runners
-            )
-            if sightings:
-                self.notify(f"Surveillance logged {len(sightings)} sighting(s) in your territory today.")
+        if self.corp_state and not self._corp_day_tick(day, today_actions):
+            return  # the corp was broken up; the run is over
 
         if skip_night_effects:
             return
-        # A hospital stay skips this block (nothing progresses on a contract you're
-        # not on-site for) — everything above still fires the same as any other
-        # crossing.
+        self._resolve_security_night()
+
+    def _corp_day_tick(self, day: int, today_actions: list[RivalAction]) -> bool:
+        """The player corp's half of the day boundary, run after the rivals have moved.
+        Returns whether the run goes on — False means the corp was broken up and
+        self.exit has already fired.
+
+        Only the reporting is here: what a day is actually *worth* to a corp is
+        corp_turn.advance_corp_day. Surveillance stays on this side because it needs
+        the runner, the rival roster and an rng, none of which corp_turn takes."""
+        corp_state = self.corp_state
+        # Reported before anything else the corp does today, because the rivals
+        # have already moved above: a district lost overnight is news the player
+        # needs whether or not it was the last one.
+        for lost in self._report_corp_attacks(today_actions):
+            self.notify(lost, severity="error")
+        if corp_defeated(corp_state, self.corp_map):
+            faction = FACTIONS_BY_ID[corp_state.faction_id]
+            self.exit(message=f"{faction.name} has been broken up. Game over.")
+            return False
+
+        corp_day = advance_corp_day(corp_state, self.corp_map, day)
+        parts = []
+        if corp_day.income:
+            # Signed: net income goes negative on an overextended corp
+            # (TERRITORY_UPKEEP and corp_turn.logistics_strain), and "+-410eb"
+            # read as a bug rather than as the bill it is.
+            parts.append(f"{corp_day.income:+d}eb")
+        if corp_day.research:
+            parts.append(f"+{corp_day.research:g}rp")
+        if parts:
+            self.notify(f"Day {day} income: {', '.join(parts)}.")
+        for action in today_actions:
+            if action.kind == "faction":
+                name = FACTIONS_BY_ID[action.actor_id].name
+                if action.attack is not None and action.attack.captured:
+                    target = self.corp_map.territories[action.attack.territory_id].name
+                    if action.attack.defender_id != corp_state.faction_id:
+                        loser = FACTIONS_BY_ID[action.attack.defender_id].name
+                        self.notify(f"{name} seized {target} from {loser}.")
+                elif action.territory_id is not None:
+                    target = self.corp_map.territories[action.territory_id].name
+                    self.notify(f"{name} claimed {target}.")
+        if corp_day.trained:
+            self.notify(
+                f"Training complete: {corp_day.trained.count} new "
+                f"{employee_plural(corp_day.trained.category)} report for duty."
+            )
+        if corp_day.returned_operatives:
+            self.notify(f"{corp_day.returned_operatives} operative(s) returned from tasking.")
+        sightings = resolve_surveillance_day(
+            self.character, self.corp_map, corp_state, self.rival_runner_states, day, self.rng, self.runners
+        )
+        if sightings:
+            self.notify(f"Surveillance logged {len(sightings)} sighting(s) in your territory today.")
+        return True
+
+    def _resolve_security_night(self) -> None:
+        """A night's watch on every accepted security contract. A hospital stay skips
+        this (nothing progresses on a contract you're not on-site for) — everything in
+        _apply_day_tick above it fires the same as on any other crossing."""
         character = self.character
         here_id = character.location_id
         here = self.corp_map.territories[here_id]

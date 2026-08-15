@@ -9,7 +9,8 @@ from shadowguy.checks import resolve_check
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
 from shadowguy.corp_turn import CorpState
 from shadowguy.factions import FACTIONS
-from shadowguy.jobs import ARCHETYPES, DIFFICULTY_BASE, WETWORK_STRUCTURE, Approach, StageType
+from shadowguy.job_archetypes import ARCHETYPES, Approach, StageType
+from shadowguy.jobs import DIFFICULTY_BASE, WETWORK_STRUCTURE
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import BurglaryStage, Entrance, MatrixStage, Outcome, TacticalStage
