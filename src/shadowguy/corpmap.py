@@ -592,6 +592,8 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
         parts.append("O")
     if territory.id == here_id:
         parts.append("@")
+    if has_guaranteed_bar(territory):
+        parts.append("$")
     return f"{marker}[{' '.join(parts)}]"
 
 
