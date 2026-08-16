@@ -253,6 +253,12 @@ class Territory:
     # OUTSKIRTS_COUNT per map, cleared on claim like slums (capture_territory never
     # touches either flag — both only ever sit on neutral ground, which it can't reach).
     is_outskirts: bool = False
+    # A park is one of the map's two guaranteed old-city greenspaces — public land no
+    # corp can claim. Exactly PARK_COUNT per map, selected in _plan_injections like
+    # slums/outskirts, but unlike them a park never stops being neutral:
+    # expansion_candidates excludes it outright rather than claim_territory clearing
+    # the flag on capture, since there is no capture to clear it after.
+    is_park: bool = False
     # Operatives stationed here by whichever corp holds it — the defense half of
     # corp-vs-corp conflict (see corp_turn.attack_territory / defense_strength).
     # Lives on the Territory rather than on CorpState so the AI factions, which
@@ -331,13 +337,15 @@ def has_guaranteed_bar(territory: Territory) -> bool:
 
 def lodging_cost(territory: Territory) -> int:
     """What resting in this district costs the runner tonight. Free where they own a
-    place (has_home), where Amy's Place is, in a slum or in the outskirts; otherwise
-    LODGING_COST_PER_DEVELOPMENT per Development level."""
+    place (has_home), where Amy's Place is, in a slum, in the outskirts or in a park;
+    otherwise LODGING_COST_PER_DEVELOPMENT per Development level."""
     if has_home(territory):
         return 0
     if territory.is_slum:
         return 0
     if territory.is_outskirts:
+        return 0
+    if territory.is_park:
         return 0
     if any(loc.kind == LocationKind.AMYS_PLACE for loc in territory.locations):
         return 0
@@ -478,11 +486,13 @@ def capture_territory(territory: Territory, faction_id: str) -> None:
 
 
 def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
-    """Neutral territories bordering `faction_id`'s own ground, excluding gang turf
-    and the player's start (corp_map.player_start_id) — the same reservation
+    """Neutral territories bordering `faction_id`'s own ground, excluding gang turf,
+    the player's start (corp_map.player_start_id) and any park — the same reservation
     corpmap_gen._grow_blocs honors at generation time (a faction never seeds or expands onto
-    start_cell), kept alive at runtime so the player's home turf is never swallowed.
-    Shared by rivals.py's AI expansion and corp_turn.py's player-directed one."""
+    start_cell), kept alive at runtime so the player's home turf is never swallowed. A
+    park is never claimable by anyone, not just the player: it's the map's public land,
+    permanently neutral. Shared by rivals.py's AI expansion and corp_turn.py's
+    player-directed one."""
     owned = [t for t in corp_map.territories.values() if t.owner == faction_id]
     return sorted(
         {
@@ -492,6 +502,7 @@ def expansion_candidates(corp_map: CorpMap, faction_id: str) -> list[str]:
             if (neighbor := corp_map.territories[conn_id]).owner == "neutral"
             and neighbor.gang_id is None
             and neighbor.id != corp_map.player_start_id
+            and not neighbor.is_park
         }
     )
 
@@ -597,6 +608,8 @@ def _label(territory: Territory, selected_id: str | None, here_id: str | None = 
         parts.append("S")
     if territory.is_outskirts:
         parts.append("O")
+    if territory.is_park:
+        parts.append("P")
     if territory.id == here_id:
         parts.append("@")
     if has_guaranteed_bar(territory):
@@ -870,6 +883,21 @@ def outskirts_modifiers() -> dict[TerritoryModifier, int]:
         TerritoryModifier.SECURITY: 0,
         TerritoryModifier.SURVEILLANCE: 0,
         TerritoryModifier.UNREST: MODIFIER_MAX,
+        TerritoryModifier.DEVELOPMENT: 0,
+        TerritoryModifier.RESTRICTED: 0,
+    }
+
+
+def park_modifiers() -> dict[TerritoryModifier, int]:
+    """A park is calm public ground, not lawless like a slum or the outskirts — no
+    security or surveillance because there's nothing to protect or watch, no
+    development or restriction because nobody's building on it, and no unrest because
+    nobody's fighting over it either. It's just been sitting here since before the
+    corps, kept exactly as it was."""
+    return {
+        TerritoryModifier.SECURITY: 0,
+        TerritoryModifier.SURVEILLANCE: 0,
+        TerritoryModifier.UNREST: 0,
         TerritoryModifier.DEVELOPMENT: 0,
         TerritoryModifier.RESTRICTED: 0,
     }

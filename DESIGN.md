@@ -1060,6 +1060,14 @@ What differs from a slum, and it's one thing: **the outskirts still generate loc
 
 Both flags mean *neutral* ground, so `claim_territory` clears both when a corp moves in. `capture_territory` never has to: it only ever runs on ground a corp already holds.
 
+### Parks
+
+**A third neutral flag, and the one that never comes off.** `Territory.is_park`, exactly `PARK_COUNT` (2) territories, picked by `_plan_injections` from the same neutral, non-start, non-gang pool a slum draws from, minus everything already reserved for Amy's Place, a `SPECIAL_BARS` tile, a slum or the outskirts. Old-city greenspace that stayed public property — the corps built around it instead of through it.
+
+**Zero generated locations**, same `count` short-circuit as a slum, and `park_modifiers()` is flatter still: Security/Surveillance/Development/Restricted all 0 like a slum, but Unrest 0 too rather than `MODIFIER_MAX` — nobody's fighting over it either. `lodging_cost` returns 0, `_label` tags it `P`, `CorpMapScreen`'s summary suffixes `, park` and colors the tile green (`OWNER_COLORS` has no neutral entry, so `_refresh_map_view` stylizes a park directly rather than through the owner-color lookup) — the same three-plus-one touch points a slum's `S` gets.
+
+**The one thing a park doesn't share with a slum: it never gets claimed.** `corpmap.expansion_candidates` excludes any `is_park` neighbor outright, for every faction including the AI's (`rivals.py` and the player's own `corp_turn.expand` both route through it, no separate path exists) — so a park never becomes the corp-held, zero-location district a slum can turn into, and the `GENERATED_KINDS`-filtering care `jobs.generate_job`/`security.generate_security_contract` need for a claimed slum's empty pool (see above) never applies here: neutral ground is never a job or security-contract target in the first place, and a park can't become anything else.
+
 ## Faction/gang relations (`shadowguy/relations.py`, `shadowguy/corpmap.py`, `shadowguy/corpmap_gen.py`)
 
 The only standing that isn't player-facing: corps and gangs' standing with **each other**, independent of the runner entirely.

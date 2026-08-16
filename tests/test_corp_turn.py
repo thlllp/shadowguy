@@ -406,6 +406,14 @@ def test_collect_income_matches_formula_on_generated_maps(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
+def test_expansion_candidates_never_include_a_park(seed):
+    corp_map = generate_corp_map(FACTIONS, random.Random(seed))
+    for faction in FACTIONS:
+        for tid in expansion_candidates(corp_map, faction.id):
+            assert corp_map.territories[tid].is_park is False
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_expand_into_only_mutates_the_claimed_territory(seed):
     rng = random.Random(seed)
     corp_map = generate_corp_map(FACTIONS, rng)

@@ -703,6 +703,12 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
             color = OWNER_COLORS.get(territory.owner)
             if color:
                 text.stylize(color, span.offset, span.offset + span.end - span.start)
+            elif territory.is_park:
+                # Neutral ground gets no OWNER_COLORS entry (see corpmap.py), so a
+                # park's green has to be set here rather than picked up from `color`
+                # above -- a park is always neutral, so this never collides with the
+                # one faction whose own OWNER_COLORS entry also happens to be green.
+                text.stylize("green", span.offset, span.offset + span.end - span.start)
             if has_guaranteed_bar(territory):
                 text.stylize("bold", span.offset, span.offset + span.end - span.start)
             if span.territory_id == self._flash_territory_id:
@@ -917,11 +923,12 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         gang_suffix = f", gang: {GANGS_BY_ID[t.gang_id].name}" if t.gang_id else ""
         slum_suffix = ", slum" if t.is_slum else ""
         outskirts_suffix = ", outskirts" if t.is_outskirts else ""
+        park_suffix = ", park" if t.is_park else ""
         modifier_line = "  ".join(
             f"{MODIFIER_LABELS[modifier]}:{level}" for modifier, level in t.modifiers.items()
         )
         return (
-            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}{slum_suffix}{outskirts_suffix}\n"
+            f"{t.name} — owner: {owner_label(t.owner)}, value: {t.value}{gang_suffix}{fixer_suffix}{slum_suffix}{outskirts_suffix}{park_suffix}\n"
             f"Borders: {borders}\n"
             f"{modifier_line}\n"
             f"{self._travel_hint(t, here, character)}"

@@ -4,8 +4,8 @@ Everything here is generation-time only — the grid the city is a blob on, grow
 that blob (`_grow_region`), wiring it up (`_connect`), racing one contiguous bloc
 per faction across it (`_grow_blocs`), scattering gang turf, planting the out-of-band
 places every map needs exactly so many of (`_plan_injections`: hospitals, HQs,
-research facilities, academies, gang dens, junkyards, docks, slums, outskirts, Amy's
-Place and the other two guaranteed unique bars), and naming every district,
+research facilities, academies, gang dens, junkyards, docks, slums, outskirts, parks,
+Amy's Place and the other two guaranteed unique bars), and naming every district,
 storefront and person in one.
 
 The arrow points one way: this imports `corpmap` for the model it fills in, and
@@ -36,6 +36,7 @@ from shadowguy.corpmap import (
     LocationKind,
     Territory,
     outskirts_modifiers,
+    park_modifiers,
     slum_modifiers,
     add_academy,
     add_research_facility,
@@ -102,6 +103,12 @@ SLUM_COUNT = 3
 # Exactly this many neutral territories on the grid edge are outskirts — the
 # forgotten rim of the city. Guaranteed, not ratio-scaled.
 OUTSKIRTS_COUNT = 5
+
+# Exactly this many neutral territories are parks — old-city greenspace that stayed
+# public property and that no corp can ever claim (corpmap.expansion_candidates
+# excludes them outright). Guaranteed, not ratio-scaled, and unlike slums/outskirts
+# not tied to the grid edge — a park can land anywhere neutral ground does.
+PARK_COUNT = 2
 
 # Chance that a grid-adjacent pair not already joined by the spanning tree gets
 # an edge anyway. Higher = loopier map with more flanking routes.
@@ -711,6 +718,7 @@ class _InjectionPlan:
     special_bar_ids: dict[str, str]
     slum_ids: set[str]
     outskirts_ids: set[str]
+    park_ids: set[str]
 
 
 def _faction_adjacent_ids(
@@ -805,17 +813,33 @@ def _plan_injections(region: list[Cell], edges: set[frozenset[Cell]], owners: di
         )
     outskirts_ids = set(rng.sample(outskirts_candidates, OUTSKIRTS_COUNT))
 
+    # Parks: exactly PARK_COUNT neutral territories, permanently unclaimable public
+    # greenspace (corpmap.expansion_candidates excludes them). Same pool as slums --
+    # any neutral tile, not edge-restricted like outskirts -- minus everything already
+    # reserved so far.
+    park_candidates = [
+        tid for tid in amy_candidates
+        if tid != amys_place_id and tid not in special_bar_ids and tid not in gang_ids
+        and tid not in slum_ids and tid not in outskirts_ids
+    ]
+    if len(park_candidates) < PARK_COUNT:
+        raise ValueError(
+            f"_plan_injections: only {len(park_candidates)} neutral tiles left for "
+            f"{PARK_COUNT} parks"
+        )
+    park_ids = set(rng.sample(park_candidates, PARK_COUNT))
+
     # Junkyards draw from neutral ground only, and skip any tile already reserved for
-    # a hospital, gang den, Amy's Place, a special bar or a slum: those already stack to the
-    # reserved-slot ceiling a neutral tile can carry (MAX_LOCATIONS_PER_TERRITORY -
-    # MIN_LOCATIONS_PER_TERRITORY == 2) — a third reservation on the same tile would
-    # make generate_corp_map's `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop
-    # below MIN and raise.
+    # a hospital, gang den, Amy's Place, a special bar, a slum, outskirts or a park:
+    # those already stack to the reserved-slot ceiling a neutral tile can carry
+    # (MAX_LOCATIONS_PER_TERRITORY - MIN_LOCATIONS_PER_TERRITORY == 2) — a third
+    # reservation on the same tile would make generate_corp_map's
+    # `MAX_LOCATIONS_PER_TERRITORY - reserved` floor drop below MIN and raise.
     junkyard_candidates = [
         tid for tid in neutral_ids
         if tid not in hospital_ids and tid not in den_ids
         and tid != amys_place_id and tid not in special_bar_ids and tid not in slum_ids
-        and tid not in outskirts_ids
+        and tid not in outskirts_ids and tid not in park_ids
     ]
     junkyard_count = min(len(junkyard_candidates), max(1, round(len(neutral_ids) / TILES_PER_JUNKYARD)))
     junkyard_ids = set(rng.sample(junkyard_candidates, junkyard_count))
@@ -858,6 +882,7 @@ def _plan_injections(region: list[Cell], edges: set[frozenset[Cell]], owners: di
         special_bar_ids=special_bar_ids,
         slum_ids=slum_ids,
         outskirts_ids=outskirts_ids,
+        park_ids=park_ids,
     )
 
 
@@ -893,6 +918,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
         owner = owners.get(cell, "neutral")
         is_slum = tid in plan.slum_ids
         is_outskirts = tid in plan.outskirts_ids
+        is_park = tid in plan.park_ids
         reserved = (
             (tid == start_id)
             + (tid in plan.hospital_ids)
@@ -905,7 +931,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             + (tid == plan.amys_place_id)
             + (tid in plan.special_bar_ids)
         )
-        if is_slum:
+        if is_slum or is_park:
             count = 0
         else:
             count = rng.randint(MIN_LOCATIONS_PER_TERRITORY, MAX_LOCATIONS_PER_TERRITORY - reserved)
@@ -913,6 +939,8 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             modifiers = slum_modifiers()
         elif is_outskirts:
             modifiers = outskirts_modifiers()
+        elif is_park:
+            modifiers = park_modifiers()
         else:
             modifiers = make_modifiers(owner, values[cell], rng)
         territories[tid] = Territory(
@@ -920,10 +948,12 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
             connections=sorted(ids[other] for other in region if frozenset((cell, other)) in edges),
             locations=_make_locations(tid, owner, rng, used_names, count) if count > 0 else [],
             modifiers=modifiers,
-            # Never a gang id on a slum or outskirts: the candidate filters above exclude gang turf.
+            # Never a gang id on a slum, outskirts or park: the candidate filters above
+            # exclude gang turf.
             gang_id=plan.gang_ids.get(tid),
             is_slum=is_slum,
             is_outskirts=is_outskirts,
+            is_park=is_park,
         )
 
     start = territories[start_id]
