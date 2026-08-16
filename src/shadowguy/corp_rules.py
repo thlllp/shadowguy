@@ -86,6 +86,11 @@ EXPANSION_COST_PER_VALUE = 100
 # still expands, just slowly enough that building is worth the action point.
 EXPANSION_SPRAWL_DIVISOR = 10
 
+# A district hosting one of the map's three guaranteed runner bars (Amy's Place,
+# the two SPECIAL_BARS) is deliberately punishing to expand into, on top of the
+# normal value-based price and sprawl scaling.
+GUARANTEED_BAR_EXPANSION_MULTIPLIER = 5
+
 
 class EmployeeCategory(StrEnum):
     """What a training session at the Academy produces. All three now have a

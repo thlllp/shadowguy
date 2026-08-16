@@ -307,6 +307,21 @@ def has_home(territory: Territory) -> bool:
 LODGING_COST_PER_DEVELOPMENT = 5
 
 
+# The map's three guaranteed unique bars — Amy's Place plus corpmap_gen.SPECIAL_BARS
+# — named here rather than in corpmap_gen so corp_turn (leaf-ish: imports corpmap
+# only) can read has_guaranteed_bar without importing the generator. corpmap_gen
+# builds its locations from these same constants, so there is one source of truth.
+AMYS_PLACE_NAME = "Amy's Place"
+SPECIAL_BAR_NAMES = ("The Blue Dolphin", "Dorothy's")
+GUARANTEED_BAR_NAMES = (AMYS_PLACE_NAME, *SPECIAL_BAR_NAMES)
+
+
+def has_guaranteed_bar(territory: Territory) -> bool:
+    """True where this territory hosts one of the map's three guaranteed runner
+    bars, not just an ordinary filler LocationKind.BAR."""
+    return any(loc.name in GUARANTEED_BAR_NAMES for loc in territory.locations)
+
+
 def lodging_cost(territory: Territory) -> int:
     """What resting in this district costs the runner tonight. Free where they own a
     place (has_home), where Amy's Place is, in a slum or in the outskirts; otherwise
