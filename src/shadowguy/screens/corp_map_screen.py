@@ -720,7 +720,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
                     text.stylize("bold", span.offset, span.offset + span.end - span.start)
             for conn in self.rendered.connector_spans:
                 if conn.territory_a in all_path_set and conn.territory_b in all_path_set:
-                    text.stylize("bold bright_black", conn.offset, conn.offset + conn.end - conn.start)
+                    text.stylize("bold bright_yellow", conn.offset, conn.offset + conn.end - conn.start)
         self.query_one("#map", Static).update(text)
         self._scroll_selection_into_view()
         if focus_id is None:
