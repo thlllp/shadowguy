@@ -50,6 +50,7 @@ from shadowguy.factions import (
 )
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
+from shadowguy.security import generate_security_contract
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet
 from shadowguy.screens.burglary_screens import EntrancePickScreen
@@ -948,6 +949,51 @@ def test_burglary_job_reaching_the_objective_completes_the_whole_job():
             assert isinstance(app.screen, TitleMenu)
             assert scene.id not in [job.scene.id for job in app.character.accepted_jobs]
             assert app.character.cash > cash_before
+
+    run(body())
+
+
+def test_accepting_a_bodyguard_job_adds_it_with_its_flat_hours_cost():
+    """Bodyguard (job_archetypes.py) is the one archetype with a flat hours_cost=4
+    override -- every other archetype uses the tier-based 8/12 default -- and no UI
+    test reached it before. Exercises the ordinary FixerOffersScreen accept flow
+    (offer_label/on_list_view_selected) against it specifically."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            fixer = app.fixers[0]
+
+            scene = timing = None
+            for seed in range(150):
+                candidate, candidate_timing = generate_job(
+                    day=character.day, corp_map=app.corp_map, fixer_id=fixer.id, rng=random.Random(seed)
+                )
+                if candidate.title.startswith("Bodyguard"):
+                    scene, timing = candidate, candidate_timing
+                    break
+            assert scene is not None, "no Bodyguard job turned up in 150 seeds"
+            assert scene.hours_cost == 4
+
+            offer = JobOffer(
+                id="fx_test_bodyguard", fixer_id=fixer.id, scene=scene, timing=timing,
+                offered_day=character.day,
+            )
+            fixer.offers = [offer]
+
+            app.push_screen(FixerOffersScreen(fixer))
+            await pilot.pause()
+            rows = app.screen.query_one("#offers", ListView)
+            rows.focus()
+            rows.index = next(i for i, item in enumerate(rows.children) if item.id == offer.id)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert offer in character.accepted_jobs
+            assert offer not in fixer.offers
 
     run(body())
 
@@ -3515,6 +3561,39 @@ def test_neon_choir_can_introduce_a_runner_for_a_fee():
 
             assert character.knows_runner(runner.id)
             assert character.cash == 0
+
+    run(body())
+
+
+def test_accepting_a_security_contract_moves_it_off_the_fixers_board():
+    """Security contracts (security.py) share FixerOffersScreen's #offers list with
+    ordinary jobs (rows id'd security_<uuid>, branched on in on_list_view_selected)
+    but were only covered at the pure-generation/resolution layer before -- nothing
+    exercised the offer/accept wiring (accept_security_contract, the board removal)
+    through the real screen."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            fixer = app.fixers[0]
+            contract = generate_security_contract(
+                character.day, app.corp_map, fixer.id, random.Random(0)
+            )
+            fixer.security_offers = [contract]
+
+            app.push_screen(FixerOffersScreen(fixer))
+            await pilot.pause()
+            rows = app.screen.query_one("#offers", ListView)
+            rows.focus()
+            rows.index = next(i for i, item in enumerate(rows.children) if item.id == contract.id)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert contract in character.security_contracts
+            assert contract not in fixer.security_offers
 
     run(body())
 
