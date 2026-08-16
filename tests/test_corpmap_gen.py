@@ -28,6 +28,7 @@ from shadowguy.corpmap_gen import (
     JUNKYARD_ROLE,
     MIN_START_DEGREE,
     OUTSKIRTS_COUNT,
+    PARK_COUNT,
     SLUM_COUNT,
     SPECIAL_BARS,
     TERRITORIES_PER_FACTION,
@@ -530,6 +531,53 @@ def test_outskirts_and_slums_are_disjoint(seed):
     outskirts_ids = {t.id for t in _outskirts(corp_map)}
     slum_ids = {t.id for t in _slums(corp_map)}
     assert not outskirts_ids & slum_ids
+
+
+def _parks(corp_map):
+    return [t for t in corp_map.territories.values() if t.is_park]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_exactly_park_count_parks(seed):
+    corp_map = _generated_map(seed)
+    assert len(_parks(corp_map)) == PARK_COUNT
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_parks_are_neutral_non_start(seed):
+    corp_map = _generated_map(seed)
+    for t in _parks(corp_map):
+        assert t.owner == "neutral"
+        assert t.id != corp_map.player_start_id
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_parks_have_no_gang_presence_or_locations(seed):
+    corp_map = _generated_map(seed)
+    for t in _parks(corp_map):
+        assert t.gang_id is None
+        assert t.locations == []
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_parks_have_zero_modifiers_across_the_board(seed):
+    corp_map = _generated_map(seed)
+    for t in _parks(corp_map):
+        assert t.modifiers["development"] == 0
+        assert t.modifiers["security"] == 0
+        assert t.modifiers["surveillance"] == 0
+        assert t.modifiers["unrest"] == 0
+        assert t.modifiers["restricted"] == 0
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_parks_never_share_with_slums_or_outskirts(seed):
+    corp_map = _generated_map(seed)
+    park_ids = {t.id for t in _parks(corp_map)}
+    outskirts_ids = {t.id for t in _outskirts(corp_map)}
+    slum_ids = {t.id for t in _slums(corp_map)}
+    assert not park_ids & outskirts_ids
+    assert not park_ids & slum_ids
 
 
 def test_generate_corp_map_raises_if_factions_dont_fit():
