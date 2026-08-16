@@ -18,6 +18,7 @@ from shadowguy.corpmap import (
     Location,
     LocationKind,
     Territory,
+    has_guaranteed_bar,
     owner_label,
     render_ascii_map,
     travel_path,
@@ -702,6 +703,8 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
             color = OWNER_COLORS.get(territory.owner)
             if color:
                 text.stylize(color, span.offset, span.offset + span.end - span.start)
+            if has_guaranteed_bar(territory):
+                text.stylize("bold", span.offset, span.offset + span.end - span.start)
             if span.territory_id == self._flash_territory_id:
                 text.stylize("bold yellow reverse", span.offset, span.offset + span.end - span.start)
             elif span.territory_id == self.hovered_id:
