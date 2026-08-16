@@ -143,7 +143,16 @@ class CharacterSheet(Static):
         # player rests from the map view, where the Corp tab's #corp_info isn't up.
         if self.app.corp_only and self.app.corp_state is not None:
             return self._render_corp()
-        fatigue = "Rested" if c.fatigue == 0 else f"Fatigued: {c.fatigue} (-{c.fatigue_penalty} to stats)"
+        # The raw counter (unlike fatigue_penalty) is deliberately uncapped -- see its
+        # field comment -- so a runner who skips rest for a very long stretch can drive
+        # it into the millions. Displayed capped at 999+ so that stays a sanity-check
+        # number rather than a screen-breaking one; fatigue_penalty (already shown) is
+        # what actually matters to the player.
+        if c.fatigue == 0:
+            fatigue = "Rested"
+        else:
+            shown = "999+" if c.fatigue > 999 else str(c.fatigue)
+            fatigue = f"Fatigued: {shown} (-{c.fatigue_penalty} to stats)"
         # What's left of the runner (ceiling minus installed chrome), not the ceiling --
         # the ceiling alone says nothing about how chromed-up they currently are. The
         # penalty is spelled out for the same reason fatigue's is: so the player isn't

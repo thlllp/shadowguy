@@ -16,6 +16,7 @@ from enum import StrEnum
 
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.relations import Relations
+from shadowguy.saves import restore_defaults
 from shadowguy.skills import skill_for
 
 OWNER_NAMES = {"neutral": "Unclaimed"}
@@ -260,6 +261,9 @@ class Territory:
     # and nothing garrisons ground nobody holds.
     garrison: int = 0
 
+    def __setstate__(self, state: dict) -> None:
+        restore_defaults(self, state)
+
 
 @dataclass
 class CorpMap:
@@ -273,6 +277,9 @@ class CorpMap:
     # us" count. rivals.resolve_rival_day reads and resets it when a faction
     # bribes a gang in retaliation; nothing else consumes it.
     faction_grudge: dict[str, int] = field(default_factory=dict)
+
+    def __setstate__(self, state: dict) -> None:
+        restore_defaults(self, state)
 
     def __post_init__(self) -> None:
         for territory in self.territories.values():

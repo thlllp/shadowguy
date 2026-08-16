@@ -242,6 +242,8 @@ Leaf modules, and why each has to stay one:
 
 What does **not** need a bump: save state stores catalog entries by **id** (`Character.installed_cyberware` holds cyberware ids, `owned_programs`/`installed_programs` hold program ids), so adding a row *or a field* to a frozen catalog dataclass changes no pickled shape. Renaming an existing id does — see v59.
 
+Nor does a field added, with a real default, to a class that defines `__setstate__ = lambda self, state: restore_defaults(self, state)` (`saves.restore_defaults`) — `Territory`, `CorpMap` and `RivalRunner` in v68/v69/v58/v72's own hazards, `Ice` in v71's, are wired up this way now, so the *next* additive field on any of them backfills its default on unpickle instead of needing a new row here. `restore_defaults` only ever fills in a field `state` doesn't carry — it is not a substitute for a bump on a rename, a reshape (a scalar becoming a tuple, e.g. v61's `RunnerState.activity` → `activities`, still deliberately unhooked), or a key/id change, all of which still need one. A class not listed above still relies on plain `__dict__` restore and still needs a bump for any shape change, additive or not.
+
 What each bump added:
 
 | v | Change |

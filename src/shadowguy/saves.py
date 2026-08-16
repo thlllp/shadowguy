@@ -11,14 +11,31 @@ match — fine for an in-development roguelite with no meta-progression, where a
 disposable. `SAVE_VERSION` is the coarse guard: bump it on a breaking state change and
 old saves are refused at load rather than exploding half-way through unpickling.
 
+**Not every shape change is breaking.** A field added to an existing dataclass with a
+real default is recoverable — pickle restores an object through `__dict__`/`__setstate__`,
+never `__init__`, so the field's declared default otherwise never applies to an old
+pickle missing it (this bit the map render more than once before `restore_defaults`
+existed: see the pre-v70 entries in the save-version history below). A class whose
+saved instances can predate one of its own fields should define
+`__setstate__ = lambda self, state: restore_defaults(self, state)` (or an equivalent
+explicit method) rather than rely on the default `__dict__.update`, and its field
+**must not need a bump for that alone** — `SAVE_VERSION` stays reserved for changes
+`restore_defaults` can't paper over: a rename, a reshaped field (a scalar becoming a
+tuple, a dict changing its key), or anything else where "fill in the declared default"
+would be a silent wrong answer rather than a safe one. `RunnerState.activities` (v61,
+replacing a single `activity` field) is exactly that case and still needs a real bump.
+
 Leaf module: pickle resolves the game classes by their own module paths at load time,
-so nothing here imports them, and app.py can import this without a cycle. The filename
-carries day + timestamp so `list_saves` can render the load list without unpickling a
-single file — a corrupt or stale save only fails when you actually pick it.
+so nothing here imports them, and app.py can import this without a cycle. `restore_defaults`
+lives here rather than in each class's own module because this is already the module that
+owns save compatibility as a policy — nothing it does depends on any other class, so every
+module in the package can import it back with no cycle. The filename carries day +
+timestamp so `list_saves` can render the load list without unpickling a single file — a
+corrupt or stale save only fails when you actually pick it.
 """
 
 import pickle
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -294,6 +311,26 @@ STATE_KEYS = frozenset(
         "corp_only",
     }
 )
+
+
+def restore_defaults(instance: Any, state: dict[str, Any]) -> None:
+    """`__setstate__` body for a dataclass that wants old pickles missing a field to
+    unpickle with that field's declared default instead of not having it at all.
+    Restores `state` verbatim first — same as pickle's own default `__setstate__`,
+    `self.__dict__.update(state)` — then fills in any of the class's *current*
+    dataclass fields that `state` doesn't carry.
+
+    Only correct for a field whose default is really a safe stand-in for "this
+    pickle predates the field" — a rename or reshape needs its own migration, not
+    this. See this module's docstring."""
+    instance.__dict__.update(state)
+    for f in fields(instance):
+        if f.name in instance.__dict__:
+            continue
+        if f.default is not MISSING:
+            instance.__dict__[f.name] = f.default
+        elif f.default_factory is not MISSING:  # type: ignore[misc]
+            instance.__dict__[f.name] = f.default_factory()
 
 
 @dataclass(frozen=True)

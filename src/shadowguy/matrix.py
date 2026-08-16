@@ -42,6 +42,7 @@ from shadowguy.checks import CheckResult, CheckRoll, pool_for_difficulty, resolv
 from shadowguy.combat import FREE_ROUND, Drop, resolve_hit, roll_tier_pool
 from shadowguy.cybernetics import installed_matrix_action_bonus
 from shadowguy.inventory import active_deck_entry, equipped_deck_rating, installed_programs_for
+from shadowguy.saves import restore_defaults
 from shadowguy.shops import ITEMS_BY_ID, STOLEN_DATASHARD_ID, Program, grant_item
 from shadowguy.skills import skill_value
 
@@ -171,6 +172,9 @@ class Ice:
     # a spider triggered coordinates the rest of the network, same security-ratchet lever
     # as Sentinel above. First-slice tag, room to grow spider-specific behavior later.
     human: bool = False
+
+    def __setstate__(self, state: dict) -> None:
+        restore_defaults(self, state)
 
 
 # id, name, integrity, attack, defense, damage, soak, security_per_round. Watchdogs are

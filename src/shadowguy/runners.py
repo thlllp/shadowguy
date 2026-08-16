@@ -43,6 +43,7 @@ import copy
 import random
 from dataclasses import dataclass, field
 
+from shadowguy.saves import restore_defaults
 from shadowguy.shops import ITEMS_BY_ID, Item, Slot
 
 
@@ -74,6 +75,9 @@ class RivalRunner:
     # combat.crew_stats when they fight beside you. A bought *deck* isn't in here: it
     # replaces `deck_id` above, which is where every support check already looks.
     gear: list[str] = field(default_factory=list)
+
+    def __setstate__(self, state: dict) -> None:
+        restore_defaults(self, state)
 
 
 RIVAL_RUNNERS = [
