@@ -79,6 +79,7 @@ from shadowguy.corpmap import (
     capture_territory,
     claim_territory,
     expansion_candidates,
+    has_guaranteed_bar,
 )
 from shadowguy.corp_rules import (
     ACADEMY_REBUILD_COST,
@@ -93,6 +94,7 @@ from shadowguy.corp_rules import (
     EXPANSION_COST_PER_VALUE,
     EXPANSION_SPRAWL_DIVISOR,
     EmployeeCategory,
+    GUARANTEED_BAR_EXPANSION_MULTIPLIER,
     LAB_UPGRADE_COSTS,
     LOGISTICS_BASE_CAPACITY,
     LOGISTICS_DEVELOPMENT_PER_SLOT,
@@ -890,6 +892,12 @@ def expansion_cost(
     the corp held nothing, which is only right for a preview that has no corp
     behind it.
 
+    A district hosting one of the map's three guaranteed runner bars is priced at
+    GUARANTEED_BAR_EXPANSION_MULTIPLIER times its normal price (see
+    corpmap.has_guaranteed_bar) — those districts are also never bordered by
+    faction-owned ground at generation (corpmap_gen._faction_adjacent_ids), so this
+    only ever bites once a corp's border has grown to reach one.
+
     Both parameters are **required, not defaulted**: the sprawl multiplier is the
     whole point of this function at any real call site, and a defaulted-away
     corp_map would let a caller quietly display a price the corp will never be
@@ -898,6 +906,8 @@ def expansion_cost(
     if corp_state is not None and has_technology(corp_state, SUPPLY_CHAIN_ID):
         base = SUPPLY_CHAIN_EXPANSION_BASE
     price = base + EXPANSION_COST_PER_VALUE * territory.value
+    if has_guaranteed_bar(territory):
+        price *= GUARANTEED_BAR_EXPANSION_MULTIPLIER
     if corp_state is None or corp_map is None:
         return price
     held = len(_owned_territories(corp_state, corp_map))

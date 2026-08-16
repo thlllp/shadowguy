@@ -25,9 +25,11 @@ from collections import Counter
 from dataclasses import dataclass
 
 from shadowguy.corpmap import (
+    AMYS_PLACE_NAME,
     GENERATED_KINDS,
     ROLLED_KINDS,
     SHOP_KINDS,
+    SPECIAL_BAR_NAMES,
     CorpMap,
     LocalCharacter,
     Location,
@@ -499,7 +501,7 @@ def _make_amys_place(territory_id: str, rng: random.Random) -> Location:
     location_id = f"{territory_id}_amys_place"
     return Location(
         id=location_id,
-        name="Amy's Place",
+        name=AMYS_PLACE_NAME,
         kind=LocationKind.AMYS_PLACE,
         characters=_characters_for_roles(location_id, [AMYS_PLACE_ROLE], rng),
     )
@@ -510,7 +512,7 @@ def _make_amys_place(territory_id: str, rng: random.Random) -> Location:
 # one exception create_fixers seats a fixer at). A fixed name each rather than the
 # usual prefix+suffix roll (_unique_location_name), the same way Amy's Place's name
 # is fixed. (id_slug, name) pairs, id_slug used to build the Location id.
-SPECIAL_BARS = (("blue_dolphin", "The Blue Dolphin"), ("dorothys", "Dorothy's"))
+SPECIAL_BARS = tuple(zip(("blue_dolphin", "dorothys"), SPECIAL_BAR_NAMES, strict=True))
 SPECIAL_BARS_BY_SLUG = dict(SPECIAL_BARS)
 
 
@@ -604,6 +606,18 @@ def _player_start(region: list[Cell], edges: set[frozenset[Cell]], rng: random.R
     return rng.choice(sorted(candidates))
 
 
+def _adjacency(region: list[Cell], edges: set[frozenset[Cell]]) -> dict[Cell, set[Cell]]:
+    """Expand the edge set into a per-cell neighbor graph, once, for callers that
+    walk it repeatedly (_grow_blocs) or just need a fast "is this cell adjacent to
+    that one" test (_faction_adjacent_ids)."""
+    graph: dict[Cell, set[Cell]] = {cell: set() for cell in region}
+    for edge in edges:
+        a, b = tuple(edge)
+        graph[a].add(b)
+        graph[b].add(a)
+    return graph
+
+
 def _grow_blocs(
     region: list[Cell],
     edges: set[frozenset[Cell]],
@@ -619,11 +633,7 @@ def _grow_blocs(
     Returns None if a bloc gets boxed in before reaching its quota; the caller
     retries with fresh seeds.
     """
-    graph: dict[Cell, set[Cell]] = {cell: set() for cell in region}
-    for edge in edges:
-        a, b = tuple(edge)
-        graph[a].add(b)
-        graph[b].add(a)
+    graph = _adjacency(region, edges)
 
     available = [cell for cell in region if cell != start_cell]
     seeds = rng.sample(available, k=len(faction_ids))
@@ -703,7 +713,21 @@ class _InjectionPlan:
     outskirts_ids: set[str]
 
 
-def _plan_injections(region: list[Cell], owners: dict[Cell, str],
+def _faction_adjacent_ids(
+    region: list[Cell], edges: set[frozenset[Cell]], owners: dict[Cell, str], ids: dict[Cell, str]
+) -> set[str]:
+    """Territory ids not owned by any faction but sharing a connection with one that
+    is — the buffer the map's guaranteed bars (Amy's Place, SPECIAL_BARS) must clear,
+    so a runner bar never sits one hop from corp ground."""
+    graph = _adjacency(region, edges)
+    return {
+        ids[cell]
+        for cell in region
+        if cell not in owners and any(n in owners for n in graph[cell])
+    }
+
+
+def _plan_injections(region: list[Cell], edges: set[frozenset[Cell]], owners: dict[Cell, str],
                      values: dict[Cell, int], ids: dict[Cell, str], start_id: str,
                      faction_ids: list[str], rng: random.Random) -> _InjectionPlan:
     elsewhere = [ids[cell] for cell in region if ids[cell] != start_id]
@@ -717,11 +741,19 @@ def _plan_injections(region: list[Cell], owners: dict[Cell, str],
         gang_turf.setdefault(gang_id, []).append(tid)
     den_ids = {rng.choice(tids): gang_id for gang_id, tids in gang_turf.items()}
 
+    # Amy's Place and the two SPECIAL_BARS are the map's guaranteed runner bars, so
+    # neither their pool of candidates may touch faction-owned ground — never mind
+    # sitting on it, not even bordering it.
+    faction_adjacent_ids = _faction_adjacent_ids(region, edges, owners, ids)
+
     # Amy's Place is a single guaranteed placement, same footing as hospital/den above
     # rather than a junkyard/docks-style count scaled to the neutral pool — so it's
     # reserved right after them, while the neutral pool is least fragmented, instead of
     # competing with junkyard/docks for what's left.
-    amy_candidates = [tid for tid in neutral_ids if tid not in hospital_ids and tid not in den_ids]
+    amy_candidates = [
+        tid for tid in neutral_ids
+        if tid not in hospital_ids and tid not in den_ids and tid not in faction_adjacent_ids
+    ]
     if not amy_candidates:
         raise ValueError("_plan_injections: no neutral tile left for Amy's Place")
     amys_place_id = rng.choice(amy_candidates)
@@ -851,7 +883,7 @@ def generate_corp_map(factions: list[Faction], rng: random.Random) -> CorpMap:
     names = rng.sample(DISTRICT_NAMES, k=len(region))
     ids = {cell: name.lower() for cell, name in zip(region, names, strict=True)}
     start_id = ids[start_cell]
-    plan = _plan_injections(region, owners, values, ids, start_id, faction_ids, rng)
+    plan = _plan_injections(region, edges, owners, values, ids, start_id, faction_ids, rng)
 
     territories = {}
     used_names: set[str] = set()
