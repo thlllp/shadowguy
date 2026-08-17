@@ -161,6 +161,24 @@ _NPC_WEAPON_ROWS = (
     ("riot_shotgun", "Riot Shotgun", "longarms", 4, 0, 1, True),
     ("combat_rifle", "Combat Rifle", "automatics", 5, 0, 1, True),
     ("marksman_rifle", "Marksman Rifle", "longarms", 4, 0, 1, True),
+    # Bite/claw weapons: grapple, like UNARMED, so they scale off Strength rather than
+    # a trained weapon skill — an animal (or a limb no one trained) is a body attack,
+    # not a technique. concealment 5 for the same reason as UNARMED: nothing to search
+    # or confiscate.
+    ("guard_dog_bite", "Guard Dog", "grapple", 1, 0, 5, False),
+    ("mutant_claw", "Mutated Limb", "grapple", 2, 0, 5, False),
+    # Flavor stand-in for a psychic strike, not a new mechanic — thrown rather than
+    # melee (THROWN_RANGE, not MELEE_RANGE) so it reads as reaching out rather than
+    # closing in, and still picks up the Strength melee bonus like any other
+    # non-RANGED_SKILLS weapon (see melee_damage_bonus). See mutant_aberrant's own
+    # comment below for what this is a placeholder for.
+    ("psychic_lash", "Psychic Lash", "throwing", 3, 0, 5, False),
+    # Drone armament: "gunnery" (skills.py: "Turrets, mounts and stationary guns"), the
+    # one weapon skill nothing else in the roster carries — a drone's gun is bolted on,
+    # not aimed by hand. Bulky and unconcealable (concealment at the floor) on both:
+    # there's no pocketing a chassis-mounted weapon.
+    ("drone_autocannon", "Mounted Autocannon", "gunnery", 3, 0, 1, True),
+    ("drone_railgun", "Drone Railgun", "gunnery", 5, 0, 1, True),
 )
 
 NPC_WEAPONS = {
@@ -417,7 +435,37 @@ _ENEMY_ROWS: tuple[Enemy, ...] = (
     # A gun at tier 0 — can't hit much, but reaches the whole map and doesn't have to
     # close. The first thing on the ladder that punishes standing in the open.
     _enemy("lookout", "Street Lookout", (1, 1, 1, 2, 1, 1), "holdout_pistol"),
+    # --- a generic corp roster: small arms, no cybernetics, deliberately unspecialized
+    # filler rather than a fifth "shape" — see the checklist's item 3 for why the
+    # roster's other rows differ by what they punish; these four exist to reskin corp
+    # locations without every corp fight reading as Corp Sec. ---
+    # A rent-a-cop: the same holdout pistol as the Street Lookout, but wearing
+    # something over it instead of having the perception to compensate.
+    _enemy("security_guard", "Security Guard", (1, 1, 1, 1, 1, 1), "holdout_pistol", armor=1),
+    # Fast and hard to pin down (agility 2, no armor) but a lone bite barely scratches
+    # anything — a nuisance, not a threat, same as a real guard dog would be.
+    _enemy("guard_dog", "Guard Dog", (1, 1, 2, 2, 1, 1), "guard_dog_bite"),
+    # The softest thing in the roster: no armor, no training, a desk pistol grabbed in a
+    # panic. Combat stats identical to the Street Lookout on purpose — an office worker
+    # caught in a firefight isn't a harder fight than a rookie with a gun, just a
+    # different reason to be holding one.
+    _enemy("corp_manager", "Manager", (1, 1, 1, 1, 1, 1), "holdout_pistol"),
+    # --- the slums/outskirts' own roster: mutants, not corp or gang. mutant_claw is one
+    # point harder-hitting than a Guard Dog's plain bite (the "one mutated limb" the
+    # rest of it never grew), and Pariah trades the usual tier-0 fragility for extra body
+    # instead — tougher to put down, not harder to hit or hit with. ---
+    _enemy("mutant_dog", "Mutated Dog", (1, 1, 2, 2, 1, 1), "mutant_claw"),
+    # More health than anything else at this tier (body 2), everything else left at the
+    # tier-0 floor — a target that punishes being ignored, not one that punishes anything
+    # in particular about how you fight it.
+    _enemy("pariah", "Pariah", (2, 1, 1, 1, 1, 1), "scrap_pipe"),
     # --- tier 1: organized ---
+    # The trained step up from Security Guard: an SMG and a rank in it, still armor 1.
+    # Half the health and toughness of tier 2's Sec Heavy, which is what it becomes with
+    # a body/strength upgrade — this is the ladder's rung in between.
+    _enemy(
+        "elite_guard", "Elite Guard", (1, 1, 2, 1, 1, 1), "guard_smg", {"automatics": 1}, armor=1
+    ),
     _enemy("corp_sec", "Corp Sec", (1, 1, 2, 1, 1, 1), "holdout_pistol", armor=1),
     # Glass cannon: combat drugs instead of training. Hits harder than anything else at
     # this tier and folds to one solid answer. Strength, not skill — it swings wildly
@@ -428,7 +476,36 @@ _ENEMY_ROWS: tuple[Enemy, ...] = (
     _enemy(
         "shock_trooper", "Shock Trooper", (2, 1, 2, 1, 1, 1), "stun_baton", armor=1
     ),
+    # Organized where the Pariah/Mutated Dog aren't: the same gun and armor as Elite
+    # Guard, but numbers over training — no rank in it, mutated Body/Strength instead.
+    # Tougher and less accurate rather than a plain reskin of the same fight.
+    _enemy("mutant_militant", "Mutant Militant", (2, 2, 2, 1, 1, 1), "guard_smg", armor=1),
+    # Slow and low-accuracy (agility 1, no ranks) but the hardest-hitting and toughest
+    # thing at this tier when it does connect — mutated Strength and Body both at 2,
+    # nothing spent on training or evasion. A wall that also swings back, unlike Bulwark.
+    _enemy("mutant_elder", "Mutant Elder", (2, 2, 1, 1, 2, 2), "machete", armor=2),
+    # A "stupid" weapons platform: no targeting logic worth the name (agility 1, no
+    # ranks) behind its mounted gun, but a real chassis to punch through (armor 2, on
+    # top of Body 2) — a lot easier to avoid than to actually finish off.
+    _enemy("drone_wheeled", "Wheeled Drone", (2, 1, 1, 1, 1, 1), "drone_autocannon", armor=2),
     # --- tier 2: corporate ---
+    # The generic corp line's third rung, after Security Guard (unranked, armored) and
+    # Elite Guard (ranked, light armor): the elite of the whole tier, not a specialist —
+    # high stats across the board rather than a trade. Ties the Enforcer's top attack
+    # and toughness, but carries the roster's hardest-hitting weapon (Combat Rifle,
+    # otherwise only a hired Solo's gun — see _CREW_PROFILES) for the single highest
+    # damage figure in the game.
+    _enemy(
+        "corp_operative", "Corp Operative", (2, 2, 2, 1, 2, 2), "combat_rifle", {"automatics": 2}, armor=2
+    ),
+    # The other end of the drone line from Wheeled Drone: "intelligent and capable"
+    # instead of dumb — agility and a trained gunner's eye bought instead of armor
+    # (the same trade Razorgirl makes with a blade), on the roster's other 5-damage
+    # weapon. Ties the roster's top defense bar Razorgirl's, and drops to a single
+    # solid hit like anything else this fragile once one lands.
+    _enemy(
+        "drone_sentinel", "Sentinel Drone", (1, 1, 3, 2, 2, 1), "drone_railgun", {"gunnery": 1}
+    ),
     # Speed instead of armor: the hardest thing in the game to land a hit on, and it
     # dies to the first one that lands.
     _enemy("razorgirl", "Razorgirl", (1, 2, 3, 1, 1, 1), "machete", {"dodge": 1}),
@@ -444,6 +521,18 @@ _ENEMY_ROWS: tuple[Enemy, ...] = (
     # The opposite trade: the most health and soak on the board, barely able to hit
     # anything. A wall to be worked around rather than a threat to be raced.
     _enemy("bulwark", "Bulwark", (2, 2, 1, 1, 1, 2), "riot_shotgun", armor=3),
+    # Placeholder for a psychic-power system that doesn't exist yet: the numbers behind
+    # the flavor, not a mechanic of its own. `psychic_lash` is a thrown attack rather than
+    # a weapon (THROWN_RANGE, no ammo, reads as reaching out rather than closing in) with
+    # two ranks bought in it despite no training existing to buy — the "gift" standing in
+    # for a skill. High Perception/Logic are flavor only today (nothing in Enemy's derived
+    # properties reads them outside `.stat()` calls a real skill check would make), and
+    # Body/armor are left at the floor: whatever this becomes should be a glass cannon,
+    # not survive by soaking hits. Revisit this row, not the flee/drop rules, the day
+    # psych abilities land — see DESIGN.md's enemy-roster section.
+    _enemy(
+        "mutant_aberrant", "Mutant Aberrant", (1, 1, 1, 3, 3, 1), "psychic_lash", {"throwing": 2}
+    ),
 )
 
 ENEMIES = list(_ENEMY_ROWS)
@@ -452,13 +541,50 @@ ENEMIES_BY_ID = {enemy.id: enemy for enemy in ENEMIES}
 if len(ENEMIES_BY_ID) != len(ENEMIES):
     raise ValueError("_ENEMY_ROWS has a duplicate enemy id")
 
+# Which _ENEMY_ROWS ids are machines rather than people — scaffolding for an EMP weapon
+# effect that doesn't exist yet, the same "numbers before the mechanic" move as
+# mutant_aberrant's psych placeholder above. Deliberately an id-keyed side table rather
+# than a field on Enemy itself: a new Enemy field needs a SAVE_VERSION bump (see
+# saves.py's v54 entry), and nothing reads this one yet to justify paying that now.
+DRONE_ENEMY_IDS = frozenset({"drone_wheeled", "drone_sentinel"})
+if not DRONE_ENEMY_IDS <= set(ENEMIES_BY_ID):
+    raise ValueError("DRONE_ENEMY_IDS references an id that is not in _ENEMY_ROWS")
+
 # Day tier (checks.day_tier) -> who turns up, and how many. The count is the real
 # difficulty lever, not the stats: two gangers is a far worse round than one Corp Sec,
 # because every one of them swings at you every round.
 ENEMY_TIERS: dict[int, tuple[list[str], tuple[int, int]]] = {
-    0: (["thug", "ganger", "lookout"], (1, 2)),
-    1: (["ganger", "corp_sec", "shock_trooper", "juicer"], (2, 2)),
-    2: (["corp_sec", "sec_heavy", "enforcer", "razorgirl", "marksman", "bulwark"], (2, 3)),
+    0: (
+        ["thug", "ganger", "lookout", "security_guard", "guard_dog", "corp_manager", "mutant_dog", "pariah"],
+        (1, 2),
+    ),
+    1: (
+        [
+            "ganger",
+            "corp_sec",
+            "shock_trooper",
+            "juicer",
+            "elite_guard",
+            "mutant_militant",
+            "mutant_elder",
+            "drone_wheeled",
+        ],
+        (2, 2),
+    ),
+    2: (
+        [
+            "corp_sec",
+            "sec_heavy",
+            "enforcer",
+            "corp_operative",
+            "razorgirl",
+            "marksman",
+            "bulwark",
+            "mutant_aberrant",
+            "drone_sentinel",
+        ],
+        (2, 3),
+    ),
 }
 
 if any(enemy_id not in ENEMIES_BY_ID for ids, _ in ENEMY_TIERS.values() for enemy_id in ids):
