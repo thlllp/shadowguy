@@ -4728,7 +4728,10 @@ def test_ripperdoc_removal_rebounds_humanity_and_lifts_the_penalty():
 
     async def body():
         app = ShadowguyApp()
-        async with app.run_test(size=(80, 60)) as pilot:
+        # Taller than the usual 80x60: the catalog now has enough rows that
+        # #ripper_installed (height: auto, stacked below #ripper_stock) would
+        # otherwise sit below the fold, which a coordinate click can't reach.
+        async with app.run_test(size=(80, 140)) as pilot:
             await pilot.pause()
             clinic = next(
                 loc
