@@ -139,9 +139,8 @@ class Cyberware:
 # Deltaware catalog, not balance-simulated. Every row here is min_standing 0 (see
 # CYBERWARE_TIER_MIN_STANDING): the baseline grade is what any clinic will sell a
 # stranger, so no *effect* in the catalog is ever locked behind a relationship --
-# only the better trade-offs on it. Two pieces per slot, the same spread shops.py's
-# weapon/armor catalog uses -- most are a flat stat piece plus a
-# skill-specialized piece, except OPTICS, where Smartlink's whole effect is
+# only the better trade-offs on it. Most slots pair a flat stat piece with a
+# skill-specialized one, except OPTICS, where Smartlink's whole effect is
 # conditional (see above) rather than a flat skill_bonuses entry.
 # humanity_cost is deliberately uneven: the cheap option in each slot sums to
 # 4.0 of HUMANITY_BASELINE's 6 (Smartlink and Datajack tie at 0.5, the cheapest
@@ -149,6 +148,13 @@ class Cyberware:
 # but has to give something up to fit any of the pricier, more invasive options in
 # on top. (This comment used to say 5.5, which was simply wrong -- worth knowing,
 # since character.SURGERY_SCARRING was originally sized against that bad figure.)
+#
+# The six rows below (tactical_cybereye through toxin_extractor) round the catalog
+# out with a second skill-specialized option in every slot, Shadowrun-flavored --
+# Wired Reflexes, an arm-mounted blade, Orthoskin, a toxin-filtering internal --
+# each landing on one of the existing bonuses/skill_bonuses/defense hooks rather
+# than adding a new mechanic, the same way grapple_rig_cyberarm and steel_bones
+# already do.
 _DELTAWARE_CYBERWARE = [
     Cyberware(
         "cybereye_scanner", "Cybereye Scanner", 700, CyberSlot.OPTICS, {"perception": 1}, {}, humanity_cost=1
@@ -247,6 +253,80 @@ _DELTAWARE_CYBERWARE = [
     # tables).
     Cyberware(
         "adamantium_bones", "Adamantium Bones", 6000, CyberSlot.INTERNAL, {}, {}, humanity_cost=2.8, defense=4
+    ),
+    # A rangefinding cybereye rather than another flat Perception bump (cybereye_scanner
+    # already covers that): aimed squarely at the Sight roll, the skill "spotting
+    # details at range or in the dark" already names.
+    Cyberware(
+        "tactical_cybereye",
+        "Tactical Cybereye",
+        900,
+        CyberSlot.OPTICS,
+        {},
+        {"sight": 2},
+        humanity_cost=1.2,
+        tag="rangefinder",
+    ),
+    # The classic: overclocked reflexes shaving time off every dodge, not another flat
+    # Agility piece (reflex_coprocessor already covers that). Priced and scarred like
+    # the invasive, life-changing surgery it always was in the source material --
+    # 2.6 is close to the catalog ceiling (character.py's guard caps a Deltaware row
+    # at 2.9 so its Trashware double still fits under HUMANITY_BASELINE).
+    Cyberware(
+        "wired_reflexes",
+        "Wired Reflexes",
+        4500,
+        CyberSlot.NEURALWARE,
+        {},
+        {"dodge": 2},
+        humanity_cost=2.6,
+        tag="overclocked",
+    ),
+    # A logic-processing implant for reading a new system fast, distinct from
+    # neural_processor's flat Logic bump the way reflex_coprocessor/datajack already
+    # split NEURALWARE between a stat piece and two specialized ones.
+    Cyberware(
+        "math_spu",
+        "Math SPU",
+        1200,
+        CyberSlot.NEURALWARE,
+        {},
+        {"infer": 2},
+        humanity_cost=1,
+    ),
+    # ARMS' skill-specialized twin to grapple_rig_cyberarm: a blade folded into the
+    # forearm instead of a grip built for holds, so this build's off-hand carries a
+    # weapon that never shows up in a pat-down. humanity_cost deliberately doesn't
+    # undercut hydraulic_cyberarm's 2 -- the catalog's "cheapest piece per slot sums
+    # to 4.0" figure above is load-bearing (SURGERY_SCARRING was sized against it),
+    # so no new row should quietly become the new cheapest option in its slot.
+    Cyberware(
+        "bladed_cyberarm",
+        "Bladed Cyberarm",
+        1600,
+        CyberSlot.ARMS,
+        {},
+        {"blades": 2},
+        humanity_cost=2.2,
+        tag="concealed blade",
+    ),
+    # A second INTERNAL defense piece alongside the bone lacing ladder, priced and
+    # scarred for a lighter trade-off (dermal weave rather than a skeleton swap) --
+    # a cheaper, shallower alternative to steel_bones rather than a step on its ladder.
+    Cyberware(
+        "orthoskin", "Orthoskin", 1200, CyberSlot.INTERNAL, {}, {}, humanity_cost=1.3, defense=1
+    ),
+    # INTERNAL's other skill-specialized piece, matched to Fortitude's own "shrugging
+    # off toxins, disease" the way toxin-filtering organs always have been.
+    Cyberware(
+        "toxin_extractor",
+        "Toxin Extractor",
+        900,
+        CyberSlot.INTERNAL,
+        {},
+        {"fortitude": 2},
+        humanity_cost=1.1,
+        tag="toxin filter",
     ),
 ]
 

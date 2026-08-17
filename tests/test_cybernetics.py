@@ -333,6 +333,84 @@ def test_install_datajack_succeeds_and_spends_humanity():
     assert free_humanity(character) == HUMANITY_BASELINE - 0.5 - SURGERY_SCARRING
 
 
+# --- Shadowrun-flavored second-per-slot rows -----------------------------------
+
+
+def test_tactical_cybereye_catalog_values():
+    cybereye = CYBERWARE_BY_ID["tactical_cybereye"]
+    assert (cybereye.price, cybereye.humanity_cost) == (900, 1.2)
+    assert cybereye.slot is CyberSlot.OPTICS
+    assert cybereye.skill_bonuses == {"sight": 2}
+    assert cybereye.bonuses == {}
+    assert cybereye.grants_smartlink is False
+
+
+def test_wired_reflexes_catalog_values():
+    wired = CYBERWARE_BY_ID["wired_reflexes"]
+    assert (wired.price, wired.humanity_cost) == (4500, 2.6)
+    assert wired.slot is CyberSlot.NEURALWARE
+    assert wired.skill_bonuses == {"dodge": 2}
+
+
+def test_math_spu_catalog_values():
+    spu = CYBERWARE_BY_ID["math_spu"]
+    assert (spu.price, spu.humanity_cost) == (1200, 1)
+    assert spu.slot is CyberSlot.NEURALWARE
+    assert spu.skill_bonuses == {"infer": 2}
+
+
+def test_bladed_cyberarm_catalog_values():
+    """humanity_cost is pinned above hydraulic_cyberarm's 2 -- see the row's own
+    comment -- so it never becomes ARMS' new cheapest piece."""
+    blade = CYBERWARE_BY_ID["bladed_cyberarm"]
+    assert (blade.price, blade.humanity_cost) == (1600, 2.2)
+    assert blade.slot is CyberSlot.ARMS
+    assert blade.skill_bonuses == {"blades": 2}
+    hydraulic = CYBERWARE_BY_ID["hydraulic_cyberarm"]
+    assert blade.humanity_cost > hydraulic.humanity_cost
+
+
+def test_orthoskin_catalog_values():
+    orthoskin = CYBERWARE_BY_ID["orthoskin"]
+    assert (orthoskin.price, orthoskin.humanity_cost, orthoskin.defense) == (1200, 1.3, 1)
+    assert orthoskin.slot is CyberSlot.INTERNAL
+
+
+def test_toxin_extractor_catalog_values():
+    extractor = CYBERWARE_BY_ID["toxin_extractor"]
+    assert (extractor.price, extractor.humanity_cost) == (900, 1.1)
+    assert extractor.slot is CyberSlot.INTERNAL
+    assert extractor.skill_bonuses == {"fortitude": 2}
+
+
+@pytest.mark.parametrize(
+    "base_id",
+    ["tactical_cybereye", "wired_reflexes", "math_spu", "bladed_cyberarm", "orthoskin", "toxin_extractor"],
+)
+def test_new_deltaware_rows_get_generated_tier_variants_too(base_id):
+    base = CYBERWARE_BY_ID[base_id]
+    for tier in ("trashware", "betaware", "alphaware"):
+        variant = CYBERWARE_BY_ID[f"{base_id}_{tier}"]
+        assert variant.skill_bonuses == base.skill_bonuses
+        assert variant.defense == base.defense
+        assert variant.slot is base.slot
+        assert variant.tier == tier
+
+
+def test_installing_wired_reflexes_folds_into_dodge():
+    character = Character(name="t", cash=10_000)
+    before = skill_value(character, "dodge")
+    assert install_cyberware(character, "wired_reflexes") is True
+    assert skill_value(character, "dodge") == before + 2
+
+
+def test_installing_bladed_cyberarm_competes_with_grapple_rig_for_the_arms_slot():
+    character = Character(name="t", cash=10_000)
+    assert install_cyberware(character, "bladed_cyberarm") is True
+    assert install_cyberware(character, "grapple_rig_cyberarm") is False
+    assert character.installed_cyberware[CyberSlot.ARMS] == "bladed_cyberarm"
+
+
 # --- Standing gate ------------------------------------------------------------
 # Cyberware is the last catalog to get shops.py's min_standing gate, and it's the
 # one where the gate runs *opposite* to price: Trashware is the cheap knockoff
