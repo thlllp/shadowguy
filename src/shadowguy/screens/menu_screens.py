@@ -5,15 +5,18 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 import shadowguy.archetypes as archetypes
 from shadowguy.buildings import BuildingKind, generate_building
-from shadowguy.checks import resolve_check
+from shadowguy.checks import day_tier, resolve_check
 from shadowguy.combat import ENEMY_TIERS, Drop, roll_enemies
 from shadowguy.corp_turn import CorpState
 from shadowguy.factions import FACTIONS
+from shadowguy.fishing import generate_fishing_trip
+from shadowguy.gangs import GANGS
 from shadowguy.job_archetypes import ARCHETYPES, Approach, StageType
-from shadowguy.jobs import DIFFICULTY_BASE, WETWORK_STRUCTURE
+from shadowguy.jobs import DIFFICULTY_BASE, WETWORK_STRUCTURE, generate_job, generate_smuggling_job
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome, generate_matrix_network
 from shadowguy.saves import SaveSlot, list_saves, load_game
 from shadowguy.scene import BurglaryStage, Entrance, MatrixStage, Outcome, TacticalStage
+from shadowguy.security import generate_security_contract
 from shadowguy.skills import skill_for, skill_value
 from shadowguy.tactical import TacticalOutcome
 from shadowguy.tactical_gen import generate_map
@@ -22,6 +25,7 @@ from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .burglary_screens import EntrancePickScreen
 from .creation_screen import CharacterCreationScreen
 from .matrix_screen import MatrixScreen
+from .scene_screen import SceneScreen
 from .tactical_screen import TacticalScreen
 
 
@@ -33,6 +37,44 @@ def _approach_pool(archetype_name: str) -> tuple[Approach, ...]:
     archetype = next(a for a in ARCHETYPES if a.name == archetype_name)
     stage = next(s for s in archetype.stages if s.type is StageType.APPROACH)
     return stage.approaches
+
+
+def _day_for_tier(tier: int) -> int:
+    """The lowest day number that lands on `tier` per checks.day_tier -- Test menu
+    scenarios have no run clock to read a day off of, so this picks one backwards
+    from the tier the player actually chose rather than hard-coding day_tier's
+    own day-per-tier cadence a second time here."""
+    day = 1
+    while day_tier(day, len(DIFFICULTY_BASE)) < tier:
+        day += 1
+    return day
+
+
+class TierPickScreen(ModalScreen):
+    """Which day-tier to generate a job/contract/delivery test scenario at -- the
+    same dismiss-a-value modal shape GrenadePickScreen/HackerPickScreen/
+    ForcePickScreen use. Dismisses the chosen tier, or None if cancelled."""
+
+    BINDINGS = [("escape", "cancel", "Back")]
+    CSS = _menu_css("TierPickScreen", "tier_dialog")
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Tier"),
+            ListView(
+                *(
+                    ListItem(Static(f"Tier {tier}"), id=f"tier_{tier}")
+                    for tier in range(len(DIFFICULTY_BASE))
+                )
+            ),
+            id="tier_dialog",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(int(event.item.id.removeprefix("tier_")))
 
 
 class QuitMenu(ModalScreen):
@@ -379,6 +421,10 @@ class TestMenu(BackScreen):
                     for kind in BuildingKind
                 ),
                 ListItem(Static(f"Wetwork — {WETWORK_STRUCTURE.value.title()}"), id="wetwork"),
+                ListItem(Static("Bodyguard Job"), id="bodyguard"),
+                ListItem(Static("Smuggling Delivery"), id="smuggling"),
+                ListItem(Static("Security Contract"), id="security"),
+                ListItem(Static("Fishing"), id="fishing"),
             ),
             id="test_dialog",
         )
@@ -395,6 +441,14 @@ class TestMenu(BackScreen):
             self._start_burglary(kind, _approach_pool("Burglary"))
         elif item_id == "wetwork":
             self._start_burglary(WETWORK_STRUCTURE, _approach_pool("Wetwork"))
+        elif item_id == "bodyguard":
+            self._start_bodyguard()
+        elif item_id == "smuggling":
+            self._start_smuggling()
+        elif item_id == "security":
+            self._start_security()
+        elif item_id == "fishing":
+            self.app.push_screen(SceneScreen(generate_fishing_trip()))
 
     def _start_tactical(self, tier: int) -> None:
         rng = self.app.rng
@@ -464,3 +518,46 @@ class TestMenu(BackScreen):
     def _on_burglary_end(self, result: TacticalOutcome) -> None:
         self.app.character.health = self.app.character.max_health
         self.notify(f"Test infiltration ended: {result.name.title()}.")
+
+    def _start_bodyguard(self) -> None:
+        self.app.push_screen(TierPickScreen(), self._bodyguard_tier_picked)
+
+    def _bodyguard_tier_picked(self, tier: int | None) -> None:
+        if tier is None:
+            return
+        archetype = next(a for a in ARCHETYPES if a.name == "Bodyguard")
+        scene, _timing = generate_job(
+            _day_for_tier(tier), self.app.corp_map, fixer_id="test", rng=self.app.rng, archetype=archetype
+        )
+        self.app.push_screen(SceneScreen(scene))
+
+    def _start_smuggling(self) -> None:
+        if self.app.character.smuggling_job is not None:
+            self.notify("Already carrying a delivery job.", severity="warning")
+            return
+        self.app.push_screen(TierPickScreen(), self._smuggling_tier_picked)
+
+    def _smuggling_tier_picked(self, tier: int | None) -> None:
+        if tier is None:
+            return
+        character = self.app.character
+        gang = self.app.rng.choice(GANGS)
+        character.smuggling_job = generate_smuggling_job(
+            gang.id, character.location_id, self.app.corp_map, _day_for_tier(tier), self.app.rng
+        )
+        destination = self.app.corp_map.territories[character.smuggling_job.destination_territory_id]
+        self.notify(f"Test delivery for {gang.name}: carry it to {destination.name}.")
+
+    def _start_security(self) -> None:
+        self.app.push_screen(TierPickScreen(), self._security_tier_picked)
+
+    def _security_tier_picked(self, tier: int | None) -> None:
+        if tier is None:
+            return
+        character = self.app.character
+        contract = generate_security_contract(
+            _day_for_tier(tier), self.app.corp_map, fixer_id="test", rng=self.app.rng
+        )
+        character.accept_security_contract(contract)
+        territory = self.app.corp_map.territories[contract.territory_id]
+        self.notify(f"Test contract: guard {territory.name} for {contract.nights_total} nights.")

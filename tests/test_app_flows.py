@@ -802,7 +802,7 @@ def test_test_menu_lists_one_row_per_tier_and_building_kind():
                 [f"tactical_{tier}" for tier in ENEMY_TIERS]
                 + [f"matrix_{tier}" for tier in ICE_TIERS]
                 + [f"burglary_{kind.value}" for kind in BuildingKind]
-                + ["wetwork"]
+                + ["wetwork", "bodyguard", "smuggling", "security", "fishing"]
             )
             assert ids == expected
 

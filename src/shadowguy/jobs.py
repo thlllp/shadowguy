@@ -626,10 +626,18 @@ def _fight_stage(plan: _JobPlan, index: int) -> Stage:
 
 
 def generate_job(
-    day: int, corp_map: CorpMap, fixer_id: str, rng: random.Random | None = None
+    day: int,
+    corp_map: CorpMap,
+    fixer_id: str,
+    rng: random.Random | None = None,
+    archetype: JobArchetype | None = None,
 ) -> tuple[Scene, JobTiming]:
     rng = resolve_rng(rng)
-    archetype = rng.choice(ARCHETYPES)
+    # archetype is forced by the Test menu (screens/menu_screens.py) to play a
+    # specific one on demand; every real caller (fixer.py) leaves it None and gets
+    # the normal random draw.
+    if archetype is None:
+        archetype = rng.choice(ARCHETYPES)
     territory, faction, location = _pick_mark(corp_map, rng)
     # Drawn here rather than inside the _JobPlan below so the rng is consumed in the
     # same order it always was — the optional-stage rolls come after the mark.
