@@ -436,9 +436,23 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     async def on_screen_resume(self) -> None:
         if self.selected_category is None:
             self._refresh_map()
-            self.set_focus(None)
+            # Deferred, not called directly: resuming from a pushed screen re-triggers
+            # the same mount-time autofocus race on_mount works around above -- a
+            # synchronous set_focus(None) here loses the race. Unlike on_mount's own
+            # _release_hidden_focus, the widget that ends up focused on resume isn't
+            # always a hidden one: backing out of a Locals-panel entry (e.g. a shop)
+            # leaves focus on #map_local_boxes_scroll itself, which is visible in map
+            # mode -- its Collapsible content gets torn down and rebuilt by
+            # _refresh_map_local_boxes, and Textual reassigns the destroyed focus to
+            # that surviving container. Map mode wants no focused widget at all
+            # (AUTO_FOCUS above), so clear unconditionally rather than only when hidden.
+            self.call_after_refresh(self._release_focus_in_map_mode)
         else:
             await self._refresh_activities()
+
+    def _release_focus_in_map_mode(self) -> None:
+        if self.selected_category is None:
+            self.set_focus(None)
 
     # ── back / map mode ─────────────────────────────────────────────────────
 
