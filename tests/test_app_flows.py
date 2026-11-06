@@ -2772,7 +2772,13 @@ def test_corp_screen_groups_actions_by_academy_and_research_facility():
 
             academy_list = app.screen.query_one("#academy_list", ListView)
             academy_ids = {item.id for item in academy_list.children}
-            assert academy_ids == {"upgrade_academy", "train_scientist", "train_operative", "train_research_assistant"}
+            assert academy_ids == {
+                "upgrade_academy",
+                "academy_grant",
+                "train_scientist",
+                "train_operative",
+                "train_research_assistant",
+            }
 
             research_list = app.screen.query_one("#research_list", ListView)
             research_ids = {item.id for item in research_list.children}
@@ -3313,6 +3319,10 @@ def test_corp_screen_researches_worker_surveillance_then_raises_a_modifier():
                 "tech_research_expansion", "tech_logistics_network",
                 "tech_private_security", "tech_hardened_garrison",
             }
+            project_ids = {
+                item.id for item in app.screen.query_one("#project_list", ListView).children
+            }
+            assert project_ids == {"project_logistics"}
 
             income_before = collect_income(app.corp_state, app.corp_map)
             app.corp_state.research_points = TECHNOLOGIES_BY_ID[WORKER_SURVEILLANCE_ID].cost

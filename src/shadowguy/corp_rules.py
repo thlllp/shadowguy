@@ -164,6 +164,15 @@ ACADEMY_REBUILD_COST = 2000
 ACADEMY_UPGRADE_COSTS = (3000, 8000)
 MAX_ACADEMY_TIER = STARTING_ACADEMY_TIER + len(ACADEMY_UPGRADE_COSTS)  # 3
 
+# The Academy's fallback use once every research seat/pool is full and there is
+# nothing worth training: 1 AP + cash for ACADEMY_GRANT_RP_PER_TIER research
+# points per Academy tier. Before this, ACADEMY_UPGRADE_COSTS bought batch size
+# for a queue that was usually empty; now the upgrade also raises the grant
+# yield, so the building keeps buying something after training stops.
+# Not balance-simulated.
+ACADEMY_GRANT_COST = 250
+ACADEMY_GRANT_RP_PER_TIER = 2
+
 # Cost of the 1st and 2nd efficiency upgrade, indexed by
 # Location.efficiency_upgrades -- strictly sequential, same shape as
 # LAB_UPGRADE_COSTS. Priced steeper than a lab: +1 RP/scientist compounds with
@@ -177,6 +186,17 @@ RESEARCH_ASSISTANTS_PER_LAB = 2
 # RP/day each working research assistant adds — flat, unlike research_rate:
 # efficiency upgrades boost scientists only.
 RESEARCH_PER_ASSISTANT = 0.5
+
+# --- Repeatable research -----------------------------------------------------
+# The finite technology tree (TECHNOLOGIES) ends; this is the research-point sink
+# it leaves behind. Each level of Logistics Optimization adds
+# RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL to logistics_capacity, and the price rises
+# linearly: 200, 400, 600 ... RP. Linear rather than exponential because each level
+# buys one district of headroom, and the strain it removes grows with the overage;
+# the cost still eventually outruns a flat research rate. Not balance-simulated.
+RESEARCH_LOGISTICS_COST_BASE = 200
+RESEARCH_LOGISTICS_COST_STEP = 200
+RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL = 1
 
 # CorpState.sightings is capped at this many entries (most-recent-first) —
 # an unbounded log would grow for the life of a run for no read anything

@@ -57,6 +57,7 @@ from shadowguy.corp_turn import (
     CorpState,
     EmployeeCategory,
     TECHNOLOGIES,
+    academy_research_grant,
     advance_corp_day,
     assistant_capacity,
     build_efficiency_upgrade,
@@ -79,6 +80,7 @@ from shadowguy.corp_turn import (
     raise_development,
     raise_security,
     raise_surveillance,
+    research_logistics,
     research_technology,
     security_bump_cost,
     security_targets,
@@ -143,8 +145,12 @@ class RunResult:
     fundraises: int = 0
     expansions: int = 0
     trainings: int = 0
-    # Days the Academy sat idle with nothing training — the training slot is a
-    # separate bottleneck from cash, and this is what shows which one binds.
+    grants: int = 0
+    # Repeatable Logistics Optimization levels bought after the finite tech tree.
+    logistics_research: int = 0
+    # Days the Academy sat idle with nothing training or granting — the training
+    # slot is a separate bottleneck from cash, and this is what shows which one
+    # binds.
     academy_idle_days: int = 0
     trace: list[DaySnapshot] = field(default_factory=list)
 
@@ -210,11 +216,25 @@ def _needed_category(corp_state: CorpState, corp_map: CorpMap) -> EmployeeCatego
 def _try_train(corp_state: CorpState, corp_map: CorpMap, result: RunResult, day: int) -> bool:
     from shadowguy.corp_turn import train_employees
 
+    if corp_state.pending_recruit is not None:
+        return False
     category = _needed_category(corp_state, corp_map)
     if category is None or not train_employees(corp_state, corp_map, category, day):
         return False
     result.trainings += 1
     return True
+
+
+def _try_grant(corp_state: CorpState, corp_map: CorpMap, result: RunResult) -> bool:
+    """The Academy's fallback use, kept as its own policy action rather than folded
+    into "train": a grant is 1 AP, and a greedy policy that treats it as the next
+    training step would spend the day's expansion point on RP forever."""
+    if corp_state.pending_recruit is not None:
+        return False
+    if academy_research_grant(corp_state, corp_map):
+        result.grants += 1
+        return True
+    return False
 
 
 def _try_build(corp_state: CorpState, corp_map: CorpMap) -> bool:
@@ -318,15 +338,15 @@ POLICIES = {
     # Buy ground and nothing else — the income curve's ceiling.
     "wide": ["expand", "cash"],
     # Buy the research ladder and staff it; expand only with nothing else to do.
-    "tall": ["build", "academy", "train", "cash", "expand"],
+    "tall": ["build", "academy", "train", "cash", "expand", "grant"],
     # Ground first up to a point, then the ladder.
-    "balanced": ["expand", "build", "train", "academy", "cash"],
+    "balanced": ["expand", "build", "train", "academy", "cash", "grant"],
     # Never expand: the pure research line, to isolate what a corp's *starting*
     # bloc can fund on its own.
-    "research_only": ["build", "train", "academy", "cash"],
+    "research_only": ["build", "train", "academy", "cash", "grant"],
     # Expand, but build the ground up as it goes — the counterplay to logistics
     # strain, and the policy that shows whether developing actually pays.
-    "developed": ["develop", "expand", "build", "train", "academy", "cash"],
+    "developed": ["develop", "expand", "build", "train", "academy", "cash", "grant"],
     # Spend nothing, buy nothing: the passive-income floor a run starts on.
     "idle": [],
 }
@@ -336,19 +356,26 @@ def _spend_research(corp_state: CorpState, result: RunResult, day: int, order: s
     """Research is not on the action_points slot, so this runs every day until the
     RP won't stretch. `cheapest` buys whatever is reachable and affordable;
     `brains` prefers the research chain (compounding), `income` the surveillance
-    chain (per-territory eb)."""
+    chain (per-territory eb). Once the finite tree has nothing left to buy, the
+    leftover RP goes into repeatable Logistics Optimization levels."""
     preferred = {"brains": ("brains_2", "brains_3", "cognitive_uplink"),
                  "income": ("worker_surveillance", "panopticon_grid", "shadow_economy")}.get(order, ())
     while True:
-        available = [
+        remaining = [
             tech
             for tech in TECHNOLOGIES
             if tech.id not in corp_state.researched
-            and prereqs_met(corp_state, tech)
-            and tech.cost <= corp_state.research_points
             and (tech.faction_id is None or tech.faction_id == corp_state.faction_id)
         ]
+        if not remaining:
+            break
+        available = [
+            tech
+            for tech in remaining
+            if prereqs_met(corp_state, tech) and tech.cost <= corp_state.research_points
+        ]
         if not available:
+            # Save for the next tech rather than diverting RP into a project.
             return
         pick = next((t for t in available if t.id in preferred), None)
         pick = pick or min(available, key=lambda t: (t.cost, t.id))
@@ -359,6 +386,9 @@ def _spend_research(corp_state: CorpState, result: RunResult, day: int, order: s
             result.first_tech_day = day
         if result.techs == 3 and result.third_tech_day is None:
             result.third_tech_day = day
+
+    while research_logistics(corp_state):
+        result.logistics_research += 1
 
 
 def run_once(
@@ -400,6 +430,7 @@ def run_once(
         _spend_research(corp_state, result, day, tech_order)
         if "develop" in actions:
             _spend_development(corp_state, corp_map, result)
+        grants_before = result.grants
         while corp_state.action_points > 0:
             for action in actions:
                 acted = (
@@ -407,6 +438,7 @@ def run_once(
                     else _try_build(corp_state, corp_map) if action == "build"
                     else _try_academy(corp_state, corp_map) if action == "academy"
                     else _try_train(corp_state, corp_map, result, day) if action == "train"
+                    else _try_grant(corp_state, corp_map, result) if action == "grant"
                     else _try_cash_action(corp_state, corp_map, result) if action == "cash"
                     else False
                 )
@@ -416,7 +448,7 @@ def run_once(
             else:
                 result.ap_idle += corp_state.action_points
                 break
-        if corp_state.pending_recruit is None:
+        if corp_state.pending_recruit is None and result.grants == grants_before:
             result.academy_idle_days += 1
 
         if keep_trace:
@@ -446,6 +478,7 @@ def run_once(
     result.labs = (facility.labs_built or 0) if facility else 0
     result.efficiency = (facility.efficiency_upgrades or 0) if facility else 0
     result.academy_tier = (academy.academy_tier or 0) if academy else 0
+    result.logistics_research = corp_state.logistics_research
     result.final_capacity = logistics_capacity(corp_state, corp_map)
     result.final_strain = logistics_strain(corp_state, corp_map)
     result.final_income = collect_income(corp_state, corp_map)
@@ -460,7 +493,7 @@ def run_once(
 def report_policies(batches: dict[str, list[RunResult]], days: int) -> None:
     print(f"\nPolicy comparison — day {days}, {len(next(iter(batches.values())))} maps:\n")
     header = (f"{'policy':<14} {'terr':>5} {'cash':>8} {'eb/day':>7} {'rp/day':>7} "
-              f"{'techs':>6} {'tech1':>6} {'tech3':>6} {'sci':>4} {'asst':>5} "
+              f"{'techs':>6} {'proj':>5} {'tech1':>6} {'tech3':>6} {'sci':>4} {'asst':>5} "
               f"{'lab':>4} {'eff':>4} {'acad':>5} {'AP idle':>8}")
     print(header)
     print("-" * len(header))
@@ -475,7 +508,8 @@ def report_policies(batches: dict[str, list[RunResult]], days: int) -> None:
         ap_total = mean(lambda r: r.ap_spent + r.ap_idle)
         print(f"{policy:<14} {mean(lambda r: r.territories):>5.1f} {mean(lambda r: r.cash):>8.0f} "
               f"{mean(lambda r: r.final_income):>7.0f} {mean(lambda r: r.final_research):>7.1f} "
-              f"{mean(lambda r: r.techs):>6.1f} {day_mean(lambda r: r.first_tech_day):>6} "
+              f"{mean(lambda r: r.techs):>6.1f} {mean(lambda r: r.logistics_research):>5.1f} "
+              f"{day_mean(lambda r: r.first_tech_day):>6} "
               f"{day_mean(lambda r: r.third_tech_day):>6} {mean(lambda r: r.scientists):>4.1f} "
               f"{mean(lambda r: r.assistants):>5.1f} {mean(lambda r: r.labs):>4.1f} "
               f"{mean(lambda r: r.efficiency):>4.1f} {mean(lambda r: r.academy_tier):>5.1f} "
@@ -496,14 +530,15 @@ def report_policies(batches: dict[str, list[RunResult]], days: int) -> None:
               f"{mean(lambda r: r.security_bumps):>10.1f} "
               f"{mean(lambda r: r.surveillance_bumps):>11.1f}")
 
-    print("\n  Academy idle (days with nothing training) and free-action use:")
-    print(f"  {'policy':<14} {'idle%':>7} {'trainings':>10} {'expansions':>11} {'fundraises':>11}")
+    print("\n  Academy idle (days with nothing training or granting) and free-action use:")
+    print(f"  {'policy':<14} {'idle%':>7} {'trainings':>10} {'grants':>7} {'expansions':>11} {'fundraises':>11}")
     for policy, batch in batches.items():
         def mean(fn):
             return statistics.mean(fn(r) for r in batch)
 
         print(f"  {policy:<14} {mean(lambda r: r.academy_idle_days) / days:>6.0%} "
-              f"{mean(lambda r: r.trainings):>10.1f} {mean(lambda r: r.expansions):>11.1f} "
+              f"{mean(lambda r: r.trainings):>10.1f} {mean(lambda r: r.grants):>7.1f} "
+              f"{mean(lambda r: r.expansions):>11.1f} "
               f"{mean(lambda r: r.fundraises):>11.1f}")
 
 

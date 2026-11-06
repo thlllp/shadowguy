@@ -82,6 +82,8 @@ from shadowguy.corpmap import (
     has_guaranteed_bar,
 )
 from shadowguy.corp_rules import (
+    ACADEMY_GRANT_COST,
+    ACADEMY_GRANT_RP_PER_TIER,
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     ACADEMY_UPGRADE_COSTS,
@@ -105,6 +107,9 @@ from shadowguy.corp_rules import (
     MIN_ATTACK_FORCE,
     RESEARCH_ASSISTANTS_PER_LAB,
     RESEARCH_FACILITY_REBUILD_COST,
+    RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL,
+    RESEARCH_LOGISTICS_COST_BASE,
+    RESEARCH_LOGISTICS_COST_STEP,
     RESEARCH_PER_ASSISTANT,
     RESEARCH_PER_SCIENTIST,
     STARTING_CASH,
@@ -352,6 +357,11 @@ class CorpState:
     # same shape Character.owned_programs/discovered_fixers use. Research is
     # permanent — nothing takes a tech back.
     researched: set[str] = field(default_factory=set)
+    # How many repeatable Logistics Optimization levels this corp has bought with
+    # RP (see logistics_research). The finite tech tree runs out; this is what
+    # keeps research points useful afterward. Each level adds
+    # RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL to logistics_capacity.
+    logistics_research: int = 0
     # Surveillance sightings logged against this corp's own territory,
     # most-recent-first, capped by MAX_SIGHTINGS_LOG (or COUNTERINTEL_SIGHTINGS_LOG
     # when Counter-Intelligence is researched). Stays empty
@@ -401,6 +411,27 @@ def research_technology(corp_state: CorpState, technology_id: str) -> bool:
     return True
 
 
+def logistics_research_cost(corp_state: CorpState) -> int:
+    """Price of the next repeatable Logistics Optimization level. Starts at
+    RESEARCH_LOGISTICS_COST_BASE and rises by RESEARCH_LOGISTICS_COST_STEP per
+    level already bought, so the finite tech tree's leftovers keep having a sink."""
+    return RESEARCH_LOGISTICS_COST_BASE + RESEARCH_LOGISTICS_COST_STEP * corp_state.logistics_research
+
+
+def research_logistics(corp_state: CorpState) -> bool:
+    """Spend RP to buy one repeatable Logistics Optimization level, adding
+    RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL to the corp's supply-line capacity.
+    Fails closed if the corp can't afford the next level. Like
+    research_technology, this does **not** spend an action point — RP is its own
+    pacing gate."""
+    cost = logistics_research_cost(corp_state)
+    if cost > corp_state.research_points:
+        return False
+    corp_state.research_points -= cost
+    corp_state.logistics_research += 1
+    return True
+
+
 def collect_income(corp_state: CorpState, corp_map: CorpMap) -> int:
     """Daily income from every territory the player's faction holds, **net of
     TERRITORY_UPKEEP per district and of logistics_strain**, plus
@@ -442,6 +473,7 @@ def logistics_capacity(corp_state: CorpState, corp_map: CorpMap) -> int:
         for t in _owned_territories(corp_state, corp_map)
     )
     capacity = LOGISTICS_BASE_CAPACITY + development // LOGISTICS_DEVELOPMENT_PER_SLOT
+    capacity += corp_state.logistics_research * RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL
     if has_technology(corp_state, LOGISTICS_NETWORK_ID):
         capacity += LOGISTICS_NETWORK_CAPACITY
     if has_technology(corp_state, SUPPLY_CHAIN_ID):
@@ -1300,6 +1332,35 @@ def owned_academy(corp_state: CorpState, corp_map: CorpMap) -> Location | None:
             if location.kind == LocationKind.ACADEMY:
                 return location
     return None
+
+
+def academy_grant_rp(corp_state: CorpState, corp_map: CorpMap) -> int:
+    """How much RP the Academy's research grant pays right now: zero without an
+    Academy, otherwise ACADEMY_GRANT_RP_PER_TIER per Academy tier. Tier-scaling is
+    what keeps ACADEMY_UPGRADE_COSTS meaningful once every research seat and the
+    operative pool are full and there is nothing left to train."""
+    academy = owned_academy(corp_state, corp_map)
+    if academy is None:
+        return 0
+    return (academy.academy_tier or STARTING_ACADEMY_TIER) * ACADEMY_GRANT_RP_PER_TIER
+
+
+def academy_research_grant(corp_state: CorpState, corp_map: CorpMap) -> bool:
+    """The Academy's fallback action: spend 1 AP and ACADEMY_GRANT_COST cash for
+    academy_grant_rp() research points. Fails closed with no Academy, no AP, a
+    batch already training (the Academy has one slot at a time), or unaffordable
+    cash. Deliberately on the action-point slot, unlike research_technology: this
+    is a daily Academy action, so AP is one of its gates, with cash and the free
+    training slot as the others."""
+    if corp_state.action_points < AP_COST or corp_state.pending_recruit is not None:
+        return False
+    rp = academy_grant_rp(corp_state, corp_map)
+    if rp <= 0 or ACADEMY_GRANT_COST > corp_state.cash:
+        return False
+    corp_state.cash -= ACADEMY_GRANT_COST
+    corp_state.action_points -= AP_COST
+    corp_state.research_points += rp
+    return True
 
 
 def train_employees(

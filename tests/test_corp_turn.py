@@ -10,6 +10,8 @@ import random
 import pytest
 
 from shadowguy.corp_turn import (
+    ACADEMY_GRANT_COST,
+    ACADEMY_GRANT_RP_PER_TIER,
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     AP_COST,
@@ -49,6 +51,9 @@ from shadowguy.corp_turn import (
     RAPID_RESPONSE_SECURITY_COST,
     RESEARCH_ASSISTANTS_PER_LAB,
     RESEARCH_FACILITY_REBUILD_COST,
+    RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL,
+    RESEARCH_LOGISTICS_COST_BASE,
+    RESEARCH_LOGISTICS_COST_STEP,
     RESEARCH_PER_ASSISTANT,
     RESEARCH_PER_SCIENTIST,
     SIGHTING_RESEARCH_BONUS,
@@ -71,6 +76,8 @@ from shadowguy.corp_turn import (
     CorpState,
     EmployeeCategory,
     Sighting,
+    academy_grant_rp,
+    academy_research_grant,
     advance_training,
     assistant_capacity,
     assistant_rate,
@@ -111,10 +118,12 @@ from shadowguy.corp_turn import (
     research_rate,
     effective_security_max,
     logistics_capacity,
+    logistics_research_cost,
     logistics_strain,
     raise_security,
     security_bump_cost,
     security_targets,
+    research_logistics,
     research_technology,
     resolve_attack,
     return_tasking_operatives,
@@ -842,6 +851,64 @@ def test_research_technology_does_not_consume_the_daily_action():
     corp_state = CorpState(faction_id=IRONCLAD, research_points=10)
     assert research_technology(corp_state, WORKER_SURVEILLANCE_ID) is True
     assert corp_state.action_points >= AP_COST
+
+
+def test_logistics_research_spends_rp_and_adds_capacity():
+    corp_state = CorpState(faction_id=IRONCLAD, research_points=RESEARCH_LOGISTICS_COST_BASE)
+    corp_map = _map()
+    capacity_before = logistics_capacity(corp_state, corp_map)
+
+    assert logistics_research_cost(corp_state) == RESEARCH_LOGISTICS_COST_BASE
+    assert research_logistics(corp_state) is True
+    assert corp_state.logistics_research == 1
+    assert corp_state.research_points == 0
+    assert logistics_capacity(corp_state, corp_map) == (
+        capacity_before + RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL
+    )
+    assert logistics_research_cost(corp_state) == (
+        RESEARCH_LOGISTICS_COST_BASE + RESEARCH_LOGISTICS_COST_STEP
+    )
+
+
+def test_logistics_research_fails_closed_when_short():
+    corp_state = CorpState(
+        faction_id=IRONCLAD, research_points=RESEARCH_LOGISTICS_COST_BASE - 1
+    )
+    assert research_logistics(corp_state) is False
+    assert corp_state.logistics_research == 0
+    assert corp_state.research_points == RESEARCH_LOGISTICS_COST_BASE - 1
+
+
+def test_academy_research_grant_scales_with_academy_tier():
+    corp_map = _map()
+    academy = _academy(corp_map)
+    for tier in (1, 2, 3):
+        academy.academy_tier = tier
+        corp_state = CorpState(faction_id=IRONCLAD, cash=1000, research_points=0)
+        expected = tier * ACADEMY_GRANT_RP_PER_TIER
+        assert academy_grant_rp(corp_state, corp_map) == expected
+        assert academy_research_grant(corp_state, corp_map) is True
+        assert corp_state.research_points == expected
+        assert corp_state.cash == 1000 - ACADEMY_GRANT_COST
+        assert corp_state.action_points == 1
+
+
+def test_academy_research_grant_refused_while_training():
+    corp_map = _map()
+    _academy(corp_map)
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert train_employees(corp_state, corp_map, EmployeeCategory.SCIENTIST, day=0) is True
+    cash_before = corp_state.cash
+    rp_before = corp_state.research_points
+    assert academy_research_grant(corp_state, corp_map) is False
+    assert corp_state.cash == cash_before
+    assert corp_state.research_points == rp_before
+
+
+def test_academy_research_grant_refused_without_an_academy():
+    corp_state = CorpState(faction_id=IRONCLAD, cash=10_000)
+    assert academy_grant_rp(corp_state, _map()) == 0
+    assert academy_research_grant(corp_state, _map()) is False
 
 
 def test_worker_surveillance_income_bonus_is_per_territory():

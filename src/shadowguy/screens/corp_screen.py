@@ -4,6 +4,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Footer, Header, ListItem, ListView, Static
 
 from shadowguy.corp_turn import (
+    ACADEMY_GRANT_COST,
     ACADEMY_REBUILD_COST,
     ACADEMY_TRAINING_COST,
     AP_COST,
@@ -11,6 +12,7 @@ from shadowguy.corp_turn import (
     INVESTIGATION_COST,
     MAX_ACADEMY_TIER,
     RESEARCH_FACILITY_REBUILD_COST,
+    RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL,
     STARTING_ACADEMY_TIER,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
@@ -19,6 +21,8 @@ from shadowguy.corp_turn import (
     EmployeeCategory,
     FactionEvent,
     Sighting,
+    academy_grant_rp,
+    academy_research_grant,
     assistant_capacity,
     assistant_rate,
     attack_territory,
@@ -43,6 +47,7 @@ from shadowguy.corp_turn import (
     investigate_sighting_targets,
     lab_capacity,
     logistics_capacity,
+    logistics_research_cost,
     logistics_strain,
     log_faction_event,
     next_academy_upgrade_cost,
@@ -59,6 +64,7 @@ from shadowguy.corp_turn import (
     raise_surveillance,
     rebuild_academy_targets,
     rebuild_facility_targets,
+    research_logistics,
     research_rate,
     research_technology,
     sabotage,
@@ -396,6 +402,16 @@ def academy_rows(corp_state: CorpState, corp_map, day: int) -> list[ListItem]:
         elif (academy.academy_tier or 0) >= MAX_ACADEMY_TIER:
             rows.append(ListItem(Static("Academy fully expanded."), id="academy_maxed"))
 
+        grant_rp = academy_grant_rp(corp_state, corp_map)
+        if grant_rp:
+            label = f"Research grant (+{grant_rp}rp) — {ACADEMY_GRANT_COST}eb"
+            rows.append(
+                ListItem(
+                    Static(_gate(label, corp_state, ACADEMY_GRANT_COST)),
+                    id="academy_grant",
+                )
+            )
+
     for category in EmployeeCategory:
         if category is EmployeeCategory.OPERATIVE:
             cost = operative_training_cost(corp_state)
@@ -505,6 +521,7 @@ ROW_METHODS: dict[str, str] = {
     "fundraise": "_row_fundraise",
     "survey_": "_row_survey",
     "train_": "_row_train",
+    "academy_grant": "_row_academy_grant",
     "upgrade_academy": "_row_upgrade_academy",
     "tail_": "_row_tail",
     "intel_": "_row_intel",
@@ -686,6 +703,14 @@ class CorpActionsMixin:
             f"Academy expanded to tier {academy.academy_tier} — "
             f"trains {academy.academy_tier} per batch."
         )
+
+    async def _row_academy_grant(self, _: str) -> None:
+        corp_state, corp_map = self.app.corp_state, self.app.corp_map
+        rp = academy_grant_rp(corp_state, corp_map)
+        if not academy_research_grant(corp_state, corp_map):
+            self._notify_refusal()
+            return
+        self.notify(f"Academy research grant paid out: +{rp}rp.")
 
     async def _row_tail(self, suffix: str) -> None:
         corp_state, corp_map = self.app.corp_state, self.app.corp_map
@@ -1008,6 +1033,14 @@ class ResearchTreeScreen(BackScreen):
             )
             for tier in range(max_tier + 1)
         ]
+        panels.append(
+            Collapsible(
+                ListView(id="project_list"),
+                title="Repeatable Projects",
+                collapsed=False,
+                id="project_panel",
+            )
+        )
         yield ScrollableContainer(*panels, id="tiers")
         yield Footer()
 
@@ -1019,7 +1052,10 @@ class ResearchTreeScreen(BackScreen):
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state
-        self.query_one("#tree_info", Static).update(f"{corp_state.research_points:g}rp available.")
+        self.query_one("#tree_info", Static).update(
+            f"{corp_state.research_points:g}rp available. "
+            f"Logistics Optimization: level {corp_state.logistics_research}."
+        )
 
         layout = technology_tree_layout()
         max_tier = max(col for col, _ in layout.values())
@@ -1033,6 +1069,26 @@ class ResearchTreeScreen(BackScreen):
             list_view = self.query_one(f"#tier_{tier}_list", ListView)
             items = [self._tech_item(corp_state, technology) for technology in technologies]
             await _replace_items(list_view, items)
+
+        await _replace_items(
+            self.query_one("#project_list", ListView),
+            [self._project_item(corp_state)],
+        )
+
+    def _project_item(self, corp_state: CorpState) -> ListItem:
+        cost = logistics_research_cost(corp_state)
+        level = corp_state.logistics_research
+        detail = (
+            f"{cost}rp — +{RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL} district supplied "
+            f"(level {level} → {level + 1})"
+        )
+        if cost > corp_state.research_points:
+            detail += f" (need {cost - corp_state.research_points:g}rp more)"
+        return ListItem(
+            Static(_boxed_text("Logistics Optimization", detail)),
+            id="project_logistics",
+            classes="tech_box",
+        )
 
     def _tech_item(self, corp_state: CorpState, technology) -> ListItem:
         researched = has_technology(corp_state, technology.id)
@@ -1064,8 +1120,18 @@ class ResearchTreeScreen(BackScreen):
         return item
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        technology_id = event.item.id.removeprefix("tech_")
+        item_id = event.item.id
         corp_state = self.app.corp_state
+
+        if item_id == "project_logistics":
+            if research_logistics(corp_state):
+                self.notify(f"Logistics Optimization level {corp_state.logistics_research}.")
+            else:
+                self.notify("Not enough research points.", severity="warning")
+            await self._refresh()
+            return
+
+        technology_id = item_id.removeprefix("tech_")
         technology = TECHNOLOGIES_BY_ID[technology_id]
 
         if has_technology(corp_state, technology_id):

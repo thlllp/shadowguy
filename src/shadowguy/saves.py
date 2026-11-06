@@ -291,7 +291,11 @@ SAVE_SUFFIX = ".save"
 # Sanctuary bloc and its CorpMap.relations (seeded from relations.ENTITY_IDS at
 # generation) holds no faction_sanctuary pair at all, so any relations.relation lookup
 # reaching that id would KeyError on a bare dict index.
-SAVE_VERSION = 73
+# v74 added CorpState.logistics_research -- the repeatable Logistics Optimization level
+# bought with RP once the finite technology tree runs out. CorpState has no
+# restore_defaults hook, so a pre-v74 pickle lacks the attribute and the first
+# logistics_capacity call would AttributeError.
+SAVE_VERSION = 74
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
 # at the boundary, rather than half-applied to the live App by the caller. Optional

@@ -38,7 +38,7 @@ uv run shadowguy --dev
 
 Running away always works in abstract combat; the roll only decides what it costs. A critical failure on a job stage can drop you into a fight you did not choose.
 
-**Corp mode.** Take one of five factions and run it alongside the city clock. A corp gets 2 action points a day: expand into neutral ground, attack a rival, deploy or task operatives, train staff, build labs/academies, or buy Security/Surveillance/Development. Districts pay income but charge upkeep, and holding more ground than logistics supports adds a growing strain bill. Research points buy 31 technologies. Lose your last district and the run is over.
+**Corp mode.** Take one of five factions and run it alongside the city clock. A corp gets 2 action points a day: expand into neutral ground, attack a rival, deploy or task operatives, train staff, build labs/academies, or buy Security/Surveillance/Development. Districts pay income but charge upkeep, and holding more ground than logistics supports adds a growing strain bill. Research points buy 31 technologies, and after the tree runs out they buy repeatable Logistics Optimization levels (+1 district supplied each). A fully staffed Academy can also run a research grant instead of training. Lose your last district and the run is over.
 
 **Takeover.** A Runner can buy a controlling stake at a corp's own HQ — 15,000eb, 20 rep and +15 standing with that corp — and then play both halves of the same run.
 
@@ -59,7 +59,7 @@ Running away always works in abstract combat; the roll only decides what it cost
 | **Shops** | Pawn, weapon, auto, pharmacy and computer stores; a Ripperdoc's cyber clinic; real estate; junkyards and docks. Standing moves prices and stock. |
 | **Cyberware** | Installed, always active, one piece per slot. Every operation permanently erodes your Humanity ceiling; 0 free Humanity ends the run in cyberpsychosis. Removing a piece returns its Humanity cost, so removal is the way back. |
 | **Workshop** | Build one in a safehouse, then install weapon/wearable mods (Armorer) or cook chems (Chemistry) from scavenged materials. |
-| **Corp mode** | 2 action points/day, daily income minus upkeep and logistics strain, 31 technologies, operatives, garrisons, corp-vs-corp attacks, and a research/academy loop. |
+| **Corp mode** | 2 action points/day, daily income minus upkeep and logistics strain, 31 technologies, repeatable Logistics Optimization projects, Academy training and research grants, operatives, garrisons, corp-vs-corp attacks, and a research/academy loop. |
 
 ## Controls
 
