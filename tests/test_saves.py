@@ -5,6 +5,7 @@ See saves.py's module docstring and CLAUDE.md's Save versions section."""
 import pickle
 
 from shadowguy.corpmap import Territory
+from shadowguy.corp_turn import CorpState
 from shadowguy.matrix import Ice
 from shadowguy.runners import RivalRunner
 from shadowguy.saves import restore_defaults
@@ -54,6 +55,15 @@ def test_corp_map_backfills_faction_grudge(corp_map):
     assert restored.faction_grudge == {}
     # territories/relations were actually in the pickle, not backfilled
     assert restored.territories.keys() == corp_map.territories.keys()
+
+
+def test_corp_state_backfills_logistics_research():
+    corp_state = CorpState(faction_id="faction_ironclad", logistics_research=2)
+    # An actually-present value survives untouched.
+    assert pickle.loads(pickle.dumps(corp_state)).logistics_research == 2
+
+    restored = _drop(corp_state, "logistics_research")
+    assert restored.logistics_research == 0
 
 
 def test_restore_defaults_does_not_invent_a_field_the_class_no_longer_has():

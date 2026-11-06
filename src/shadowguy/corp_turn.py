@@ -58,7 +58,7 @@ The state classes stay here on purpose — CorpState/PendingRecruit/Sighting/
 AttackResult are all pickled into a save (directly, or via rivals.RivalAction),
 and pickle resolves a class by the module path it was written with.
 
-Leaf-ish: imports corpmap only, never scene or app.
+Leaf-ish: imports corpmap and the leaf `saves` helper, never scene or app.
 """
 
 import random
@@ -218,6 +218,7 @@ from shadowguy.technologies import (
     TECHNOLOGIES as TECHNOLOGIES,
     technology_tree_layout as technology_tree_layout,
 )
+from shadowguy.saves import restore_defaults
 
 @dataclass
 class Sighting:
@@ -374,6 +375,11 @@ class CorpState:
     # cap can still send them out (they'll come back into a capped pool and be
     # lost above it — dispatch them wisely).
     tasking_operatives: int = 0
+
+    def __setstate__(self, state: dict) -> None:
+        # Purely-additive fields (logistics_research is the first) backfill their
+        # declared default on an older pickle instead of needing a SAVE_VERSION bump.
+        restore_defaults(self, state)
 
 
 def has_technology(corp_state: CorpState, technology_id: str) -> bool:
