@@ -2,113 +2,105 @@
 
 A text-based cyberpunk roguelite TUI. Python 3.14, built on [Textual](https://textual.textualize.io/) and [tcod](https://python-tcod.readthedocs.io/).
 
-Two coupled game modes — **Runner mode** (RPG-scale: one character, scene-based jobs, permadeath) and **Corp mode** (4X-scale: area control against rival corps). Corp mode now has a first-slice turn loop: take over one of the 4 rival corps and play a turn alongside your runner — territory income, one directed move a day (expand onto neutral ground, attack a bordering rival, deploy operatives, or train up scientists and operatives at your Academy), plus a Research Facility generating research points. Losing your last district ends the run.
+One run, one life. Play it as a **Runner** — an RPG-scale character with stats, skills, scene-based jobs and permadeath — or as a **Corp** — a 4X-scale area-control game against rival factions. The two halves share the same city and the same day clock. A Runner can eventually buy a controlling stake in a corp; a Corp start never builds a runner at all.
 
 ## Quick start
 
 ```bash
 uv sync
 uv run shadowguy
+
+# Reproduce a specific city and dice stream
+uv run shadowguy --seed 12345
+# or: SHADOWGUY_SEED=12345 uv run shadowguy
+
+# Show the developer Test menu on the title screen
+uv run shadowguy --dev
 ```
 
-## How it plays
+`How to Play` on the title screen (and in the in-run `q` menu) is the short field manual. The current run's seed is always visible in the status panel.
 
-You start as a nobody standing on unclaimed ground at the edge of a procedurally-generated city. Everything begins at 1 — six core stats, all 39 skills — and character creation is the *whole* progression system: you spend 6 stat points and 20 skill points once, and there is no XP. Take a preset (Enforcer, Hacker, Infiltrator, Gunslinger, Fixer) or build by hand. Ranks get dearer as they climb, so taking one skill from 1 to 10 costs 19 of your 20 points: a specialist buys one great skill and almost nothing else.
+## What a run looks like
 
-From there you work. **Gigs** are quick single-scene street work, runnable wherever you're standing, owned by a local who'll think better of you for it. They turn up gradually, one location at a time, rather than blanketing the map on day one. **Jobs** come from fixers, are aimed at a real corp's real building on the real map, and have to be run *on site* — so an accepted job is a place you have to travel to, and a scheduled one means being in the right district on the right day. **Legwork** scouts a job beforehand to bank an advantage on its first check. **Security contracts** are the inverse of a heist: a fixer signs you to guard a corp for several nights, and you work them by ending the day on-site — steady pay and free lodging, but they pin you to one district.
+**Creation.** Everything starts at rank 1: six core stats (Body, Strength, Agility, Perception, Logic, Cool) and 39 skills. Spend 6 stat points and 20 skill points once. Points get dearer as a skill climbs, so a specialist can take one skill to 10 for 19 of the 20. Six presets — Enforcer, Hacker, Infiltrator, Gunslinger, Street Samurai, Fixer — or a hand-built character. Skill points can also be converted into creation-only gear budget (`1 point = 1000eb`); unspent gear budget is written off when the run begins, never banked as cash.
 
-Every job stage offers several ways through — a clean approach, a middling one, and an easy one that bleeds — plus the option to just take them first. The approaches in a stage always sit on different stats, so every build has *a* way through, but rarely the same way. Some jobs open on a **burglary**: pick an entrance off a building diagram, then sneak the interior past guard sightlines to the objective. Others are a specialist's work: a **Data Heist** is a netrunner's remote break-in whose fights play out in the matrix against ICE — offered to anyone, but a runner without a cyberdeck and the Hack for it will bleed. Botch badly enough — or get spotted — and you go loud, which drops you into a fight you didn't choose.
+**Growth.** Completed jobs pay Experience, a separate post-creation pool spent on more stats or skill ranks. Gigs, legwork and security contracts do not pay XP.
 
-Cash goes on gear, chems, weapons, a vehicle (free travel moves), and eventually property. Health does not come back on its own: you pay for days in a hospital ward. Sleeping costs lodging unless you own a place in the district, so buying a safehouse pays for itself.
+**Work.** Gigs are short local scenes at a location in the district you are standing in, owned by one of its locals. Jobs come from fixers: each fixer holds a couple of offers and a security contract, and a job has to be run on site, on the right day. Legwork is optional prep that banks an advantage on the job's first check. Security contracts are the inverse of a heist — end the day on site for several nights and get paid.
 
-Death is permanent. No meta-progression between runs.
+**Time.** The clock is hours, not stamina. Travel costs hours (cut by a vehicle or the RideShare+ app); jobs cost 8–12. Crossing midnight fires the day tick. Rest is an action: it charges lodging unless you own a place or are in a slum/outskirt, heals one point, halves fatigue, and can be shortened with the Phone's Alarm Clock. Health mostly comes back through paid hospital stays; going more than a day without rest builds Fatigue, which drains stats.
 
-## Systems
+**Fights.** Four surfaces share one dice engine:
+- **Abstract** — turn-based rounds, no positions. Used by legwork ambushes and gang encounters.
+- **Tactical** — a generated grid with cover, reach, line of sight and exits. Every non-matrix job fight lands here.
+- **Matrix** — a Data Heist's fight against ICE on a separate integrity pool; losing ejects you rather than killing you.
+- **Burglary** — pick an entrance, then walk a generated building interior past guards, cameras and locked doors.
+
+Running away always works in abstract combat; the roll only decides what it costs. A critical failure on a job stage can drop you into a fight you did not choose.
+
+**Corp mode.** Take one of five factions and run it alongside the city clock. A corp gets 2 action points a day: expand into neutral ground, attack a rival, deploy or task operatives, train staff, build labs/academies, or buy Security/Surveillance/Development. Districts pay income but charge upkeep, and holding more ground than logistics supports adds a growing strain bill. Research points buy 31 technologies. Lose your last district and the run is over.
+
+**Takeover.** A Runner can buy a controlling stake at a corp's own HQ — 15,000eb, 20 rep and +15 standing with that corp — and then play both halves of the same run.
+
+## Systems at a glance
 
 | | |
 |---|---|
-| **Checks** | An opposed d6 dice pool. Roll `skill_value + advantage` dice, count 5s and 6s; the opposition rolls against you. Net successes decide it; a gap of 3+ either way is a critical. |
-| **Combat** | Round-based: you take one action, then every standing enemy swings. Actions span five of the six stats — attack, brace, read the fight, face them down, break and run, throw a grenade. Weapons are the damage, skills are the hit, and Strength adds straight onto a melee or thrown hit. Running always works; the roll only decides what it costs you. |
-| **Tactical** | ~35% of jobs play their fights on a generated grid instead: tcod FOV and A*, cover as a raised to-hit difficulty, firearms that kite and melee that has to close. Reach an exit to leave, no roll. |
-| **Matrix** | A Data Heist's fights are against ICE, not muscle, played out node by node across a small hacked network. Round-based like combat and rolling the same dice, but it drains a separate integrity pool instead of your health — lose and you're ejected (the contract blown) rather than killed. The cyberdeck is the damage, Hack is the hit; jacking out always works. Installed programs add a bypass roll, a soak-ignoring data grab, and remote recon — but pushing them raises the network's alert level, making every ICE hit harder to dodge for the rest of the run. |
-| **Burglary** | One job archetype opens on a break-in: pick an entrance off a small building diagram (its check resolves on the spot), then walk the generated interior to the objective, avoiding static guards' sightlines. Getting seen sends you loud into the job's fight. |
-| **Corp map** | 65 districts, generated fresh each run and always connected. Four rival corps hold equal territory by construction. Each district has locations — shops, bars, data hubs, clinics, a corp HQ, a research facility, an academy — that jobs, gigs and legwork all hang off. |
-| **Standing** | Four separate relationships: street `rep`, per-corp `standing` (hit one corp and its rivals warm to you), per-fixer trust, and per-person local standing that bends shop prices and unlocks stock. |
-| **Crew** | Meet independent runners drinking at a bar, or pay an info-broker fixer to introduce one directly. Hire them indefinitely for a daily wage, or for one job in exchange for a cut of its payout. Miss payroll and they walk. The city's other runners aren't static either — every job they run, yours or their own off a fixer's board, earns them experience and cash they spend on rating and gear. |
-| **Fixers** | Nine seated fresh each run: six street-level contacts on neutral ground plus three planted inside the corps' own turf. Each brokers a couple of jobs and a security contract. |
-| **Corp HQs** | Each corp has a headquarters whose officer ladder gates on both street rep and corp standing. The lobby is public; the executive is not. Flavor for now. |
-| **Gangs** | Four street gangs hold scattered turf (no contiguous territory, unlike the corps). Walk onto ground held by one you've crossed and you can be tolled or jumped outright, depending how badly. |
-| **Corp mode** | Take over one of the four rival corps and play a turn alongside your runner, sharing the same day clock. Territory income funds one directed move a day: expand onto bordering neutral ground, attack a bordering rival, deploy operatives, train scientists/operatives at your Academy, or build a lab/upgrade. A Research Facility generates research points, spent on a two-chain technology tree (territory income, research rate) plus direct Security/Development bumps on held ground. Losing your last district ends the run. |
-| **Cyberware** | Bought and installed at a Ripperdoc's Cyber Clinic, one piece per slot, always active. Every install or removal costs Humanity — a shrinking ceiling, not a refillable stat — and hitting 0 free Humanity ends the run in cyberpsychosis. Pulling a piece out returns its cost, so removal is the way back from the edge. |
+| **Checks** | Opposed d6 pool: roll `skill value + advantage` dice and count 5s and 6s against the opposition. Net successes decide it; a gap of 3 either way is a critical. |
+| **Combat** | You take one action, then every standing enemy swings. Weapons are the damage, skills are the hit, and Strength adds to melee/thrown damage. Brace, read the fight, intimidate, flee or throw a grenade. |
+| **Tactical** | tcod FOV and A*, cover raises the to-hit difficulty, firearms kite and melee closes. Reach an exit to leave — no roll. |
+| **Matrix** | Node-by-node ICE fights. The cyberdeck is the damage, Cybercombat is the attack, Computer extracts data and analyzes nodes. Programs trade alert level for effects. |
+| **Burglary** | Entrance check, then a multi-level interior walk with guard sightlines, cameras, locks and stairs. Getting seen sends you loud. |
+| **Map** | 260 procedurally generated districts on a 14×24 grid, always connected. Five factions hold 6 districts each by construction; the rest is neutral, plus slums, outskirts, parks and scattered gang turf. |
+| **Standing** | Street `rep`, per-corp `standing`, per-fixer trust, and per-person local standing that bends shop prices and gates stock. |
+| **Crew** | Meet independent runners at bars or buy an introduction. Hire for a daily wage or a cut of one job. They earn rating and gear from the work they do, including jobs they take without you. |
+| **Fixers** | Ten seated per run: street contacts on neutral ground, inside contacts on corp turf, and Amy at Amy's Place. They broker jobs and security contracts. |
+| **Gangs** | Four gangs hold scattered turf. Walk onto ground held by one you have crossed and you can be tolled or attacked. |
+| **Shops** | Pawn, weapon, auto, pharmacy and computer stores; a Ripperdoc's cyber clinic; real estate; junkyards and docks. Standing moves prices and stock. |
+| **Cyberware** | Installed, always active, one piece per slot. Every operation permanently erodes your Humanity ceiling; 0 free Humanity ends the run in cyberpsychosis. Removing a piece returns its Humanity cost, so removal is the way back. |
+| **Workshop** | Build one in a safehouse, then install weapon/wearable mods (Armorer) or cook chems (Chemistry) from scavenged materials. |
+| **Corp mode** | 2 action points/day, daily income minus upkeep and logistics strain, 31 technologies, operatives, garrisons, corp-vs-corp attacks, and a research/academy loop. |
 
 ## Controls
 
-Rows and menus are driven with the arrow keys and `enter`. Screen-specific:
+Rows and menus are arrow-key + `enter`. Screen-specific:
 
 | Key | Screen | Action |
 |---|---|---|
-| `m` / `r` / `i` / `d` / `k` / `c` | Main menu | Corp map / Run a Corp / Gear / Cyberdeck / Skills / Contacts |
-| `←` `→` | Main menu, creation, contacts | Previous / next panel |
-| `r` / `b` | Character creation | Reset build / begin run |
 | `←↑→↓` | Corp map | Move cursor (`*`); `@` is you |
-| `enter` | Corp map | Travel to cursor (costs hours, cut by an equipped vehicle) |
-| `t` | Corp screen | Research Tree (spend research points) |
-| `←↑→↓` / `f` / `e` / `l` | Tactical fight | Move / attack / end turn / leave via exit |
-| `q` | Most screens | Menu (save, load, quit) |
+| `enter` | Corp map | Travel to cursor (costs hours, cut by a vehicle) |
+| `i` / `d` / `k` / `c` | Corp map | Gear / Cyberdeck / Skills / Phone |
+| `r` | Corp map | Run a Corp (or open the corp screen) |
+| `t` | Corp map or Corp screen | Research Tree |
+| `q` | Most screens | Menu: save, load, how to play, restart, quit |
 | `escape` | Most screens | Back |
+| `g` / `b` / `r` | Character creation | Gear / begin run / reset build |
+| `←` `→` | Creation, contacts, skills | Previous / next panel |
+| `←↑→↓` | Tactical fight | Move (numpad also works) |
+| `f` / `g` / `h` / `r` / `s` | Tactical fight | Aim attack / grenade / direct hacker / reload / stabilize |
+| `e` / `l` / `x` | Tactical fight | End turn / leave via exit / look |
+| `>` | Tactical fight | Take stairs |
 
-## Project structure
+## Where to read next
 
-```
-src/shadowguy/
-  app.py          Textual App: on_mount, save/load_state, spend_time (the one chokepoint that advances
-                  the clock and fires day-boundary effects); every screen lives under screens/
-  character.py    Character dataclass: stats, health, skills, experience, inventory, crew, standing
-                  (faction/gang/local/fixer), accepted jobs, security contracts
-  archetypes.py   Enforcer/Hacker/Infiltrator/Gunslinger/Fixer creation presets
-  skills.py       Skill table (39 skills across 6 core stats); leaf module
-  checks.py       resolve_check(): the opposed d6 pool every roll in the game goes through
-  combat.py       Shared fight foundation: enemy roster, resolve_hit, weapon + consumable queries
-  abstract_combat.py Fight surface 1: round-based combat, the five-stat action set, no positions
-  grid.py         Grid/Tile, tcod FOV + A*, distance -- space itself, no game state
-  tactical.py     Fight surface 2: the grid fight -- turn engine, cover, aiming, AI phases
-  tactical_gen.py generate_map: the BSP fight map, laid out once per stage
-  support.py      The remote hacker backing a burglary/job; blinds cameras, marks units acted
-  buildings.py    Burglary targets: rooms, levels and the links between them; job-scoped, built on
-                  tactical's grid primitives
-  matrix.py       Fight surface 3 (Data Heist): ICE roster, integrity pool, jack-in actions; reuses resolve_hit
-  scene.py        Scene/Stage/Choice/Outcome/Encounter/TacticalStage/Entrance/BurglaryStage/MatrixStage data model
-  jobs.py         Procedural job generation, stage templates, timing, per-job legwork
-  gigs.py         Per-location gig generation from per-kind templates, spawned gradually over time
-  fixer.py        Fixer roster, job offers, security offers, refresh/expiry
-  security.py     Multi-night security contract generation and nightly resolution (not Scene-based)
-  runners.py      Hireable NPC runners (crew) who earn rating and buy gear from the jobs they run
-  factions.py     Rival corps, standing rules, HQ officer ladder
-  gangs.py        Street gangs holding scattered turf (no territory); den staffing lives in corpmap.py
-  relations.py    Seeded standing between every corp/gang pair, independent of the player
-  rivals.py       Daily rival-Faction territory expansion + independent-runner wander turns
-  encounters.py   Gang turf-entry encounters: toll or attack when standing is negative
-  corp_turn.py    The player's own Corp turn: territory income, one directed move/day (expand or train),
-                  research spent on a technology tree, Security/Surveillance/Development purchases
-  surveillance.py Daily chance a corp spots the player or a rival runner on its own territory
-  corpmap.py      Procedural territory map (65 nodes), ASCII renderer, locations, property/lodging
-  corpmap_gen.py  generate_corp_map: lays out one new territory map, run once per run
-  shops.py        Item and consumable catalogs, buy/sell/equip, standing pricing, hospital care
-  inventory.py    Equip state, deck programs, and using a consumable -- what happens to an item after
-                  shops.py adds it to inventory
-  cybernetics.py  Cyberware catalog and install/remove, bought at a Ripperdoc's Cyber Clinic; Humanity
-                  erosion is the cost -- 0 free capacity ends the run (cyberpsychosis)
-  saves.py        Pickle-based save/load
-```
+- [`DESIGN.md`](DESIGN.md) — why every system is the way it is, which constants are load-bearing, and what has been balance-simulated.
+- [`CLAUDE.md`](CLAUDE.md) — codebase map, module layering, save-version history, testing conventions, and Textual gotchas.
 
 ## Development
 
-There's a `pytest` suite under `tests/`, run alongside `ruff` in CI on every push and PR. Generators are checked by sweeping a range of seeds and asserting invariants (a map that merely *looks* plausible can be quietly unfair); screens are driven headlessly with Textual's `async with app.run_test() as pilot:`; and a check outcome is pinned either by a fixed-face `random.Random` subclass or by seeding the module-level `random` — `app.rng` doesn't control the dice.
-
 ```bash
-uv sync
-uv run pytest -q
-uvx ruff check src/
+uv run pytest -q              # full suite (CI runs this on every push/PR to main)
+uv run ruff check src/        # lint (ruff is pinned in the dev group)
 ```
 
-See [DESIGN.md](DESIGN.md) for the design rationale, invariants, and the balance numbers behind the tuning constants — and [CLAUDE.md](CLAUDE.md) for the codebase map and behavioral guidelines.
+The balance harnesses in `tools/` are developer tools, run by hand:
+
+```bash
+uv run python tools/combat_sim.py      # abstract fights, presets x enemy tiers
+uv run python tools/matrix_sim.py      # ICE fights, presets x ICE tiers
+uv run python tools/conflict_sim.py    # corp attack grid + multi-faction map sim
+uv run python tools/fatigue_sim.py     # rest cadence x job length over 60 days
+uv run python tools/corp_econ_sim.py   # 6 policies x 30 maps to day 120
+```
+
+Tests are seed-swept for generators, driven headlessly through Textual's `run_test()` for screens, and pin check outcomes with fixed-face RNG helpers. `app.rng` is the run seed's stream; every in-game check reads it.

@@ -11,7 +11,7 @@ from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.grid import Grid, Tile
 from shadowguy.matrix import matrix_readiness
 from shadowguy.scene import Scene
-from shadowguy.skills import skill_value
+from shadowguy.skills import UNROLLED_SKILL_IDS, skill_value
 
 # Terrain glyph/style for anything drawn over a grid.Grid. Solid vs. shaded blocks plus
 # a distinct color for cover reads as "hide here" at a glance, without changing any
@@ -161,8 +161,9 @@ class CharacterSheet(Static):
         if c.humanity_penalty:
             humanity += f" (-{c.humanity_penalty} to stats)"
         stun = "None" if c.stun == 0 else str(c.stun)
+        seed = f"Seed {self.app.seed}" if self.app.seed is not None else "Seed unknown"
         return (
-            f"{c.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
+            f"{c.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}   {seed}\n"
             f"Health: {c.health}/{c.max_health}   {fatigue}   Stun: {stun}\n"
             f"Cash: {c.cash}eb   Rep: {c.rep}   Experience: {c.experience}xp   "
             f"Humanity: {humanity}\n"
@@ -176,8 +177,9 @@ class CharacterSheet(Static):
         corp_state = self.app.corp_state
         faction = FACTIONS_BY_ID[corp_state.faction_id]
         owned = sum(1 for t in self.app.corp_map.territories.values() if t.owner == corp_state.faction_id)
+        seed = f"Seed {self.app.seed}" if self.app.seed is not None else "Seed unknown"
         return (
-            f"{faction.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}\n"
+            f"{faction.name}   Day {c.day}, {_format_hour_ampm(c.hour_of_day)}   {seed}\n"
             f"Cash: {corp_state.cash}eb   Research: {corp_state.research_points:g}rp   "
             f"Actions: {corp_state.action_points}\n"
             f"Territories: {owned}   Scientists: {corp_state.scientists}   "
@@ -269,12 +271,18 @@ class PanelNav:
 def _compact_skill_label(character: Character, skill) -> str:
     """One skill row, shared by CharacterCreationScreen's build columns and
     SkillsScreen's: current rank and value, plus what the next rank costs. The two
-    screens fund that cost from different pools, but the row reads the same."""
+    screens fund that cost from different pools, but the row reads the same.
+
+    Skills nothing rolls yet say so on the name line, so a hand-built runner doesn't
+    sink creation points into a skill that has no check to use it. The set is
+    deliberately a short, documented list in skills.py; remove an id when a system
+    starts rolling it."""
     rank = character.skill_rank(skill.id)
     value = skill_value(character, skill.id)
     cost = character.next_rank_cost(skill.id)
     next_up = "  MAX" if cost is None else f"  next +{cost}"
-    return f"{skill.name}\n  rank {rank}/{MAX_SKILL_RANK}  value {value}{next_up}"
+    unused = "  (no checks yet)" if skill.id in UNROLLED_SKILL_IDS else ""
+    return f"{skill.name}{unused}\n  rank {rank}/{MAX_SKILL_RANK}  value {value}{next_up}"
 
 
 _MENU_CSS = """

@@ -294,7 +294,8 @@ SAVE_SUFFIX = ".save"
 SAVE_VERSION = 73
 # The run fields a bundle must carry (app.ShadowguyApp writes and reads exactly these).
 # Checked at load so a payload that unpickles but isn't a whole run is rejected here,
-# at the boundary, rather than half-applied to the live App by the caller.
+# at the boundary, rather than half-applied to the live App by the caller. Optional
+# additions (the run seed) are allowed and read with state.get(...).
 STATE_KEYS = frozenset(
     {
         "rng",

@@ -1,3 +1,4 @@
+import random
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -461,13 +462,18 @@ def apply_outcome(character: Character, outcome: Outcome, scene: Scene, corp_map
 
 
 def resolve_choice(
-    character: Character, scene: Scene, choice: Choice, corp_map: CorpMap
+    character: Character,
+    scene: Scene,
+    choice: Choice,
+    corp_map: CorpMap,
+    rng: random.Random | None = None,
 ) -> tuple[CheckResult, Outcome]:
     advantage = character.consume_advantage(scene.id) if scene.kind == SceneKind.JOB else 0
     roll = resolve_check(
         stat_value=skill_value(character, choice.skill),
         difficulty=choice.difficulty,
         advantage=advantage,
+        rng=rng,
     )
     outcome = choice.outcome_for(roll.result)
     apply_outcome(character, outcome, scene, corp_map)
@@ -475,7 +481,11 @@ def resolve_choice(
 
 
 def resolve_entrance(
-    character: Character, scene: Scene, entrance: Entrance, corp_map: CorpMap
+    character: Character,
+    scene: Scene,
+    entrance: Entrance,
+    corp_map: CorpMap,
+    rng: random.Random | None = None,
 ) -> tuple[CheckResult, Outcome]:
     """Same shape as resolve_choice, for a BurglaryStage's Entrance -- the entrance
     check resolves (and applies its Outcome) the instant it's picked, before any
@@ -486,6 +496,7 @@ def resolve_entrance(
         stat_value=skill_value(character, entrance.skill),
         difficulty=entrance.difficulty,
         advantage=advantage,
+        rng=rng,
     )
     outcome = entrance.outcome_for(roll.result)
     apply_outcome(character, outcome, scene, corp_map)

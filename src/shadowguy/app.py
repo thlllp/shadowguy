@@ -1,3 +1,5 @@
+import argparse
+import os
 import random
 import traceback
 from datetime import datetime, timezone
@@ -101,12 +103,21 @@ class ShadowguyApp(App):
         except Exception:
             self.exit()
 
-    def __init__(self) -> None:
+    def __init__(self, *, seed: int | None = None, dev: bool | None = None) -> None:
         super().__init__()
-        self._new_run()
+        # Test is a developer menu, not a player one. main() passes None unless --dev,
+        # so SHADOWGUY_DEV can opt in without changing the command line; run_test()
+        # also counts as a development environment (see TitleMenu's option list).
+        self.dev_mode = dev if dev is not None else os.environ.get("SHADOWGUY_DEV") == "1"
+        self._new_run(seed)
 
-    def _new_run(self) -> None:
-        self.rng = random.Random()
+    def _new_run(self, seed: int | None = None) -> None:
+        # A run seed is what makes a run reproducible: every roll in the game reads
+        # this one stream (see checks.resolve_check's rng parameter), and the seed is
+        # saved with the run so a reload continues exactly where it left off. The
+        # current seed is shown in CharacterSheet; main()'s --seed sets it directly.
+        self.seed = seed if seed is not None else random.SystemRandom().randrange(1, 1_000_000_000)
+        self.rng = random.Random(self.seed)
         self.corp_map = generate_corp_map(FACTIONS, self.rng)
         self.character = Character(name="Runner", location_id=self.corp_map.player_start_id)
         self.fixers = create_fixers(self.corp_map, self.rng)
@@ -179,23 +190,29 @@ class ShadowguyApp(App):
         discount = owned_app_bonus(character, "lodging_discount")
         return round(lodging_cost(here) * (1 - discount))
 
-    def _rest_hours(self) -> int:
+    def _rest_hours(self) -> float:
         """How long the next Rest will actually run: REST_HOURS_COST, unless the
         Phone's Alarm Clock tab has set Character.alarm_hour, in which case it's
         only until that hour — wrapping to the next day, and never 0 (an alarm set
         to the current hour wakes a full day later, not instantly).
-        For a corp rest, skips to 6 AM of the next calendar day instead."""
+        For a corp rest, skips to 6 AM of the next calendar day instead.
+
+        Both paths read elapsed_hours as a float. Travel can leave a fractional
+        hour (a vehicle cuts 2.0h to 1.8h), so `int(hour_of_day)`/`int(elapsed_hours)`
+        would land the rest at 6:48 rather than 6:00 -- see the fractional-hour test
+        in test_app_flows."""
         character = self.character
         if self.corp_state is not None:
             return self._corp_rest_hours()
         if character.alarm_hour is None:
             return REST_HOURS_COST
-        return (character.alarm_hour - character.hour_of_day) % HOURS_PER_DAY or HOURS_PER_DAY
+        elapsed_hour = character.elapsed_hours % HOURS_PER_DAY
+        return (character.alarm_hour - elapsed_hour) % HOURS_PER_DAY or HOURS_PER_DAY
 
-    def _corp_rest_hours(self) -> int:
+    def _corp_rest_hours(self) -> float:
         """How many hours from now until 6 AM of the next calendar day. Always
-        crosses midnight (at least 1 hour, up to 25)."""
-        return self.character.day * HOURS_PER_DAY + 6 - int(self.character.elapsed_hours)
+        crosses midnight (24 to 30 hours, depending on the current hour)."""
+        return self.character.day * HOURS_PER_DAY + 6 - self.character.elapsed_hours
 
     def rest_label(self) -> str:
         """The "Rest" menu item's text for CorpMapScreen/CorpScreen, previewing rest_cost()
@@ -205,8 +222,8 @@ class ShadowguyApp(App):
         hours = self._rest_hours()
         cost = self.rest_cost()
         if not cost:
-            return f"Rest ({hours}h)"
-        return f"Rest ({hours}h, {cost}eb lodging)"
+            return f"Rest ({hours:g}h)"
+        return f"Rest ({hours:g}h, {cost}eb lodging)"
 
     def rest(self) -> None:
         """Shared "Rest" action wiring for CorpMapScreen and CorpScreen: pay lodging
@@ -424,6 +441,7 @@ class ShadowguyApp(App):
     def save_run(self) -> SaveSlot:
         state = {
             "rng": self.rng,
+            "seed": self.seed,
             "corp_map": self.corp_map,
             "character": self.character,
             "fixers": self.fixers,
@@ -440,6 +458,10 @@ class ShadowguyApp(App):
 
     def load_state(self, state: dict) -> None:
         self.rng = state["rng"]
+        # Optional: saves written before run seeds existed don't carry one. Keep the
+        # loaded rng stream intact either way; only the display and reproducibility
+        # of that one old run are lost.
+        self.seed = state.get("seed")
         self.corp_map = state["corp_map"]
         self.character = state["character"]
         self.fixers = state["fixers"]
@@ -478,13 +500,33 @@ def _show_crash_console(error: BaseException) -> None:
     input("\nThe game crashed. Press Enter to exit...")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="shadowguy", description="A text-based cyberpunk roguelite.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=_env_seed(),
+        help="run seed (default: random; also settable with SHADOWGUY_SEED)",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="show the developer Test menu on the title screen",
+    )
+    args = parser.parse_args(argv)
     try:
-        ShadowguyApp().run()
+        # None (rather than False) lets SHADOWGUY_DEV=1 still enable the dev menu
+        # when the flag itself is absent.
+        ShadowguyApp(seed=args.seed, dev=True if args.dev else None).run()
     except KeyboardInterrupt:
         raise
     except BaseException as exc:
         _show_crash_console(exc)
+
+
+def _env_seed() -> int | None:
+    value = os.environ.get("SHADOWGUY_SEED", "").strip()
+    return int(value) if value.isdigit() else None
 
 
 if __name__ == "__main__":

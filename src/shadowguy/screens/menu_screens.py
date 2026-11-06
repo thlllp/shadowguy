@@ -1,5 +1,6 @@
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
@@ -77,6 +78,112 @@ class TierPickScreen(ModalScreen):
         self.dismiss(int(event.item.id.removeprefix("tier_")))
 
 
+HELP_TEXT = """SHADOWGUY — field manual
+
+WHAT THIS IS
+A text-based cyberpunk roguelite. A run is either a Runner (one character,
+scene-based jobs, permadeath) or a Corp (area control against rival corps).
+A Runner can later buy a controlling stake in a corp; a Corp start never builds
+a runner at all. A Runner's death or a Corp's last district ends the run, and
+there is no meta-progression.
+
+FIRST STEPS
+New Game asks Runner or Corp. A Runner starts with 6 stat points and 20 skill
+points, spent once at creation; preset builds are the fast path. After that,
+completed jobs pay Experience, which buys more stat and skill ranks in Skills.
+On the map, arrows move the cursor and enter travels to the selected district.
+Your own position is @; the cursor is *.
+
+FINDING WORK
+Gigs are local, short scenes at locations in the territory you are standing in.
+Jobs come from fixers, and a fixer is only found by being in their district;
+the Locals panel names any fixer working next door as a rumour. Fixers also
+sell security contracts, which pay for spending nights on site.
+Jobs must be run on site and on the right day. Legwork is optional prep that
+banks a bonus on a job's first check.
+
+CHECKS
+Every roll is an opposed d6 pool: skill value plus advantage dice, counting
+5s and 6s against the opposition's pool. More net successes is better; a gap
+of 3 either way is a critical. Failure usually costs health, standing, or
+both; a critical failure can drop you into a fight you did not choose.
+
+TIME, REST, AND HEALTH
+The clock is hours, not stamina. Travel costs hours; jobs cost 8-12. Crossing
+midnight fires the day tick. Rest is an action, costs lodging unless you own a
+place or are in a slum/outskirt, and heals one point. Going more than a day
+without rest builds Fatigue. The hospital is the real way to recover health.
+
+FIGHTS
+There are four surfaces. Abstract combat is turn-based and used by legwork
+ambushes and gang encounters. Tactical fights play on a generated grid with
+cover, reach, and exits. Data Heists fight ICE in the matrix on a separate
+integrity pool. Burglaries sneak a building's interior past guards and cameras.
+Running away always works in abstract combat; the roll only decides the cost.
+
+CORP MODE
+A corp gets 2 action points a day: expand, attack, deploy operatives, train
+staff, build, or upgrade. Districts pay income but charge upkeep, and holding
+more ground than logistics supports adds a growing strain bill. Research points
+buy technologies. A corp that loses its last district is out. From a runner,
+a takeover needs 15,000eb, rep 20, and +15 standing with the corp; the offer is
+at that corp's HQ once the executive will see you.
+
+SEEDS AND SAVES
+The run seed is shown in the status panel. Launch with --seed N (or set
+SHADOWGUY_SEED) to replay the same city and dice stream. q opens Save/Load.
+
+CONTROLS
+Arrows + enter    move / select (lists and the map)
+q                 menu: save, load, how to play, restart, quit
+escape            back
+g / b             creation: gear / begin run
+r                 creation: reset build
+i / d / k / c     map: Gear / Cyberdeck / Skills / Phone
+t                 map or corp screen: Research Tree
+← ↑ → ↓           tactical: move (numpad also works)
+f / e / l         tactical: attack / end turn / leave via exit
+g / h / r / s     tactical: grenade / direct hacker / reload / stabilize
+>                 tactical: take stairs
+"""
+
+
+class HelpScreen(BackScreen):
+    """The in-game field manual. Reached from the title menu and from the in-run
+    menu, so a player who is already stuck does not have to quit to read it.
+
+    Uses Text rather than a plain str because Static parses Rich markup, and a
+    manual full of bracketed key names would silently lose them (see CLAUDE.md's
+    Textual gotchas)."""
+
+    BINDINGS = MENU_BACK_BINDINGS
+
+    CSS = """
+    HelpScreen {
+        align: center middle;
+    }
+
+    #help_scroll {
+        width: 90%;
+        height: 1fr;
+        border: round $accent;
+        padding: 1 2;
+    }
+
+    #help_body {
+        width: 1fr;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield ScrollableContainer(
+            Static(Text(HELP_TEXT), id="help_body"),
+            id="help_scroll",
+        )
+        yield Footer()
+
+
 class QuitMenu(ModalScreen):
     BINDINGS = [("escape", "close", "Back"), ("q", "close", "Back")]
     CSS = _menu_css("QuitMenu", "quit_dialog")
@@ -87,6 +194,7 @@ class QuitMenu(ModalScreen):
             ListView(
                 ListItem(Static("Save Game"), id="save"),
                 ListItem(Static("Load Game"), id="load"),
+                ListItem(Static("How to Play"), id="help"),
                 ListItem(Static("Quit Game"), id="quit"),
                 ListItem(Static("Restart Game"), id="restart"),
             ),
@@ -111,6 +219,8 @@ class QuitMenu(ModalScreen):
                 self.app.notify("No saved games found.", severity="warning")
                 return
             self.app.push_screen(LoadMenu(slots))
+        elif event.item.id == "help":
+            self.app.push_screen(HelpScreen())
         elif event.item.id == "quit":
             self.app.exit()
         elif event.item.id == "restart":
@@ -216,16 +326,29 @@ TitleMenu {
     OPTIONS = [
         ("new_game", "New Game"),
         ("load_game", "Load Game"),
-        ("test", "Test"),
-        ("settings", "Settings"),
+        ("help", "How to Play"),
     ]
+
+    def _options(self) -> list[tuple[str, str]]:
+        """The player-facing rows, plus the developer Test menu when this is a
+        development run. main() leaves dev_mode False unless --dev or SHADOWGUY_DEV=1,
+        and run_test() counts too so the UI suite can drive it."""
+        options = list(self.OPTIONS)
+        if self.app.dev_mode or self.app.is_headless:
+            options.append(("test", "Test"))
+        return options
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
             Vertical(Static(BANNER, id="banner"), id="banner_box"),
             Vertical(
-                ListView(*(ListItem(Static(label), id=option_id) for option_id, label in self.OPTIONS)),
+                ListView(
+                    *(
+                        ListItem(Static(label), id=option_id)
+                        for option_id, label in self._options()
+                    )
+                ),
                 id="menu_box",
             ),
             id="title_dialog",
@@ -241,10 +364,10 @@ TitleMenu {
                 self.notify("No saved games found.", severity="warning")
                 return
             self.app.push_screen(LoadMenu(slots))
+        elif event.item.id == "help":
+            self.app.push_screen(HelpScreen())
         elif event.item.id == "test":
             self.app.push_screen(TestMenu())
-        elif event.item.id == "settings":
-            self.notify("Settings aren't implemented yet.")
 
 
 class ModeSelectScreen(BackScreen):

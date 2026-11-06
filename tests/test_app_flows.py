@@ -51,14 +51,14 @@ from shadowguy.factions import (
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
 from shadowguy.security import generate_security_contract
+from shadowguy.saves import load_game
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
-from shadowguy.screens import CharacterSheet
+from shadowguy.screens import CharacterSheet, _compact_skill_label
 from shadowguy.screens.burglary_screens import EntrancePickScreen
 from shadowguy.screens.combat_screen import CombatScreen
 from shadowguy.screens.corp_map_screen import TRAVEL_HOURS_COST, CorpMapScreen, _travel_hours
 from shadowguy.corp_turn import (
     ACADEMY_REBUILD_COST,
-    AP_COST,
     DEVELOPMENT_MIN_SECURITY,
     DEVELOPMENT_MIN_SURVEILLANCE,
     FUNDRAISE_PER_TERRITORY,
@@ -100,7 +100,7 @@ from shadowguy.tactical import (
 )
 from shadowguy.tactical import _settle as _settle_tactical_state
 from shadowguy.checks import CheckResult, resolve_check
-from shadowguy.skills import skill_value
+from shadowguy.skills import skill_for, skill_value
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
 # in a warning) to collect it as a test class, since its name starts with "Test".
@@ -109,6 +109,7 @@ from shadowguy.screens.menu_screens import (
     ArchetypeSelectScreen,
     BuildSelectScreen,
     CorpSelectScreen,
+    HelpScreen,
     ModeSelectScreen,
     TitleMenu,
 )
@@ -293,6 +294,85 @@ def test_app_boots_to_title_menu():
             assert isinstance(app.screen, TitleMenu)
 
     run(body())
+
+
+def test_title_menu_help_opens_the_manual_and_escape_returns():
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            assert app.screen.query_one("#help") is not None
+            await pilot.click("#help")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, TitleMenu)
+
+    run(body())
+
+
+def test_quit_menu_help_opens_the_manual_from_a_run():
+    """Help has to be reachable after the run has started, not just from the title
+    screen -- a player who is already stuck is the one who needs it."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            app.action_quit_menu()
+            await pilot.pause()
+            assert app.screen.query_one("#help") is not None
+            await pilot.click("#help")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+
+    run(body())
+
+
+def test_fixer_box_rumours_an_undiscovered_fixer_next_door():
+    """A fixer is only discovered by walking into their district; the Locals panel
+    still names one working next door, so the first job board isn't invisible."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            screen = app.screen
+            assert isinstance(screen, CorpMapScreen)
+            fixer = next(
+                f for f in app.fixers if f.id not in app.character.discovered_fixers
+            )
+            here = next(
+                t
+                for t in app.corp_map.territories.values()
+                if fixer.location_id in t.connections
+            )
+            app.character.location_id = here.id
+            await screen._refresh_map_local_boxes(here)
+            await pilot.pause()
+            assert screen.query_one(f"#map_rumor_{fixer.id}") is not None
+
+    run(body())
+
+
+def test_run_seed_is_deterministic_and_travels_with_the_save(tmp_path, monkeypatch):
+    monkeypatch.setattr("shadowguy.saves.SAVE_DIR", tmp_path)
+    first = ShadowguyApp(seed=424242)
+    second = ShadowguyApp(seed=424242)
+    assert first.seed == 424242
+    assert first.rng.randint(1, 10_000) == second.rng.randint(1, 10_000)
+
+    slot = first.save_run()
+    state = load_game(slot.path)
+    assert state["seed"] == 424242
+
+
+def test_skills_no_check_rolls_are_marked_in_the_shared_row_label():
+    character = ShadowguyApp(seed=1).character
+    for skill_id in ("gunnery", "medicine", "demolitions"):
+        assert "(no checks yet)" in _compact_skill_label(character, skill_for(skill_id))
+    assert "(no checks yet)" not in _compact_skill_label(character, skill_for("hack"))
 
 
 def test_unhandled_exception_under_test_fails_fast_instead_of_hanging():
@@ -1926,6 +2006,30 @@ def test_corp_rest_always_crosses_midnight_and_collects_income():
     run(body())
 
 
+def test_corp_rest_lands_on_six_am_even_with_a_fractional_clock():
+    """Travel leaves fractional hours (a vehicle cuts a 2.0h hop to 1.8h), so a corp
+    Rest computed from int(elapsed_hours) landed at 6:54 rather than 6:00. The clock
+    is a float; the rest target is not an integer hour boundary in disguise."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            assert app.corp_state is not None
+
+            app.character.elapsed_hours = float(app.character.day * HOURS_PER_DAY + 5) + 0.9
+            target = app.character.day * HOURS_PER_DAY + 6
+            day_before = app.character.day
+
+            app.rest()
+
+            assert app.character.elapsed_hours == target
+            assert app.character.day == day_before + 1
+            assert app.character.hour_of_day == 6
+
+    run(body())
+
+
 def test_corp_only_panels_show_corp_cash_and_track_it_across_a_rest():
     """A corp-only run's always-visible panel carries the corp's books, not the unused
     placeholder runner's -- and map mode (where the Rest button lives) keeps #corp_info
@@ -2630,7 +2734,6 @@ def test_corp_screen_expand_and_rest():
             assert app.corp_state.action_points == 1
 
             day_before = app.character.day
-            hours_before = app.character.elapsed_hours
             cash_before = app.corp_state.cash
             # Corp rest skips to next day's 6 AM — one click crosses midnight.
             rest_button = app.screen.query_one("#rest_button", Button)
@@ -3803,6 +3906,25 @@ def test_alarm_clock_screen_sets_and_shortens_the_next_rest():
             app.rest()
             assert app.character.elapsed_hours == 6.0  # not REST_HOURS_COST (8)
             assert app.character.alarm_hour is None
+
+    run(body())
+
+
+def test_alarm_rest_lands_on_the_alarm_hour_with_a_fractional_clock():
+    """Same fractional-clock hazard as the corp Rest: hour_of_day is an int, so an
+    alarm Rest from 01:48 used to wake at 06:48 instead of 06:00."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            app.character.elapsed_hours = 1.8
+            app.character.alarm_hour = 6
+
+            app.rest()
+
+            assert app.character.elapsed_hours == 6.0
+            assert app.character.hour_of_day == 6
 
     run(body())
 

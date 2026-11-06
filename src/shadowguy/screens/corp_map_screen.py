@@ -835,7 +835,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
             f for f in self.app.fixers if f.location_id == t.id and f.id in character.discovered_fixers
         ]
         boxes = [self._location_box(location, t) for location in t.locations]
-        boxes.append(self._fixers_box(fixers_here))
+        boxes.append(self._fixers_box(fixers_here, t))
 
         container = self.query_one("#map_local_boxes", Grid)
         await container.remove_children()
@@ -1127,7 +1127,18 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         ContactsScreen._status's own pick when a territory has more than one."""
         return next((loc for loc in territory.locations if loc.kind == LocationKind.BAR), None)
 
-    def _fixers_box(self, fixers_here: list) -> Collapsible:
+    def _fixers_box(self, fixers_here: list, here: Territory) -> Collapsible:
+        character = self.app.character
+        # Fixers are only discovered by standing in their district, but a player who
+        # has just arrived needs a direction to walk in. Someone working one hop away
+        # is close enough to hear about without a check, and it is a rumour, not a
+        # reveal -- the fixer still isn't in discovered_fixers until you arrive.
+        nearby = [
+            fixer
+            for fixer in self.app.fixers
+            if fixer.id not in character.discovered_fixers
+            and fixer.location_id in here.connections
+        ]
         if fixers_here:
             items = [
                 ListItem(
@@ -1139,8 +1150,25 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
                 )
                 for fixer in fixers_here
             ]
+        elif nearby:
+            items = []
         else:
-            items = [ListItem(Static("No fixer seated here."), id="no_map_local_fixers")]
+            items = [
+                ListItem(
+                    Static("No fixer seated here. Try a neighbouring district."),
+                    id="no_map_local_fixers",
+                )
+            ]
+        items += [
+            ListItem(
+                Static(
+                    f"Rumor: {fixer.name} works out of "
+                    f"{self.app.corp_map.territories[fixer.location_id].name}."
+                ),
+                id=f"map_rumor_{fixer.id}",
+            )
+            for fixer in nearby
+        ]
         return Collapsible(
             ListView(*items), title="Fixers", collapsed=True, id="map_local_box_fixers", classes="local_box"
         )

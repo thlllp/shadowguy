@@ -4,9 +4,9 @@ A Choice names a skill, never a raw stat (see scene.Choice). The skill's
 effective value (skill_value) is its tied core stat — character.stat(), which
 already folds in gear and chem bonuses — plus the character's invested rank in
 that specific skill, plus any gear bonus aimed at that specific skill alone
-(shops.Item.skill_bonuses, e.g. Slippers' Stealth). Ranks are spent from
-Character.skill_points, a fixed pool granted at character creation for now; a
-future XP system will grant more over the course of a run.
+(shops.Item.skill_bonuses, e.g. Slippers' Stealth). Ranks are bought with
+Character.skill_points at creation and with Character.experience in play (see
+Post-creation experience in DESIGN.md).
 
 This module is deliberately a leaf: it imports nothing from the package at
 runtime, because character.py -> shops.py -> corpmap.py all end up importing
@@ -103,10 +103,20 @@ SKILLS: list[Skill] = [
 ]
 SKILLS_BY_ID = {skill.id: skill for skill in SKILLS}
 
+# Skills no current *player-facing* check rolls. They are still real skills (an
+# enemy drone's weapon rolls gunnery, for instance), but a hand-built runner has
+# nothing to spend them on yet, so creation and SkillsScreen mark them instead of
+# letting scarce points disappear into a hook that isn't wired. Keep this list in
+# sync with DESIGN.md's "Not every skill is rolled" paragraph; remove an id the
+# moment a real check uses it.
+UNROLLED_SKILL_IDS = frozenset({"gunnery", "medicine", "demolitions"})
+
 # A duplicate id would silently collapse SKILLS_BY_ID and hand two rows of the
 # skills screen the same Textual widget id (DuplicateIds on mount).
 if len(SKILLS_BY_ID) != len(SKILLS):
     raise ValueError("skill ids must be unique across _SKILL_ROWS")
+if not UNROLLED_SKILL_IDS <= SKILLS_BY_ID.keys():
+    raise ValueError("UNROLLED_SKILL_IDS names an unknown skill")
 
 
 def skill_for(skill_id: str) -> Skill:

@@ -87,7 +87,7 @@ class SceneScreen(Screen):
         choice = stage.choices[index]
 
         result, outcome = resolve_choice(
-            self.app.character, self.scene, choice, self.app.corp_map
+            self.app.character, self.scene, choice, self.app.corp_map, rng=self.app.rng
         )
         if not self._show_resolved(result, outcome):
             return
@@ -190,7 +190,7 @@ class SceneScreen(Screen):
         stage = self._current_stage()
         entrance = stage.burglary.entrances[chosen_index]
         result, outcome = resolve_entrance(
-            self.app.character, self.scene, entrance, self.app.corp_map
+            self.app.character, self.scene, entrance, self.app.corp_map, rng=self.app.rng
         )
         if not self._show_resolved(result, outcome):
             return

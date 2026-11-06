@@ -191,7 +191,7 @@ src/shadowguy/
                          BackScreen, PanelNav, the tactical/burglary map glyph helpers
     creation_screen.py   CharacterCreationScreen + GearScreen (creation gear)
     menu_screens.py      TitleMenu (entry point) + ModeSelect + BuildSelect + ArchetypeSelect
-                         + CorpSelect + Test + Quit + Load
+                         + CorpSelect + Help + Test + Quit + Load
     scene_screen.py      SceneScreen
     combat_screen.py     CombatScreen (the abstract_combat surface)
     tactical_screen.py   TacticalScreen + GrenadePickScreen + HackerPickScreen (the
@@ -242,7 +242,7 @@ Leaf modules, and why each has to stay one:
 
 What does **not** need a bump: save state stores catalog entries by **id** (`Character.installed_cyberware` holds cyberware ids, `owned_programs`/`installed_programs` hold program ids), so adding a row *or a field* to a frozen catalog dataclass changes no pickled shape. Renaming an existing id does — see v59.
 
-Nor does a field added, with a real default, to a class that defines `__setstate__ = lambda self, state: restore_defaults(self, state)` (`saves.restore_defaults`) — `Territory`, `CorpMap` and `RivalRunner` in v68/v69/v58/v72's own hazards, `Ice` in v71's, are wired up this way now, so the *next* additive field on any of them backfills its default on unpickle instead of needing a new row here. `restore_defaults` only ever fills in a field `state` doesn't carry — it is not a substitute for a bump on a rename, a reshape (a scalar becoming a tuple, e.g. v61's `RunnerState.activity` → `activities`, still deliberately unhooked), or a key/id change, all of which still need one. A class not listed above still relies on plain `__dict__` restore and still needs a bump for any shape change, additive or not.
+Nor does a field added, with a real default, to a class that defines `__setstate__ = lambda self, state: restore_defaults(self, state)` (`saves.restore_defaults`) — `Territory`, `CorpMap` and `RivalRunner` in v68/v69/v58/v72's own hazards, `Ice` in v71's, are wired up this way now, so the *next* additive field on any of them backfills its default on unpickle instead of needing a new row here. Nor does an optional extra key in the save bundle that `load_state` reads with `state.get(...)`: the run `seed` was added that way, old saves simply lack it, and the required `STATE_KEYS` subset is unchanged. `restore_defaults` only ever fills in a field `state` doesn't carry — it is not a substitute for a bump on a rename, a reshape (a scalar becoming a tuple, e.g. v61's `RunnerState.activity` → `activities`, still deliberately unhooked), or a key/id change, all of which still need one. A class not listed above still relies on plain `__dict__` restore and still needs a bump for any shape change, additive or not.
 
 What each bump added:
 
@@ -306,14 +306,14 @@ What each bump added:
 
 ### Verifying changes
 
-A real test suite exists (`tests/`, 27 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
+A real test suite exists (`tests/`, 28 test files plus `conftest.py`/`helpers.py`, `pytest>=8` in `pyproject.toml`'s `dev` dependency group), run by CI (`.github/workflows/tests.yml`, every push/PR to `main`): `uv run pytest -q` runs it, `uv run ruff check src/` lints (ruff is pinned in the `dev` group so CI and local agree — an unpinned `uvx ruff` drifts to whatever's newest). Guideline §4 still applies; established conventions:
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap_gen.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
 - **Forcing a *contest*** (corp conflict, where both sides roll) — both dice come off the same rng, so `AlwaysSix`/`AlwaysOne` fix them *equal* and the capture collapses to the deterministic `committed > defense`. Useful, but it means neither helper can bias one side of a contest against the other.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
-- **UI tests on a generated map must not assume map shape** — e.g. that the player's corp borders a rival, or that a given district has a shop. The map is unseeded per run (`ShadowguyApp.rng` is a bare `random.Random()`), so construct the situation the test needs and re-run it 15–20× to confirm stability.
-- Anything asserting on a **check outcome** without one of the above tricks must seed the module-level `random` (see Check resolution in `DESIGN.md`) or it will be flaky. **`app.rng` is not that seed**: it's threaded through map/job *generation* only, while `checks.resolve_check` falls back to module-level `random` when passed no rng — so seeding `app.rng` does not control the dice.
+- **UI tests on a generated map must not assume map shape** — e.g. that the player's corp borders a rival, or that a given district has a shop. The map is randomly seeded per run unless `ShadowguyApp(seed=...)` is passed, so construct the situation the test needs and re-run it 15–20× to confirm stability.
+- Anything asserting on an **in-game check outcome** should pass a seed (`ShadowguyApp(seed=...)`) or set `app.rng` before acting: the run seed's stream is what every screen-routed check rolls. A low-level helper that calls `checks.resolve_check` **without** an `rng` still falls back to module-level `random`, so those tests must seed `random` or pass a fixed `random.Random`.
 
 ### Known Textual gotchas hit so far
 
