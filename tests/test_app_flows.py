@@ -50,7 +50,7 @@ from shadowguy.factions import (
 )
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
-from shadowguy.security import generate_security_contract
+from shadowguy.security import BLOWN_REP_HIT, generate_security_contract
 from shadowguy.saves import load_game
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet, _compact_skill_label
@@ -99,7 +99,7 @@ from shadowguy.tactical import (
     enter_level,
 )
 from shadowguy.tactical import _settle as _settle_tactical_state
-from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.checks import CheckResult, resolve_check, CRITICAL_MARGIN
 from shadowguy.skills import skill_for, skill_value
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
@@ -3954,6 +3954,37 @@ def test_neon_choir_can_introduce_a_runner_for_a_fee():
 
             assert character.knows_runner(runner.id)
             assert character.cash == 0
+
+    run(body())
+
+
+def test_security_contract_blown_by_a_forced_critical_failure_ends_the_contract():
+    """The one branch Allie's playtests could not reach: a critical failure on a
+    night's watch. AlwaysSix() plus a zero player pool and an opposing pool of
+    exactly CRITICAL_MARGIN pins it deterministically, so the app's own day tick
+    (not resolve_security_night in isolation) is what gets exercised here."""
+
+    async def body():
+        app = ShadowguyApp(seed=1)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            contract = generate_security_contract(
+                character.day, app.corp_map, app.fixers[0].id, random.Random(0)
+            )
+            contract.difficulty = 9 + 2 * CRITICAL_MARGIN
+            contract.territory_id = character.location_id
+            skill = skill_for(contract.skill)
+            setattr(character, skill.stat, 0)
+            character.skill_ranks[contract.skill] = 0
+            character.security_contracts.append(contract)
+            character.elapsed_hours = 23.0  # an 8h rest crosses midnight
+            app.rng = AlwaysSix()
+
+            app.rest()
+
+            assert contract not in character.security_contracts
+            assert character.rep == BLOWN_REP_HIT
 
     run(body())
 
