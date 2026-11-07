@@ -884,6 +884,34 @@ def test_corp_tab_panels_scroll_into_view_at_80x24():
     run(body())
 
 
+def test_corp_tab_activity_list_omits_map_wide_intel_rows():
+    """One Gather-intel row per territory (253 on the full board) buried Deploy and
+    Attack. The flat list keeps the operative moves; per-territory intel/sabotage
+    stay available from the map's cursored-territory panel."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 48)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+
+            app.corp_state.operatives = 3
+            await app.screen._select_category("corp")
+            await _settle(pilot)
+            ids = [item.id for item in app.screen.query_one("#activities", ListView).children]
+            assert not any(item_id.startswith(("intel_", "sabotage_")) for item_id in ids)
+            assert any(item_id.startswith("expand_") for item_id in ids)
+            assert any(item_id.startswith("deploy_") for item_id in ids)
+
+    run(body())
+
+
 def test_rest_key_advances_time_on_the_map():
     """'R' is the keyboard route to Rest; the side-panel button is mouse-only."""
 
@@ -4762,6 +4790,11 @@ def test_corp_only_attack_flow_resolves_on_the_map_screen():
             await screen._select_category("corp")
             await _settle(pilot)
 
+            # The capped action list can put the attack row below the fold; scroll it
+            # into view before the coordinate click (the row is reachable, just not
+            # necessarily painted yet).
+            app.screen.query_one(f"#attack_{target}").scroll_visible()
+            await _settle(pilot)
             await pilot.click(f"#attack_{target}")
             await _settle(pilot)
             assert isinstance(app.screen, ForcePickScreen)

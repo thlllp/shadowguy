@@ -191,11 +191,13 @@ RESEARCH_PER_ASSISTANT = 0.5
 # The finite technology tree (TECHNOLOGIES) ends; this is the research-point sink
 # it leaves behind. Each level of Logistics Optimization adds
 # RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL to logistics_capacity, and the price rises
-# linearly: 200, 400, 600 ... RP. Linear rather than exponential because each level
+# linearly: 150, 300, 450 ... RP. Linear rather than exponential because each level
 # buys one district of headroom, and the strain it removes grows with the overage;
-# the cost still eventually outruns a flat research rate. Not balance-simulated.
-RESEARCH_LOGISTICS_COST_BASE = 200
-RESEARCH_LOGISTICS_COST_STEP = 200
+# the cost still eventually outruns a flat research rate. Tuned down from 200 after
+# corp_econ_sim --rivals showed a balanced policy buying under one level by day 120;
+# 150 lets a research-heavy session see level 1 without making it a runaway.
+RESEARCH_LOGISTICS_COST_BASE = 150
+RESEARCH_LOGISTICS_COST_STEP = 150
 RESEARCH_LOGISTICS_CAPACITY_PER_LEVEL = 1
 
 # CorpState.sightings is capped at this many entries (most-recent-first) —

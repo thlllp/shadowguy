@@ -203,3 +203,38 @@ def test_resolve_security_night_critical_failure_rival_factions_move_the_opposit
     rival_ids = [fid for fid in FACTIONS_BY_ID if fid != contract.faction_id]
     for rival_id in rival_ids:
         assert character.standing_with(rival_id) == -BLOWN_STANDING_HIT // RIVAL_WEIGHT
+
+
+def test_day_tick_removes_a_blown_security_contract():
+    """The caller side of the blown branch: _resolve_security_night must drop the
+    contract and notify, not leave a dead contract on the character."""
+
+    from shadowguy.app import ShadowguyApp
+
+    app = ShadowguyApp(seed=1)
+    character = app.character
+    character.skill_ranks["sight"] = 0
+    character.perception = 0
+    character.logic = 0
+    contract = SecurityContract(
+        id="security_app_blown",
+        fixer_id="fx",
+        faction_id=FACTIONS[0].id,
+        territory_id=character.location_id,
+        location_id="location_test",
+        skill="sight",
+        difficulty=9 + 2 * CRITICAL_MARGIN,
+        nightly_pay=50,
+        nights_total=3,
+        completion_bonus=100,
+        offered_day=1,
+    )
+    character.accept_security_contract(contract)
+    app.rng = AlwaysSix()
+    notes = []
+    app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+
+    app._resolve_security_night()
+
+    assert contract not in character.security_contracts
+    assert any("blown" in note for note in notes)

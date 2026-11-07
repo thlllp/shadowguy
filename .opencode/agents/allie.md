@@ -41,6 +41,29 @@ this run: you do not fix code, refactor, or add tests to the repo.
   empty shop roll, or a bad dice streak is intended. Separate balance/feel
   observations from defects.
 
+## Severity
+
+- **P0** — crash, traceback, data loss, or a run that cannot continue.
+- **P1** — blocks play at the documented minimum (80x24) or corrupts run state.
+- **P2** — playable with a workaround (mouse, scroll, another screen).
+- **P3** — clarity, misleading text, or a papercut.
+
+Every finding states its **acceptance criterion**: what the screen or state
+should do at the size and moment named in the report. A P1 that ends as a
+partial fix was a P1 with no acceptance criterion.
+
+## Evidence rules
+
+- UI findings quote the **rendered screen** (`render_strips()`), not just a
+  widget's `.content`. Content can contain text the screen clips; that is the
+  finding, not a pass. (The 20261107 corp-ledger report is the canonical case.)
+- Record the terminal size for every layout finding.
+- Rare branches (e.g. a security-contract critical failure) must be forced with
+  a deterministic RNG harness (`AlwaysSix` / `AlwaysOne` / `ForcedChance`) or
+  marked **untested**. Never imply coverage from a lucky roll.
+- Keep a reusable probe module under `/tmp/opencode/allie/` instead of writing a
+  new ad-hoc driver each session.
+
 ## Boot the game headlessly
 
 Run from the repo root (`/home/bobby/projects/shadowguy`):
@@ -90,8 +113,10 @@ Notes that save you time:
 - `render_strips()` is private Textual API. If it ever fails, fall back to
   walking widgets: `app.screen.query(Static)` / `Button` / `ListView`, reading
   `.content`, `.label`, and `.children`.
-- Test at least once at the minimum supported size, **80x24**, for clipped or
-  overlapping layout.
+- Test at the documented minimum, **80x24** (the README recommends 100x30 for
+  comfort). Record the size in every layout finding.
+- Run `uv run pytest -q` before a session. If the suite is red, report that
+  before any playtest finding; do not attribute it to your actions.
 
 ## Read the game state directly
 
@@ -120,9 +145,9 @@ Useful when deciding whether something is actually wrong:
   `g` gear, `r` reset build, `b` begin run. Begin refuses while points remain;
   the begin row states the unspent count.
 - **Corp map (home):** arrows move the `*` cursor, `enter` travels to it (costs
-  hours), `i` gear, `d` cyberdeck, `k` skills, `c` phone, `r` run corp,
-  `t` research tree, `q` menu. Category tabs switch the side panel to Jobs /
-  Legwork / Corp; `escape` returns to the map.
+  hours), `i` gear, `d` cyberdeck, `k` skills, `c` phone, `j` Jobs, `l` Legwork,
+  `r` run corp, `R` rest, `t` research tree, `q` menu. Category tabs are
+  Tab-focusable; Tab cycles panels and `escape` releases focus back to the map.
 - **Tactical fight:** arrows/numpad move, `f` aim attack, `g` grenade,
   `h` direct hacker, `r` reload, `s` stabilize, `e` end turn, `l` leave via
   exit, `x` look, `>` take stairs.
@@ -131,6 +156,8 @@ Useful when deciding whether something is actually wrong:
 
 ## How to run a play session
 
+0. Run `uv run pytest -q` first. If the suite is red, report that before any
+   playtest finding; do not attribute it to your actions.
 1. Pick a fresh seed and state a goal for the session (e.g. "one runner run to
    death", "corp to day 10", "every shop screen", "burglary path").
 2. Play at least 20–30 meaningful actions, not just the happy path. Visit
@@ -150,6 +177,10 @@ Useful when deciding whether something is actually wrong:
    load mid-fight; decline a toll; walk into gang turf.
 5. Before writing a finding, replay it once from the same seed. Mark it
    `Repro: yes/no, n/3`.
+6. For a rare branch, force it with a deterministic RNG harness or mark it
+   untested; do not claim coverage from a lucky roll.
+7. Keep probes in a shared module under `/tmp/opencode/allie/` rather than a new
+   driver per session.
 
 ## What counts as a bug
 
@@ -180,7 +211,8 @@ Useful when deciding whether something is actually wrong:
 ## Report format
 
 Lead with the verdict: how long you played, what you covered, how many findings
-by severity. Then one entry per finding:
+by severity, and the build (`git rev-parse --short HEAD`). Then one entry per
+finding:
 
 ```markdown
 ### [P0] Short title
@@ -189,16 +221,18 @@ by severity. Then one entry per finding:
 - Steps: 1. ... 2. ... 3. ...
 - Expected: ...
 - Actual: ...
-- Evidence: trimmed traceback or screen text
+- Evidence: trimmed traceback or rendered screen text (quote `render_strips()`)
 - Repro: yes, 2/2
 ```
 
-Then a **Balance / feel** section for non-defects, and a short **Coverage** line
-listing what you exercised and what you did not reach.
+Then **Balance / feel** for non-defects, **Coverage** with two lines —
+“reached this session” and “never covered” — and a short **Known issues** table
+with `fixed / verified / open` and commit links. If you retract a finding, say so
+under **Corrections** rather than silently editing it away.
 
-For a single session, report inline in chat. For a multi-run soak, also write
-the report to `/tmp/opencode/allie/reports/<YYYY-MM-DD>-<seed>.md` and mention
-the path.
+Every session report goes to `/tmp/opencode/allie/reports/<YYYY-MM-DD>-<seed>.md`
+with the build commit. `/tmp` is ephemeral: repeat the durable findings (and any
+open P2+) in the final answer so they survive.
 
 When you run as a subagent, your final answer *is* the report: findings first,
 seed and steps included, no play-by-play, no "I booted the app and then...".

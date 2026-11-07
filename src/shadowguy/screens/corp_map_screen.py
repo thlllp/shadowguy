@@ -1410,8 +1410,15 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         items = territory_rows(corp_state, corp_map)
         # The corp's operative moves, folded into the same flat list rather than a
         # panel of their own -- a corp_only run never opens CorpScreen, so this is
-        # where its Operations rows live.
-        items.extend(operations_rows(corp_state, corp_map))
+        # where its Operations rows live. Intel/sabotage are deliberately left out:
+        # they are per-territory and the map's per-territory panel already offers
+        # them for the cursored district, whereas one row per district here buried
+        # Deploy/Attack under hundreds of entries.
+        items.extend(
+            row
+            for row in operations_rows(corp_state, corp_map)
+            if not (row.id or "").startswith(("intel_", "sabotage_"))
+        )
         await _replace_items(activities, items)
 
         await _replace_items(
