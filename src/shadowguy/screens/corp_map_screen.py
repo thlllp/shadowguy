@@ -957,7 +957,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     # has an internal underscore) if a district were ever named e.g. "Assistant".
     _TERRITORY_ACTION_PREFIXES = (
         "expand", "secure", "surveil", "develop", "survey",
-        "deploy", "attack", "newacademy", "rebuild",
+        "deploy", "attack", "newacademy", "rebuild", "intel", "sabotage",
     )
 
     async def _refresh_map_corp_actions(self, territory_id: str) -> None:

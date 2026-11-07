@@ -4894,6 +4894,56 @@ def test_corp_only_map_mode_shows_territory_actions_instead_of_locals():
     run(body())
 
 
+def test_corp_only_map_mode_offers_intel_and_sabotage_for_a_rival_district():
+    """Regression: 010a48f dropped intel/sabotage from the Corp tab's flat list on
+    the promise that the map's per-territory panel still offered them, but that
+    panel's id filter listed neither prefix -- so a corp-only run could not use
+    either move at all."""
+
+    async def body():
+        app = ShadowguyApp(seed=1)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            assert isinstance(screen, CorpMapScreen)
+            ours = app.corp_state.faction_id
+            target = next(
+                t.id
+                for t in app.corp_map.territories.values()
+                if t.owner not in (ours, "neutral")
+            )
+            app.corp_state.operatives = 1
+            app.corp_state.action_points = 2
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            rows = [
+                item.id
+                for item in screen.query_one("#map_corp_actions", ListView).children
+            ]
+            assert f"intel_{target}" in rows
+            assert f"sabotage_{target}" in rows
+
+            # The Corp tab still keeps them out, so its flat list stays usable.
+            await screen._select_category("corp")
+            await _settle(pilot)
+            tab_rows = [item.id for item in screen.query_one("#activities", ListView).children]
+            assert not any(
+                row_id.startswith(("intel_", "sabotage_")) for row_id in tab_rows
+            )
+
+    run(body())
+
+
 def test_corp_only_map_mode_expand_refreshes_the_stale_owner_tag():
     """Regression: render_ascii_map bakes each territory's owner tag straight into
     _refresh_map_view's cached text (corpmap._label), keyed only on
