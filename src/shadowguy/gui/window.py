@@ -77,7 +77,7 @@ class ShadowguyWindow(arcade.Window):
     # ── stack / helpers used by views ───────────────────────────────────────
 
     @property
-    def view(self):
+    def top_view(self):
         return self.views[-1]
 
     def push(self, view) -> None:
@@ -118,11 +118,11 @@ class ShadowguyWindow(arcade.Window):
     # ── input / drawing ─────────────────────────────────────────────────────
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
-        self.view.on_key(symbol, modifiers)
+        self.top_view.on_key(symbol, modifiers)
 
     def on_draw(self) -> None:
         self.clear()
-        self.view.draw()
+        self.top_view.draw()
 
     def draw_map_screen(self, message: str | None = None) -> None:
         header_h = 64
