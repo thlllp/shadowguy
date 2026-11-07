@@ -18,26 +18,30 @@ Reports are ordered by the build they were run against, not by filename.
 | `2026-11-06-updates-reruns.md` | `010a48f` | all five open TUI findings fixed and verified |
 | `2026-11-06-gui-five-runs.md` | `7c761e4` | GUI slice: two P2 and two P3 defects |
 | `2026-11-06-cover-everything.md` | `7c761e4` | GUI sweep: one P1 (dead runner keeps playing), four P2, two P3 |
+| `2026-11-07-five-runs.md` | `e891049` | post-fix audit: corp intel/sabotage regression and burglary picker ordering (P2); death/KO/taken-offer fixes verified |
 
 ## Status after the follow-up fixes
 
-The reports were written against `7c761e4` (plus the working-tree `gui/window.py`
-rename). Since then:
+The reports were written against `7c761e4` and then `e891049`. Since then:
 
 Fixed and verified: the TUI findings from the `2c3fd19` → `010a48f` sequence
 (corp ledger and panels at 80x24, Rest key, transient saves, off-site notify),
 plus the GUI death/knockout handling, knockout-as-victory, burglary starting
-stages and rival-taken offers. Those four GUI fixes are covered by
-`tests/test_gui_views.py`.
+stages, rival-taken offers, and the two `e891049` P2s — the burglary picker is
+now opened after `JobsView` pushes the scene (`3263118`), and the map's
+per-territory panel offers intel/sabotage again (`47382c4`). The GUI fixes are
+covered by `tests/test_gui_views.py`; the corp-panel regression by
+`test_corp_only_map_mode_offers_intel_and_sabotage_for_a_rival_district`.
 
-Still open in the GUI preview: the `S`/WASD conflict, the unaffordable-program
-message, and arrow-free aiming.
+Still open in the GUI preview: the `S`/WASD conflict (the README documents the
+workaround, the in-game footer does not), the unaffordable-program message, and
+arrow-free aiming.
 
 Coverage still honestly marked **untested** by the reports: crew hiring (the
 timing precondition was never lined up), safehouse/cyberware/cyberdeck purchases
-(above the starting cash), corp sabotage and player-initiated captures, and a
-security contract blown by a critical failure. The last now has an app-level test
-(`test_security_contract_blown_by_a_forced_critical_failure_ends_the_contract`).
+(above the starting cash), corp sabotage execution, player-initiated captures,
+and a security contract blown by a critical failure. The last now has an app-level
+test (`test_security_contract_blown_by_a_forced_critical_failure_ends_the_contract`).
 
 ## Running again
 
