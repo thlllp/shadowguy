@@ -26,12 +26,12 @@ from shadowguy.corpmap import (
 from shadowguy.factions import FACTIONS_BY_ID
 from shadowguy.fixer import AMY_FIXER_ID, discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
-from shadowguy.inventory import equipped_travel_reduction
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.cybernetics import catalog_for_standing
 from shadowguy.rivals import RunnerActivity
 from shadowguy.scene import Scene
-from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG, owned_app_bonus
+from shadowguy.shops import CATALOG, CONSUMABLE_CATALOG, PROGRAM_CATALOG
+from shadowguy.travel import TRAVEL_HOURS_COST as TRAVEL_HOURS_COST, travel_hours
 
 from . import (
     MENU_QUIT_BINDINGS,
@@ -70,8 +70,6 @@ from .shop_screens import (
     RipperdocScreen,
     ShopScreen,
 )
-
-TRAVEL_HOURS_COST = 2.0
 
 # How many columns #map_corp_actions lays its rows out in. Kept beside GridListView
 # rather than read back off the CSS (Textual exposes no such reader) -- change one and
@@ -116,10 +114,9 @@ _STOCK_PREVIEW_COUNT = 5
 
 
 def _travel_hours(character: Character) -> float:
-    reduction = equipped_travel_reduction(character.inventory) + owned_app_bonus(
-        character, "travel_reduction"
-    )
-    return TRAVEL_HOURS_COST * (1 - reduction)
+    # Kept as the screen-facing name (tests and call sites import it here); the
+    # formula lives in shadowguy.travel so a non-Textual front-end can share it.
+    return travel_hours(character)
 
 
 _RUNNER_CATEGORIES = [

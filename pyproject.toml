@@ -12,11 +12,16 @@ dependencies = [
     "textual>=8.2.8",
 ]
 
+[project.optional-dependencies]
+gui = ["arcade>=3.3.3"]
+
 [project.scripts]
 shadowguy = "shadowguy:main"
+shadowguy-gui = "shadowguy.gui:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff==0.15.22"]
+gui = ["arcade>=3.3.3"]
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12.0"]

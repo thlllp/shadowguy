@@ -22,6 +22,28 @@ uv run shadowguy --dev
 
 **Terminal size:** the TUI needs at least **80×24**; **100×30 or larger is recommended**. At 80×24 the map is a small scrolling viewport, the Locals/actions strip and corp ledger are short and scroll internally, and a few footer hints are clipped.
 
+## Graphical front-end (experimental)
+
+The TUI is still the canonical game and the full test surface, but this branch has
+an Arcade front-end for a graphical map/character slice. It shares the same
+`ShadowguyApp` state and rules and does not change the TUI.
+
+```bash
+uv sync --group gui
+uv run --group gui python -m shadowguy.gui --seed 12345
+# or, once the gui extra is installed: shadowguy-gui --seed 12345
+```
+
+Controls: arrows/WASD move the cursor, `Enter` travels, `R` rests, `F` fixers,
+`J` jobs on site, `S` shops, `I` gear, `Q` quits.
+
+The slice currently covers the map/character/district panels, travel with gang
+and corp encounters (toll or fight), fixer offers and job acceptance, the scene
+check runner, abstract/tactical/matrix fights, shops and inventory. It is a
+simplified presentation of the same rules: crew/burglary edge cases, grenades,
+hacker programs and cyberware are still TUI-only. See `src/shadowguy/gui/` and
+`shadowguy.travel` for the shared travel-time formula.
+
 ## What a run looks like
 
 **Creation.** Everything starts at rank 1: six core stats (Body, Strength, Agility, Perception, Logic, Cool) and 39 skills. Spend 6 stat points and 20 skill points once. Points get dearer as a skill climbs, so a specialist can take one skill to 10 for 19 of the 20. Six presets — Enforcer, Hacker, Infiltrator, Gunslinger, Street Samurai, Fixer — or a hand-built character. Skill points can also be converted into creation-only gear budget (`1 point = 1000eb`); unspent gear budget is written off when the run begins, never banked as cash.

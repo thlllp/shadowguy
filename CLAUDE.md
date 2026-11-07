@@ -184,7 +184,14 @@ src/shadowguy/
   cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC;
                  owns Humanity erosion (every operation scars, 0 free = run over)
   saves.py       pickle-based whole-run save/load
+  travel.py      travel-time formula shared by the TUI map screen and the GUI
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
+
+  gui/           experimental Arcade front-end (optional `gui` group)
+    __init__.py  main(): optional-dependency guard + CLI
+    session.py   GameSession: the GUI's boundary to ShadowguyApp (travel/encounters/work)
+    views.py     map, menus, scene runner, abstract/tactical/matrix, shops, gear
+    window.py    view stack + map/character/district renderer
 
   screens/
     __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
@@ -233,6 +240,7 @@ Leaf modules, and why each has to stay one:
 - **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
 - **`workshop.py`** — imports `shops.py` and nothing else from the package; only `screens/shop_screens.py` imports *it*. The split is retail vs. making: everything in `shops.py` is a cash-and-standing transaction over a catalog, everything here is a skill roll over scavenged materials. The mod **catalog** (`Mod`/`MOD_CATALOG`/`MODS_BY_ID`/`WEAPON_MOD_SLOTS`/`STOCK_MOD_IDS`) stays in `shops.py` — `buy_item` seeds a bought gun's slots from it and `effective_item` folds installed mods into the stats `combat.py` reads, so a `shops → workshop` edge would be a cycle.
 - **`job_archetypes.py`** — imports `character`/`scene`/`skills` and nothing else from the package; `jobs.py` imports *it*, never the reverse. The split is table vs. pass over the table: authoring a new archetype row is a different kind of change from retuning what the generator does with one. `PARTIAL_POOL_SIZE` lives here rather than in `jobs.py` because the import-time guard on pool width reads it, and `DAMAGE_FOR_DELTA` because `Approach.failure_damage` does.
+- **`travel.py` / `gui/`** — `travel.py` is a leaf over `inventory`/`shops`, shared by the TUI map and the Arcade client. `gui/` is an experimental Arcade front-end: its `GameSession` wraps `app`/logic and the views never import Textual screens. The Textual screens remain the canonical client and the test surface; `gui` is optional (`gui` dependency group).
 
 `scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `job_archetypes.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
 
