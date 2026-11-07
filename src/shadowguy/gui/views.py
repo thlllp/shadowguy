@@ -405,9 +405,12 @@ class JobsView(MenuView):
         job = next(j for j in self.jobs if j.id == row_id)
         scene = self.window.session.start_job(job)
         # Replace the list with the scene so finishing returns to the map, not to a
-        # stale "jobs on site" list.
+        # stale "jobs on site" list. Push the scene before `start()`: a burglary
+        # start pushes its entrance picker, which must land on top of this view.
+        view = SceneView(self.window, scene, self.window.pop)
         self.window.pop()
-        self.window.push(SceneView(self.window, scene, self.window.pop))
+        self.window.push(view)
+        view.start()
 
 
 class ShopPickView(MenuView):
@@ -595,14 +598,22 @@ class SceneView(MenuView):
         self.pending_result = None
         self._show_stage()
 
+    def start(self) -> None:
+        """Open the first stage's child view, if it has one.
+
+        Must be called *after* this view is pushed: a burglary-start job's entrance
+        picker is a separate view, and pushing it from `__init__` would bury it
+        under whichever view the caller pushes next.
+        """
+        stage = self._stage()
+        if stage.burglary is not None:
+            self.window.push(EntranceView(self.window, stage.burglary, self))
+
     def _stage(self):
         return self.scene.stages[self.stage_id]
 
     def _show_stage(self) -> None:
         stage = self._stage()
-        if stage.burglary is not None:
-            self.window.push(EntranceView(self.window, stage.burglary, self))
-            return
         self.title = stage.prompt.split(".")[0][:40] or "JOB"
         self.intro = [stage.prompt]
         if stage.narration is not None:

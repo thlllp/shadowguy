@@ -33,6 +33,7 @@ from shadowguy.gui.views import (  # noqa: E402
     FixerView,
     GameOverView,
     InventoryView,
+    JobsView,
     MapView,
     SceneView,
     ShopView,
@@ -277,11 +278,16 @@ def test_scene_fight_knockout_pays_the_loss_not_the_victory():
     assert scene.id not in [job.scene.id for job in character.accepted_jobs]
 
 
-def test_scene_view_opens_the_entrance_picker_when_the_first_stage_is_a_burglary():
+def test_jobs_view_opens_the_entrance_picker_for_a_burglary_start():
     window, scene = _job_starting_with("burglary")
+    map_view = MapView(window)
+    window.views = [map_view]
+    jobs_view = JobsView(window, [types.SimpleNamespace(id="job_test", scene=scene)])
+    window.views.append(jobs_view)
 
-    SceneView(window, scene, lambda: None)
+    jobs_view.pick("job_test")
 
+    assert isinstance(window.views[-2], SceneView)
     assert isinstance(window.views[-1], EntranceView)
     assert window.views[-1].rows
 
@@ -290,15 +296,19 @@ def test_burglary_ambush_routes_straight_to_the_fight():
     from shadowguy.gui.views import TacticalView
 
     window, scene = _job_starting_with("burglary")
-    view = SceneView(window, scene, lambda: None)
+    map_view = MapView(window)
+    window.views = [map_view]
+    jobs_view = JobsView(window, [types.SimpleNamespace(id="job_test", scene=scene)])
+    window.views.append(jobs_view)
+    jobs_view.pick("job_test")
+    scene_view = window.views[-2]
     entrance_view = window.views[-1]
-    window.views = [view, entrance_view]
     entrance_view.pick(f"entrance:{len(entrance_view.rows) - 1}")  # the ambush
 
-    assert window.views[-1] is view
-    assert view.awaiting
+    assert window.views[-1] is scene_view
+    assert scene_view.awaiting
 
-    view.pick("continue")
+    scene_view.pick("continue")
 
     assert isinstance(window.views[-1], TacticalView)
 
