@@ -158,6 +158,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     BINDINGS = [
         *MENU_QUIT_BINDINGS,
         Binding("escape", "back", "Back"),
+        Binding("R", "rest_action", "Rest"),
         ("r", "run_corp", "Corp"),
         ("i", "inventory", "Gear"),
         ("d", "cyberdeck", "Deck"),
@@ -270,17 +271,30 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     }
 
     #activities {
-        height: auto;
+        /* The corp tab's flat action list. Bounded so the Academy/Research/
+        Surveillance panels below it stay reachable on a short terminal instead of
+        being pushed off the screen by hundreds of rows; the 80x60 test surface
+        still shows the Attack row without scrolling. */
+        height: 1fr;
+        max-height: 24;
+        min-height: 4;
+    }
+
+    #corp_panels {
+        /* The three Corp-tab panels live in a scroller of their own: at 80x24 they
+        cannot all fit under the action list, and an off-screen focusable panel is
+        worse than a scroll bar. */
+        height: 1fr;
+        min-height: 4;
+        overflow-y: auto;
     }
 
     #corp_info {
-        /* Detail, not the action surface. Let it shrink and scroll on a short
-        terminal instead of pushing the corp actions strip and itself off the
-        bottom of an 80x24 screen. */
-        height: 1fr;
+        /* Detail, not the action surface. Four compact lines at 80 columns; the
+        auto height keeps it to its content, and the cap stops a long ledger from
+        eating the map on a tall screen. */
+        height: auto;
         max-height: 6;
-        min-height: 2;
-        overflow-y: auto;
     }
 
     #map_local_boxes_scroll, #map_corp_actions_scroll {
@@ -384,14 +398,23 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
                 yield ScrollableContainer(Grid(id="map_local_boxes"), id="map_local_boxes_scroll")
                 yield ScrollableContainer(GridListView(id="map_corp_actions"), id="map_corp_actions_scroll")
                 yield Static(id="corp_info")
-                yield Collapsible(
-                    ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
-                )
-                yield Collapsible(
-                    ListView(id="research_list"), title="Research Facility", collapsed=False, id="research_panel"
-                )
-                yield Collapsible(
-                    ListView(id="surveillance_list"), title="Surveillance Log", collapsed=True, id="surveillance_panel"
+                yield ScrollableContainer(
+                    Collapsible(
+                        ListView(id="academy_list"), title="Academy", collapsed=False, id="academy_panel"
+                    ),
+                    Collapsible(
+                        ListView(id="research_list"),
+                        title="Research Facility",
+                        collapsed=False,
+                        id="research_panel",
+                    ),
+                    Collapsible(
+                        ListView(id="surveillance_list"),
+                        title="Surveillance Log",
+                        collapsed=True,
+                        id="surveillance_panel",
+                    ),
+                    id="corp_panels",
                 )
         yield Footer()
 
@@ -598,6 +621,16 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     def action_run_corp(self) -> None:
         self.app.push_screen(CorpScreen())
 
+    async def action_rest_action(self) -> None:
+        """Keyboard route to Rest (the side-panel button is mouse-only). Rests in
+        whichever mode the map is in and refreshes the same surface the button does."""
+        self.app.rest()
+        if self.selected_category is None:
+            self._do_refresh_map()
+        else:
+            await self._refresh_activities()
+        self._refresh_rest_button()
+
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
             self.app.push_screen(ResearchTreeScreen())
@@ -637,7 +670,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         if item_id.startswith("legwork_"):
             offer_id = item_id.removeprefix("legwork_")
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
-            if not self._on_site(job.scene):
+            if not self._require_on_site(job.scene):
                 return
             legwork_scene = generate_legwork_for_job(job.scene, self.app.corp_map, self.app.rng)
             self.app.spend_time(legwork_scene.hours_cost, protect_job_id=job.scene.id)
@@ -647,9 +680,10 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         if item_id.startswith("job_"):
             offer_id = item_id.removeprefix("job_")
             job = next(job for job in character.accepted_jobs if job.id == offer_id)
-            if not self._on_site(job.scene):
+            if not self._require_on_site(job.scene):
                 return
             if not job.timing.is_available(character.day):
+                self.notify(f"{job.scene.title} isn't available today.", severity="warning")
                 return
             self.app.spend_time(job.scene.hours_cost, protect_job_id=job.scene.id)
             self.app.push_screen(SceneScreen(job.scene))
@@ -692,6 +726,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         # Also up in corp_only's map mode: that's where the Rest button is, and the
         # corp's books (cash/research/territories) are the only numbers moving there.
         self.query_one("#corp_info").display = is_corp or (in_map and corp_only)
+        self.query_one("#corp_panels").display = is_corp
         self.query_one("#academy_panel").display = is_corp
         self.query_one("#research_panel").display = is_corp
         self.query_one("#surveillance_panel").display = is_corp
@@ -1120,6 +1155,17 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
 
     def _on_site(self, scene: Scene) -> bool:
         return self.app.character.location_id == scene.target_territory_id
+
+    def _require_on_site(self, scene: Scene) -> bool:
+        """Whether the runner is where `scene` runs, with a player-facing reason when
+        they aren't. Selecting an out-of-district Job/Legwork row used to return
+        silently, leaving the row click with no feedback at all."""
+        if self._on_site(scene):
+            return True
+        self.notify(
+            f"You must be on site — travel to {self._district(scene)}.", severity="warning"
+        )
+        return False
 
     def _district(self, scene: Scene) -> str:
         return self.app.corp_map.territories[scene.target_territory_id].name

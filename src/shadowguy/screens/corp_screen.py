@@ -242,20 +242,24 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
         assist_capacity = assistant_capacity(facility, corp_state)
         facility_line = (
             f"\nResearch Facility: tier {facility.research_tier} "
-            f"({facility.research_tier or 0}rp/day base), "
-            f"{min(corp_state.scientists, capacity)}/{capacity} scientists at work "
-            f"({research_rate(corp_state, facility):g}rp/scientist), "
-            f"{min(corp_state.research_assistants, assist_capacity)}/{assist_capacity} "
-            f"assistants at work ({assistant_rate(corp_state):g}rp/assistant)"
+            f"({facility.research_tier or 0}rp/day) · "
+            f"{min(corp_state.scientists, capacity)}/{capacity} sci "
+            f"(+{research_rate(corp_state, facility):g}) · "
+            f"{min(corp_state.research_assistants, assist_capacity)}/{assist_capacity} asst "
+            f"(+{assistant_rate(corp_state):g})"
         )
+    # Keep the ledger to four lines that fit an 80-column terminal: the full
+    # headcount is repeated in the facility line, and the territory list is
+    # capped so a large corp can't wrap it into a fifth line.
+    names = [t.name for t in owned]
+    shown_names = ", ".join(names[:4]) or "none"
+    if len(names) > 4:
+        shown_names += f" +{len(names) - 4} more"
     return (
         f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
-        f"{corp_state.scientists} scientists — "
-        f"{corp_state.operatives}/{operative_max(corp_state)} operatives — "
-        f"{corp_state.research_assistants} research assistants "
-        f"({corp_state.tasking_operatives} on task) — "
-        f"Day {day}\n"
-        f"Territories ({len(owned)}): {', '.join(t.name for t in owned) or 'none'}\n"
+        f"{corp_state.operatives}/{operative_max(corp_state)} ops "
+        f"({corp_state.tasking_operatives} on task) — Day {day}\n"
+        f"Territories ({len(owned)}): {shown_names}\n"
         f"{logistics_line}"
         f"{facility_line}"
     )
@@ -864,6 +868,7 @@ class CorpScreen(CorpActionsMixin, BackScreen):
     BINDINGS = [
         *MENU_BACK_BINDINGS,
         ("t", "research_tree", "Research Tree"),
+        ("R", "rest_action", "Rest"),
     ]
 
     # ListView defaults to height: 1fr, which -- with three of them stacked as
@@ -928,6 +933,12 @@ class CorpScreen(CorpActionsMixin, BackScreen):
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
             self.app.push_screen(ResearchTreeScreen())
+
+    async def action_rest_action(self) -> None:
+        """Keyboard route to Rest; the top-bar button is mouse-only."""
+        self.app.rest()
+        await self._refresh()
+        self._refresh_rest_button()
 
     async def _refresh(self) -> None:
         corp_state = self.app.corp_state

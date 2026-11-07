@@ -74,6 +74,7 @@ Rows and menus are arrow-key + `enter`. Screen-specific:
 | `i` / `d` / `k` / `c` | Corp map | Gear / Cyberdeck / Skills / Phone |
 | `j` / `l` | Corp map | Jobs / Legwork |
 | `tab` / `escape` | Corp map | Cycle panels / release focus back to the map |
+| `R` | Corp map or Corp screen | Rest |
 | `r` | Corp map | Run a Corp (or open the corp screen) |
 | `t` | Corp map or Corp screen | Research Tree |
 | `q` | Most screens | Menu: save, load, how to play, restart, quit |

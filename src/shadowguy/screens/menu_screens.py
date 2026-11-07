@@ -24,10 +24,24 @@ from shadowguy.tactical_gen import generate_map
 
 from . import MENU_BACK_BINDINGS, MENU_QUIT_BINDINGS, BackScreen, _menu_css
 from .burglary_screens import EntrancePickScreen
+from .combat_screen import CombatScreen
 from .creation_screen import CharacterCreationScreen
+from .map_encounters import TollScreen
 from .matrix_screen import MatrixScreen
 from .scene_screen import SceneScreen
 from .tactical_screen import TacticalScreen
+
+# Screens that hold transient state the save bundle does not carry (a scene in
+# progress, a live fight, a pending toll). Saving while one is underneath the menu
+# would let the player reload out of it, so QuitMenu refuses instead.
+_TRANSIENT_SCREENS = (
+    SceneScreen,
+    CombatScreen,
+    TacticalScreen,
+    MatrixScreen,
+    EntrancePickScreen,
+    TollScreen,
+)
 
 
 def _approach_pool(archetype_name: str) -> tuple[Approach, ...]:
@@ -142,6 +156,7 @@ r                 creation: reset build
 i / d / k / c     map: Gear / Cyberdeck / Skills / Phone
 j / l             map: Jobs / Legwork
 tab / escape      map: cycle panels / release focus
+R                 map or corp screen: Rest
 t                 map or corp screen: Research Tree
 ← ↑ → ↓           tactical: move (numpad also works)
 f / e / l         tactical: attack / end turn / leave via exit
@@ -208,6 +223,11 @@ class QuitMenu(ModalScreen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id == "save":
+            if any(isinstance(screen, _TRANSIENT_SCREENS) for screen in self.app.screen_stack):
+                self.app.notify(
+                    "Can't save during a scene or fight.", severity="warning"
+                )
+                return
             try:
                 slot = self.app.save_run()
             except Exception as exc:

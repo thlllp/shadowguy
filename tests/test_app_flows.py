@@ -111,6 +111,7 @@ from shadowguy.screens.menu_screens import (
     CorpSelectScreen,
     HelpScreen,
     ModeSelectScreen,
+    QuitMenu,
     TitleMenu,
 )
 from shadowguy.gangs import GANGS, GANGS_BY_ID
@@ -366,6 +367,69 @@ def test_run_seed_is_deterministic_and_travels_with_the_save(tmp_path, monkeypat
     slot = first.save_run()
     state = load_game(slot.path)
     assert state["seed"] == 424242
+
+
+def test_saving_is_refused_during_a_fight(tmp_path, monkeypatch):
+    """The save bundle carries run state only; saving mid-fight and loading would
+    drop the encounter, so QuitMenu refuses while a scene/fight screen is live."""
+
+    monkeypatch.setattr("shadowguy.saves.SAVE_DIR", tmp_path)
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            notes = []
+            app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+            await pilot.press("q")
+            await pilot.pause()
+            assert isinstance(app.screen, QuitMenu)
+            await pilot.press("enter")  # Save Game
+            await pilot.pause()
+            assert list(tmp_path.glob("*.save")) == []
+            assert any("Can't save" in note for note in notes)
+            assert isinstance(app.screen, QuitMenu)
+
+    run(body())
+
+
+def test_out_of_district_job_row_warns_instead_of_silently_doing_nothing():
+    async def body():
+        app = ShadowguyApp(seed=424242)
+        async with app.run_test(size=(80, 60)) as pilot:
+            app.push_screen(CorpMapScreen())
+            await _settle(pilot)
+            character = app.character
+            scene, timing = generate_job(1, app.corp_map, fixer_id="test", rng=app.rng)
+            if scene.target_territory_id == character.location_id:
+                character.location_id = next(
+                    iter(app.corp_map.territories[character.location_id].connections)
+                )
+            character.accepted_jobs.append(
+                JobOffer(
+                    id="offer_test",
+                    fixer_id="test",
+                    scene=scene,
+                    timing=timing,
+                    offered_day=1,
+                )
+            )
+            notes = []
+            app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+            await pilot.press("j")
+            await _settle(pilot)
+            assert app.screen.selected_category == "job"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert any("on site" in note for note in notes)
+
+    run(body())
 
 
 def test_skills_no_check_rolls_are_marked_in_the_shared_row_label():
@@ -767,7 +831,71 @@ def test_corp_only_map_keeps_actions_and_ledger_on_screen_at_80x24():
             ledger = app.screen.query_one("#corp_info", Static).content
             assert "Research Facility" in ledger
             # The tier's own RP/day is what explains income at 0 scientists.
-            assert "rp/day base" in ledger
+            assert "rp/day" in ledger
+            # The content string is not enough: at 80x24 the ledger must actually
+            # render its Logistics and Research Facility lines, not clip them.
+            rendered = "\n".join(
+                "".join(segment.text for segment in strip)
+                for strip in app.screen._compositor.render_strips()
+            )
+            assert "Logistics:" in rendered
+            assert "Research Facility:" in rendered
+            assert app.screen.query_one("#corp_info", Static).region.height >= 4
+
+    run(body())
+
+
+def test_corp_tab_panels_scroll_into_view_at_80x24():
+    """The Academy/Research/Surveillance panels sit below the action list on a
+    short terminal. They live in a scroll container now, and focusing one must
+    scroll it into the viewport instead of leaving an invisible control that can
+    still spend AP/cash."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+            assert isinstance(app.screen, CorpMapScreen)
+
+            for _ in range(5):
+                focused = app.focused
+                if focused is not None and getattr(focused, "id", None) == "cat_corp":
+                    break
+                await pilot.press("tab")
+                await pilot.pause()
+            await pilot.press("enter")
+            await _settle(pilot)
+
+            panels = app.screen.query_one("#corp_panels")
+            assert panels.region.y + panels.region.height <= 24
+            research = app.screen.query_one("#research_list", ListView)
+            research.focus()
+            await _settle(pilot)
+            assert panels.scroll_offset.y > 0
+            assert research.region.y >= panels.region.y
+            assert research.region.y + research.region.height <= panels.region.y + panels.region.height
+
+    run(body())
+
+
+def test_rest_key_advances_time_on_the_map():
+    """'R' is the keyboard route to Rest; the side-panel button is mouse-only."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(120, 48)) as pilot:
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            before = app.character.elapsed_hours
+            await pilot.press("R")
+            await pilot.pause()
+            assert app.character.elapsed_hours > before
 
     run(body())
 
