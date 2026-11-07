@@ -704,6 +704,8 @@ def test_corp_map_screen_has_sidebar_categories():
                 "cat_phone",
                 "cat_tech",
             ]
+            # A keyboard player has to be able to reach the tabs.
+            assert all(btn.can_focus for btn in cat_buttons)
 
             # Select the corp category to see its action list.
             await pilot.click("#cat_corp")
@@ -727,6 +729,60 @@ def test_corp_map_screen_has_sidebar_categories():
             await pilot.pause()
             assert isinstance(app.screen, CorpMapScreen)
             assert app.screen.selected_category is None
+
+            # Focus in the per-territory corp actions strip used to be a keyboard
+            # dead end (Tab cycled inside it; arrows moved the list, not the map).
+            # Escape releases it.
+            app.screen.set_focus(app.screen.query_one("#map_corp_actions"))
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is None
+
+    run(body())
+
+
+def test_runner_map_jobs_and_legwork_are_keyboard_reachable():
+    """The category tabs used to be mouse-only (can_focus=False, no bindings), which
+    left Jobs and Legwork -- the only place accepted work is listed and started --
+    unreachable without a pointer. j/l and Tab+Enter must both work."""
+
+    async def body():
+        import shadowguy.archetypes as archetypes
+
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
+            await pilot.click("#premade")
+            await pilot.pause()
+            await pilot.click(f"#archetype_{archetypes.ARCHETYPES[0].id}")
+            await _settle(pilot)
+            await pilot.press("b")
+            await _settle(pilot)
+
+            assert isinstance(app.screen, CorpMapScreen)
+            screen = app.screen
+            assert all(btn.can_focus for btn in screen.query("#cat_buttons Button"))
+
+            await pilot.press("j")
+            await pilot.pause()
+            assert screen.selected_category == "job"
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen.selected_category is None
+
+            await pilot.press("l")
+            await pilot.pause()
+            assert screen.selected_category == "legwork"
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen.selected_category is None
+            assert app.focused is None
 
     run(body())
 
@@ -1129,7 +1185,7 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
             assert not state.is_over
 
             # Content that doesn't depend on the randomly generated map/enemy roll.
-            assert "Move (arrows/numpad)" in tac_screen.query_one("#tac_box_move").content.plain
+            assert "Move (arrows)" in tac_screen.query_one("#tac_box_move").content.plain
             assert "Attack (f)" in tac_screen.query_one("#tac_box_attack").content.plain
             assert "End turn (e)" in tac_screen.query_one("#tac_box_end").content.plain
             assert "Leave (l)" in tac_screen.query_one("#tac_box_leave").content.plain
@@ -1150,6 +1206,43 @@ def test_test_menu_tactical_combat_reaches_a_live_tactical_fight_with_boxed_stat
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, GameTestMenu)
+
+    run(body())
+
+
+def test_tactical_status_tiles_fit_an_80_column_terminal():
+    """The HUD was a single Horizontal row of ten boxes; at 80 columns Leave and
+    Enemies fell off the right edge. The grid wraps them, so every visible tile must
+    sit inside the terminal."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#test")
+            await pilot.pause()
+            await pilot.click(f"#tactical_{min(ENEMY_TIERS)}")
+            await pilot.pause()
+            assert isinstance(app.screen, TacticalScreen)
+
+            boxes = [
+                "tac_box_move",
+                "tac_box_attack",
+                "tac_box_grenade",
+                "tac_box_ammo",
+                "tac_box_end",
+                "tac_box_leave",
+                "tac_box_enemies",
+                "tac_box_crew",
+                "tac_box_hacker",
+                "tac_box_level",
+            ]
+            for box_id in boxes:
+                box = app.screen.query_one(f"#{box_id}", Static)
+                if not box.display:
+                    continue
+                assert box.region.x >= 0, (box_id, box.region)
+                assert box.region.x + box.region.width <= 80, (box_id, box.region)
 
     run(body())
 

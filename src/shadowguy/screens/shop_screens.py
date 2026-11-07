@@ -2,7 +2,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Vertical
 from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import HOURS_PER_DAY, Character
+from shadowguy.character import HOURS_PER_DAY, SURGERY_SCARRING, Character
 from shadowguy.corpmap import (
     WORKSHOP_BUILD_COST,
     Location,
@@ -72,6 +72,7 @@ from shadowguy.workshop import (
     craft_consumable,
     install_mod,
     install_refusal,
+    materials_label,
     remove_mod,
     scavenge,
 )
@@ -521,6 +522,9 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
                     continue
                 where = f" ({mod.weapon_slot.value})" if named_layout and mod.weapon_slot else ""
                 label = f"Install {mod.name}{where} on {item.name} — {mod.price}eb"
+                materials = materials_label(mod.materials)
+                if materials:
+                    label += f" + {materials}"
                 if character.cash < mod.price:
                     label += " — can't afford"
                 items.append(ListItem(Static(label), id=f"mod_{index}_{mod.id}"))
@@ -536,6 +540,7 @@ class SafehouseScreen(RefreshOnResume, BackScreen):
             consumable = CONSUMABLES_BY_ID[consumable_id]
             price = round(consumable.price * 0.5)
             label = f"Craft {consumable.name} — {price}eb"
+            label += f" + {materials_label(CRAFT_RECIPES[consumable_id])}"
             if character.cash < price:
                 label += " — can't afford"
             items.append(ListItem(Static(label), id=f"craft_{consumable_id}"))
@@ -1045,7 +1050,11 @@ class RipperdocScreen(PanelNav, RefreshOnResume, BackScreen):
         stock = []
         for cyberware in catalog_for_standing(standing):
             effect = _cyberware_label(cyberware)
-            label = f"{cyberware.name} — {cyberware.price}eb, {cyberware.humanity_cost:g} humanity"
+            # The free-Humanity change is the implant's own cost *plus* the scar every
+            # operation leaves (character.SURGERY_SCARRING), so quote the net the
+            # player will actually see on the sheet rather than the raw cost.
+            net_cost = cyberware.humanity_cost + SURGERY_SCARRING
+            label = f"{cyberware.name} — {cyberware.price}eb, {net_cost:g} humanity"
             if effect:
                 label += f" ({effect})"
             # Reasons in the order the player can act on them: a full slot is fixed by
@@ -1072,7 +1081,8 @@ class RipperdocScreen(PanelNav, RefreshOnResume, BackScreen):
             ListItem(
                 Static(
                     f"Remove {CYBERWARE_BY_ID[cyberware_id].name} — no refund "
-                    f"(frees {CYBERWARE_BY_ID[cyberware_id].humanity_cost:g} humanity)"
+                    f"(net +{CYBERWARE_BY_ID[cyberware_id].humanity_cost - SURGERY_SCARRING:g} "
+                    f"humanity, incl. {SURGERY_SCARRING:g} surgery)"
                 ),
                 id=f"remove_{slot.value}",
             )

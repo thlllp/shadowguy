@@ -157,17 +157,24 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
 
     BINDINGS = [
         *MENU_QUIT_BINDINGS,
-        Binding("escape", "back", "Back", show=False),
-        ("r", "run_corp", "Run a Corp"),
+        Binding("escape", "back", "Back"),
+        ("r", "run_corp", "Corp"),
         ("i", "inventory", "Gear"),
-        ("d", "cyberdeck", "Cyberdeck"),
+        ("d", "cyberdeck", "Deck"),
         ("k", "skills", "Skills"),
         ("c", "phone", "Phone"),
-        ("t", "research_tree", "Research Tree"),
+        ("t", "research_tree", "Research"),
+        # Direct keyboard routes to the two categories a run cannot be played without
+        # (jobs to run accepted work, legwork to prep it). Hidden from the Footer to
+        # keep it readable; the category buttons themselves are Tab-focusable too.
+        Binding("j", "open_category('job')", "Jobs", show=False),
+        Binding("l", "open_category('legwork')", "Legwork", show=False),
+        # One movement tile, not four: the arrow row is documented in the manual, and
+        # four "Move" entries were crowding out the category/action hints at 80 cols.
         ("up", "move('up')", "Move"),
-        ("down", "move('down')", "Move"),
-        ("left", "move('left')", "Move"),
-        ("right", "move('right')", "Move"),
+        Binding("down", "move('down')", "Move", show=False),
+        Binding("left", "move('left')", "Move", show=False),
+        Binding("right", "move('right')", "Move", show=False),
         ("enter", "enter_action", "Select"),
     ]
 
@@ -184,6 +191,10 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     CSS = """
     #top_bar {
         height: auto;
+        /* Safety valve on short terminals: the sheet can wrap tall at narrow
+        widths, and the map below must not be pushed off the screen entirely. */
+        max-height: 14;
+        overflow: hidden;
     }
 
     #top_bar CharacterSheet {
@@ -205,6 +216,14 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
 
     #cat_buttons Button {
         width: 9;
+        /* Compact tabs: a bordered Button is 3 rows tall, and four rows of them
+        (the 80-column two-column layout) made the top bar 14 rows -- more than the
+        CharacterSheet -- on a terminal with only 24. Flat one-line tabs keep the
+        top bar at the sheet's height. */
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0;
     }
 
     #rest_panel {
@@ -229,8 +248,10 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         top-left rather than content-align: center middle -- centering only
         does anything while the content fits, which it never does now, and it
         offsets the map's own coordinates away from the scroll origin that
-        _scroll_selection_into_view works in. */
-        height: 1fr;
+        _scroll_selection_into_view works in. 2fr against the strip's 1fr keeps
+        the map the larger share when vertical space is tight (80x24). */
+        height: 2fr;
+        min-height: 2;
         overflow: auto auto;
         padding: 0 1;
     }
@@ -253,14 +274,17 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     }
 
     #map_local_boxes_scroll, #map_corp_actions_scroll {
-        /* Bounded, not 1fr -- these are a preview strip, not the main event (the
-        map above needs most of the vertical room in map mode). An expanded box
-        (stock lists, NPC rosters, ...) can still run taller than this, so scroll
-        internally instead of pushing lower boxes off-screen with no way to reach
-        them.
+        /* Bounded, not fixed -- these are a preview strip, not the main event (the
+        map above needs most of the vertical room in map mode). 1fr against the
+        map's 2fr lets it give ground on short terminals instead of squeezing the
+        map to a single row; max-height keeps it from eating a tall screen. An
+        expanded box (stock lists, NPC rosters, ...) can still run taller, so it
+        scrolls internally.
         #map_corp_actions_scroll is corp_only's map-mode replacement for
         #map_local_boxes_scroll -- same bounded strip, same reason. */
-        height: 14;
+        height: 1fr;
+        max-height: 14;
+        min-height: 4;
         border-top: solid $accent;
         overflow-y: auto;
     }
@@ -428,6 +452,11 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         if self.selected_category is None:
             self.rendered = None
             self._refresh_map_view()
+            # A resolved action can change cash/territories/logistics, and those live
+            # in #corp_info rather than on the map itself. _refresh_map_view does not
+            # rebuild it, so without this the bottom ledger stays on the pre-action
+            # numbers until something calls _do_refresh_map (travel/rest/category).
+            self._refresh_map_corp_info()
             if self._map_corp_actions_task is not None:
                 await self._map_corp_actions_task
             return
@@ -461,7 +490,13 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
             self.selected_category = None
             self._refresh_map()
             self.set_focus(None)
-        # else: no-op — nothing below this screen to pop back to
+        else:
+            # Map mode has nothing to pop, but a panel (the Locals strip or the corp
+            # actions list) can hold focus, and while it does the arrow keys scroll/
+            # move that list instead of the map cursor. Escape is the keyboard way
+            # back out of it — the same release on_screen_resume performs when a
+            # pushed screen pops.
+            self.set_focus(None)
 
     # ── category navigation ─────────────────────────────────────────────────
 
@@ -469,15 +504,29 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         grid = self.query_one("#cat_buttons", Grid)
         await grid.remove_children()
         cats = self.categories
-        columns = (len(cats) + 1) // 2
+        # At 80 columns the four-column runner layout is 43 wide, leaving the
+        # CharacterSheet about seven columns; it wraps to ~29 rows and pushes the
+        # map and Locals panel off the bottom. Two columns (23 wide) keeps the sheet
+        # readable at narrow widths, at the cost of a taller button block.
+        width = self.app.size.width or 100
+        columns = 2 if width < 100 else (len(cats) + 1) // 2
         grid.styles.grid_size_columns = columns
         # 9 chars per button + gutters + 4 for panel padding/border
         panel = self.query_one("#cat_button_panel")
         panel.styles.width = columns * 9 + (columns - 1) + 4
         for key, label in cats:
             btn = Button(label, id=f"cat_{key}")
-            btn.can_focus = False
+            # Focusable so a keyboard player can Tab to the tabs and Enter one. The
+            # arrow keys still drive the map whenever nothing is focused (AUTO_FOCUS
+            # is None); Escape releases focus again (action_back).
+            btn.can_focus = True
             await grid.mount(btn)
+
+    async def action_open_category(self, key: str) -> None:
+        """Keyboard shortcut for a category tab (j = Jobs, l = Legwork). Guarded on
+        the mode's own category set so a corp-only run ignores the runner-only keys."""
+        if key in dict(self.categories):
+            await self._select_category(key)
 
     async def _select_category(self, key: str) -> None:
         if key == "phone":
@@ -516,6 +565,9 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         # instead of advertising a keybinding that silently no-ops when pressed.
         if self.app.corp_only and action in ("run_corp", "inventory", "cyberdeck", "skills"):
             return False
+        # j/l name runner-only categories; ignore them in a corp-only run.
+        if action == "open_category" and parameters:
+            return parameters[0] in dict(self.categories)
         return True
 
     # No corp_only guard on the four runner-only actions below: check_action above

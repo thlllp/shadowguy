@@ -140,6 +140,8 @@ escape            back
 g / b             creation: gear / begin run
 r                 creation: reset build
 i / d / k / c     map: Gear / Cyberdeck / Skills / Phone
+j / l             map: Jobs / Legwork
+tab / escape      map: cycle panels / release focus
 t                 map or corp screen: Research Tree
 ← ↑ → ↓           tactical: move (numpad also works)
 f / e / l         tactical: attack / end turn / leave via exit

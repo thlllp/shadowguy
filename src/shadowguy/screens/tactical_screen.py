@@ -2,7 +2,7 @@ import numpy as np
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Grid, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
@@ -143,10 +143,12 @@ class HackerPickScreen(ModalScreen):
 
 class TacticalScreen(Screen):
     BINDINGS = [
+        # One movement tile: the arrow row is in the manual, and four "Move" entries
+        # were crowding the action hints off an 80-column Footer.
         ("up", "move('up')", "Move"),
-        ("down", "move('down')", "Move"),
-        ("left", "move('left')", "Move"),
-        ("right", "move('right')", "Move"),
+        Binding("down", "move('down')", "Move", show=False),
+        Binding("left", "move('left')", "Move", show=False),
+        Binding("right", "move('right')", "Move", show=False),
         # The numpad, both ways a terminal can deliver it: with NumLock on the keys arrive
         # as plain digits (the roguelike 1-9 layout), with it off as home/pageup/end/pagedown
         # for the four corners. Hidden from the Footer -- the arrow row already says "Move",
@@ -168,20 +170,22 @@ class TacticalScreen(Screen):
                 ("pagedown", "down_right"),
             )
         ],
-        ("f", "fire", "Aim attack"),
+        ("f", "fire", "Attack"),
         ("g", "throw_grenade", "Grenade"),
         ("h", "direct_hacker", "Hacker"),
         # Priority so the aim cursor's target-cycling wins over Screen's own default
         # tab -> focus_next binding, which would otherwise eat the key.
-        Binding("tab", "next_target", "Next target", priority=True),
+        Binding("tab", "next_target", "Target", priority=True),
         ("r", "reload", "Reload"),
-        ("s", "stabilize", "Stabilize crew"),
-        ("x", "look", "Look"),
-        ("e", "end_turn", "End turn"),
-        ("l", "leave", "Leave (on exit)"),
-        (">", "stairs", "Take stairs"),
-        ("enter", "continue", "Continue / confirm"),
-        ("escape", "cancel_aim", "Cancel aim"),
+        ("s", "stabilize", "Stabilize"),
+        # Look/Continue/Cancel aim are contextual and the prompt names them; keeping
+        # them off the Footer is what lets the combat actions fit at 80 columns.
+        Binding("x", "look", "Look", show=False),
+        ("e", "end_turn", "End"),
+        ("l", "leave", "Leave"),
+        (">", "stairs", "Stairs"),
+        Binding("enter", "continue", "Continue", show=False),
+        Binding("escape", "cancel_aim", "Cancel aim", show=False),
         *MENU_QUIT_BINDINGS,
     ]
 
@@ -199,12 +203,21 @@ class TacticalScreen(Screen):
     CSS = """
     #tac_map { height: 1fr; padding: 0 1; }
     #tac_end, #tac_log { height: auto; padding: 0 1; }
-    #tac_status { height: auto; padding: 0 1; }
+    #tac_status {
+        /* A grid, not a single row: ten fixed boxes overflow an 80-column terminal
+        (Leave/Enemies fell off the right edge), and a grid wraps them instead. Four
+        columns is the widest that still fits 80 minus the padding. */
+        layout: grid;
+        grid-size: 4;
+        grid-gutter: 0 1;
+        height: auto;
+        padding: 0 1;
+    }
     #tac_status .tac_box {
         border: round $accent;
         padding: 0 1;
         margin: 0 1 0 0;
-        width: auto;
+        width: 100%;
         height: auto;
     }
     """
@@ -230,7 +243,7 @@ class TacticalScreen(Screen):
         yield CharacterSheet(self.app.character)
         yield Static(self.stage.prompt, id="tac_prompt")
         yield Static(id="tac_end")
-        yield Horizontal(
+        yield Grid(
             Static(id="tac_box_move", classes="tac_box"),
             Static(id="tac_box_attack", classes="tac_box"),
             Static(id="tac_box_grenade", classes="tac_box"),
@@ -597,7 +610,7 @@ class TacticalScreen(Screen):
         self.query_one("#tac_map", Static).update(self._map_text(cursor_legal, seen))
         self.query_one("#tac_log", Static).update(Text("\n".join(state.log[-TACTICAL_LOG_LINES:])))
 
-        status = self.query_one("#tac_status", Horizontal)
+        status = self.query_one("#tac_status", Grid)
         if state.is_over:
             status.display = False
             aftermath = "  ".join(
@@ -643,7 +656,7 @@ class TacticalScreen(Screen):
             grenade_detail = "aiming — enter/esc"
         else:
             grenade_detail = "used" if state.acted else (f"{len(grenades)} ready" if grenades else "none carried")
-        self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows/numpad)", move_detail))
+        self.query_one("#tac_box_move", Static).update(_boxed_text("Move (arrows)", move_detail))
         self.query_one("#tac_box_attack", Static).update(_boxed_text("Attack (f)", attack_detail))
         self.query_one("#tac_box_grenade", Static).update(_boxed_text("Grenade (g)", grenade_detail))
         # Ammo tile, same "only there when it applies" rule as the crew and hacker tiles:

@@ -53,6 +53,7 @@ from shadowguy.workshop import (
     craft_consumable,
     install_mod,
     install_refusal,
+    materials_label,
     remove_mod,
     scavenge,
 )
@@ -405,7 +406,16 @@ def test_install_mod_refuses_without_enough_materials():
     attempted, message = install_mod(c, 0, WEAPON_MOD.id, rng=AlwaysSix())
     assert attempted is False
     assert "materials" in message.lower()
+    # The refusal names what's missing, not just the mod -- otherwise a player has
+    # no way to know what to scavenge.
+    missing_name = next(ITEMS_BY_ID[mid].name for mid in WEAPON_MOD.materials)
+    assert missing_name in message
     assert c.inventory[0].mods == []
+
+
+def test_materials_label_lists_counts_and_names():
+    label = materials_label({"screws": 1, "wire": 2})
+    assert label == "1 Screws, 2 Wire"
 
 
 def test_install_mod_on_failed_check_spends_nothing():
@@ -922,6 +932,8 @@ def test_craft_consumable_refuses_without_enough_materials():
     attempted, message = craft_consumable(c, CRAFTABLE_ID, rng=AlwaysSix())
     assert attempted is False
     assert "materials" in message.lower()
+    missing_name = next(ITEMS_BY_ID[mid].name for mid in CRAFT_RECIPES[CRAFTABLE_ID])
+    assert missing_name in message
     assert c.consumables == []
 
 

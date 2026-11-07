@@ -66,10 +66,25 @@ def _material_count(character: "Character", material_id: str) -> int:
     return sum(1 for entry in character.inventory if entry.item_id == material_id)
 
 
+def materials_label(materials: dict[str, int]) -> str:
+    """A recipe's material list as player-facing text, e.g. "1 Screws, 1 Wire"."""
+    return ", ".join(f"{count} {ITEMS_BY_ID[material_id].name}" for material_id, count in materials.items())
+
+
+def missing_materials(character: "Character", materials: dict[str, int]) -> dict[str, int]:
+    """The subset of `materials` the character is short of, with the shortfall as the
+    value. Empty when the recipe can be made. SafehouseScreen and the refusal messages
+    both read this, so the row and the toast can never disagree about what's missing."""
+    missing = {}
+    for material_id, count in materials.items():
+        short = count - _material_count(character, material_id)
+        if short > 0:
+            missing[material_id] = short
+    return missing
+
+
 def _has_materials(character: "Character", materials: dict[str, int]) -> bool:
-    return all(
-        _material_count(character, material_id) >= count for material_id, count in materials.items()
-    )
+    return not missing_materials(character, materials)
 
 
 def _consume_materials(character: "Character", materials: dict[str, int]) -> None:
@@ -163,7 +178,8 @@ def install_mod(
     if character.cash < mod.price:
         return False, f"Can't afford {mod.name} ({mod.price}eb)."
     if not _has_materials(character, mod.materials):
-        return False, f"Not enough materials for {mod.name}."
+        missing = missing_materials(character, mod.materials)
+        return False, f"Not enough materials for {mod.name} — need {materials_label(missing)}."
     roll = resolve_check(
         stat_value=skill_value(character, "armorer"),
         difficulty=WORKSHOP_ARMORER_DIFFICULTY,
@@ -231,7 +247,8 @@ def craft_consumable(
     if character.cash < price:
         return False, f"Can't afford {consumable.name} ({price}eb)."
     if not _has_materials(character, materials):
-        return False, f"Not enough materials for {consumable.name}."
+        missing = missing_materials(character, materials)
+        return False, f"Not enough materials for {consumable.name} — need {materials_label(missing)}."
     roll = resolve_check(
         stat_value=skill_value(character, "chemistry"),
         difficulty=WORKSHOP_CHEMISTRY_DIFFICULTY,
