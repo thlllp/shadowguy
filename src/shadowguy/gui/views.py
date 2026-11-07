@@ -12,10 +12,20 @@ from typing import TYPE_CHECKING
 import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
-from shadowguy.combat import Drop, drop_for_result
-from shadowguy.corpmap import travel_path
+from shadowguy.combat import (
+    KNOCKOUT_FATAL_MAX,
+    KNOCKOUT_ROUGH_MAX,
+    Drop,
+    drop_for_result,
+    knockout_roll,
+    mug_unconscious,
+)
+from shadowguy.corpmap import travel_path, unowned_territory_ids
+from shadowguy.encounters import ARREST_CASH_PCT, ARREST_HOURS, ARREST_STANDING_HIT
+from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.inventory import reload_weapon, rounds_needed, toggle_equip, use_consumable
+from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
 from shadowguy.matrix import (
     analyze_node,
     available_matrix_actions,
@@ -29,7 +39,7 @@ from shadowguy.matrix import (
     take_run_turn,
     usable_analyze_program,
 )
-from shadowguy.scene import apply_outcome, resolve_choice, resolve_entrance
+from shadowguy.scene import SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.shops import (
     AMMO_CATALOG,
     AmmoKind,
@@ -282,6 +292,39 @@ class TollView(MenuView):
         self.window.push(CombatView(self.window, fight, Drop.ENEMY, self._after_fight))
 
     def _after_fight(self, outcome: CombatOutcome) -> None:
+        """Resolve what the fight meant, matching the TUI's EncounterMixin: a death
+        ends the run, a knockout is a wake-up roll (a gang mugs you, corp security
+        arrests you), and anything else just reports the result."""
+        character = self.window.session.character
+        if outcome is CombatOutcome.DEAD:
+            self.window.pop()
+            self.window.push(GameOverView(self.window, "You died."))
+            return
+        if outcome is CombatOutcome.KNOCKED_OUT:
+            self.window.pop()
+            roll = knockout_roll(self.window.session.rng)
+            if roll <= KNOCKOUT_FATAL_MAX:
+                self.window.push(GameOverView(self.window, "You didn't wake up."))
+                return
+            if self.encounter.kind == "gang":
+                mug_unconscious(character)
+                self.map_view.message = "You came to in an alley, lighter a few creds."
+                return
+            encounter = self.encounter.encounter
+            lost = int(character.cash * ARREST_CASH_PCT)
+            character.cash -= lost
+            character.adjust_standing(encounter.faction.id, ARREST_STANDING_HIT)
+            self.window.session.app.spend_time(ARREST_HOURS)
+            unowned = unowned_territory_ids(self.window.session.corp_map)
+            character.location_id = (
+                unowned[0] if unowned else self.window.session.corp_map.player_start_id
+            )
+            self.map_view.selected_id = character.location_id
+            self.map_view.message = (
+                f"{encounter.faction.name} holds you for hours, then dumps you on the "
+                f"street. Lighter by {lost}eb."
+            )
+            return
         self.map_view.message = f"Fight over: {outcome.name.title()}."
         self.window.pop()
 
@@ -321,7 +364,12 @@ class FixerView(MenuView):
                 deadline = f" | by day {offer.timing.deadline_day}"
             elif offer.timing.scheduled_day is not None:
                 deadline = f" | day {offer.timing.scheduled_day}"
-            self.rows.append((f"offer:{offer.id}", f"{scene.title} ({scene.hours_cost}h){deadline}"))
+            if offer.taken_by is not None:
+                taken_by = self.window.session.app.runner(offer.taken_by).name
+                label = f"{scene.title} - TAKEN, {taken_by} got there first"
+            else:
+                label = f"{scene.title} ({scene.hours_cost}h){deadline}"
+            self.rows.append((f"offer:{offer.id}", label))
         for contract in self.fixer.security_offers:
             self.rows.append(
                 (f"sec:{contract.id}", f"Security - {contract.nights_total} nights, {contract.nightly_pay}eb/night")
@@ -331,7 +379,9 @@ class FixerView(MenuView):
         session = self.window.session
         if row_id.startswith("offer:"):
             offer = next(o for o in self.fixer.offers if o.id == row_id.removeprefix("offer:"))
-            session.accept_offer(self.fixer, offer)
+            if not session.accept_offer(self.fixer, offer):
+                self.message = "Someone else already took that one."
+                return
             self.message = f"Accepted {offer.scene.title}."
         else:
             contract = next(c for c in self.fixer.security_offers if c.id == row_id.removeprefix("sec:"))
@@ -550,6 +600,9 @@ class SceneView(MenuView):
 
     def _show_stage(self) -> None:
         stage = self._stage()
+        if stage.burglary is not None:
+            self.window.push(EntranceView(self.window, stage.burglary, self))
+            return
         self.title = stage.prompt.split(".")[0][:40] or "JOB"
         self.intro = [stage.prompt]
         if stage.narration is not None:
@@ -603,13 +656,39 @@ class SceneView(MenuView):
         if stage.burglary is not None:
             self.window.push(EntranceView(self.window, stage.burglary, self))
             return
-        self.stage_id = self.pending_next
         self._show_stage()
 
     def _after_fight(self, outcome: CombatOutcome) -> None:
         self.window.pop()
+        character = self.window.session.character
         if outcome is CombatOutcome.DEAD:
             self.window.push(GameOverView(self.window, "You died."))
+            return
+        if outcome is CombatOutcome.KNOCKED_OUT:
+            # The TUI's SceneScreen applies the loss, not the victory: a knockout
+            # mugs you, fails the job/gig, and returns to the map.
+            roll = knockout_roll(self.window.session.rng)
+            if roll <= KNOCKOUT_FATAL_MAX:
+                self.window.push(GameOverView(self.window, "You didn't wake up."))
+                return
+            mug_unconscious(character)
+            message = (
+                "Most of your creds are gone."
+                if roll <= KNOCKOUT_ROUGH_MAX
+                else "At least you're alive."
+            )
+            if self.scene.kind is SceneKind.JOB:
+                character.adjust_fixer_trust(self.scene.target_fixer_id, JOB_FAILURE_TRUST_HIT)
+                character.adjust_rep(JOB_FAILURE_REP_HIT)
+            elif self.scene.kind is SceneKind.GIG:
+                character.adjust_local_standing(
+                    self.scene.target_character_id, GIG_FAIL_STANDING_HIT
+                )
+                character.adjust_rep(GIG_FAIL_REP_HIT)
+            self.window.session.end_scene(self.scene)
+            self.on_end()
+            if self.window.views and isinstance(self.window.views[-1], MapView):
+                self.window.views[-1].message = "You came to in an alley. " + message
             return
         stage = self._stage()
         result = stage.tactical.victory if stage.tactical is not None else stage.combat.victory
@@ -654,6 +733,19 @@ class EntranceView(MenuView):
         self.scene_view.pending_next = outcome.next_stage
         if not self.window.session.character.is_alive:
             self.window.push(GameOverView(self.window, "You died."))
+            return
+        # A critical failure (or the always-loud ambush entrance) routes straight
+        # to the fight instead of the walk, exactly as SceneScreen does.
+        target = (
+            self.scene_view.scene.stages[outcome.next_stage]
+            if outcome.next_stage is not None
+            else None
+        )
+        if target is not None and (
+            target.combat is not None or target.tactical is not None or target.matrix is not None
+        ):
+            self.window.pop()
+            self.scene_view._finish_stage_outcome(outcome, applied=True)
             return
         self.window.pop()
         self.window.push(
@@ -857,6 +949,10 @@ class GameOverView(MenuView):
         super().__init__(window)
         self.intro = [message]
         self.rows = [("quit", "Quit")]
+
+    def cancel(self) -> None:
+        """A dead run has no back: only Quit leaves this view."""
+        return
 
     def pick(self, row_id: str) -> None:
         self.window.close()

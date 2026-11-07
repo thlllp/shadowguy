@@ -141,9 +141,15 @@ class GameSession:
             and job.timing.is_available(self.character.day)
         ]
 
-    def accept_offer(self, fixer: Fixer, offer) -> None:
+    def accept_offer(self, fixer: Fixer, offer) -> bool:
+        """Take an offer off a fixer's board. Refuses one a rival runner already
+        took (rivals.py marks `taken_by`); the board still lists it so the player
+        can see what went."""
+        if offer.taken_by is not None:
+            return False
         self.character.accept_job(offer)
         fixer.offers = [candidate for candidate in fixer.offers if candidate.id != offer.id]
+        return True
 
     def start_job(self, job) -> Scene:
         self.app.spend_time(job.scene.hours_cost, protect_job_id=job.scene.id)
