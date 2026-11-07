@@ -20,6 +20,8 @@ uv run shadowguy --dev
 
 `How to Play` on the title screen (and in the in-run `q` menu) is the short field manual. The current run's seed is always visible in the status panel.
 
+**Terminal size:** the TUI needs at least **80×24**; **100×30 or larger is recommended**. At 80×24 the map is a small scrolling viewport, the Locals/actions strip and corp ledger are short and scroll internally, and a few footer hints are clipped.
+
 ## What a run looks like
 
 **Creation.** Everything starts at rank 1: six core stats (Body, Strength, Agility, Perception, Logic, Cool) and 39 skills. Spend 6 stat points and 20 skill points once. Points get dearer as a skill climbs, so a specialist can take one skill to 10 for 19 of the 20. Six presets — Enforcer, Hacker, Infiltrator, Gunslinger, Street Samurai, Fixer — or a hand-built character. Skill points can also be converted into creation-only gear budget (`1 point = 1000eb`); unspent gear budget is written off when the run begins, never banked as cash.

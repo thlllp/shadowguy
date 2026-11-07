@@ -741,6 +741,37 @@ def test_corp_map_screen_has_sidebar_categories():
     run(body())
 
 
+def test_corp_only_map_keeps_actions_and_ledger_on_screen_at_80x24():
+    """The corp-only map adds the auto-height #corp_info ledger under the map; on a
+    24-row terminal that used to push the per-territory actions strip and the ledger
+    itself below the viewport. Both must stay on screen (the strip and ledger scroll
+    internally instead)."""
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await pilot.pause()
+            assert isinstance(app.screen, CorpMapScreen)
+
+            for selector in ("#map_corp_actions", "#corp_info"):
+                widget = app.screen.query_one(selector)
+                assert widget.display, selector
+                assert widget.region.y + widget.region.height <= 24, (selector, widget.region)
+
+            ledger = app.screen.query_one("#corp_info", Static).content
+            assert "Research Facility" in ledger
+            # The tier's own RP/day is what explains income at 0 scientists.
+            assert "rp/day base" in ledger
+
+    run(body())
+
+
 def test_runner_map_jobs_and_legwork_are_keyboard_reachable():
     """The category tabs used to be mouse-only (can_focus=False, no bindings), which
     left Jobs and Legwork -- the only place accepted work is listed and started --

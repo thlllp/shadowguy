@@ -241,7 +241,8 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
         capacity = lab_capacity(facility, corp_state)
         assist_capacity = assistant_capacity(facility, corp_state)
         facility_line = (
-            f"\nResearch Facility: tier {facility.research_tier}, "
+            f"\nResearch Facility: tier {facility.research_tier} "
+            f"({facility.research_tier or 0}rp/day base), "
             f"{min(corp_state.scientists, capacity)}/{capacity} scientists at work "
             f"({research_rate(corp_state, facility):g}rp/scientist), "
             f"{min(corp_state.research_assistants, assist_capacity)}/{assist_capacity} "

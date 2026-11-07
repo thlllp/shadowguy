@@ -273,6 +273,16 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         height: auto;
     }
 
+    #corp_info {
+        /* Detail, not the action surface. Let it shrink and scroll on a short
+        terminal instead of pushing the corp actions strip and itself off the
+        bottom of an 80x24 screen. */
+        height: 1fr;
+        max-height: 6;
+        min-height: 2;
+        overflow-y: auto;
+    }
+
     #map_local_boxes_scroll, #map_corp_actions_scroll {
         /* Bounded, not fixed -- these are a preview strip, not the main event (the
         map above needs most of the vertical room in map mode). 1fr against the
