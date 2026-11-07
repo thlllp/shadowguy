@@ -22,11 +22,15 @@ uv run shadowguy --dev
 
 **Terminal size:** the TUI needs at least **80×24**; **100×30 or larger is recommended**. At 80×24 the map is a small scrolling viewport, the Locals/actions strip and corp ledger are short and scroll internally, and a few footer hints are clipped.
 
-## Graphical front-end (experimental)
+## Graphical front-end (preview)
 
-The TUI is still the canonical game and the full test surface, but this branch has
-an Arcade front-end for a graphical map/character slice. It shares the same
-`ShadowguyApp` state and rules and does not change the TUI.
+The TUI is the canonical game and the full test surface. The Arcade front-end is
+an **experimental preview slice**, not an alternative client yet: it shares the
+same `ShadowguyApp` state and rules and does not change the TUI, but it starts on
+the engine's bare default character and has **no character creation, no save/load,
+and no corp mode**. Those remain TUI-only, along with crew, burglary edge cases,
+grenades, hacker programs and cyberware. Treat it as a way to inspect the
+map/character/district panels and the fight surfaces, not as a full run.
 
 ```bash
 uv sync --group gui
@@ -34,15 +38,16 @@ uv run --group gui python -m shadowguy.gui --seed 12345
 # or, once the gui extra is installed: shadowguy-gui --seed 12345
 ```
 
-Controls: arrows/WASD move the cursor, `Enter` travels, `R` rests, `F` fixers,
-`J` jobs on site, `S` shops, `I` gear, `Q` quits.
+Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops, so use
+the Down arrow for south), `Enter` travels, `R` rests, `F` fixers, `J` jobs on
+site, `S` shops, `I` gear, `Q` quits.
 
-The slice currently covers the map/character/district panels, travel with gang
-and corp encounters (toll or fight), fixer offers and job acceptance, the scene
-check runner, abstract/tactical/matrix fights, shops and inventory. It is a
-simplified presentation of the same rules: crew/burglary edge cases, grenades,
-hacker programs and cyberware are still TUI-only. See `src/shadowguy/gui/` and
-`shadowguy.travel` for the shared travel-time formula.
+The slice covers the map/character/district panels, travel with gang and corp
+encounters (toll or fight), fixer offers and job acceptance, the scene check
+runner, abstract/tactical/matrix fights, shops and inventory. See
+`src/shadowguy/gui/` and `shadowguy.travel` for the shared travel-time formula.
+Playtest reports, including the remaining open GUI defects, live in
+`docs/playtests/`.
 
 ## What a run looks like
 
