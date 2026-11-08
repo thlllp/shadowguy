@@ -27,12 +27,12 @@ uv run shadowguy --dev
 The TUI is the canonical game and the full test surface. The Arcade front-end is
 an **experimental preview slice**, not an alternative client yet: it shares the
 same `ShadowguyApp` state and rules and does not change the TUI, but it starts on
-the engine's bare default character and has **no character creation, no corp mode
-and no smuggling**. Those remain TUI-only, along with crew, burglary edge cases,
-grenades, hacker programs and cyberware. Saves are shared with the TUI: `F5`
-writes a normal run save and `F9` loads the newest runner save (corp-only saves
-are refused). Treat it as a way to inspect the map/character/district panels and
-the fight surfaces, not as a full run.
+the engine's bare default character and has **no character creation and no
+smuggling**. The start screen offers a Runner or Corp run. Corp mode covers the
+map, the daily economy, the Academy, the Research Facility and Operations;
+corp takeover/HQ and the surveillance log remain TUI-only, along with crew,
+burglary edge cases, grenades, hacker programs and cyberware. Saves are shared
+with the TUI: `F5` writes a normal run save and `F9` loads the newest save.
 
 ```bash
 uv sync --group gui
@@ -40,15 +40,18 @@ uv run --group gui python -m shadowguy.gui --seed 12345
 # or, once the gui extra is installed: shadowguy-gui --seed 12345
 ```
 
-Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops, so use
-the Down arrow for south), `Enter` travels, `R` rests, `F` fixers, `J` jobs on
-site, `S` shops, `I` gear, `F5` saves, `F9` loads the newest save, `Q` quits.
+Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops in a
+runner run, so use the Down arrow for south), `Enter` travels or relocates, `R`
+rests/ends the day, `F` fixers, `J` jobs on site, `S` shops, `I` gear, `C` opens
+the corp action list, `F5` saves, `F9` loads the newest save, `Q` quits.
 
 The slice covers the map/character/district panels, travel with gang and corp
 encounters (toll or fight), fixer offers and job acceptance, the scene check
-runner, abstract/tactical/matrix fights, shops, inventory and save/load. See
-`src/shadowguy/gui/` and `shadowguy.travel` for the shared travel-time formula.
-Playtest reports live in `docs/playtests/`.
+runner, abstract/tactical/matrix fights, shops, inventory, save/load, and a
+corp-only run: expand, survey, security/surveillance/development, fundraise,
+Academy training and grants, labs and efficiency, the research tree, and
+deploy/attack/intel/sabotage. See `src/shadowguy/gui/` and `shadowguy.travel`
+for the shared travel-time formula. Playtest reports live in `docs/playtests/`.
 
 ## What a run looks like
 
