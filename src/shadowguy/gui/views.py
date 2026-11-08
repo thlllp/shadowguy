@@ -13,14 +13,25 @@ import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
-from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, SURGERY_SCARRING
 from shadowguy.combat import (
     KNOCKOUT_FATAL_MAX,
     KNOCKOUT_ROUGH_MAX,
     Drop,
+    crew_stats,
     drop_for_result,
     knockout_roll,
     mug_unconscious,
+    reloadable_weapons,
+)
+from shadowguy.cybernetics import (
+    CYBERWARE_BY_ID,
+    CyberSlot,
+    catalog_for_standing,
+    free_humanity,
+    install_cyberware,
+    lost_to_cyberpsychosis,
+    remove_cyberware,
 )
 from shadowguy.corp_turn import (
     ACADEMY_GRANT_COST,
@@ -102,11 +113,22 @@ from shadowguy.factions import (
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
-from shadowguy.inventory import reload_weapon, rounds_needed, toggle_equip, use_consumable
+from shadowguy.inventory import (
+    active_deck_entry,
+    install_program,
+    installed_programs_for,
+    reload_weapon,
+    rounds_needed,
+    toggle_equip,
+    uninstall_program,
+    use_consumable,
+)
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
-from shadowguy.runners import RUNNERS_BY_ID
+from shadowguy.runners import RUNNERS_BY_ID, recruit_cut, recruit_wage
+from shadowguy.rivals import RunnerActivity
 from shadowguy.shops import bonus_text
-from shadowguy.skills import SKILLS
+from shadowguy.skills import SKILLS, skill_for, skill_value
+from shadowguy.support import run_support_task, support_for, support_tasks
 from shadowguy.matrix import (
     analyze_node,
     available_matrix_actions,
@@ -129,6 +151,7 @@ from shadowguy.shops import (
     CONSUMABLES_BY_ID,
     ITEMS_BY_ID,
     PROGRAM_CATALOG,
+    PROGRAMS_BY_ID,
     buy_ammo,
     buy_consumable,
     buy_item,
@@ -136,18 +159,26 @@ from shadowguy.shops import (
     buy_program,
 )
 from shadowguy.tactical import (
+    AimKind,
     TacticalOutcome,
+    available_grenades,
     begin_attack_aim,
+    begin_grenade_aim,
+    begin_look,
     cancel_aim,
     confirm_aim,
     end_turn,
+    grenade_needs_target,
     leave,
     move_aim_cursor,
     move_player,
+    reload_weapon as reload_weapon_in_fight,
     snap_aim_to_next_target,
+    stabilize_ally,
     start_burglary,
     start_tactical,
     take_stairs,
+    throw_grenade,
 )
 
 
@@ -496,7 +527,8 @@ class MapView(View):
             )
             self.message = corp + (
                 "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | "
-                "I gear | G den | V deliver | H HQ | F5 save | F9 load | Q quit"
+                "I gear | G den | V deliver | H HQ | B bar | K clinic | P deck | "
+                "F5 save | F9 load | Q quit"
             )
 
     def draw(self) -> None:  # pragma: no cover - drawing
@@ -542,6 +574,15 @@ class MapView(View):
                 return
             if symbol == arcade.key.H:
                 self._open_hq()
+                return
+            if symbol == arcade.key.B:
+                self._open_bar()
+                return
+            if symbol == arcade.key.K:
+                self._open_clinic()
+                return
+            if symbol == arcade.key.P:
+                self.window.push(CyberdeckView(self.window))
                 return
         if symbol in (arcade.key.ENTER, arcade.key.SPACE):
             self._travel()
@@ -669,6 +710,34 @@ class MapView(View):
         self.window.push(
             CorpHQView(self.window, hq, FACTIONS_BY_ID[territory.owner])
         )
+
+    def _open_bar(self) -> None:
+        session = self.window.session
+        territory = session.territory(session.character.location_id)
+        bar = next(
+            (location for location in territory.locations if location.kind is LocationKind.BAR),
+            None,
+        )
+        if bar is None:
+            self.message = "No bar here."
+            return
+        self.window.push(BarView(self.window, bar))
+
+    def _open_clinic(self) -> None:
+        session = self.window.session
+        territory = session.territory(session.character.location_id)
+        clinic = next(
+            (
+                location
+                for location in territory.locations
+                if location.kind is LocationKind.CYBER_CLINIC
+            ),
+            None,
+        )
+        if clinic is None:
+            self.message = "No cyber clinic here."
+            return
+        self.window.push(RipperdocView(self.window, clinic))
 
     def _deliver_smuggling(self) -> None:
         session = self.window.session
@@ -1404,6 +1473,289 @@ class GangDenView(MenuView):
         self._build()
 
 
+class BarView(MenuView):
+    title = "BAR"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self.chosen = None
+        self._build()
+
+    def _runner_here(self, runner_id: str) -> bool:
+        character = self.window.session.character
+        state = self.window.session.app.rival_runner_states.get(runner_id)
+        return (
+            state is not None
+            and state.territory_id == character.location_id
+            and state.current(character.hour_of_day) is RunnerActivity.DRINKING
+        )
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        app = self.window.session.app
+        if self.chosen is None:
+            self.intro = [
+                f"{self.location.name} — ask around for runners looking for work"
+            ]
+            rows = []
+            for runner in app.runners:
+                if not character.runner_available(runner.id):
+                    continue
+                if not self._runner_here(runner.id):
+                    continue
+                if character.on_crew(runner.id):
+                    rows.append(
+                        (
+                            f"runner:{runner.id}",
+                            f"{runner.name} ({runner.archetype}) — on your crew",
+                        )
+                    )
+                elif character.knows_runner(runner.id):
+                    rows.append(
+                        (
+                            f"recruit:{runner.id}",
+                            f"Recruit {runner.name} ({runner.archetype}, rating {runner.rating})",
+                        )
+                    )
+                else:
+                    rows.append(
+                        (
+                            f"meet:{runner.id}",
+                            f"{runner.name} is here — exchange numbers?",
+                        )
+                    )
+            if not rows:
+                rows.append(("none", "No runners drinking here."))
+            self.rows = rows
+            return
+
+        runner = app.runner(self.chosen)
+        leadership = skill_value(character, "leadership")
+        wage = recruit_wage(runner, leadership)
+        pct = round(recruit_cut(runner, leadership) * 100)
+        self.intro = [f"Bring {runner.name} on — on what terms?"]
+        rows = [(f"indef:{runner.id}", f"Keep on indefinitely — {wage}eb/day")]
+        for job in character.accepted_jobs:
+            scene = job.scene
+            if scene.max_on_site is None and scene.max_support is None:
+                rows.append(
+                    (f"job:{scene.id}:1", f"For the job: {scene.title} — {pct}% cut")
+                )
+                continue
+            for on_site, label in ((True, "on-site"), (False, "support")):
+                if not character.job_roster_has_room(scene.id, on_site):
+                    continue
+                rows.append(
+                    (
+                        f"job:{scene.id}:{int(on_site)}",
+                        f"For the job: {scene.title} ({label}) — {pct}% cut",
+                    )
+                )
+        rows.append(("back", "Back"))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        app = self.window.session.app
+        if row_id == "none":
+            return
+        if self.chosen is None:
+            if row_id.startswith("meet:"):
+                runner = app.runner(row_id.removeprefix("meet:"))
+                character.meet_runner(runner.id)
+                self.message = f"You exchange numbers with {runner.name}."
+                self._build()
+                return
+            if row_id.startswith("runner:"):
+                self.message = "They're already on your crew."
+                return
+            self.chosen = row_id.removeprefix("recruit:")
+            self._build()
+            return
+        if row_id == "back":
+            self.chosen = None
+            self._build()
+            return
+        runner = app.runner(self.chosen)
+        if row_id.startswith("indef:"):
+            character.hire_indefinite(runner.id)
+            self.message = (
+                f"{runner.name} is on the crew ({runner.daily_cost}eb/day)."
+            )
+        elif row_id.startswith("job:"):
+            _, job_id, on_site = row_id.split(":", 2)
+            if character.hire_for_job(
+                runner.id, job_id, on_site=on_site == "1", roster=app.runners
+            ):
+                self.message = f"{runner.name} signed on for the job."
+            else:
+                self.message = "Can't sign them on for that job."
+        self.chosen = None
+        self._build()
+
+
+def _cyberware_effect(cyberware) -> str:
+    parts = [
+        f"+{value} {stat.title()}" for stat, value in cyberware.bonuses.items()
+    ]
+    parts += [
+        f"+{value} {skill_for(skill_id).name}"
+        for skill_id, value in cyberware.skill_bonuses.items()
+    ]
+    if cyberware.defense:
+        parts.append(f"+{cyberware.defense} soak")
+    if cyberware.matrix_action_bonus:
+        parts.append(f"+{cyberware.matrix_action_bonus} matrix")
+    if cyberware.grants_smartlink:
+        parts.append("smartlink")
+    return ", ".join(parts)
+
+
+class RipperdocView(MenuView):
+    title = "CYBER CLINIC"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _contact(self):
+        character = self.window.session.character
+        if not self.location.characters:
+            return None
+        return max(
+            self.location.characters,
+            key=lambda contact: character.local_standing_with(contact.id),
+        )
+
+    def _standing(self) -> int:
+        contact = self._contact()
+        return self.window.session.character.local_standing_with(contact.id) if contact else 0
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        standing = self._standing()
+        contact = self._contact()
+        header = self.location.name
+        if contact is not None:
+            header += f" — {contact.name}, standing {standing:+d}"
+        self.intro = [
+            header,
+            f"Humanity: {free_humanity(character):g} of {character.humanity:g} free",
+        ]
+        rows = []
+        for cyberware in catalog_for_standing(standing):
+            net_cost = cyberware.humanity_cost + SURGERY_SCARRING
+            label = (
+                f"{cyberware.name} — {cyberware.price}eb, {net_cost:g} humanity "
+                f"({_cyberware_effect(cyberware)})"
+            )
+            if cyberware.slot in character.installed_cyberware:
+                label += f" — {cyberware.slot.value} slot full"
+            elif cyberware.humanity_cost > free_humanity(character):
+                label += " — not enough humanity left"
+            elif cyberware.price > character.cash:
+                label += " — can't afford"
+            rows.append((f"install:{cyberware.id}", label))
+        for slot, cyberware_id in character.installed_cyberware.items():
+            rows.append(
+                (
+                    f"remove:{slot.value}",
+                    f"Remove {CYBERWARE_BY_ID[cyberware_id].name} ({slot.value})",
+                )
+            )
+        if not rows:
+            rows.append(("none", "Nothing on the shelf."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        if row_id.startswith("install:"):
+            if install_cyberware(
+                character, row_id.removeprefix("install:"), self._standing()
+            ):
+                if lost_to_cyberpsychosis(character):
+                    self.window.push(
+                        GameOverView(
+                            self.window,
+                            "You lost yourself to cyberpsychosis. Game over.",
+                        )
+                    )
+                    return
+                self.message = "Installed."
+            else:
+                self.message = "Can't install that."
+        elif row_id.startswith("remove:"):
+            removed = remove_cyberware(character, CyberSlot(row_id.removeprefix("remove:")))
+            self.message = "Removed." if removed is not None else "Nothing in that slot."
+        self._build()
+
+
+class CyberdeckView(MenuView):
+    title = "CYBERDECK"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _deck(self):
+        character = self.window.session.character
+        active = active_deck_entry(character.inventory)
+        if active is None:
+            return None, None, None
+        entry, item = active
+        index = next(
+            position
+            for position, candidate in enumerate(character.inventory)
+            if candidate is entry
+        )
+        return entry, item, index
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        entry, item, index = self._deck()
+        if entry is None:
+            self.intro = [
+                "No cyberdeck equipped — use I to equip one from your gear."
+            ]
+            self.rows = [("none", "No active cyberdeck.")]
+            return
+        installed = installed_programs_for(entry)
+        self.intro = [
+            f"{item.name} — {len(installed)} program(s) installed, "
+            f"{item.program_slots} action slot(s), {item.passive_slots} passive"
+        ]
+        rows = [
+            (f"uninstall:{program.id}", f"Uninstall {program.name}")
+            for program in installed
+        ]
+        for program_id in sorted(character.owned_programs):
+            if program_id in entry.installed_programs:
+                continue
+            program = PROGRAMS_BY_ID[program_id]
+            rows.append((f"install:{program_id}", f"Install {program.name}"))
+        if not rows:
+            rows.append(("none", "No owned programs to install."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        entry, _item, index = self._deck()
+        if entry is None:
+            self.message = "Equip a cyberdeck first."
+            return
+        if row_id.startswith("install:"):
+            self.message = install_program(
+                character, index, row_id.removeprefix("install:")
+            )
+        elif row_id.startswith("uninstall:"):
+            self.message = uninstall_program(
+                character, index, row_id.removeprefix("uninstall:")
+            )
+        self._build()
+
+
 class CorpHQView(MenuView):
     title = "CORP HQ"
 
@@ -1673,6 +2025,23 @@ class SceneView(MenuView):
     def _stage(self):
         return self.scene.stages[self.stage_id]
 
+    def _crew_units(self):
+        if self.scene.kind is not SceneKind.JOB:
+            return []
+        character = self.window.session.character
+        return [
+            crew_stats(self.window.session.app.runner(hire.runner_id))
+            for hire in character.crew_on_site(self.scene.id)
+        ]
+
+    def _support(self):
+        if self.scene.kind is not SceneKind.JOB:
+            return None
+        character = self.window.session.character
+        return support_for(
+            character.crew_support(self.scene.id), self.window.session.app.runners
+        )
+
     def _show_stage(self) -> None:
         stage = self._stage()
         self.title = stage.prompt.split(".")[0][:40] or "JOB"
@@ -1720,7 +2089,14 @@ class SceneView(MenuView):
             )
             return
         if stage.tactical is not None:
-            self.window.push(TacticalView.from_stage(self.window, stage.tactical, self._after_tactical))
+            self.window.push(
+                TacticalView.from_stage(
+                    self.window,
+                    stage.tactical,
+                    self._after_tactical,
+                    allies=self._crew_units(),
+                )
+            )
             return
         if stage.matrix is not None:
             self.window.push(MatrixView(self.window, stage.matrix, self._after_matrix))
@@ -1913,19 +2289,34 @@ class TacticalView(View):
         super().__init__(window)
         self.state = state
         self.callback = callback
-        self.message = "Arrows move | f attack | Tab target | Enter fire | e end turn | l leave | > stairs"
+        self.message = (
+            "Arrows move | f attack | g grenade | x look | r reload | z stabilize | "
+            "y support | Tab target | Enter fire | e end turn | l leave | > stairs"
+        )
         self.aiming = False
 
     @classmethod
-    def from_stage(cls, window, stage, callback):
+    def from_stage(cls, window, stage, callback, allies=()):
         state = start_tactical(
-            window.session.character, stage.grid, stage.player_start, list(stage.enemies), stage.exits
+            window.session.character,
+            stage.grid,
+            stage.player_start,
+            list(stage.enemies),
+            stage.exits,
+            allies=list(allies),
         )
         return cls(window, state, callback)
 
     @classmethod
     def from_burglary(cls, window, stage, spawn, scene_view):
-        state = start_burglary(window.session.character, stage.building, spawn, stage.guard)
+        state = start_burglary(
+            window.session.character,
+            stage.building,
+            spawn,
+            stage.guard,
+            allies=scene_view._crew_units(),
+            support=scene_view._support(),
+        )
         def callback(outcome):
             scene_view.window.pop()
             if outcome is TacticalOutcome.SECURED:
@@ -1982,10 +2373,14 @@ class TacticalView(View):
             if symbol == arcade.key.TAB:
                 snap_aim_to_next_target(state)
             elif symbol in (arcade.key.ENTER, arcade.key.SPACE):
-                confirm_aim(state, self.window.session.rng)
-                # A misaimed confirm leaves the cursor open; keep our wrapper in
-                # step with the engine rather than dropping out of aim mode.
-                self.aiming = state.aim_cursor is not None
+                if state.aim_kind is AimKind.LOOK:
+                    cancel_aim(state)
+                    self.aiming = False
+                else:
+                    confirm_aim(state, self.window.session.rng)
+                    # A misaimed confirm leaves the cursor open; keep our wrapper in
+                    # step with the engine rather than dropping out of aim mode.
+                    self.aiming = state.aim_cursor is not None
             elif symbol == arcade.key.ESCAPE:
                 cancel_aim(state)
                 self.aiming = False
@@ -2004,6 +2399,21 @@ class TacticalView(View):
             return
         if symbol == arcade.key.F:
             self.aiming = begin_attack_aim(state)
+            return
+        if symbol == arcade.key.G:
+            self._open_grenades()
+            return
+        if symbol == arcade.key.X:
+            self.aiming = begin_look(state)
+            return
+        if symbol == arcade.key.R:
+            self._reload()
+            return
+        if symbol == arcade.key.Z:
+            self._stabilize()
+            return
+        if symbol == arcade.key.Y:
+            self._open_support()
             return
         if symbol == arcade.key.E:
             end_turn(state, self.window.session.rng)
@@ -2026,6 +2436,86 @@ class TacticalView(View):
         if dx or dy:
             px, py = state.player.coord
             move_player(state, (px + dx, py + dy), self.window.session.rng)
+
+    def _open_grenades(self) -> None:
+        if self.state.acted:
+            self.message = "You've already acted this turn."
+            return
+        grenades = available_grenades(self.state)
+        if not grenades:
+            self.message = "No grenades carried."
+            return
+        if len(grenades) == 1:
+            self._throw_grenade(*grenades[0])
+            return
+        self.window.push(GrenadePickView(self.window, grenades, self._throw_grenade))
+
+    def _throw_grenade(self, index: int, consumable) -> None:
+        if grenade_needs_target(consumable):
+            begin_grenade_aim(self.state, index)
+            self.aiming = True
+            return
+        throw_grenade(self.state, index)
+
+    def _reload(self) -> None:
+        weapons = reloadable_weapons(self.window.session.character)
+        if not weapons:
+            self.message = "Nothing to reload."
+            return
+        self.message = reload_weapon_in_fight(self.state, weapons[0]) or "Reloaded."
+
+    def _stabilize(self) -> None:
+        reason = stabilize_ally(self.state)
+        if reason:
+            self.message = reason
+
+    def _open_support(self) -> None:
+        tasks = support_tasks(self.state)
+        if not tasks:
+            support = self.state.support
+            self.message = (
+                f"{support.name} has nothing to reach from here."
+                if support is not None
+                else "No support hacker on this job."
+            )
+            return
+        if len(tasks) == 1:
+            run_support_task(self.state, tasks[0], self.window.session.rng)
+            return
+        self.window.push(SupportPickView(self.window, tasks, self.state))
+
+
+class GrenadePickView(MenuView):
+    title = "GRENADES"
+
+    def __init__(self, window, grenades, callback) -> None:
+        super().__init__(window)
+        self.grenades = grenades
+        self.callback = callback
+        self.rows = [
+            (f"grenade:{index}", consumable.name)
+            for index, (_slot, consumable) in enumerate(grenades)
+        ]
+
+    def pick(self, row_id: str) -> None:
+        index = int(row_id.removeprefix("grenade:"))
+        self.window.pop()
+        self.callback(*self.grenades[index])
+
+
+class SupportPickView(MenuView):
+    title = "SUPPORT"
+
+    def __init__(self, window, tasks, state) -> None:
+        super().__init__(window)
+        self.tasks = tasks
+        self.state = state
+        self.rows = [(f"task:{index}", program.name) for index, program in enumerate(tasks)]
+
+    def pick(self, row_id: str) -> None:
+        index = int(row_id.removeprefix("task:"))
+        self.window.pop()
+        run_support_task(self.state, self.tasks[index], self.window.session.rng)
 
 
 class GameOverView(MenuView):

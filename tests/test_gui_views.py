@@ -35,22 +35,26 @@ from shadowguy.gangs import GANGS  # noqa: E402
 from shadowguy.gui.session import GameSession, HopEncounter  # noqa: E402
 from shadowguy.gui.views import (  # noqa: E402
     ArchetypePickView,
+    BarView,
     CombatView,
     CorpActionsView,
     CorpHQView,
     CreationGearView,
     CreationSkillsView,
     CreationView,
+    CyberdeckView,
     EntranceView,
     FactionPickView,
     FixerView,
     ForcePickView,
     GameOverView,
     GangDenView,
+    GrenadePickView,
     InventoryView,
     JobsView,
     MapView,
     ResearchTreeView,
+    RipperdocView,
     RunnerBuildView,
     SceneView,
     ShopView,
@@ -60,7 +64,10 @@ from shadowguy.gui.views import (  # noqa: E402
     TollView,
 )
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_job  # noqa: E402
+from shadowguy.rivals import RunnerActivity, RunnerState  # noqa: E402
 from shadowguy.runners import RUNNERS_BY_ID  # noqa: E402
+from shadowguy.shops import InventoryItem  # noqa: E402
+from shadowguy.tactical import AimKind  # noqa: E402
 from shadowguy.scene import Outcome  # noqa: E402
 from helpers import AlwaysOne, AlwaysSix, force_outcome  # noqa: E402
 
@@ -815,3 +822,120 @@ def test_surveillance_log_tails_a_sighted_runner():
 
     assert state.tasking_operatives == 1
     assert state.action_points == 1
+
+
+def test_tactical_grenade_opens_aim():
+    window = FakeWindow()
+    character = window.session.character
+    character.consumables = ["grenade_flash"]
+    state = types.SimpleNamespace(
+        acted=False,
+        is_over=False,
+        character=character,
+        aim_cursor=None,
+        aim_kind=None,
+        pending_grenade_index=None,
+        player=types.SimpleNamespace(coord=(4, 4)),
+    )
+    view = TacticalView(window, state, lambda outcome: None)
+
+    view._open_grenades()
+
+    assert view.aiming
+    assert state.aim_kind is AimKind.GRENADE
+
+
+def test_grenade_picker_returns_the_chosen_grenade():
+    window = FakeWindow()
+    picked = []
+    view = GrenadePickView(
+        window,
+        [(0, types.SimpleNamespace(name="Flash")), (1, types.SimpleNamespace(name="Smoke"))],
+        lambda *args: picked.append(args),
+    )
+    window.views = [view]
+
+    view.pick("grenade:1")
+
+    assert picked and picked[0][0] == 1
+
+
+def test_tactical_support_with_no_hacker_reports_it():
+    window = FakeWindow()
+    state = types.SimpleNamespace(support=None, is_over=False)
+    view = TacticalView(window, state, lambda outcome: None)
+
+    view._open_support()
+
+    assert "No support hacker" in view.message
+
+
+def test_bar_view_meets_and_hires_a_runner():
+    window = FakeWindow()
+    app = window.session.app
+    character = window.session.character
+    runner = next(runner for runner in app.runners if character.runner_available(runner.id))
+    app.rival_runner_states[runner.id] = RunnerState(
+        territory_id=character.location_id,
+        activities=(RunnerActivity.DRINKING,) * 3,
+    )
+    bar = types.SimpleNamespace(name="Test Bar")
+    view = BarView(window, bar)
+    row = next(
+        row_id
+        for row_id, _ in view.rows
+        if row_id.startswith(("meet:", "recruit:"))
+    )
+    if row.startswith("meet:"):
+        view.pick(row)
+        assert character.knows_runner(runner.id)
+        view = BarView(window, bar)
+    recruit = next(row_id for row_id, _ in view.rows if row_id.startswith("recruit:"))
+    view.pick(recruit)
+    terms = next(row_id for row_id, _ in view.rows if row_id.startswith("indef:"))
+    view.pick(terms)
+
+    assert character.on_crew(runner.id)
+
+
+def test_ripperdoc_installs_and_removes_cyberware():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.CYBER_CLINIC for location in territory.locations)
+    )
+    character.location_id = territory.id
+    character.cash = 1_000_000
+    clinic = next(
+        location for location in territory.locations if location.kind is LocationKind.CYBER_CLINIC
+    )
+    view = RipperdocView(window, clinic)
+    install = next(row_id for row_id, _ in view.rows if row_id.startswith("install:"))
+
+    view.pick(install)
+
+    assert character.installed_cyberware
+    remove = next(row_id for row_id, _ in view.rows if row_id.startswith("remove:"))
+    view.pick(remove)
+
+    assert not character.installed_cyberware
+
+
+def test_cyberdeck_installs_and_uninstalls_an_owned_program():
+    window = FakeWindow()
+    character = window.session.character
+    character.inventory.append(InventoryItem(item_id="burner_deck", equipped=True))
+    character.owned_programs.add("sleaze")
+    view = CyberdeckView(window)
+    install = next(row_id for row_id, _ in view.rows if row_id.startswith("install:"))
+
+    view.pick(install)
+
+    entry = character.inventory[-1]
+    assert "sleaze" in entry.installed_programs
+    uninstall = next(row_id for row_id, _ in view.rows if row_id.startswith("uninstall:"))
+    view.pick(uninstall)
+
+    assert not entry.installed_programs

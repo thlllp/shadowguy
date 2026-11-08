@@ -181,13 +181,14 @@ class ShadowguyWindow(arcade.Window):
         elif self.session.app.corp_state is not None:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
-                "I gear   G den   V deliver   H HQ   C corp actions   F5 save   "
-                "F9 load   Q quit"
+                "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
+                "C corp actions   F5 save   F9 load   Q quit"
             )
         else:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
-                "I gear   G den   V deliver   H HQ   F5 save   F9 load   Q quit"
+                "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
+                "F5 save   F9 load   Q quit"
             )
         self.text(controls, 20, footer_h - 34, size=11, color=MUTED)
 
