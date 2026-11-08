@@ -38,9 +38,12 @@ crafting, corp-map intel and sabotage execution, corp attack, rival district
 losses, 80x24 matrix and burglary, the GUI death/KO/burglary/entrance flows, a
 live player capture, and a security contract blown through the app day tick.
 
-Remaining gaps: **corp defeat** on this build (needs a long soak losing every
-district), and the GUI's **unimplemented** save/load, corp mode and smuggling —
-preview limits, not test gaps.
+Remaining gaps: the GUI's **unimplemented** save/load, corp mode, smuggling
+and character creation — preview limits, not test gaps.
+
+Corp defeat was re-verified on this build with a passive corp-only soak (seed
+`555002`, Ironclad): 6 districts → 0 by day 104, `"Ironclad Dynamics has been
+broken up. Game over."` That closes the last mechanical playtest gap.
 
 Design note (decided): a capture can leave the taken district at garrison 0 when
 every committed operative dies (`attacker_losses = min(committed, defense)`). That
