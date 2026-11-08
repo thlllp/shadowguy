@@ -40,6 +40,7 @@ from shadowguy.gui.views import (  # noqa: E402
     FixerView,
     ForcePickView,
     GameOverView,
+    GangDenView,
     InventoryView,
     JobsView,
     MapView,
@@ -50,7 +51,7 @@ from shadowguy.gui.views import (  # noqa: E402
     TacticalView,
     TollView,
 )
-from shadowguy.jobs import generate_job  # noqa: E402
+from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_job  # noqa: E402
 from shadowguy.scene import Outcome  # noqa: E402
 from helpers import AlwaysOne, AlwaysSix, force_outcome  # noqa: E402
 
@@ -585,3 +586,85 @@ def test_corp_run_saves_and_loads(tmp_path, monkeypatch):
     assert window.session.app.corp_only
     assert window.session.app.corp_state.cash == 1234
     assert isinstance(window.views[-1], MapView)
+
+
+def test_gang_den_view_takes_a_delivery():
+    window = FakeWindow()
+    gang = GANGS[0]
+    view = GangDenView(window, gang)
+    assert "take_job" in [row_id for row_id, _ in view.rows]
+
+    view.pick("take_job")
+
+    job = window.session.character.smuggling_job
+    assert job is not None
+    assert job.gang_id == gang.id
+    assert job.destination_territory_id != window.session.character.location_id
+    assert "hands you" in view.message
+
+
+def test_map_opens_a_gang_den_when_standing_on_one():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if territory.gang_id
+        and any(location.kind is LocationKind.GANG_DEN for location in territory.locations)
+    )
+    character.location_id = territory.id
+    view = MapView(window)
+
+    view._open_gang_den()
+
+    assert isinstance(window.views[-1], GangDenView)
+
+
+def test_map_delivers_a_smuggling_job_at_its_destination():
+    window = FakeWindow()
+    character = window.session.character
+    job = window.session.take_smuggling_job(GANGS[0].id)
+    character.location_id = job.destination_territory_id
+    cash = character.cash
+    standing = character.gang_standing_with(job.gang_id)
+    view = MapView(window)
+
+    view._deliver_smuggling()
+
+    assert character.smuggling_job is None
+    assert character.cash == cash + job.reward_cash
+    assert character.gang_standing_with(job.gang_id) == standing + GANG_JOB_STANDING_GAIN
+    assert "Delivered" in view.message
+
+
+def test_map_refuses_delivery_away_from_the_destination():
+    window = FakeWindow()
+    character = window.session.character
+    job = window.session.take_smuggling_job(GANGS[0].id)
+    character.location_id = next(
+        territory_id
+        for territory_id in window.session.corp_map.territories
+        if territory_id != job.destination_territory_id
+    )
+    view = MapView(window)
+
+    view._deliver_smuggling()
+
+    assert character.smuggling_job is job
+    assert "Deliver it in" in view.message
+
+
+def test_rest_reports_an_expired_delivery():
+    window = FakeWindow()
+    character = window.session.character
+    job = window.session.take_smuggling_job(GANGS[0].id)
+    job.deadline_day = character.day
+    character.elapsed_hours = 23.0
+    standing = character.gang_standing_with(job.gang_id)
+    view = MapView(window)
+
+    view._rest()
+
+    assert character.smuggling_job is None
+    assert character.gang_standing_with(job.gang_id) == standing - GANG_JOB_STANDING_GAIN
+    assert "expired" in view.message

@@ -51,6 +51,10 @@ def test_map_and_menu_draw_paths(monkeypatch):
     window.seed = window.session.seed
     window.views = []
 
+    from shadowguy.gangs import GANGS
+
+    window.session.take_smuggling_job(GANGS[0].id)
+
     window.draw_map_screen("smoke")
     MapView(window).draw()
     InventoryView(window).draw()

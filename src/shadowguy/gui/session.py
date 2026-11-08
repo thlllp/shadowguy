@@ -22,6 +22,7 @@ from shadowguy.encounters import (
     roll_gang_encounter,
 )
 from shadowguy.fixer import Fixer, discover_fixers_here
+from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_smuggling_job
 from shadowguy.saves import list_saves, load_game
 from shadowguy.scene import Scene
 from shadowguy.travel import travel_hours
@@ -77,6 +78,31 @@ class GameSession:
         self.app.character.skill_points = 0
         self.fight_encounter = None
         self.pending_encounter = None
+
+    # ── smuggling ───────────────────────────────────────────────────────────
+
+    def take_smuggling_job(self, gang_id: str):
+        """Pick up one delivery at the den the runner is standing in. None when a
+        job is already active."""
+        character = self.character
+        if character.smuggling_job is not None:
+            return None
+        character.smuggling_job = generate_smuggling_job(
+            gang_id,
+            character.location_id,
+            self.corp_map,
+            character.day,
+            self.rng,
+        )
+        return character.smuggling_job
+
+    def deliver_smuggling_job(self):
+        """Pay out a delivery if the runner is standing on its destination."""
+        character = self.character
+        job = character.smuggling_job
+        if job is None or character.location_id != job.destination_territory_id:
+            return None
+        return character.deliver_smuggling_job(GANG_JOB_STANDING_GAIN)
 
     # ── saves ───────────────────────────────────────────────────────────────
 

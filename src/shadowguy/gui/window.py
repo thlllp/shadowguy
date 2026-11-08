@@ -181,7 +181,7 @@ class ShadowguyWindow(arcade.Window):
         else:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
-                "I gear   F5 save   F9 load   Q quit"
+                "I gear   G den   V deliver   F5 save   F9 load   Q quit"
             )
         self.text(controls, 20, footer_h - 34, size=11, color=MUTED)
 
@@ -354,6 +354,12 @@ class ShadowguyWindow(arcade.Window):
         player = territories[character.location_id]
         px, py = pos(player)
         self.text("YOU", px + 9, py - 6, size=9, color=ACCENT, bold=True)
+        job = character.smuggling_job
+        if job is not None:
+            target = territories[job.destination_territory_id]
+            tx, ty = pos(target)
+            arcade.draw_circle_outline(tx, ty, radius + 7, YELLOW, 2)
+            self.text("PKG", tx + 9, ty - 6, size=9, color=YELLOW, bold=True)
 
         lx = map_x + 12
         ly = map_y + 12

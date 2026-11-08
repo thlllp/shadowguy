@@ -71,6 +71,7 @@ from shadowguy.corp_turn import (
     upgrade_academy,
 )
 from shadowguy.corpmap import (
+    LocationKind,
     TerritoryModifier,
     attack_candidates,
     expansion_candidates,
@@ -80,6 +81,7 @@ from shadowguy.corpmap import (
 )
 from shadowguy.encounters import ARREST_CASH_PCT, ARREST_HOURS, ARREST_STANDING_HIT
 from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.inventory import reload_weapon, rounds_needed, toggle_equip, use_consumable
@@ -276,7 +278,7 @@ class MapView(View):
                 "F5 save | F9 load | Q quit"
             )
         else:
-            self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | F5 save | F9 load | Q quit"
+            self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | G den | V deliver | F5 save | F9 load | Q quit"
 
     def draw(self) -> None:  # pragma: no cover - drawing
         self.window.selected_id = self.selected_id
@@ -288,10 +290,7 @@ class MapView(View):
             return
         corp_only = self.window.session.app.corp_only
         if symbol == arcade.key.R:
-            self.window.session.rest()
-            if _corp_over(self.window):
-                return
-            self.message = f"Rested - {self.window.clock()}"
+            self._rest()
             return
         if symbol == arcade.key.F5:
             self._save()
@@ -315,6 +314,12 @@ class MapView(View):
                 return
             if symbol == arcade.key.I:
                 self.window.push(InventoryView(self.window))
+                return
+            if symbol == arcade.key.G:
+                self._open_gang_den()
+                return
+            if symbol == arcade.key.V:
+                self._deliver_smuggling()
                 return
         if symbol in (arcade.key.ENTER, arcade.key.SPACE):
             self._travel()
@@ -355,7 +360,13 @@ class MapView(View):
                 self.selected_id = next_id
                 self.window.push(TollView(self.window, encounter, self))
                 return
-        self.message = f"Travelled to {session.territory(self.selected_id).name} - {self.window.clock()}"
+        message = f"Travelled to {session.territory(self.selected_id).name} - {self.window.clock()}"
+        job = character.smuggling_job
+        if job is not None and character.location_id == job.destination_territory_id:
+            message = (
+                f"Arrived — deliver the package with V (due day {job.deadline_day})."
+            )
+        self.message = message
 
     def _open_fixers(self) -> None:
         fixers = self.window.session.fixers_here()
@@ -377,6 +388,63 @@ class MapView(View):
             self.message = "No shop here."
             return
         self.window.push(ShopPickView(self.window, shops))
+
+    def _rest(self) -> None:
+        session = self.window.session
+        character = session.character
+        job_before = character.smuggling_job
+        session.rest()
+        if _corp_over(self.window):
+            return
+        if (
+            job_before is not None
+            and character.smuggling_job is None
+            and character.day > job_before.deadline_day
+        ):
+            gang = GANGS_BY_ID[job_before.gang_id]
+            self.message = (
+                f"Rested — but the {gang.name} delivery expired. Standing -2."
+            )
+        elif character.smuggling_job is not None:
+            self.message = (
+                f"Rested — delivery still due day {character.smuggling_job.deadline_day}."
+            )
+        else:
+            self.message = f"Rested - {self.window.clock()}"
+
+    def _open_gang_den(self) -> None:
+        session = self.window.session
+        territory = session.territory(session.character.location_id)
+        if not territory.gang_id:
+            self.message = "No gang den here."
+            return
+        den = next(
+            (location for location in territory.locations if location.kind is LocationKind.GANG_DEN),
+            None,
+        )
+        if den is None:
+            self.message = "No gang den here."
+            return
+        self.window.push(GangDenView(self.window, GANGS_BY_ID[territory.gang_id]))
+
+    def _deliver_smuggling(self) -> None:
+        session = self.window.session
+        character = session.character
+        job = character.smuggling_job
+        if job is None:
+            self.message = "You aren't carrying a delivery."
+            return
+        if character.location_id != job.destination_territory_id:
+            destination = session.territory(job.destination_territory_id)
+            self.message = (
+                f"Deliver it in {destination.name} by day {job.deadline_day}."
+            )
+            return
+        delivered = session.deliver_smuggling_job()
+        if delivered is None:
+            self.message = "You can't deliver that here."
+            return
+        self.message = f"Delivered. +{delivered.reward_cash}eb."
 
     def _save(self) -> None:
         try:
@@ -952,6 +1020,49 @@ class ShopPickView(MenuView):
     def pick(self, row_id: str) -> None:
         shop = next(s for s in self.shops if s.id == row_id)
         self.window.push(ShopView(self.window, shop))
+
+
+class GangDenView(MenuView):
+    title = "GANG DEN"
+
+    def __init__(self, window, gang) -> None:
+        super().__init__(window)
+        self.gang = gang
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        standing = character.gang_standing_with(self.gang.id)
+        self.intro = [
+            f"{self.gang.name} — {self.gang.description} (standing {standing:+d})"
+        ]
+        job = character.smuggling_job
+        if job is not None:
+            destination = self.window.session.territory(job.destination_territory_id)
+            self.intro.append(
+                f"Carrying {job.item} to {destination.name} by day {job.deadline_day}."
+            )
+            self.rows = [("busy", "Already carrying a job — deliver it or wait it out.")]
+        else:
+            self.rows = [("take_job", "Take a delivery job")]
+
+    def pick(self, row_id: str) -> None:
+        if row_id != "take_job":
+            return
+        job = self.window.session.take_smuggling_job(self.gang.id)
+        if job is None:
+            self.message = "You're already carrying a job for them."
+        else:
+            destination = self.window.session.territory(job.destination_territory_id)
+            self.message = (
+                f"{self.gang.name} hands you {job.item}. Get it to {destination.name} "
+                f"by day {job.deadline_day}."
+            )
+            if self.window.map_view is not None:
+                self.window.map_view.message = (
+                    f"Delivery: {job.item} to {destination.name} by day {job.deadline_day}."
+                )
+        self._build()
 
 
 class ShopView(MenuView):
