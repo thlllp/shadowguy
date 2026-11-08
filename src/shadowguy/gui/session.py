@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from shadowguy.character import Character
 from shadowguy.combat import Drop, drop_for_result
+from shadowguy.corp_turn import CorpState
 from shadowguy.corpmap import Location, travel_path
 from shadowguy.encounters import (
     corp_security_encounter,
@@ -66,6 +67,17 @@ class GameSession:
     def seed(self) -> int | None:
         return self.app.seed
 
+    def start_corp(self, faction_id: str) -> None:
+        """Turn this session's bare runner app into a corp-only run, the same setup
+        CorpSelectScreen does. The runner is never built; its leftover creation
+        points are zeroed so a save doesn't reopen creation."""
+        self.app.corp_state = CorpState(faction_id=faction_id)
+        self.app.corp_only = True
+        self.app.character.stat_points = 0
+        self.app.character.skill_points = 0
+        self.fight_encounter = None
+        self.pending_encounter = None
+
     # ── saves ───────────────────────────────────────────────────────────────
 
     def save(self) -> str:
@@ -83,8 +95,6 @@ class GameSession:
             return "No save files."
         try:
             state = load_game(slots[0].path)
-            if state.get("corp_only"):
-                return "That save is a corp run; the preview has no corp mode."
             self.app.load_state(state, reopen=False)
         except Exception as exc:
             return f"Couldn't load: {exc}"

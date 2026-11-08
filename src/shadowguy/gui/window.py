@@ -13,11 +13,12 @@ import arcade
 
 from shadowguy.corpmap import MODIFIER_LABELS, owner_label, travel_path
 from shadowguy.corpmap_gen import GRID_COLS, GRID_ROWS
+from shadowguy.corp_turn import operative_max
 from shadowguy.cybernetics import free_humanity
-from shadowguy.factions import FACTIONS
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 
 from .session import GameSession
-from .views import MapView
+from .views import MapView, StartView
 
 BG = (8, 12, 18)
 PANEL = (16, 23, 32)
@@ -71,10 +72,17 @@ class ShadowguyWindow(arcade.Window):
         self.seed = seed if seed is not None else random.SystemRandom().randrange(1, 1_000_000_000)
         self.session = GameSession(seed=self.seed)
         self.selected_id = self.session.character.location_id
-        self.map_view = MapView(self)
-        self.views = [self.map_view]
+        self.map_view = None
+        self.views = [StartView(self)]
 
-    # ── stack / helpers used by views ───────────────────────────────────────
+    # ── run start ───────────────────────────────────────────────────────────
+
+    def start_runner(self) -> None:
+        self.show_map()
+
+    def start_corp(self, faction_id: str) -> None:
+        self.session.start_corp(faction_id)
+        self.show_map()
 
     @property
     def top_view(self):
@@ -165,12 +173,54 @@ class ShadowguyWindow(arcade.Window):
         arcade.draw_line(16, footer_h, self.width - 16, footer_h, PANEL_EDGE, 1)
         if message:
             self.text(message, 20, footer_h - 14, size=12, color=ACCENT)
-        self.text(
-            "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   I gear   F5 save   F9 load   Q quit",
-            20, footer_h - 34, size=11, color=MUTED,
+        if self.session.app.corp_only:
+            controls = (
+                "Arrows/WASD move   Enter relocate   C actions   R end day   "
+                "F5 save   F9 load   Q quit"
+            )
+        else:
+            controls = (
+                "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
+                "I gear   F5 save   F9 load   Q quit"
+            )
+        self.text(controls, 20, footer_h - 34, size=11, color=MUTED)
+
+    def _draw_corp_status(self, rect) -> None:
+        corp_state = self.session.app.corp_state
+        faction = FACTIONS_BY_ID[corp_state.faction_id]
+        held = sum(
+            1
+            for territory in self.session.corp_map.territories.values()
+            if territory.owner == corp_state.faction_id
         )
+        y = self.panel(rect, "CORP")
+        x = rect[0] + 16
+        self.text(faction.name, x, y, size=17, color=TEXT, bold=True)
+        y -= 24
+        self.text(self.clock(), x, y, size=11, color=MUTED)
+        y -= 24
+        for label, value in [
+            ("Cash", f"{corp_state.cash}eb"),
+            ("Research", f"{corp_state.research_points:g}rp"),
+            ("Action pts", f"{corp_state.action_points}"),
+            ("Districts", f"{held}"),
+            ("Operatives", f"{corp_state.operatives}/{operative_max(corp_state)}"),
+            ("Tasking", f"{corp_state.tasking_operatives}"),
+            ("Scientists", f"{corp_state.scientists}"),
+            ("Assistants", f"{corp_state.research_assistants}"),
+        ]:
+            self.text(label, x, y, size=11, color=MUTED)
+            self.text(value, x + 118, y, size=11, color=TEXT)
+            y -= 18
+        y -= 10
+        self.text("RESEARCH", x, y, size=10, color=MUTED, bold=True)
+        y -= 18
+        self.text(f"Logistics level {corp_state.logistics_research}", x, y, size=11, color=TEXT)
 
     def _draw_character(self, rect) -> None:
+        if self.session.app.corp_only and self.session.app.corp_state is not None:
+            self._draw_corp_status(rect)
+            return
         character = self.session.character
         territory = self.session.corp_map.territories[character.location_id]
         y = self.panel(rect, "RUNNER")

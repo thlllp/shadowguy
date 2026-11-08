@@ -16,7 +16,12 @@ import arcade  # noqa: E402
 
 from shadowguy.abstract_combat import CombatOutcome  # noqa: E402
 from shadowguy.combat import Drop  # noqa: E402
-from shadowguy.corpmap import LocationKind, SHOP_KINDS, unowned_territory_ids  # noqa: E402
+from shadowguy.corpmap import (  # noqa: E402
+    LocationKind,
+    SHOP_KINDS,
+    expansion_candidates,
+    unowned_territory_ids,
+)
 from shadowguy.encounters import (  # noqa: E402
     ARREST_CASH_PCT,
     ARREST_HOURS,
@@ -29,14 +34,19 @@ from shadowguy.gangs import GANGS  # noqa: E402
 from shadowguy.gui.session import GameSession, HopEncounter  # noqa: E402
 from shadowguy.gui.views import (  # noqa: E402
     CombatView,
+    CorpActionsView,
     EntranceView,
+    FactionPickView,
     FixerView,
+    ForcePickView,
     GameOverView,
     InventoryView,
     JobsView,
     MapView,
+    ResearchTreeView,
     SceneView,
     ShopView,
+    StartView,
     TacticalView,
     TollView,
 )
@@ -67,6 +77,13 @@ class FakeWindow:
         self.selected_id = self.session.character.location_id
         self.map_view = MapView(self)
         self.views = [self.map_view]
+
+    def start_runner(self):
+        self.show_map()
+
+    def start_corp(self, faction_id):
+        self.session.start_corp(faction_id)
+        self.show_map()
 
     def clock(self):
         return "Day 1"
@@ -416,21 +433,138 @@ def test_map_view_load_with_no_saves_reports_it(tmp_path, monkeypatch):
     assert window.views == [view]
 
 
-def test_map_view_refuses_a_corp_only_save(tmp_path, monkeypatch):
+def test_start_view_offers_a_corp_run():
+    window = FakeWindow()
+    view = StartView(window)
+
+    assert [row_id for row_id, _ in view.rows] == ["runner", "corp"]
+
+    view.pick("corp")
+
+    assert isinstance(window.views[-1], FactionPickView)
+
+
+def test_faction_pick_starts_a_corp_only_run():
+    window = FakeWindow()
+    view = FactionPickView(window)
+    faction_id = FACTIONS[0].id
+
+    view.pick(f"faction:{faction_id}")
+
+    assert window.session.app.corp_only
+    assert window.session.app.corp_state.faction_id == faction_id
+    assert isinstance(window.views[-1], MapView)
+    assert "corp actions" in window.views[-1].message.lower()
+
+
+def test_corp_map_c_opens_the_actions_list():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    view = window.map_view
+    window.views = [view]
+
+    view.on_key(arcade.key.C, 0)
+
+    assert isinstance(window.views[-1], CorpActionsView)
+
+
+def test_corp_map_relocation_is_free():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    view = window.map_view
+    start = view.selected_id
+    target = window.session.territory(start).connections[0]
+    hours = window.session.character.elapsed_hours
+
+    view.selected_id = target
+    view._travel()
+
+    assert window.session.character.location_id == target
+    assert window.session.character.elapsed_hours == hours
+
+
+def test_corp_actions_expand_claims_neutral_ground():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    corp_map = window.session.app.corp_map
+    target = expansion_candidates(corp_map, state.faction_id)[0]
+    window.map_view.selected_id = target
+    view = CorpActionsView(window, window.map_view)
+    row = f"expand:{target}"
+    assert row in [row_id for row_id, _ in view.rows]
+
+    view.pick(row)
+
+    assert corp_map.territories[target].owner == state.faction_id
+    assert state.action_points == 1
+
+
+def test_corp_actions_rest_ends_the_day():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    view = CorpActionsView(window, window.map_view)
+    day = window.session.character.day
+
+    view.pick("rest")
+
+    assert window.session.character.day == day + 1
+
+
+def test_corp_rest_shows_game_over_when_the_last_district_is_lost():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    corp_map = window.session.app.corp_map
+    other = next(faction.id for faction in FACTIONS if faction.id != state.faction_id)
+    for territory in corp_map.territories.values():
+        if territory.owner == state.faction_id:
+            territory.owner = other
+    view = CorpActionsView(window, window.map_view)
+
+    view.pick("rest")
+
+    assert isinstance(window.views[-1], GameOverView)
+
+
+def test_force_pick_returns_the_chosen_count():
+    window = FakeWindow()
+    picked = []
+    view = ForcePickView(window, "Send?", 4, picked.append)
+    window.views = [view]
+
+    view.pick("force:2")
+
+    assert picked == [2]
+    assert window.views == []
+
+
+def test_research_tree_buys_a_root_technology():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    state.research_points = 10
+    view = ResearchTreeView(window)
+
+    view.pick("tech:worker_surveillance")
+
+    assert "worker_surveillance" in state.researched
+
+
+def test_corp_run_saves_and_loads(tmp_path, monkeypatch):
     from shadowguy import saves
 
     monkeypatch.setattr(saves, "SAVE_DIR", tmp_path)
 
     window = FakeWindow()
-    view = MapView(window)
-    window.views = [view]
-    window.session.app.corp_only = True
-    view.on_key(arcade.key.F5, 0)
-    window.session.app.corp_only = False
-    window.session.character.cash = 1
+    window.start_corp(FACTIONS[0].id)
+    view = window.map_view
+    window.session.app.corp_state.cash = 1234
 
+    view.on_key(arcade.key.F5, 0)
+    window.session.app.corp_state.cash = 1
     view.on_key(arcade.key.F9, 0)
 
-    assert "no corp mode" in view.message
-    assert window.session.character.cash == 1
-    assert window.views == [view]
+    assert window.session.app.corp_only
+    assert window.session.app.corp_state.cash == 1234
+    assert isinstance(window.views[-1], MapView)

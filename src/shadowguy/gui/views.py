@@ -20,8 +20,66 @@ from shadowguy.combat import (
     knockout_roll,
     mug_unconscious,
 )
-from shadowguy.corpmap import travel_path, unowned_territory_ids
+from shadowguy.corp_turn import (
+    ACADEMY_GRANT_COST,
+    ACADEMY_TRAINING_COST,
+    DEVELOPMENT_BUMP_COST,
+    TECHNOLOGIES,
+    TECHNOLOGIES_BY_ID,
+    TRAINING_DAYS,
+    EmployeeCategory,
+    academy_grant_rp,
+    academy_research_grant,
+    attack_territory,
+    build_efficiency_upgrade,
+    build_lab,
+    can_fundraise,
+    corp_defeated,
+    defense_strength,
+    deploy_operatives,
+    development_targets,
+    employee_plural,
+    expand_into,
+    expansion_cost,
+    force_options,
+    fundraise,
+    fundraise_amount,
+    gather_intel,
+    has_technology,
+    intel_targets,
+    next_academy_upgrade_cost,
+    next_efficiency_cost,
+    next_lab_cost,
+    operative_training_cost,
+    operative_training_days,
+    owned_academy,
+    owned_research_facility,
+    prereqs_met,
+    raise_development,
+    raise_security,
+    raise_surveillance,
+    research_technology,
+    sabotage,
+    sabotage_targets,
+    security_bump_cost,
+    security_targets,
+    survey,
+    survey_targets,
+    surveillance_bump_cost,
+    surveillance_targets,
+    train_employees,
+    upgrade_academy,
+)
+from shadowguy.corpmap import (
+    TerritoryModifier,
+    attack_candidates,
+    expansion_candidates,
+    owner_label,
+    travel_path,
+    unowned_territory_ids,
+)
 from shadowguy.encounters import ARREST_CASH_PCT, ARREST_HOURS, ARREST_STANDING_HIT
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.inventory import reload_weapon, rounds_needed, toggle_equip, use_consumable
@@ -141,11 +199,76 @@ class MenuView(View):
             self.cancel()
 
 
+def _corp_over(window) -> bool:
+    """Push the GUI's game-over view if a day tick broke the corp up. The Textual
+    app's own app.exit() only stops a Textual run; the Arcade client has to notice
+    the same condition itself."""
+    app = window.session.app
+    if not app.corp_only or app.corp_state is None:
+        return False
+    if not corp_defeated(app.corp_state, app.corp_map):
+        return False
+    faction = FACTIONS_BY_ID[app.corp_state.faction_id]
+    window.push(GameOverView(window, f"{faction.name} has been broken up. Game over."))
+    return True
+
+
+class StartView(MenuView):
+    title = "SHADOWGUY"
+
+    def __init__(self, window: "ShadowguyWindow") -> None:
+        super().__init__(window)
+        self.intro = ["Choose a run"]
+        self.rows = [
+            ("runner", "Runner — one character, one life"),
+            ("corp", "Corp — run a faction"),
+        ]
+
+    def pick(self, row_id: str) -> None:
+        if row_id == "runner":
+            self.window.start_runner()
+        else:
+            self.window.push(FactionPickView(self.window))
+
+    def on_key(self, symbol: int, modifiers: int) -> None:
+        if symbol in (arcade.key.ESCAPE, arcade.key.Q):
+            self.window.close()
+            return
+        super().on_key(symbol, modifiers)
+
+
+class FactionPickView(MenuView):
+    title = "PICK A CORP"
+
+    def __init__(self, window: "ShadowguyWindow") -> None:
+        super().__init__(window)
+        self.intro = ["Every faction starts with six districts and two action points a day."]
+        self.rows = [
+            (f"faction:{faction.id}", f"{faction.name} — {faction.specialty}")
+            for faction in FACTIONS
+        ]
+
+    def pick(self, row_id: str) -> None:
+        self.window.start_corp(row_id.removeprefix("faction:"))
+
+    def on_key(self, symbol: int, modifiers: int) -> None:
+        if symbol == arcade.key.Q:
+            self.window.close()
+            return
+        super().on_key(symbol, modifiers)
+
+
 class MapView(View):
     def __init__(self, window: "ShadowguyWindow") -> None:
         super().__init__(window)
         self.selected_id = window.session.character.location_id
-        self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | F5 save | F9 load | Q quit"
+        if window.session.app.corp_only:
+            self.message = (
+                "Arrows/WASD move | Enter relocate | C corp actions | R end day | "
+                "F5 save | F9 load | Q quit"
+            )
+        else:
+            self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | F5 save | F9 load | Q quit"
 
     def draw(self) -> None:  # pragma: no cover - drawing
         self.window.selected_id = self.selected_id
@@ -155,8 +278,11 @@ class MapView(View):
         if symbol in (arcade.key.ESCAPE, arcade.key.Q):
             self.window.close()
             return
+        corp_only = self.window.session.app.corp_only
         if symbol == arcade.key.R:
             self.window.session.rest()
+            if _corp_over(self.window):
+                return
             self.message = f"Rested - {self.window.clock()}"
             return
         if symbol == arcade.key.F5:
@@ -165,18 +291,23 @@ class MapView(View):
         if symbol == arcade.key.F9:
             self._load()
             return
-        if symbol == arcade.key.F:
-            self._open_fixers()
-            return
-        if symbol == arcade.key.J:
-            self._open_jobs()
-            return
-        if symbol == arcade.key.S:
-            self._open_shops()
-            return
-        if symbol == arcade.key.I:
-            self.window.push(InventoryView(self.window))
-            return
+        if corp_only:
+            if symbol == arcade.key.C:
+                self.window.push(CorpActionsView(self.window, self))
+                return
+        else:
+            if symbol == arcade.key.F:
+                self._open_fixers()
+                return
+            if symbol == arcade.key.J:
+                self._open_jobs()
+                return
+            if symbol == arcade.key.S:
+                self._open_shops()
+                return
+            if symbol == arcade.key.I:
+                self.window.push(InventoryView(self.window))
+                return
         if symbol in (arcade.key.ENTER, arcade.key.SPACE):
             self._travel()
             return
@@ -198,6 +329,13 @@ class MapView(View):
         character = session.character
         if self.selected_id == character.location_id:
             self.message = "You are already here."
+            return
+        if session.app.corp_only:
+            character.location_id = self.selected_id
+            self.message = (
+                f"Relocated to {session.territory(self.selected_id).name} - "
+                f"{self.window.clock()}"
+            )
             return
         path = travel_path(session.corp_map, character.location_id, self.selected_id)
         if not path:
@@ -247,6 +385,365 @@ class MapView(View):
             return
         self.window.show_map()
         self.window.map_view.message = "Loaded the newest save."
+
+
+class CorpActionsView(MenuView):
+    """The corp-only run's daily menu: territory moves for the cursored district
+    plus the corp-wide Academy, Research and Operations actions. Kept as one short
+    list rather than the TUI's five panels; anything that needs a second step
+    (force size, the tech tree) pushes its own view."""
+
+    title = "CORP ACTIONS"
+
+    def __init__(self, window: "ShadowguyWindow", map_view: MapView) -> None:
+        super().__init__(window)
+        self.map_view = map_view
+        self._build()
+
+    def _state(self):
+        return self.window.session.app.corp_state
+
+    def _map(self):
+        return self.window.session.corp_map
+
+    def _here(self):
+        return self._map().territories[self.map_view.selected_id]
+
+    def _build(self) -> None:
+        state = self._state()
+        corp_map = self._map()
+        here = self._here()
+        faction = FACTIONS_BY_ID[state.faction_id]
+        self.intro = [
+            f"{faction.name} — {state.cash}eb — {state.research_points:g}rp — "
+            f"{state.action_points} AP",
+            f"{here.name}: {owner_label(here.owner)}, value {here.value}, "
+            f"garrison {here.garrison}, Security {here.modifiers.get(TerritoryModifier.SECURITY, 0)}",
+        ]
+        rows: list[tuple[str, str]] = []
+
+        for territory_id in expansion_candidates(corp_map, state.faction_id):
+            target = corp_map.territories[territory_id]
+            cost = expansion_cost(target, state, corp_map)
+            rows.append((f"expand:{territory_id}", f"Expand into {target.name} — {cost}eb"))
+        survey_ids = {territory.id for territory in survey_targets(state, corp_map)}
+        if here.id in survey_ids:
+            rows.append((f"survey:{here.id}", f"Survey {here.name} — free"))
+        security_ids = {territory.id for territory in security_targets(state, corp_map)}
+        if here.id in security_ids:
+            level = here.modifiers.get(TerritoryModifier.SECURITY, 0)
+            rows.append(
+                (
+                    f"secure:{here.id}",
+                    f"Raise Security {level} -> {level + 1} — "
+                    f"{security_bump_cost(state, here)}eb",
+                )
+            )
+        surveillance_ids = {territory.id for territory in surveillance_targets(state, corp_map)}
+        if here.id in surveillance_ids:
+            level = here.modifiers.get(TerritoryModifier.SURVEILLANCE, 0)
+            rows.append(
+                (
+                    f"surveil:{here.id}",
+                    f"Raise Surveillance {level} -> {level + 1} — "
+                    f"{surveillance_bump_cost(state, here)}eb",
+                )
+            )
+        development_ids = {territory.id for territory in development_targets(state, corp_map)}
+        if here.id in development_ids:
+            level = here.modifiers.get(TerritoryModifier.DEVELOPMENT, 0)
+            rows.append(
+                (
+                    f"develop:{here.id}",
+                    f"Develop {level} -> {level + 1} — {DEVELOPMENT_BUMP_COST}eb",
+                )
+            )
+        if can_fundraise(state, corp_map):
+            rows.append(
+                ("fundraise", f"Fundraise — +{fundraise_amount(state, corp_map)}eb")
+            )
+
+        academy = owned_academy(state, corp_map)
+        pending = state.pending_recruit
+        if pending is not None:
+            days_left = pending.ready_day - self.window.session.character.day
+            rows.append(
+                (
+                    "inert",
+                    f"Training {employee_plural(pending.category)} — ready in "
+                    f"{days_left} day{'s' if days_left != 1 else ''}",
+                )
+            )
+        elif academy is not None:
+            upgrade_cost = next_academy_upgrade_cost(academy)
+            if upgrade_cost is not None:
+                rows.append(("upgrade_academy", f"Expand Academy — {upgrade_cost}eb"))
+            grant_rp = academy_grant_rp(state, corp_map)
+            if grant_rp:
+                rows.append(
+                    (
+                        "grant",
+                        f"Research grant — +{grant_rp}rp — {ACADEMY_GRANT_COST}eb",
+                    )
+                )
+            for category in EmployeeCategory:
+                if category is EmployeeCategory.OPERATIVE:
+                    cost = operative_training_cost(state)
+                    days = operative_training_days(state)
+                else:
+                    cost = ACADEMY_TRAINING_COST[category]
+                    days = TRAINING_DAYS[category]
+                rows.append(
+                    (
+                        f"train:{category}",
+                        f"Train {employee_plural(category)} ({days}d) — {cost}eb",
+                    )
+                )
+
+        facility = owned_research_facility(state, corp_map)
+        if facility is not None:
+            lab_cost = next_lab_cost(facility)
+            if lab_cost is not None:
+                rows.append(("lab", f"Build a lab — {lab_cost}eb"))
+            efficiency_cost = next_efficiency_cost(facility)
+            if efficiency_cost is not None:
+                rows.append(("efficiency", f"Upgrade efficiency — {efficiency_cost}eb"))
+        rows.append(("research_tree", "Open the research tree"))
+
+        if here.owner == state.faction_id and state.operatives:
+            rows.append((f"deploy:{here.id}", f"Deploy operatives here — {state.operatives} spare"))
+        if here.id in set(attack_candidates(corp_map, state.faction_id)) and state.operatives:
+            rows.append(
+                (
+                    f"attack:{here.id}",
+                    f"Attack {here.name} — defense {defense_strength(here)}",
+                )
+            )
+        intel_ids = {territory.id for territory in intel_targets(state, corp_map)}
+        if here.id in intel_ids:
+            rows.append((f"intel:{here.id}", f"Gather intel on {here.name}"))
+        sabotage_ids = {territory.id for territory in sabotage_targets(state, corp_map)}
+        if here.id in sabotage_ids:
+            rows.append(
+                (
+                    f"sabotage:{here.id}",
+                    f"Sabotage {here.name} — Security "
+                    f"{here.modifiers.get(TerritoryModifier.SECURITY, 0)}",
+                )
+            )
+
+        rows.append(("rest", "End day — rest to 6 AM"))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        kind, _, argument = row_id.partition(":")
+        state = self._state()
+        corp_map = self._map()
+        session = self.window.session
+        here = self._here()
+        if kind == "inert":
+            return
+        if kind == "expand":
+            if expand_into(state, corp_map, argument, session.rng):
+                self.message = f"Claimed {corp_map.territories[argument].name}."
+            else:
+                self.message = "Can't expand there."
+        elif kind == "survey":
+            target = survey(state, corp_map, argument)
+            self.message = (
+                f"Surveyed {target.name}: garrison {target.garrison}, value {target.value}."
+                if target is not None
+                else "Can't survey there."
+            )
+        elif kind == "secure":
+            self.message = (
+                f"Security raised in {here.name}."
+                if raise_security(state, corp_map, argument)
+                else "Can't afford it."
+            )
+        elif kind == "surveil":
+            self.message = (
+                f"Surveillance raised in {here.name}."
+                if raise_surveillance(state, corp_map, argument)
+                else "Can't afford it."
+            )
+        elif kind == "develop":
+            self.message = (
+                f"{here.name} developed."
+                if raise_development(state, corp_map, argument)
+                else "Can't afford it."
+            )
+        elif kind == "fundraise":
+            raised = fundraise(state, corp_map)
+            self.message = (
+                f"Emergency fundraising: +{raised}eb."
+                if raised is not None
+                else "Can't fundraise right now."
+            )
+        elif kind == "upgrade_academy":
+            self.message = (
+                "Academy expanded."
+                if upgrade_academy(state, corp_map)
+                else "Can't expand the Academy."
+            )
+        elif kind == "grant":
+            grant_rp = academy_grant_rp(state, corp_map)
+            self.message = (
+                f"Research grant paid: +{grant_rp}rp."
+                if academy_research_grant(state, corp_map)
+                else "Can't take a grant right now."
+            )
+        elif kind == "train":
+            category = EmployeeCategory(argument)
+            if train_employees(state, corp_map, category, session.character.day):
+                self.message = f"Training {employee_plural(category)}."
+            else:
+                self.message = "Can't start that batch."
+        elif kind == "lab":
+            self.message = "Lab built." if build_lab(state, corp_map) else "Can't build a lab."
+        elif kind == "efficiency":
+            self.message = (
+                "Efficiency upgraded."
+                if build_efficiency_upgrade(state, corp_map)
+                else "Can't upgrade efficiency."
+            )
+        elif kind == "research_tree":
+            self.window.push(ResearchTreeView(self.window, self._build))
+            return
+        elif kind == "deploy":
+            self.window.push(
+                ForcePickView(
+                    self.window,
+                    f"Deploy to {here.name}. Send how many?",
+                    state.operatives,
+                    self._deploy,
+                )
+            )
+            return
+        elif kind == "attack":
+            self.window.push(
+                ForcePickView(
+                    self.window,
+                    f"Attack {here.name} — defense {defense_strength(here)}. "
+                    f"Commit how many?",
+                    state.operatives,
+                    self._attack,
+                )
+            )
+            return
+        elif kind == "intel":
+            self.message = (
+                f"Intel gathered on {here.name}."
+                if gather_intel(state, corp_map, argument, session.rng)
+                else "The operative came back empty-handed."
+            )
+        elif kind == "sabotage":
+            result = sabotage(state, corp_map, argument, session.rng)
+            self.message = (
+                f"Sabotage in {result} — Security "
+                f"{here.modifiers.get(TerritoryModifier.SECURITY, 0)}."
+                if result is not None
+                else "Sabotage failed — operative captured or killed."
+            )
+        elif kind == "rest":
+            session.rest()
+            if _corp_over(self.window):
+                return
+            self.message = (
+                f"Day {session.character.day}, {session.character.hour_of_day:02d}:00 — "
+                f"{state.action_points} AP."
+            )
+            self.map_view.message = self.message
+        self._build()
+
+    def _deploy(self, count: int) -> None:
+        state = self._state()
+        here = self._here()
+        if deploy_operatives(state, self._map(), here.id, count):
+            self.message = f"{count} operative(s) deployed to {here.name}."
+        else:
+            self.message = "Can't deploy that force."
+        self._build()
+
+    def _attack(self, count: int) -> None:
+        state = self._state()
+        corp_map = self._map()
+        here = self._here()
+        result = attack_territory(state, corp_map, here.id, count, self.window.session.rng)
+        if result is None:
+            self.message = "Can't attack that district."
+        elif result.captured:
+            self.message = (
+                f"{here.name} is yours — {result.attacker_losses} lost, "
+                f"{here.garrison} holding it."
+            )
+        else:
+            self.message = f"Attack repelled — {result.attacker_losses} lost."
+        self._build()
+
+
+class ForcePickView(MenuView):
+    title = "SEND OPERATIVES"
+
+    def __init__(self, window, prompt: str, available: int, callback) -> None:
+        super().__init__(window)
+        self.intro = [prompt]
+        self.callback = callback
+        self.rows = [
+            (f"force:{count}", f"{count} operative{'s' if count != 1 else ''}")
+            for count in force_options(available)
+        ]
+
+    def pick(self, row_id: str) -> None:
+        count = int(row_id.removeprefix("force:"))
+        self.window.pop()
+        self.callback(count)
+
+
+class ResearchTreeView(MenuView):
+    title = "RESEARCH TREE"
+
+    def __init__(self, window, on_close=None) -> None:
+        super().__init__(window)
+        self.on_close = on_close
+        self._build()
+
+    def _state(self):
+        return self.window.session.app.corp_state
+
+    def _build(self) -> None:
+        state = self._state()
+        self.intro = [f"{state.research_points:g}rp available"]
+        rows = []
+        for technology in TECHNOLOGIES:
+            if technology.faction_id is not None and technology.faction_id != state.faction_id:
+                continue
+            if has_technology(state, technology.id):
+                label = f"{technology.name} — researched"
+            elif not prereqs_met(state, technology):
+                missing = ", ".join(
+                    TECHNOLOGIES_BY_ID[prereq].name
+                    for prereq in technology.prereqs
+                    if not has_technology(state, prereq)
+                )
+                label = f"{technology.name} — needs {missing}"
+            else:
+                label = f"{technology.name} — {technology.cost}rp"
+            rows.append((f"tech:{technology.id}", label))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        technology = TECHNOLOGIES_BY_ID[row_id.removeprefix("tech:")]
+        if research_technology(self._state(), technology.id):
+            self.message = f"Researched {technology.name}."
+        else:
+            self.message = "Can't research that yet."
+        self._build()
+
+    def cancel(self) -> None:
+        self.window.pop()
+        if self.on_close is not None:
+            self.on_close()
 
 
 class TollView(MenuView):
