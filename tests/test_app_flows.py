@@ -4921,6 +4921,8 @@ def test_corp_only_map_mode_offers_intel_and_sabotage_for_a_rival_district():
             )
             app.corp_state.operatives = 1
             app.corp_state.action_points = 2
+            # Sabotage is (correctly) not offered at Security 0.
+            app.corp_map.territories[target].modifiers[TerritoryModifier.SECURITY] = 1
             screen.selected_id = target
             screen.hovered_id = None
             screen.refresh_map()

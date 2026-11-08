@@ -1124,12 +1124,15 @@ def gather_intel(
 def sabotage_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
     """Rival-held territories an operative can be sent to sabotage. Only while the
     day's move is free and an operative is spare. Neutral ground and the corp's own
-    territory are excluded — sabotage is a hostile act."""
+    territory are excluded — sabotage is a hostile act — and so is any rival already
+    at Security 0, where the operation could only spend an operative and the day's
+    move without lowering anything."""
     if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return []
     return [
         t for t in corp_map.territories.values()
         if t.owner not in (corp_state.faction_id, "neutral")
+        and t.modifiers.get(TerritoryModifier.SECURITY, 0) > 0
     ]
 
 

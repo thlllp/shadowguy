@@ -2080,9 +2080,24 @@ def test_sabotage_targets_includes_rivals_excludes_self_and_neutral():
         player_start_id="neutral",
     )
     corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    corp_map.territories["rival"].modifiers[TerritoryModifier.SECURITY] = 1
     targets = sabotage_targets(corp_state, corp_map)
     assert len(targets) == 1
     assert targets[0].id == "rival"
+
+
+def test_sabotage_targets_excludes_a_rival_already_at_zero_security():
+    """At Security 0 the operation cannot lower anything, so offering the row would
+    spend an operative and the day's move for a guaranteed no-op."""
+    corp_map = CorpMap(
+        territories={
+            "home": _territory("home", owner=IRONCLAD),
+            "rival": _territory("rival", owner=GHOSTWIRE),
+        },
+        player_start_id="home",
+    )
+    corp_state = CorpState(faction_id=IRONCLAD, operatives=1)
+    assert sabotage_targets(corp_state, corp_map) == []
 
 
 def test_sabotage_reduces_security_on_hit():
