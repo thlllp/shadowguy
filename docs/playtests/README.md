@@ -20,30 +20,32 @@ Reports are ordered by the build they were run against, not by filename.
 | `2026-11-06-cover-everything.md` | `7c761e4` | GUI sweep: one P1 (dead runner keeps playing), four P2, two P3 |
 | `2026-11-07-five-runs.md` | `e891049` | post-fix audit: corp intel/sabotage regression and burglary picker ordering (P2); death/KO/taken-offer fixes verified |
 | `2026-11-07-five-runs-2.md` | `5b8cba3` | both P2s verified in real play; three P3s re-confirmed; crew hiring and safehouse purchase/build now covered |
+| `2026-11-07-five-runs-3.md` | `1dc8f16` | all open fixes verified; live capture and a blown security contract now covered; no new defects |
 
-## Status after the follow-up fixes
+## Status at `1dc8f16`
 
-The reports were written against `7c761e4`, `e891049` and `5b8cba3`. Since then:
+**No open findings.** Fixed and verified across the reports: the TUI findings
+from the `2c3fd19` → `010a48f` sequence (corp ledger and panels at 80x24, Rest
+key, transient saves, off-site notify); the GUI death/knockout handling,
+knockout-as-victory, burglary starting stages, rival-taken offers; the two
+`e891049` P2s (burglary picker ordering `3263118`, map-panel intel/sabotage
+`47382c4`); the three GUI P3s (footer, unaffordable-program message, aim arrows,
+`f6e9929`); and sabotage-at-zero-Security being withheld (`9779ebf`).
 
-Fixed and verified: the TUI findings from the `2c3fd19` → `010a48f` sequence
-(corp ledger and panels at 80x24, Rest key, transient saves, off-site notify),
-plus the GUI death/knockout handling, knockout-as-victory, burglary starting
-stages, rival-taken offers, and the two `e891049` P2s — the burglary picker is
-now opened after `JobsView` pushes the scene (`3263118`), and the map's
-per-territory panel offers intel/sabotage again (`47382c4`).
+Coverage now includes: crew hiring and the wage tick, safehouse purchase and
+workshop build, cyberdeck/program and cyberware purchase/install, shop selling,
+crafting, corp-map intel and sabotage execution, corp attack, rival district
+losses, 80x24 matrix and burglary, the GUI death/KO/burglary/entrance flows, a
+live player capture, and a security contract blown through the app day tick.
 
-The three remaining GUI P3s are also fixed: the footer no longer advertises WASD
-movement while `S` opens shops, an unaffordable program reports the real
-`buy_program` failure instead of "Bought", and arrow keys move the aim cursor.
-Sabotage is no longer offered on a rival already at Security 0, where it could
-only spend an operative and the day's move for nothing.
+Remaining gaps: **corp defeat** on this build (needs a long soak losing every
+district), and the GUI's **unimplemented** save/load, corp mode and smuggling —
+preview limits, not test gaps.
 
-Coverage now recorded as covered: crew hiring and the wage tick, safehouse
-purchase and workshop build, cyberdeck/program and cyberware purchase/install,
-corp-map intel and sabotage execution, shop selling, crafting, and the GUI
-burglary flow through `JobsView`. Remaining gaps: player-initiated captures
-(5/5 repels — dice, not a defect), corp defeat, and a security contract blown by
-a critical failure through the UI (app-level test only).
+Design note: a capture can leave the taken district at garrison 0 when every
+committed operative dies (`attacker_losses = min(committed, defense)`). The code
+comment says survivors hold the ground; the arithmetic allows none. Decide
+whether that is an intended pyrrhic-capture risk or needs a survivor floor.
 
 ## Running again
 
