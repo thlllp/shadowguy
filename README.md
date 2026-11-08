@@ -26,14 +26,13 @@ uv run shadowguy --dev
 
 The TUI is the canonical game and the full test surface. The Arcade front-end is
 an **experimental preview slice**, not an alternative client yet: it shares the
-same `ShadowguyApp` state and rules and does not change the TUI, but it starts on
-the engine's bare default character and has **no character creation**. The start
-screen offers a Runner run, a Corp run, or loading the newest save. Corp mode
-covers the map, the daily economy, the Academy, the Research Facility and
-Operations; corp takeover/HQ and the surveillance log remain TUI-only, along with
-crew, burglary edge cases, grenades, hacker programs and cyberware. Saves are
-shared with the TUI: `F5` writes a normal run save and `F9` loads the newest
-save.
+same `ShadowguyApp` state and rules and does not change the TUI, but it still
+leaves crew, burglary edge cases, grenades, hacker programs and cyberware to the
+TUI. The start screen offers a Runner run (premade archetype or custom build), a
+Corp run, or loading the newest save. Corp mode covers the map, the daily economy,
+the Academy, the Research Facility and Operations; a runner can also take over a
+corp at its HQ and use the same action list. Saves are shared with the TUI: `F5`
+writes a normal run save and `F9` loads the newest save.
 
 ```bash
 uv sync --group gui
@@ -44,15 +43,16 @@ uv run --group gui python -m shadowguy.gui --seed 12345
 Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops in a
 runner run, so use the Down arrow for south), `Enter` travels or relocates, `R`
 rests/ends the day, `F` fixers, `J` jobs on site, `S` shops, `I` gear, `G` gang
-den, `V` deliver a smuggling job, `C` opens the corp action list, `F5` saves,
-`F9` loads the newest save, `Q` quits.
+den, `V` deliver a smuggling job, `H` enter a corp HQ, `C` opens the corp action
+list, `F5` saves, `F9` loads the newest save, `Q` quits.
 
-The slice covers the map/character/district panels, travel with gang and corp
-encounters (toll or fight), fixer offers and job acceptance, the scene check
-runner, abstract/tactical/matrix fights, shops, inventory, smuggling deliveries,
-save/load, and a corp-only run: expand, survey, security/surveillance/development,
-fundraise, Academy training and grants, labs and efficiency, the research tree,
-and deploy/attack/intel/sabotage. See `src/shadowguy/gui/` and `shadowguy.travel`
+The slice covers the map/character/district panels, character creation, travel
+with gang and corp encounters (toll or fight), fixer offers and job acceptance,
+the scene check runner, abstract/tactical/matrix fights, shops, inventory,
+smuggling deliveries, save/load, corp takeover/HQ, the surveillance log, and a
+corp-only run: expand, survey, security/surveillance/development, fundraise,
+Academy training and grants, labs and efficiency, the research tree, and
+deploy/attack/intel/sabotage. See `src/shadowguy/gui/` and `shadowguy.travel`
 for the shared travel-time formula. Playtest reports live in `docs/playtests/`.
 
 ## What a run looks like
