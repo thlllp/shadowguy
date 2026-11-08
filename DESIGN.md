@@ -781,7 +781,7 @@ captured      = attack_power > defense_power        # ties hold the ground
 | Captured | `min(committed, defense)` — one per point ground through | the whole garrison |
 | Repelled | same | `min(garrison, committed)` |
 
-**Survivors of a capture become the new garrison**; survivors of a repel go back in the pool. Taking a district and leaving it empty would just invite it straight back, so holding what you took is automatic rather than a second action.
+**Survivors of a capture become the new garrison**; survivors of a repel go back in the pool. Holding what you took is automatic rather than a second action. Because attacker losses are `min(committed, defense)`, a force no larger than the defense can capture a district with **no survivors left to garrison it** — the district is yours but bare. That is a deliberate pyrrhic-capture risk, not a hole: the force picker says that committing more than the defense is what leaves a garrison.
 
 **`capture_territory` is not `claim_territory`'s twin.** Claiming reseeds modifiers because neutral ground's profile (flat Unrest, no Security) stops describing the place once a corp moves in. Capturing keeps modifiers *and every Location standing on the district* — that inheritance is the point of taking ground off a rival rather than off nobody, up to and including their `RESEARCH_FACILITY`.
 

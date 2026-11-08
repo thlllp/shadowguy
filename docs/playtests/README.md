@@ -42,10 +42,11 @@ Remaining gaps: **corp defeat** on this build (needs a long soak losing every
 district), and the GUI's **unimplemented** save/load, corp mode and smuggling —
 preview limits, not test gaps.
 
-Design note: a capture can leave the taken district at garrison 0 when every
-committed operative dies (`attacker_losses = min(committed, defense)`). The code
-comment says survivors hold the ground; the arithmetic allows none. Decide
-whether that is an intended pyrrhic-capture risk or needs a survivor floor.
+Design note (decided): a capture can leave the taken district at garrison 0 when
+every committed operative dies (`attacker_losses = min(committed, defense)`). That
+is an intended pyrrhic-capture risk, not a bug — committing more than the defense
+is what leaves a garrison, and the force picker now says so. See DESIGN.md's Corp
+conflict section.
 
 ## Running again
 
