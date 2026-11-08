@@ -16,7 +16,7 @@ import arcade  # noqa: E402
 
 from shadowguy.abstract_combat import CombatOutcome  # noqa: E402
 from shadowguy.combat import Drop  # noqa: E402
-from shadowguy.corpmap import SHOP_KINDS, unowned_territory_ids  # noqa: E402
+from shadowguy.corpmap import LocationKind, SHOP_KINDS, unowned_territory_ids  # noqa: E402
 from shadowguy.encounters import (  # noqa: E402
     ARREST_CASH_PCT,
     ARREST_HOURS,
@@ -37,6 +37,7 @@ from shadowguy.gui.views import (  # noqa: E402
     MapView,
     SceneView,
     ShopView,
+    TacticalView,
     TollView,
 )
 from shadowguy.jobs import generate_job  # noqa: E402
@@ -328,3 +329,39 @@ def test_fixer_view_marks_a_rival_taken_offer_and_refuses_it():
     assert offer not in window.session.character.accepted_jobs
     assert offer in fixer.offers
     assert view.message == "Someone else already took that one."
+
+
+def test_shop_view_reports_an_unaffordable_program():
+    window = FakeWindow()
+    shop = next(
+        location
+        for territory in window.session.corp_map.territories.values()
+        for location in territory.locations
+        if location.kind is LocationKind.COMPUTER_STORE
+    )
+    view = ShopView(window, shop)
+    row_id = next(row_id for row_id, _ in view.rows if row_id.startswith("program:"))
+    program_id = row_id.removeprefix("program:")
+    cash = window.session.character.cash
+
+    view.pick(row_id)
+
+    assert program_id not in window.session.character.owned_programs
+    assert window.session.character.cash == cash
+    assert view.message.startswith("Can't afford")
+
+
+def test_tactical_aim_arrows_move_the_cursor():
+    window = FakeWindow()
+    grid = types.SimpleNamespace(
+        in_bounds=lambda coord: 0 <= coord[0] < 10 and 0 <= coord[1] < 10
+    )
+    state = types.SimpleNamespace(aim_cursor=(5, 4), is_over=False, grid=grid)
+    view = TacticalView(window, state, lambda outcome: None)
+    view.aiming = True
+
+    view.on_key(arcade.key.LEFT, 0)
+    view.on_key(arcade.key.UP, 0)
+
+    assert state.aim_cursor == (4, 3)
+    assert view.aiming

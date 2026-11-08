@@ -159,7 +159,7 @@ class ShadowguyWindow(arcade.Window):
         if message:
             self.text(message, 20, footer_h - 14, size=12, color=ACCENT)
         self.text(
-            "Arrows/WASD move   Enter travel   R rest   F fixers   J jobs   S shops   I gear   Q quit",
+            "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   I gear   Q quit",
             20, footer_h - 34, size=11, color=MUTED,
         )
 

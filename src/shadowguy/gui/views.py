@@ -61,6 +61,7 @@ from shadowguy.tactical import (
     confirm_aim,
     end_turn,
     leave,
+    move_aim_cursor,
     move_player,
     snap_aim_to_next_target,
     start_burglary,
@@ -481,9 +482,12 @@ class ShopView(MenuView):
                 return
         else:
             result = buy_program(c, item_id, standing)
-            if "isn't available" in result or "Already own" in result:
-                self.message = result
-                return
+            # buy_program reports every failure ("Can't afford …", "Already own …",
+            # "… isn't available") and only says "Bought …" on success.
+            self.message = result
+            if result.startswith("Bought"):
+                self._build()
+            return
         self.message = f"Bought {item_id}."
         self._build()
 
@@ -922,10 +926,24 @@ class TacticalView(View):
                 snap_aim_to_next_target(state)
             elif symbol in (arcade.key.ENTER, arcade.key.SPACE):
                 confirm_aim(state, self.window.session.rng)
-                self.aiming = False
+                # A misaimed confirm leaves the cursor open; keep our wrapper in
+                # step with the engine rather than dropping out of aim mode.
+                self.aiming = state.aim_cursor is not None
             elif symbol == arcade.key.ESCAPE:
                 cancel_aim(state)
                 self.aiming = False
+            else:
+                dx = dy = 0
+                if symbol in (arcade.key.LEFT, arcade.key.A):
+                    dx = -1
+                elif symbol in (arcade.key.RIGHT, arcade.key.D):
+                    dx = 1
+                elif symbol in (arcade.key.UP, arcade.key.W):
+                    dy = -1
+                elif symbol in (arcade.key.DOWN, arcade.key.S):
+                    dy = 1
+                if dx or dy:
+                    move_aim_cursor(state, dx, dy)
             return
         if symbol == arcade.key.F:
             self.aiming = begin_attack_aim(state)

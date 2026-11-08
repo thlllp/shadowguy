@@ -67,3 +67,29 @@ def test_map_and_menu_draw_paths(monkeypatch):
     TacticalView.from_stage(window, stage, lambda outcome: None).draw()
 
     assert calls
+
+
+def test_map_footer_does_not_promise_wasd_movement(monkeypatch):
+    """S opens shops on the map, so a footer advertising "Arrows/WASD move" is
+    contradictory. The arrow keys are the documented movement path."""
+    texts = []
+
+    monkeypatch.setattr(arcade, "draw_line", lambda *args, **kwargs: None)
+
+    class RecordingText:
+        def __init__(self, value, *args, **kwargs):
+            texts.append(value)
+
+        def draw(self):
+            pass
+
+    monkeypatch.setattr(arcade, "Text", RecordingText)
+
+    window = ShadowguyWindow.__new__(ShadowguyWindow)
+    window._width = 1280
+    window._height = 860
+    window._draw_footer(56, None)
+
+    footer = next(text for text in texts if "Enter travel" in text)
+    assert "WASD" not in footer
+    assert "S shops" in footer
