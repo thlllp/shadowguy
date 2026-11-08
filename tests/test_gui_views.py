@@ -437,11 +437,28 @@ def test_start_view_offers_a_corp_run():
     window = FakeWindow()
     view = StartView(window)
 
-    assert [row_id for row_id, _ in view.rows] == ["runner", "corp"]
+    assert [row_id for row_id, _ in view.rows] == ["runner", "corp", "load"]
 
     view.pick("corp")
 
     assert isinstance(window.views[-1], FactionPickView)
+
+
+def test_start_view_loads_the_newest_save(tmp_path, monkeypatch):
+    from shadowguy import saves
+
+    monkeypatch.setattr(saves, "SAVE_DIR", tmp_path)
+
+    window = FakeWindow()
+    window.session.character.cash = 555
+    window.session.save()
+    window.session.character.cash = 1
+    view = StartView(window)
+
+    view.pick("load")
+
+    assert window.session.character.cash == 555
+    assert isinstance(window.views[-1], MapView)
 
 
 def test_faction_pick_starts_a_corp_only_run():

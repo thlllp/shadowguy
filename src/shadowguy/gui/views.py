@@ -222,13 +222,21 @@ class StartView(MenuView):
         self.rows = [
             ("runner", "Runner — one character, one life"),
             ("corp", "Corp — run a faction"),
+            ("load", "Load the newest save"),
         ]
 
     def pick(self, row_id: str) -> None:
         if row_id == "runner":
             self.window.start_runner()
-        else:
+        elif row_id == "corp":
             self.window.push(FactionPickView(self.window))
+        else:
+            error = self.window.session.load_latest()
+            if error is not None:
+                self.message = error
+                return
+            self.window.show_map()
+            self.window.map_view.message = "Loaded the newest save."
 
     def on_key(self, symbol: int, modifiers: int) -> None:
         if symbol in (arcade.key.ESCAPE, arcade.key.Q):

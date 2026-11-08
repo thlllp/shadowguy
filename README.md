@@ -28,8 +28,9 @@ The TUI is the canonical game and the full test surface. The Arcade front-end is
 an **experimental preview slice**, not an alternative client yet: it shares the
 same `ShadowguyApp` state and rules and does not change the TUI, but it starts on
 the engine's bare default character and has **no character creation and no
-smuggling**. The start screen offers a Runner or Corp run. Corp mode covers the
-map, the daily economy, the Academy, the Research Facility and Operations;
+smuggling**. The start screen offers a Runner run, a Corp run, or loading the
+newest save. Corp mode covers the map, the daily economy, the Academy, the
+Research Facility and Operations;
 corp takeover/HQ and the surveillance log remain TUI-only, along with crew,
 burglary edge cases, grenades, hacker programs and cyberware. Saves are shared
 with the TUI: `F5` writes a normal run save and `F9` loads the newest save.
