@@ -22,6 +22,7 @@ from shadowguy.corpmap import (  # noqa: E402
     expansion_candidates,
     unowned_territory_ids,
 )
+from shadowguy.corp_turn import Sighting  # noqa: E402
 from shadowguy.encounters import (  # noqa: E402
     ARREST_CASH_PCT,
     ARREST_HOURS,
@@ -29,12 +30,17 @@ from shadowguy.encounters import (  # noqa: E402
     GangEncounter,
     gang_attack,
 )
-from shadowguy.factions import FACTIONS  # noqa: E402
+from shadowguy.factions import FACTIONS, FACTIONS_BY_ID  # noqa: E402
 from shadowguy.gangs import GANGS  # noqa: E402
 from shadowguy.gui.session import GameSession, HopEncounter  # noqa: E402
 from shadowguy.gui.views import (  # noqa: E402
+    ArchetypePickView,
     CombatView,
     CorpActionsView,
+    CorpHQView,
+    CreationGearView,
+    CreationSkillsView,
+    CreationView,
     EntranceView,
     FactionPickView,
     FixerView,
@@ -45,13 +51,16 @@ from shadowguy.gui.views import (  # noqa: E402
     JobsView,
     MapView,
     ResearchTreeView,
+    RunnerBuildView,
     SceneView,
     ShopView,
     StartView,
+    SurveillanceView,
     TacticalView,
     TollView,
 )
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_job  # noqa: E402
+from shadowguy.runners import RUNNERS_BY_ID  # noqa: E402
 from shadowguy.scene import Outcome  # noqa: E402
 from helpers import AlwaysOne, AlwaysSix, force_outcome  # noqa: E402
 
@@ -668,3 +677,141 @@ def test_rest_reports_an_expired_delivery():
     assert character.smuggling_job is None
     assert character.gang_standing_with(job.gang_id) == standing - GANG_JOB_STANDING_GAIN
     assert "expired" in view.message
+
+
+def test_runner_build_view_offers_premade_and_custom():
+    window = FakeWindow()
+    view = RunnerBuildView(window)
+
+    assert [row_id for row_id, _ in view.rows] == ["premade", "custom"]
+
+    view.pick("custom")
+
+    assert isinstance(window.views[-1], CreationView)
+
+
+def test_archetype_pick_applies_a_preset():
+    window = FakeWindow()
+    view = ArchetypePickView(window)
+
+    view.pick("archetype:gunslinger")
+
+    assert isinstance(window.views[-1], CreationView)
+    character = window.session.character
+    assert character.stat_points == 0
+    assert character.skill_points == 0
+    assert character.inventory
+
+
+def test_creation_view_spends_a_stat_point():
+    window = FakeWindow()
+    character = window.session.character
+    body = character.stat("body")
+    view = CreationView(window)
+
+    view.pick("stat:body")
+
+    assert character.stat("body") == body + 1
+    assert character.stat_points == 5
+
+
+def test_creation_skills_view_spends_a_skill_point():
+    window = FakeWindow()
+    character = window.session.character
+    character.skill_points = 20
+    view = CreationSkillsView(window, "body", lambda: None)
+    row = next(row_id for row_id, _ in view.rows)
+    skill_id = row.removeprefix("skill:")
+    rank = character.skill_rank(skill_id)
+
+    view.pick(row)
+
+    assert character.skill_rank(skill_id) == rank + 1
+
+
+def test_creation_gear_converts_and_buys():
+    window = FakeWindow()
+    character = window.session.character
+    character.skill_points = 1
+    view = CreationGearView(window, lambda: None)
+
+    view.pick("convert")
+
+    assert character.gear_budget == 1000
+
+    buy = next(row_id for row_id, _ in view.rows if row_id.startswith("buy:"))
+    view.pick(buy)
+
+    assert character.gear_budget < 1000
+    assert character.creation_gear
+
+
+def test_creation_begin_starts_the_runner():
+    window = FakeWindow()
+    character = window.session.character
+    character.stat_points = 0
+    character.skill_points = 0
+    view = CreationView(window)
+
+    view.pick("begin")
+
+    assert isinstance(window.views[-1], MapView)
+
+
+def test_corp_hq_takeover_creates_a_hybrid_corp():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.CORP_HQ for location in territory.locations)
+    )
+    character.location_id = territory.id
+    character.rep = 20
+    character.adjust_standing(
+        territory.owner, 15 - character.standing_with(territory.owner)
+    )
+    character.cash = 20000
+    hq = next(
+        location for location in territory.locations if location.kind is LocationKind.CORP_HQ
+    )
+    view = CorpHQView(window, hq, FACTIONS_BY_ID[territory.owner])
+    assert "takeover" in [row_id for row_id, _ in view.rows]
+
+    view.pick("takeover")
+
+    assert window.session.app.corp_state.faction_id == territory.owner
+    assert not window.session.app.corp_only
+    assert character.cash == 5000
+
+    map_view = MapView(window)
+    window.views = [map_view]
+    map_view.on_key(arcade.key.C, 0)
+    assert isinstance(window.views[-1], CorpActionsView)
+
+
+def test_surveillance_log_tails_a_sighted_runner():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    state.operatives = 1
+    state.action_points = 2
+    actor_id = next(iter(RUNNERS_BY_ID))
+    state.sightings = [
+        Sighting(
+            kind="runner",
+            actor_id=actor_id,
+            territory_id=window.session.character.location_id,
+            day=1,
+        )
+    ]
+    assert "surveillance" in [
+        row_id for row_id, _ in CorpActionsView(window, window.map_view).rows
+    ]
+    view = SurveillanceView(window)
+    row = next(row_id for row_id, _ in view.rows if row_id.startswith("tail:"))
+
+    view.pick(row)
+
+    assert state.tasking_operatives == 1
+    assert state.action_points == 1

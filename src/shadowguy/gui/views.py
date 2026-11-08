@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
+from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT
 from shadowguy.combat import (
     KNOCKOUT_FATAL_MAX,
     KNOCKOUT_ROUGH_MAX,
@@ -24,9 +26,11 @@ from shadowguy.corp_turn import (
     ACADEMY_GRANT_COST,
     ACADEMY_TRAINING_COST,
     DEVELOPMENT_BUMP_COST,
+    INVESTIGATION_COST,
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     TRAINING_DAYS,
+    CorpState,
     EmployeeCategory,
     academy_grant_rp,
     academy_research_grant,
@@ -47,6 +51,8 @@ from shadowguy.corp_turn import (
     gather_intel,
     has_technology,
     intel_targets,
+    investigate_sighting,
+    investigate_sighting_targets,
     next_academy_upgrade_cost,
     next_efficiency_cost,
     next_lab_cost,
@@ -67,6 +73,8 @@ from shadowguy.corp_turn import (
     survey_targets,
     surveillance_bump_cost,
     surveillance_targets,
+    tail_runner,
+    tail_runner_targets,
     train_employees,
     upgrade_academy,
 )
@@ -80,12 +88,25 @@ from shadowguy.corpmap import (
     unowned_territory_ids,
 )
 from shadowguy.encounters import ARREST_CASH_PCT, ARREST_HOURS, ARREST_STANDING_HIT
-from shadowguy.factions import FACTIONS, FACTIONS_BY_ID
+from shadowguy.factions import (
+    EXECUTIVE_ROLE,
+    FACTIONS,
+    FACTIONS_BY_ID,
+    TAKEOVER_COST,
+    can_take_over,
+    officer_dialogue,
+    officer_gate,
+    officer_unlocked,
+    takeover_gate,
+)
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
 from shadowguy.inventory import reload_weapon, rounds_needed, toggle_equip, use_consumable
 from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
+from shadowguy.runners import RUNNERS_BY_ID
+from shadowguy.shops import bonus_text
+from shadowguy.skills import SKILLS
 from shadowguy.matrix import (
     analyze_node,
     available_matrix_actions,
@@ -206,7 +227,7 @@ def _corp_over(window) -> bool:
     app's own app.exit() only stops a Textual run; the Arcade client has to notice
     the same condition itself."""
     app = window.session.app
-    if not app.corp_only or app.corp_state is None:
+    if app.corp_state is None:
         return False
     if not corp_defeated(app.corp_state, app.corp_map):
         return False
@@ -229,7 +250,7 @@ class StartView(MenuView):
 
     def pick(self, row_id: str) -> None:
         if row_id == "runner":
-            self.window.start_runner()
+            self.window.push(RunnerBuildView(self.window))
         elif row_id == "corp":
             self.window.push(FactionPickView(self.window))
         else:
@@ -268,6 +289,196 @@ class FactionPickView(MenuView):
         super().on_key(symbol, modifiers)
 
 
+class RunnerBuildView(MenuView):
+    title = "NEW RUNNER"
+
+    def __init__(self, window: "ShadowguyWindow") -> None:
+        super().__init__(window)
+        self.intro = ["Take a preset or spend the 26 creation points by hand."]
+        self.rows = [
+            ("premade", "Premade archetype"),
+            ("custom", "Custom character"),
+        ]
+
+    def pick(self, row_id: str) -> None:
+        if row_id == "premade":
+            self.window.push(ArchetypePickView(self.window))
+        else:
+            self.window.push(CreationView(self.window))
+
+
+class ArchetypePickView(MenuView):
+    title = "PICK AN ARCHETYPE"
+
+    def __init__(self, window: "ShadowguyWindow") -> None:
+        super().__init__(window)
+        self.rows = [
+            (f"archetype:{archetype.id}", f"{archetype.name} — {archetype.description}")
+            for archetype in ARCHETYPES
+        ]
+
+    def pick(self, row_id: str) -> None:
+        archetype = ARCHETYPES_BY_ID[row_id.removeprefix("archetype:")]
+        character = self.window.session.character
+        character.reset_build()
+        archetype.apply(character)
+        self.window.push(CreationView(self.window))
+
+
+class CreationView(MenuView):
+    title = "CREATE RUNNER"
+
+    def __init__(self, window: "ShadowguyWindow") -> None:
+        super().__init__(window)
+        self._build()
+
+    def _character(self):
+        return self.window.session.character
+
+    def _build(self) -> None:
+        character = self._character()
+        self.intro = [
+            f"Stat points {character.stat_points} — skill points {character.skill_points} — "
+            f"gear budget {character.gear_budget}eb"
+        ]
+        rows = [
+            (
+                f"stat:{stat}",
+                f"Raise {stat.title()} ({character.stat(stat)}) — 1 point",
+            )
+            for stat in CORE_STATS
+        ]
+        rows += [(f"skills:{stat}", f"Skills — {stat.title()}") for stat in CORE_STATS]
+        rows.append(("gear", f"Gear — spend {character.gear_budget}eb"))
+        rows.append(("reset", "Reset build"))
+        rows.append(("begin", "Begin run"))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self._character()
+        kind, _, argument = row_id.partition(":")
+        if kind == "stat":
+            if not character.spend_stat_point(argument):
+                self.message = "No stat points left."
+        elif kind == "skills":
+            self.window.push(CreationSkillsView(self.window, argument, self._build))
+            return
+        elif kind == "gear":
+            self.window.push(CreationGearView(self.window, self._build))
+            return
+        elif kind == "reset":
+            character.reset_build()
+            self.message = "Build reset."
+        elif kind == "begin":
+            if character.stat_points or character.skill_points:
+                self.message = "Spend every point before the run starts."
+                return
+            lost = character.discard_gear_budget()
+            self.window.start_runner()
+            if lost:
+                self.window.map_view.message = (
+                    f"{lost}eb of unspent gear budget written off."
+                )
+            return
+        self._build()
+
+
+class CreationSkillsView(MenuView):
+    title = "SKILLS"
+
+    def __init__(self, window, stat: str, on_close) -> None:
+        super().__init__(window)
+        self.stat = stat
+        self.on_close = on_close
+        self._build()
+
+    def _character(self):
+        return self.window.session.character
+
+    def _build(self) -> None:
+        character = self._character()
+        self.intro = [
+            f"{self.stat.title()} skills — {character.skill_points} skill points left"
+        ]
+        rows = []
+        for skill in SKILLS:
+            if skill.stat != self.stat:
+                continue
+            cost = character.next_rank_cost(skill.id)
+            rank = character.skill_rank(skill.id)
+            label = (
+                f"{skill.name} — rank {rank}, max"
+                if cost is None
+                else f"{skill.name} — rank {rank} -> {rank + 1}, {cost} point"
+            )
+            rows.append((f"skill:{skill.id}", label))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not self._character().spend_skill_point(row_id.removeprefix("skill:")):
+            self.message = "Can't raise that skill."
+        self._build()
+
+    def cancel(self) -> None:
+        self.window.pop()
+        self.on_close()
+
+
+class CreationGearView(MenuView):
+    title = "CREATION GEAR"
+
+    def __init__(self, window, on_close) -> None:
+        super().__init__(window)
+        self.on_close = on_close
+        self._build()
+
+    def _character(self):
+        return self.window.session.character
+
+    def _build(self) -> None:
+        character = self._character()
+        self.intro = [
+            f"Gear budget {character.gear_budget}eb — 1 skill point = "
+            f"{GEAR_EB_PER_POINT}eb. Unspent budget is written off at the start."
+        ]
+        rows = [
+            (
+                "convert",
+                f"Convert a skill point -> +{GEAR_EB_PER_POINT}eb",
+            )
+        ]
+        affordable = sorted(
+            (
+                item
+                for item in ITEMS_BY_ID.values()
+                if not item.min_standing and item.price <= character.gear_budget
+            ),
+            key=lambda item: -item.price,
+        )
+        rows += [
+            (f"buy:{item.id}", f"{item.name} — {item.price}eb {bonus_text(item)}")
+            for item in affordable
+        ]
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self._character()
+        if row_id == "convert":
+            if not character.convert_skill_point_to_gear():
+                self.message = "No skill points left to convert."
+        else:
+            item = ITEMS_BY_ID[row_id.removeprefix("buy:")]
+            if character.buy_creation_gear(item):
+                self.message = f"Bought {item.name}."
+            else:
+                self.message = "Can't afford that."
+        self._build()
+
+    def cancel(self) -> None:
+        self.window.pop()
+        self.on_close()
+
+
 class MapView(View):
     def __init__(self, window: "ShadowguyWindow") -> None:
         super().__init__(window)
@@ -278,7 +489,15 @@ class MapView(View):
                 "F5 save | F9 load | Q quit"
             )
         else:
-            self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | G den | V deliver | F5 save | F9 load | Q quit"
+            corp = (
+                "C corp actions | "
+                if window.session.app.corp_state is not None
+                else ""
+            )
+            self.message = corp + (
+                "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | "
+                "I gear | G den | V deliver | H HQ | F5 save | F9 load | Q quit"
+            )
 
     def draw(self) -> None:  # pragma: no cover - drawing
         self.window.selected_id = self.selected_id
@@ -288,7 +507,8 @@ class MapView(View):
         if symbol in (arcade.key.ESCAPE, arcade.key.Q):
             self.window.close()
             return
-        corp_only = self.window.session.app.corp_only
+        app = self.window.session.app
+        corp_only = app.corp_only
         if symbol == arcade.key.R:
             self._rest()
             return
@@ -298,11 +518,10 @@ class MapView(View):
         if symbol == arcade.key.F9:
             self._load()
             return
-        if corp_only:
-            if symbol == arcade.key.C:
-                self.window.push(CorpActionsView(self.window, self))
-                return
-        else:
+        if app.corp_state is not None and symbol == arcade.key.C:
+            self.window.push(CorpActionsView(self.window, self))
+            return
+        if not corp_only:
             if symbol == arcade.key.F:
                 self._open_fixers()
                 return
@@ -320,6 +539,9 @@ class MapView(View):
                 return
             if symbol == arcade.key.V:
                 self._deliver_smuggling()
+                return
+            if symbol == arcade.key.H:
+                self._open_hq()
                 return
         if symbol in (arcade.key.ENTER, arcade.key.SPACE):
             self._travel()
@@ -426,6 +648,27 @@ class MapView(View):
             self.message = "No gang den here."
             return
         self.window.push(GangDenView(self.window, GANGS_BY_ID[territory.gang_id]))
+
+    def _open_hq(self) -> None:
+        session = self.window.session
+        territory = session.territory(session.character.location_id)
+        if territory.owner == "neutral":
+            self.message = "No corporate HQ here."
+            return
+        hq = next(
+            (
+                location
+                for location in territory.locations
+                if location.kind is LocationKind.CORP_HQ
+            ),
+            None,
+        )
+        if hq is None:
+            self.message = "No corporate HQ here."
+            return
+        self.window.push(
+            CorpHQView(self.window, hq, FACTIONS_BY_ID[territory.owner])
+        )
 
     def _deliver_smuggling(self) -> None:
         session = self.window.session
@@ -608,6 +851,7 @@ class CorpActionsView(MenuView):
                 )
             )
 
+        rows.append(("surveillance", f"Surveillance log — {len(state.sightings)} sighting(s)"))
         rows.append(("rest", "End day — rest to 6 AM"))
         self.rows = rows
 
@@ -686,6 +930,9 @@ class CorpActionsView(MenuView):
         elif kind == "research_tree":
             self.window.push(ResearchTreeView(self.window, self._build))
             return
+        elif kind == "surveillance":
+            self.window.push(SurveillanceView(self.window, self._build))
+            return
         elif kind == "deploy":
             self.window.push(
                 ForcePickView(
@@ -756,6 +1003,98 @@ class CorpActionsView(MenuView):
         else:
             self.message = f"Attack repelled — {result.attacker_losses} lost."
         self._build()
+
+
+class SurveillanceView(MenuView):
+    title = "SURVEILLANCE"
+
+    def __init__(self, window, on_close=None) -> None:
+        super().__init__(window)
+        self.on_close = on_close
+        self._build()
+
+    def _state(self):
+        return self.window.session.app.corp_state
+
+    def _map(self):
+        return self.window.session.app.corp_map
+
+    def _build(self) -> None:
+        state = self._state()
+        corp_map = self._map()
+        self.intro = [f"{len(state.sightings)} sighting(s) in the log"]
+        rows = []
+        can_investigate = bool(investigate_sighting_targets(state, corp_map))
+        for index, sighting in enumerate(state.sightings):
+            who = (
+                "you"
+                if sighting.kind == "player"
+                else RUNNERS_BY_ID[sighting.actor_id].name
+            )
+            label = (
+                f"Day {sighting.day} — {who} in "
+                f"{corp_map.territories[sighting.territory_id].name}"
+            )
+            if sighting.runner_faction_id:
+                label += f" ({sighting.runner_faction_id})"
+            if sighting.intercepted:
+                label += " [intercepted]"
+            if can_investigate:
+                label += f" — investigate ({INVESTIGATION_COST}eb)"
+                rows.append((f"investigate:{index}", label))
+            else:
+                rows.append((f"sighting:{index}", label))
+        for sighting in tail_runner_targets(state):
+            who = RUNNERS_BY_ID[sighting.actor_id].name
+            rows.append(
+                (
+                    f"tail:{sighting.day}:{sighting.actor_id}",
+                    f"Tail {who} (spotted on day {sighting.day})",
+                )
+            )
+        if not rows:
+            rows.append(("none", "No sightings yet."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        state = self._state()
+        corp_map = self._map()
+        rng = self.window.session.rng
+        kind, _, argument = row_id.partition(":")
+        if kind == "investigate":
+            sighting = state.sightings[int(argument)]
+            if investigate_sighting(state, sighting, rng):
+                self.message = (
+                    f"Investigated sighting: {sighting.kind} in "
+                    f"{corp_map.territories[sighting.territory_id].name} on day "
+                    f"{sighting.day}."
+                )
+            else:
+                self.message = "Can't investigate that sighting."
+        elif kind == "tail":
+            day, _, actor_id = argument.partition(":")
+            sighting = next(
+                (
+                    candidate
+                    for candidate in state.sightings
+                    if candidate.day == int(day) and candidate.actor_id == actor_id
+                ),
+                None,
+            )
+            if sighting is None:
+                self.message = "That sighting is no longer in the log."
+            elif tail_runner(state, sighting, rng):
+                self.message = (
+                    f"Tailing {RUNNERS_BY_ID[sighting.actor_id].name} — operative dispatched."
+                )
+            else:
+                self.message = "The tail lost their target. Operative dispatched anyway."
+        self._build()
+
+    def cancel(self) -> None:
+        self.window.pop()
+        if self.on_close is not None:
+            self.on_close()
 
 
 class ForcePickView(MenuView):
@@ -1063,6 +1402,86 @@ class GangDenView(MenuView):
                     f"Delivery: {job.item} to {destination.name} by day {job.deadline_day}."
                 )
         self._build()
+
+
+class CorpHQView(MenuView):
+    title = "CORP HQ"
+
+    def __init__(self, window, location, faction) -> None:
+        super().__init__(window)
+        self.location = location
+        self.faction = faction
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        standing = character.standing_with(self.faction.id)
+        self.intro = [
+            f"{self.faction.name} — rep {character.rep}, standing {standing:+d}, "
+            f"cash {character.cash}eb"
+        ]
+        rows = []
+        for officer in self.location.characters:
+            if officer_unlocked(character.rep, standing, officer.role):
+                label = f"{officer.name} ({officer.role}) — talk"
+            else:
+                label = (
+                    f"{officer.name} ({officer.role}) — locked "
+                    f"(needs {officer_gate(officer.role)})"
+                )
+            rows.append((f"officer:{officer.id}", label))
+        app = self.window.session.app
+        if app.corp_state is not None:
+            self.intro.append(f"You already run {FACTIONS_BY_ID[app.corp_state.faction_id].name}.")
+        elif officer_unlocked(character.rep, standing, EXECUTIVE_ROLE):
+            if can_take_over(character.rep, standing, character.cash):
+                label = f"Take over {self.faction.name} — {TAKEOVER_COST}eb"
+            else:
+                label = (
+                    f"Take over {self.faction.name} — locked "
+                    f"(needs {takeover_gate(character.rep, standing, character.cash)})"
+                )
+            rows.append(("takeover", label))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        standing = character.standing_with(self.faction.id)
+        if row_id == "takeover":
+            app = self.window.session.app
+            if app.corp_state is not None:
+                self.message = "You're already running a corp."
+                return
+            if not can_take_over(character.rep, standing, character.cash):
+                self.message = (
+                    "The executive hears you out and passes — come back with "
+                    f"{takeover_gate(character.rep, standing, character.cash)}."
+                )
+                return
+            character.cash -= TAKEOVER_COST
+            app.corp_state = CorpState(faction_id=self.faction.id)
+            self.message = (
+                f"The board signs. {self.faction.name} is yours — press C for corp actions."
+            )
+            self._build()
+            return
+        officer = next(
+            (
+                candidate
+                for candidate in self.location.characters
+                if f"officer:{candidate.id}" == row_id
+            ),
+            None,
+        )
+        if officer is None:
+            return
+        if not officer_unlocked(character.rep, standing, officer.role):
+            self.message = (
+                f"{officer.name}'s people wave you off — come back with "
+                f"{officer_gate(officer.role)}."
+            )
+            return
+        self.message = officer_dialogue(self.faction, officer.role, standing)
 
 
 class ShopView(MenuView):
