@@ -182,14 +182,15 @@ class ShadowguyWindow(arcade.Window):
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
                 "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
-                "L local   M phone   T legwork   N contracts   C corp actions   "
-                "F5 save   F9 load   Q quit"
+                "L local   M phone   T legwork   N contracts   X skills   "
+                "C corp actions   F5 save   F9 load   Q quit"
             )
         else:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
                 "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
-                "L local   M phone   T legwork   N contracts   F5 save   F9 load   Q quit"
+                "L local   M phone   T legwork   N contracts   X skills   "
+                "F5 save   F9 load   Q quit"
             )
         self.text(controls, 20, footer_h - 34, size=11, color=MUTED)
 

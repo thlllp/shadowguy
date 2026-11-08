@@ -22,7 +22,7 @@ from shadowguy.corpmap import (  # noqa: E402
     expansion_candidates,
     unowned_territory_ids,
 )
-from shadowguy.corp_turn import Sighting  # noqa: E402
+from shadowguy.corp_turn import FactionEvent, Sighting  # noqa: E402
 from shadowguy.encounters import (  # noqa: E402
     ARREST_CASH_PCT,
     ARREST_HOURS,
@@ -39,6 +39,7 @@ from shadowguy.gui.views import (  # noqa: E402
     CombatView,
     CorpActionsView,
     CorpHQView,
+    CorpWebsiteView,
     CreationGearView,
     CreationSkillsView,
     CreationView,
@@ -66,11 +67,14 @@ from shadowguy.gui.views import (  # noqa: E402
     RunnerBuildView,
     SafehouseView,
     SceneView,
+    SkillsView,
     ShopView,
     StartView,
     SurveillanceView,
     TacticalView,
     TollView,
+    WebView,
+    XpSkillsView,
 )
 from shadowguy.fishing import FISHING_HOURS_COST  # noqa: E402
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_job  # noqa: E402
@@ -1140,3 +1144,55 @@ def test_phone_app_store_buys_an_app():
     store.pick(row)
 
     assert character.owned_apps
+
+
+def test_skills_view_spends_experience_on_a_stat():
+    window = FakeWindow()
+    character = window.session.character
+    character.experience = 100
+    body = character.stat("body")
+    cost = character.next_stat_cost("body")
+    view = SkillsView(window)
+
+    view.pick("stat:body")
+
+    assert character.stat("body") == body + 1
+    assert character.experience == 100 - cost
+
+
+def test_xp_skills_view_spends_experience_on_a_skill():
+    window = FakeWindow()
+    character = window.session.character
+    character.experience = 100
+    view = XpSkillsView(window, "body", lambda: None)
+    row = next(row_id for row_id, _ in view.rows)
+    skill_id = row.removeprefix("skill:")
+    rank = character.skill_rank(skill_id)
+    cost = character.next_rank_cost(skill_id)
+
+    view.pick(row)
+
+    assert character.skill_rank(skill_id) == rank + 1
+    assert character.experience == 100 - cost
+
+
+def test_web_site_opens_a_corp_blog():
+    window = FakeWindow()
+    app = window.session.app
+    faction = FACTIONS[0]
+    app.faction_events[faction.id] = [
+        FactionEvent(
+            kind="territory",
+            day=2,
+            territory_id=window.session.character.location_id,
+        )
+    ]
+    view = WebView(window)
+    window.views = [view]
+    row = next(row_id for row_id, _ in view.rows if row_id == f"site:{faction.id}")
+
+    view.pick(row)
+
+    blog = window.views[-1]
+    assert isinstance(blog, CorpWebsiteView)
+    assert any(row_id.startswith("post:") for row_id, _ in blog.rows)

@@ -13,7 +13,7 @@ import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
-from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, HOURS_PER_DAY, SURGERY_SCARRING
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, HOURS_PER_DAY, MAX_SKILL_RANK, SURGERY_SCARRING
 from shadowguy.combat import (
     KNOCKOUT_FATAL_MAX,
     KNOCKOUT_ROUGH_MAX,
@@ -554,7 +554,8 @@ class MapView(View):
             self.message = corp + (
                 "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | "
                 "I gear | G den | V deliver | H HQ | B bar | K clinic | P deck | "
-                "L local | M phone | T legwork | N contracts | F5 save | F9 load | Q quit"
+                "L local | M phone | T legwork | N contracts | X skills | "
+                "F5 save | F9 load | Q quit"
             )
 
     def draw(self) -> None:  # pragma: no cover - drawing
@@ -615,6 +616,9 @@ class MapView(View):
                 return
             if symbol == arcade.key.L:
                 self._open_local()
+                return
+            if symbol == arcade.key.X:
+                self.window.push(SkillsView(self.window))
                 return
             if symbol == arcade.key.T:
                 self.window.push(LegworkView(self.window))
@@ -2147,7 +2151,10 @@ class WebView(MenuView):
     def _build(self) -> None:
         session = self.window.session
         character = session.character
-        rows = []
+        rows = [
+            (f"site:{faction.id}", f"{faction.name} — official site")
+            for faction in FACTIONS
+        ]
         for fixer in session.app.fixers:
             if character.trust_with(fixer.id) <= 0:
                 continue
@@ -2159,9 +2166,16 @@ class WebView(MenuView):
                         f"({offer.scene.hours_cost}h)",
                     )
                 )
-        self.rows = rows or [("none", "No work posted online.")]
+        self.rows = rows
 
     def pick(self, row_id: str) -> None:
+        if row_id.startswith("site:"):
+            self.window.push(
+                CorpWebsiteView(
+                    self.window, FACTIONS_BY_ID[row_id.removeprefix("site:")]
+                )
+            )
+            return
         if not row_id.startswith("offer:"):
             return
         _, fixer_id, offer_id = row_id.split(":", 2)
@@ -2352,6 +2366,110 @@ class LocalView(MenuView):
             return
         location = self.territory.locations[int(row_id.removeprefix("place:"))]
         _open_local_location(self.window, self.territory, location)
+
+
+class SkillsView(MenuView):
+    title = "SKILLS"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        self.intro = [f"Experience: {character.experience}xp"]
+        rows = [
+            (
+                f"stat:{stat}",
+                f"Raise {stat.title()} ({character.stat(stat)}) — "
+                f"{character.next_stat_cost(stat)}xp",
+            )
+            for stat in CORE_STATS
+        ]
+        rows += [(f"skills:{stat}", f"{stat.title()} skills") for stat in CORE_STATS]
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        kind, _, argument = row_id.partition(":")
+        if kind == "stat":
+            cost = character.next_stat_cost(argument)
+            if not character.spend_experience_on_stat(argument):
+                self.message = f"Raising {argument.title()} costs {cost}xp; you have {character.experience}."
+        elif kind == "skills":
+            self.window.push(XpSkillsView(self.window, argument, self._build))
+            return
+        self._build()
+
+
+class XpSkillsView(MenuView):
+    title = "SKILLS"
+
+    def __init__(self, window, stat: str, on_close) -> None:
+        super().__init__(window)
+        self.stat = stat
+        self.on_close = on_close
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        self.intro = [f"{self.stat.title()} skills — {character.experience}xp"]
+        rows = []
+        for skill in SKILLS:
+            if skill.stat != self.stat:
+                continue
+            cost = character.next_rank_cost(skill.id)
+            rank = character.skill_rank(skill.id)
+            label = (
+                f"{skill.name} — rank {rank}, max"
+                if cost is None
+                else f"{skill.name} — rank {rank} -> {rank + 1}, {cost}xp"
+            )
+            rows.append((f"skill:{skill.id}", label))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not self.window.session.character.spend_experience_on_skill(
+            row_id.removeprefix("skill:")
+        ):
+            self.message = f"Not enough experience (rank {MAX_SKILL_RANK} is the ceiling)."
+        self._build()
+
+    def cancel(self) -> None:
+        self.window.pop()
+        self.on_close()
+
+
+class CorpWebsiteView(MenuView):
+    title = "CORP SITE"
+
+    def __init__(self, window, faction) -> None:
+        super().__init__(window)
+        self.faction = faction
+        self._build()
+
+    def _build(self) -> None:
+        app = self.window.session.app
+        self.intro = [
+            f"{self.faction.name} — {self.faction.specialty}",
+            self.faction.description,
+        ]
+        rows = []
+        for index, event in enumerate(app.faction_events.get(self.faction.id, [])):
+            if event.kind == "territory":
+                name = app.corp_map.territories[event.territory_id].name
+                label = f"Day {event.day} — Expanded operations into {name}."
+            elif event.kind == "seizure":
+                name = app.corp_map.territories[event.territory_id].name
+                rival = FACTIONS_BY_ID[event.from_faction_id].name
+                label = (
+                    f"Day {event.day} — Acquired {name} from {rival} in a hostile takeover."
+                )
+            else:
+                technology = TECHNOLOGIES_BY_ID[event.technology_id]
+                label = f"Day {event.day} — Unveiled new technology: {technology.name}."
+            rows.append((f"post:{index}", label))
+        self.rows = rows or [("none", "No updates yet.")]
 
 
 class CorpHQView(MenuView):
