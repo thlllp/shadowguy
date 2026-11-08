@@ -189,7 +189,7 @@ src/shadowguy/
 
   gui/           experimental Arcade front-end (optional `gui` group)
     __init__.py  main(): optional-dependency guard + CLI
-    session.py   GameSession: the GUI's boundary to ShadowguyApp (travel/encounters/work)
+    session.py   GameSession: the GUI's boundary to ShadowguyApp (travel/encounters/work/saves)
     views.py     map, menus, scene runner, abstract/tactical/matrix, shops, gear
     window.py    view stack + map/character/district renderer
 

@@ -27,10 +27,12 @@ uv run shadowguy --dev
 The TUI is the canonical game and the full test surface. The Arcade front-end is
 an **experimental preview slice**, not an alternative client yet: it shares the
 same `ShadowguyApp` state and rules and does not change the TUI, but it starts on
-the engine's bare default character and has **no character creation, no save/load,
-and no corp mode**. Those remain TUI-only, along with crew, burglary edge cases,
-grenades, hacker programs and cyberware. Treat it as a way to inspect the
-map/character/district panels and the fight surfaces, not as a full run.
+the engine's bare default character and has **no character creation, no corp mode
+and no smuggling**. Those remain TUI-only, along with crew, burglary edge cases,
+grenades, hacker programs and cyberware. Saves are shared with the TUI: `F5`
+writes a normal run save and `F9` loads the newest runner save (corp-only saves
+are refused). Treat it as a way to inspect the map/character/district panels and
+the fight surfaces, not as a full run.
 
 ```bash
 uv sync --group gui
@@ -40,14 +42,13 @@ uv run --group gui python -m shadowguy.gui --seed 12345
 
 Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops, so use
 the Down arrow for south), `Enter` travels, `R` rests, `F` fixers, `J` jobs on
-site, `S` shops, `I` gear, `Q` quits.
+site, `S` shops, `I` gear, `F5` saves, `F9` loads the newest save, `Q` quits.
 
 The slice covers the map/character/district panels, travel with gang and corp
 encounters (toll or fight), fixer offers and job acceptance, the scene check
-runner, abstract/tactical/matrix fights, shops and inventory. See
+runner, abstract/tactical/matrix fights, shops, inventory and save/load. See
 `src/shadowguy/gui/` and `shadowguy.travel` for the shared travel-time formula.
-Playtest reports, including the remaining open GUI defects, live in
-`docs/playtests/`.
+Playtest reports live in `docs/playtests/`.
 
 ## What a run looks like
 

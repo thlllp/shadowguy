@@ -35,11 +35,12 @@ knockout-as-victory, burglary starting stages, rival-taken offers; the two
 Coverage now includes: crew hiring and the wage tick, safehouse purchase and
 workshop build, cyberdeck/program and cyberware purchase/install, shop selling,
 crafting, corp-map intel and sabotage execution, corp attack, rival district
-losses, 80x24 matrix and burglary, the GUI death/KO/burglary/entrance flows, a
-live player capture, and a security contract blown through the app day tick.
+losses, 80x24 matrix and burglary, the GUI death/KO/burglary/entrance and
+save/load flows, a live player capture, and a security contract blown through
+the app day tick.
 
-Remaining gaps: the GUI's **unimplemented** save/load, corp mode, smuggling
-and character creation — preview limits, not test gaps.
+Remaining gaps: the GUI's **unimplemented** corp mode, smuggling and character
+creation — preview limits, not test gaps.
 
 Corp defeat was re-verified on this build with a passive corp-only soak (seed
 `555002`, Ironclad): 6 districts → 0 by day 104, `"Ironclad Dynamics has been
