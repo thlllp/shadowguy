@@ -13,7 +13,7 @@ import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
-from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, SURGERY_SCARRING
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, HOURS_PER_DAY, SURGERY_SCARRING
 from shadowguy.combat import (
     KNOCKOUT_FATAL_MAX,
     KNOCKOUT_ROUGH_MAX,
@@ -23,6 +23,14 @@ from shadowguy.combat import (
     knockout_roll,
     mug_unconscious,
     reloadable_weapons,
+)
+from shadowguy.corpmap import (
+    SHOP_KINDS,
+    WORKSHOP_BUILD_COST,
+    add_safehouse,
+    build_workshop,
+    has_home,
+    safehouse_price,
 )
 from shadowguy.cybernetics import (
     CYBERWARE_BY_ID,
@@ -110,6 +118,7 @@ from shadowguy.factions import (
     officer_unlocked,
     takeover_gate,
 )
+from shadowguy.fishing import FISHING_HOURS_COST, generate_fishing_trip
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.gigs import GIG_FAIL_REP_HIT, GIG_FAIL_STANDING_HIT
 from shadowguy.grid import Tile, visible_tiles
@@ -123,7 +132,7 @@ from shadowguy.inventory import (
     uninstall_program,
     use_consumable,
 )
-from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT
+from shadowguy.jobs import JOB_FAILURE_REP_HIT, JOB_FAILURE_TRUST_HIT, generate_legwork_for_job
 from shadowguy.runners import RUNNERS_BY_ID, recruit_cut, recruit_wage
 from shadowguy.rivals import RunnerActivity
 from shadowguy.shops import bonus_text
@@ -145,18 +154,24 @@ from shadowguy.matrix import (
 from shadowguy.scene import SceneKind, apply_outcome, resolve_choice, resolve_entrance
 from shadowguy.shops import (
     AMMO_CATALOG,
+    APP_STORE_CATALOG,
     AmmoKind,
     CATALOG,
     CONSUMABLE_CATALOG,
     CONSUMABLES_BY_ID,
+    HOSPITAL_STAY_COST,
     ITEMS_BY_ID,
+    MOD_CATALOG,
+    MODS_BY_ID,
     PROGRAM_CATALOG,
     PROGRAMS_BY_ID,
     buy_ammo,
+    buy_app,
     buy_consumable,
     buy_item,
     buy_price,
     buy_program,
+    hospital_stay,
 )
 from shadowguy.tactical import (
     AimKind,
@@ -179,6 +194,17 @@ from shadowguy.tactical import (
     start_tactical,
     take_stairs,
     throw_grenade,
+)
+from shadowguy.workshop import (
+    CRAFT_RECIPES,
+    SCAVENGE_HOURS_COST,
+    WORKSHOP_HOURS_COST,
+    craft_consumable,
+    install_mod,
+    install_refusal,
+    materials_label,
+    remove_mod,
+    scavenge,
 )
 
 
@@ -516,8 +542,8 @@ class MapView(View):
         self.selected_id = window.session.character.location_id
         if window.session.app.corp_only:
             self.message = (
-                "Arrows/WASD move | Enter relocate | C corp actions | R end day | "
-                "F5 save | F9 load | Q quit"
+                "Arrows/WASD move | Enter relocate | C corp actions | M phone | "
+                "R end day | F5 save | F9 load | Q quit"
             )
         else:
             corp = (
@@ -528,7 +554,7 @@ class MapView(View):
             self.message = corp + (
                 "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | "
                 "I gear | G den | V deliver | H HQ | B bar | K clinic | P deck | "
-                "F5 save | F9 load | Q quit"
+                "L local | M phone | T legwork | N contracts | F5 save | F9 load | Q quit"
             )
 
     def draw(self) -> None:  # pragma: no cover - drawing
@@ -552,6 +578,9 @@ class MapView(View):
             return
         if app.corp_state is not None and symbol == arcade.key.C:
             self.window.push(CorpActionsView(self.window, self))
+            return
+        if symbol == arcade.key.M:
+            self.window.push(PhoneView(self.window))
             return
         if not corp_only:
             if symbol == arcade.key.F:
@@ -583,6 +612,15 @@ class MapView(View):
                 return
             if symbol == arcade.key.P:
                 self.window.push(CyberdeckView(self.window))
+                return
+            if symbol == arcade.key.L:
+                self._open_local()
+                return
+            if symbol == arcade.key.T:
+                self.window.push(LegworkView(self.window))
+                return
+            if symbol == arcade.key.N:
+                self.window.push(ContractsView(self.window))
                 return
         if symbol in (arcade.key.ENTER, arcade.key.SPACE):
             self._travel()
@@ -722,6 +760,11 @@ class MapView(View):
             self.message = "No bar here."
             return
         self.window.push(BarView(self.window, bar))
+
+    def _open_local(self) -> None:
+        session = self.window.session
+        territory = session.territory(session.character.location_id)
+        self.window.push(LocalView(self.window, territory))
 
     def _open_clinic(self) -> None:
         session = self.window.session
@@ -1754,6 +1797,561 @@ class CyberdeckView(MenuView):
                 character, index, row_id.removeprefix("uninstall:")
             )
         self._build()
+
+
+class HospitalView(MenuView):
+    title = "HOSPITAL"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        self.intro = [
+            self.location.name,
+            f"Health {character.health}/{character.max_health} — {character.cash}eb",
+        ]
+        if character.health >= character.max_health:
+            self.rows = [("none", "Fully patched up — nothing to treat.")]
+        else:
+            self.rows = [
+                (
+                    "stay",
+                    f"Stay the night — heal 1d6+Body, {HOSPITAL_STAY_COST}eb",
+                )
+            ]
+
+    def pick(self, row_id: str) -> None:
+        if row_id != "stay":
+            return
+        app = self.window.session.app
+        character = self.window.session.character
+        message = hospital_stay(character, app.rng)
+        if message is None:
+            self.message = "Can't afford a night's care."
+        else:
+            app.spend_time(HOURS_PER_DAY, skip_night_effects=True)
+            character.mark_rested()
+            self.message = message
+        self._build()
+
+
+class RealEstateView(MenuView):
+    title = "REAL ESTATE"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        territories = self.window.session.corp_map.territories
+        self.intro = [self.location.name, f"Cash {character.cash}eb"]
+        rows = []
+        for territory_id in self.location.listings:
+            territory = territories[territory_id]
+            if has_home(territory):
+                continue
+            price = safehouse_price(territory)
+            rows.append((f"buy:{territory_id}", f"Safehouse in {territory.name} — {price}eb"))
+        if not rows:
+            rows.append(("none", "No properties available."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("buy:"):
+            return
+        character = self.window.session.character
+        territory = self.window.session.corp_map.territories[
+            row_id.removeprefix("buy:")
+        ]
+        price = safehouse_price(territory)
+        if character.cash < price:
+            self.message = "Can't afford that safehouse."
+        else:
+            character.cash -= price
+            add_safehouse(territory)
+            self.message = f"Bought a safehouse in {territory.name} for {price}eb."
+        self._build()
+
+
+class SafehouseView(MenuView):
+    title = "SAFEHOUSE"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        self.intro = [self.location.name, f"Cash {character.cash}eb"]
+        if not self.location.workshop_built:
+            self.rows = [
+                (
+                    "build_workshop",
+                    f"Build a Workshop — {WORKSHOP_BUILD_COST}eb",
+                )
+            ]
+            return
+        rows = []
+        for index, entry in enumerate(character.inventory):
+            item = ITEMS_BY_ID[entry.item_id]
+            for mod in MOD_CATALOG:
+                if install_refusal(entry, mod) is not None:
+                    continue
+                rows.append(
+                    (
+                        f"mod:{index}:{mod.id}",
+                        f"Fit {mod.name} on {item.name} — {mod.price}eb",
+                    )
+                )
+            for mod_id in entry.mods:
+                rows.append(
+                    (
+                        f"unmod:{index}:{mod_id}",
+                        f"Remove {MODS_BY_ID[mod_id].name} from {item.name}",
+                    )
+                )
+        for consumable_id, materials in CRAFT_RECIPES.items():
+            consumable = CONSUMABLES_BY_ID[consumable_id]
+            price = round(consumable.price * 0.5)
+            rows.append(
+                (
+                    f"craft:{consumable_id}",
+                    f"Craft {consumable.name} — {price}eb + {materials_label(materials)}",
+                )
+            )
+        if not rows:
+            rows.append(("none", "Nothing to work on."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        character = self.window.session.character
+        app = self.window.session.app
+        if row_id == "build_workshop":
+            if character.cash < WORKSHOP_BUILD_COST:
+                self.message = "Can't afford a workshop."
+            else:
+                character.cash -= WORKSHOP_BUILD_COST
+                build_workshop(self.location)
+                self.message = "Workshop built."
+        elif row_id.startswith("mod:"):
+            _, index, mod_id = row_id.split(":", 2)
+            attempted, message = install_mod(character, int(index), mod_id, app.rng)
+            if attempted:
+                app.spend_time(WORKSHOP_HOURS_COST)
+            self.message = message
+        elif row_id.startswith("unmod:"):
+            _, index, mod_id = row_id.split(":", 2)
+            self.message = remove_mod(character, int(index), mod_id)
+        elif row_id.startswith("craft:"):
+            attempted, message = craft_consumable(
+                character, row_id.removeprefix("craft:"), app.rng
+            )
+            if attempted:
+                app.spend_time(WORKSHOP_HOURS_COST)
+            self.message = message
+        self._build()
+
+
+class JunkyardView(MenuView):
+    title = "JUNKYARD"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _build(self) -> None:
+        self.intro = [self.location.name, "Scavenge the scrap for workshop materials."]
+        self.rows = [
+            ("scavenge", f"Scavenge the scrap ({SCAVENGE_HOURS_COST} hours)")
+        ]
+
+    def pick(self, row_id: str) -> None:
+        if row_id != "scavenge":
+            return
+        app = self.window.session.app
+        self.message = scavenge(self.window.session.character, app.rng)
+        app.spend_time(SCAVENGE_HOURS_COST)
+        self._build()
+
+
+class DocksView(MenuView):
+    title = "DOCKS"
+
+    def __init__(self, window, location) -> None:
+        super().__init__(window)
+        self.location = location
+        self._build()
+
+    def _build(self) -> None:
+        self.intro = [self.location.name, "A quiet spot on the pier."]
+        self.rows = [("fish", f"Cast a line ({FISHING_HOURS_COST} hours)")]
+
+    def pick(self, row_id: str) -> None:
+        if row_id != "fish":
+            return
+        self.window.session.app.spend_time(FISHING_HOURS_COST)
+
+        def on_end() -> None:
+            self.window.pop()
+            self.window.pop()
+
+        self.window.push(
+            SceneView(self.window, generate_fishing_trip(), on_end)
+        )
+
+
+class LegworkView(MenuView):
+    title = "LEGWORK"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        session = self.window.session
+        character = session.character
+        self.intro = ["Case an accepted job before you run it."]
+        rows = []
+        for job in character.accepted_jobs:
+            scene = job.scene
+            if character.location_id == scene.target_territory_id:
+                rows.append((f"legwork:{job.id}", f"Case the job: {scene.title}"))
+            else:
+                district = session.territory(scene.target_territory_id)
+                rows.append(
+                    (
+                        "none",
+                        f"{scene.title} — travel to {district.name}",
+                    )
+                )
+        if not rows:
+            rows.append(("none", "No accepted jobs to case."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("legwork:"):
+            return
+        session = self.window.session
+        job = next(
+            job
+            for job in session.character.accepted_jobs
+            if job.id == row_id.removeprefix("legwork:")
+        )
+        scene = generate_legwork_for_job(
+            job.scene, session.corp_map, session.rng
+        )
+        session.app.spend_time(scene.hours_cost, protect_job_id=job.scene.id)
+
+        def on_end() -> None:
+            self.window.pop()
+            self.window.pop()
+
+        self.window.push(SceneView(self.window, scene, on_end))
+
+
+class ContractsView(MenuView):
+    title = "SECURITY CONTRACTS"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        session = self.window.session
+        character = session.character
+        self.intro = ["End the day on site to work a night's watch."]
+        rows = []
+        for index, contract in enumerate(character.security_contracts):
+            territory = session.territory(contract.territory_id)
+            rows.append(
+                (
+                    f"contract:{index}",
+                    f"{territory.name} — {contract.nights_completed}/"
+                    f"{contract.nights_total} nights — {contract.nightly_pay}eb/night",
+                )
+            )
+        if not rows:
+            rows.append(("none", "No security contracts accepted."))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("contract:"):
+            return
+        session = self.window.session
+        contract = session.character.security_contracts[
+            int(row_id.removeprefix("contract:"))
+        ]
+        territory = session.territory(contract.territory_id)
+        self.message = (
+            f"Travel to {territory.name} and end the day there; the night's "
+            f"watch resolves at midnight."
+        )
+
+
+class ContactsView(MenuView):
+    title = "CONTACTS"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        session = self.window.session
+        character = session.character
+        rows = []
+        for fixer in session.app.fixers:
+            trust = character.trust_with(fixer.id)
+            if trust > 0:
+                rows.append(
+                    (
+                        "none",
+                        f"{fixer.name} ({fixer.specialty}) — trust {trust:+d}, "
+                        f"{len(fixer.open_offers)} job(s)",
+                    )
+                )
+        for runner in session.app.runners:
+            if character.knows_runner(runner.id):
+                rows.append(
+                    (
+                        "none",
+                        f"{runner.name} ({runner.archetype}, rating {runner.rating})",
+                    )
+                )
+        for location, contact in session.corp_map.characters():
+            standing = character.local_standing_with(contact.id)
+            if standing:
+                rows.append(
+                    (
+                        "none",
+                        f"{contact.name} ({contact.role}) — {location.name}, "
+                        f"standing {standing:+d}",
+                    )
+                )
+        self.rows = rows or [("none", "No contacts yet.")]
+
+
+class WebView(MenuView):
+    title = "WEB"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        session = self.window.session
+        character = session.character
+        rows = []
+        for fixer in session.app.fixers:
+            if character.trust_with(fixer.id) <= 0:
+                continue
+            for offer in fixer.open_offers:
+                rows.append(
+                    (
+                        f"offer:{fixer.id}:{offer.id}",
+                        f"{fixer.name} — {offer.scene.title} "
+                        f"({offer.scene.hours_cost}h)",
+                    )
+                )
+        self.rows = rows or [("none", "No work posted online.")]
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("offer:"):
+            return
+        _, fixer_id, offer_id = row_id.split(":", 2)
+        session = self.window.session
+        fixer = next(f for f in session.app.fixers if f.id == fixer_id)
+        offer = next(o for o in fixer.offers if o.id == offer_id)
+        if not session.accept_offer(fixer, offer):
+            self.message = "Someone else already took that one."
+            return
+        self.message = f"Accepted {offer.scene.title}."
+        self._build()
+
+
+class AlarmView(MenuView):
+    title = "ALARM CLOCK"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        status = (
+            f"Alarm: {character.alarm_hour:02d}:00"
+            if character.alarm_hour is not None
+            else "Alarm: off"
+        )
+        self.intro = [status]
+        self.rows = [
+            (
+                f"alarm:{hour}",
+                f"Set {hour:02d}:00"
+                + (" (current — tap to clear)" if character.alarm_hour == hour else ""),
+            )
+            for hour in range(0, HOURS_PER_DAY, 3)
+        ]
+
+    def pick(self, row_id: str) -> None:
+        hour = int(row_id.removeprefix("alarm:"))
+        character = self.window.session.character
+        character.alarm_hour = None if character.alarm_hour == hour else hour
+        self._build()
+
+
+class MessagesView(MenuView):
+    title = "MESSAGES"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        session = self.window.session
+        character = session.character
+        rows = []
+        for fixer in session.app.fixers:
+            if character.trust_with(fixer.id) <= 0:
+                continue
+            if fixer.open_offers:
+                rows.append(
+                    (
+                        "none",
+                        f"{fixer.name}: got {len(fixer.open_offers)} job(s) if you're interested.",
+                    )
+                )
+            if fixer.security_offers:
+                rows.append(
+                    (
+                        "none",
+                        f"{fixer.name}: security work up for grabs too.",
+                    )
+                )
+        for runner in session.app.runners:
+            state = session.app.rival_runner_states.get(runner.id)
+            if state is not None and state.job_title:
+                rows.append(
+                    (
+                        "none",
+                        f"{runner.name}: out running {state.job_title} today.",
+                    )
+                )
+        self.rows = rows or [("none", "No new messages.")]
+
+
+class AppStoreView(MenuView):
+    title = "APP STORE"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self._build()
+
+    def _build(self) -> None:
+        character = self.window.session.character
+        rows = []
+        for app in APP_STORE_CATALOG:
+            if app.id in character.owned_apps:
+                rows.append((f"owned:{app.id}", f"{app.name} — owned ({app.tag})"))
+            else:
+                rows.append((f"buy:{app.id}", f"Buy {app.name} — {app.price}eb ({app.tag})"))
+        self.rows = rows
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("buy:"):
+            return
+        self.message = buy_app(
+            self.window.session.character, row_id.removeprefix("buy:")
+        )
+        self._build()
+
+
+class PhoneView(MenuView):
+    title = "PHONE"
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self.rows = [
+            ("contacts", "Contacts"),
+            ("web", "Web"),
+            ("alarm", "Alarm Clock"),
+            ("messages", "Messages"),
+            ("app_store", "App Store"),
+        ]
+
+    def pick(self, row_id: str) -> None:
+        view = {
+            "contacts": ContactsView,
+            "web": WebView,
+            "alarm": AlarmView,
+            "messages": MessagesView,
+            "app_store": AppStoreView,
+        }[row_id]
+        self.window.push(view(self.window))
+
+
+def _open_local_location(window, territory, location) -> None:
+    if location.kind is LocationKind.BAR:
+        window.push(BarView(window, location))
+    elif location.kind is LocationKind.CYBER_CLINIC:
+        window.push(RipperdocView(window, location))
+    elif location.kind is LocationKind.GANG_DEN:
+        if territory.gang_id:
+            window.push(GangDenView(window, GANGS_BY_ID[territory.gang_id]))
+    elif location.kind is LocationKind.CORP_HQ:
+        if territory.owner != "neutral":
+            window.push(CorpHQView(window, location, FACTIONS_BY_ID[territory.owner]))
+    elif location.kind is LocationKind.HOSPITAL:
+        window.push(HospitalView(window, location))
+    elif location.kind is LocationKind.JUNKYARD:
+        window.push(JunkyardView(window, location))
+    elif location.kind is LocationKind.DOCKS:
+        window.push(DocksView(window, location))
+    elif location.kind is LocationKind.REAL_ESTATE:
+        window.push(RealEstateView(window, location))
+    elif location.kind in (LocationKind.APARTMENT, LocationKind.SAFEHOUSE):
+        window.push(SafehouseView(window, location))
+    elif location.kind in SHOP_KINDS:
+        window.push(ShopView(window, location))
+
+
+class LocalView(MenuView):
+    title = "LOCAL PLACES"
+
+    _DISPATCHABLE = (
+        LocationKind.BAR,
+        LocationKind.CYBER_CLINIC,
+        LocationKind.GANG_DEN,
+        LocationKind.CORP_HQ,
+        LocationKind.HOSPITAL,
+        LocationKind.JUNKYARD,
+        LocationKind.DOCKS,
+        LocationKind.REAL_ESTATE,
+        LocationKind.APARTMENT,
+        LocationKind.SAFEHOUSE,
+        *SHOP_KINDS,
+    )
+
+    def __init__(self, window, territory) -> None:
+        super().__init__(window)
+        self.territory = territory
+        self.rows = [
+            (f"place:{index}", f"{location.name} ({location.kind.value})")
+            for index, location in enumerate(territory.locations)
+            if location.kind in self._DISPATCHABLE
+        ] or [("none", "Nothing to visit here.")]
+
+    def pick(self, row_id: str) -> None:
+        if not row_id.startswith("place:"):
+            return
+        location = self.territory.locations[int(row_id.removeprefix("place:"))]
+        _open_local_location(self.window, self.territory, location)
 
 
 class CorpHQView(MenuView):

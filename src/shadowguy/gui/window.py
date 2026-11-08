@@ -175,20 +175,21 @@ class ShadowguyWindow(arcade.Window):
             self.text(message, 20, footer_h - 14, size=12, color=ACCENT)
         if self.session.app.corp_only:
             controls = (
-                "Arrows/WASD move   Enter relocate   C actions   R end day   "
+                "Arrows/WASD move   Enter relocate   C actions   M phone   R end day   "
                 "F5 save   F9 load   Q quit"
             )
         elif self.session.app.corp_state is not None:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
                 "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
-                "C corp actions   F5 save   F9 load   Q quit"
+                "L local   M phone   T legwork   N contracts   C corp actions   "
+                "F5 save   F9 load   Q quit"
             )
         else:
             controls = (
                 "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   "
                 "I gear   G den   V deliver   H HQ   B bar   K clinic   P deck   "
-                "F5 save   F9 load   Q quit"
+                "L local   M phone   T legwork   N contracts   F5 save   F9 load   Q quit"
             )
         self.text(controls, 20, footer_h - 34, size=11, color=MUTED)
 

@@ -43,6 +43,8 @@ from shadowguy.gui.views import (  # noqa: E402
     CreationSkillsView,
     CreationView,
     CyberdeckView,
+    ContractsView,
+    DocksView,
     EntranceView,
     FactionPickView,
     FixerView,
@@ -50,12 +52,19 @@ from shadowguy.gui.views import (  # noqa: E402
     GameOverView,
     GangDenView,
     GrenadePickView,
+    HospitalView,
     InventoryView,
     JobsView,
+    JunkyardView,
+    LegworkView,
+    LocalView,
     MapView,
+    PhoneView,
+    RealEstateView,
     ResearchTreeView,
     RipperdocView,
     RunnerBuildView,
+    SafehouseView,
     SceneView,
     ShopView,
     StartView,
@@ -63,11 +72,14 @@ from shadowguy.gui.views import (  # noqa: E402
     TacticalView,
     TollView,
 )
+from shadowguy.fishing import FISHING_HOURS_COST  # noqa: E402
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_job  # noqa: E402
 from shadowguy.rivals import RunnerActivity, RunnerState  # noqa: E402
 from shadowguy.runners import RUNNERS_BY_ID  # noqa: E402
-from shadowguy.shops import InventoryItem  # noqa: E402
+from shadowguy.security import generate_security_contract  # noqa: E402
+from shadowguy.shops import HOSPITAL_STAY_COST, InventoryItem  # noqa: E402
 from shadowguy.tactical import AimKind  # noqa: E402
+from shadowguy.workshop import SCAVENGE_HOURS_COST  # noqa: E402
 from shadowguy.scene import Outcome  # noqa: E402
 from helpers import AlwaysOne, AlwaysSix, force_outcome  # noqa: E402
 
@@ -500,6 +512,17 @@ def test_corp_map_c_opens_the_actions_list():
     view.on_key(arcade.key.C, 0)
 
     assert isinstance(window.views[-1], CorpActionsView)
+
+
+def test_corp_map_can_open_the_phone():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    view = window.map_view
+    window.views = [view]
+
+    view.on_key(arcade.key.M, 0)
+
+    assert isinstance(window.views[-1], PhoneView)
 
 
 def test_corp_map_relocation_is_free():
@@ -939,3 +962,181 @@ def test_cyberdeck_installs_and_uninstalls_an_owned_program():
     view.pick(uninstall)
 
     assert not entry.installed_programs
+
+
+def test_local_view_opens_a_hospital():
+    window = FakeWindow()
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.HOSPITAL for location in territory.locations)
+    )
+    window.session.character.location_id = territory.id
+    hospital = next(
+        location for location in territory.locations if location.kind is LocationKind.HOSPITAL
+    )
+    view = LocalView(window, territory)
+
+    view.pick(f"place:{territory.locations.index(hospital)}")
+
+    assert isinstance(window.views[-1], HospitalView)
+
+
+def test_hospital_heals_and_spends_the_day():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.HOSPITAL for location in territory.locations)
+    )
+    character.location_id = territory.id
+    character.health = 1
+    character.cash = 100
+    hospital = next(
+        location for location in territory.locations if location.kind is LocationKind.HOSPITAL
+    )
+    view = HospitalView(window, hospital)
+
+    view.pick("stay")
+
+    assert character.health > 1
+    assert character.cash == 100 - HOSPITAL_STAY_COST
+
+
+def test_real_estate_buys_a_safehouse():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.REAL_ESTATE for location in territory.locations)
+    )
+    character.location_id = territory.id
+    character.cash = 1_000_000
+    real_estate = next(
+        location for location in territory.locations if location.kind is LocationKind.REAL_ESTATE
+    )
+    view = RealEstateView(window, real_estate)
+    row = next(row_id for row_id, _ in view.rows if row_id.startswith("buy:"))
+    target = window.session.corp_map.territories[row.removeprefix("buy:")]
+
+    view.pick(row)
+
+    assert any(location.kind is LocationKind.SAFEHOUSE for location in target.locations)
+
+
+def test_safehouse_builds_a_workshop_and_offers_crafting():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.APARTMENT for location in territory.locations)
+    )
+    character.location_id = territory.id
+    character.cash = 1000
+    apartment = next(
+        location for location in territory.locations if location.kind is LocationKind.APARTMENT
+    )
+    view = SafehouseView(window, apartment)
+    if not apartment.workshop_built:
+        view.pick("build_workshop")
+    assert apartment.workshop_built
+    assert any(row_id.startswith("craft:") for row_id, _ in view.rows)
+
+
+def test_junkyard_scavenge_spends_hours():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.JUNKYARD for location in territory.locations)
+    )
+    character.location_id = territory.id
+    junkyard = next(
+        location for location in territory.locations if location.kind is LocationKind.JUNKYARD
+    )
+    view = JunkyardView(window, junkyard)
+    hours = character.elapsed_hours
+
+    view.pick("scavenge")
+
+    assert character.elapsed_hours == hours + SCAVENGE_HOURS_COST
+
+
+def test_docks_starts_a_fishing_scene():
+    window = FakeWindow()
+    character = window.session.character
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.DOCKS for location in territory.locations)
+    )
+    character.location_id = territory.id
+    docks = next(
+        location for location in territory.locations if location.kind is LocationKind.DOCKS
+    )
+    view = DocksView(window, docks)
+    hours = character.elapsed_hours
+
+    view.pick("fish")
+
+    assert isinstance(window.views[-1], SceneView)
+    assert character.elapsed_hours == hours + FISHING_HOURS_COST
+
+
+def test_legwork_starts_a_case_scene():
+    window = FakeWindow()
+    character = window.session.character
+    scene, _timing = generate_job(
+        1, window.session.corp_map, fixer_id="test", rng=random.Random(0)
+    )
+    character.location_id = scene.target_territory_id
+    character.accepted_jobs.append(types.SimpleNamespace(id="job_test", scene=scene))
+    view = LegworkView(window)
+    row = next(row_id for row_id, _ in view.rows if row_id.startswith("legwork:"))
+
+    view.pick(row)
+
+    assert isinstance(window.views[-1], SceneView)
+
+
+def test_contracts_view_lists_accepted_contracts():
+    window = FakeWindow()
+    app = window.session.app
+    contract = generate_security_contract(
+        1, app.corp_map, app.fixers[0].id, random.Random(0)
+    )
+    app.character.security_contracts.append(contract)
+    view = ContractsView(window)
+
+    assert any(row_id.startswith("contract:") for row_id, _ in view.rows)
+
+
+def test_phone_alarm_sets_the_hour():
+    window = FakeWindow()
+    phone = PhoneView(window)
+    window.views = [phone]
+
+    phone.pick("alarm")
+    alarm = window.views[-1]
+    alarm.pick("alarm:6")
+
+    assert window.session.character.alarm_hour == 6
+
+
+def test_phone_app_store_buys_an_app():
+    window = FakeWindow()
+    character = window.session.character
+    character.cash = 1000
+    phone = PhoneView(window)
+    window.views = [phone]
+
+    phone.pick("app_store")
+    store = window.views[-1]
+    row = next(row_id for row_id, _ in store.rows if row_id.startswith("buy:"))
+    store.pick(row)
+
+    assert character.owned_apps
