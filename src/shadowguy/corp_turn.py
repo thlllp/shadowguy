@@ -1285,6 +1285,18 @@ def attack_territory(
     return result
 
 
+def force_options(available: int) -> list[int]:
+    """The operative counts a force picker offers out of a pool of `available`:
+    a quarter, half, three quarters and all of it, plus 1, deduplicated and sorted.
+
+    Quartiles rather than every number from 1 to N because the pool grows without
+    bound as a corp trains up, and a list of forty rows is not a decision anyone
+    makes. 1 is always in it — committing a token force to see what a district's
+    garrison is actually made of is a real move, and the quartiles of a small pool
+    would otherwise skip it."""
+    return sorted({1, *(available * n // 4 for n in (1, 2, 3, 4))} - {0})
+
+
 @dataclass
 class CorpDay:
     """What one day boundary did to the corp, for the caller to report.
