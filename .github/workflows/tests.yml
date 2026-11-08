@@ -29,5 +29,7 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: uv sync --group gui
+      - name: Install GUI system libraries
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libglu1-mesa
       - name: Pytest (GUI)
         run: uv run --group gui pytest -q tests/test_gui.py tests/test_gui_views.py tests/test_gui_draw.py
