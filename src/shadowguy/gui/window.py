@@ -87,6 +87,13 @@ class ShadowguyWindow(arcade.Window):
         if len(self.views) > 1:
             self.views.pop()
 
+    def show_map(self) -> None:
+        """Reset the view stack to a fresh map after loading a run."""
+        self.seed = self.session.seed
+        self.selected_id = self.session.character.location_id
+        self.map_view = MapView(self)
+        self.views = [self.map_view]
+
     def clock(self) -> str:
         c = self.session.character
         minutes = int((c.elapsed_hours % 1) * 60)
@@ -159,7 +166,7 @@ class ShadowguyWindow(arcade.Window):
         if message:
             self.text(message, 20, footer_h - 14, size=12, color=ACCENT)
         self.text(
-            "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   I gear   Q quit",
+            "Arrows move   Enter travel   R rest   F fixers   J jobs   S shops   I gear   F5 save   F9 load   Q quit",
             20, footer_h - 34, size=11, color=MUTED,
         )
 

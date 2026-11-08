@@ -50,7 +50,9 @@ class FakeWindow:
         self.session = GameSession(seed=seed)
         self.width = 1280
         self.height = 860
+        self.seed = self.session.seed
         self.views = []
+        self.map_view = None
         self.selected_id = self.session.character.location_id
 
     def push(self, view):
@@ -59,6 +61,12 @@ class FakeWindow:
     def pop(self):
         if self.views:
             self.views.pop()
+
+    def show_map(self):
+        self.seed = self.session.seed
+        self.selected_id = self.session.character.location_id
+        self.map_view = MapView(self)
+        self.views = [self.map_view]
 
     def clock(self):
         return "Day 1"
@@ -365,3 +373,64 @@ def test_tactical_aim_arrows_move_the_cursor():
 
     assert state.aim_cursor == (4, 3)
     assert view.aiming
+
+
+def test_map_view_saves_and_loads_the_latest_run(tmp_path, monkeypatch):
+    from shadowguy import saves
+
+    monkeypatch.setattr(saves, "SAVE_DIR", tmp_path)
+
+    window = FakeWindow()
+    view = MapView(window)
+    window.views = [view]
+    window.session.character.cash = 777
+
+    view.on_key(arcade.key.F5, 0)
+
+    assert "Saved" in view.message
+    assert len(saves.list_saves()) == 1
+
+    window.session.character.cash = 1
+    window.session.character.location_id = "mutated"
+    view.on_key(arcade.key.F9, 0)
+
+    assert window.session.character.cash == 777
+    assert window.session.app.screen_stack == []
+    assert window.views[-1] is not view
+    assert window.views[-1].selected_id == window.session.character.location_id
+    assert window.views[-1].message == "Loaded the newest save."
+
+
+def test_map_view_load_with_no_saves_reports_it(tmp_path, monkeypatch):
+    from shadowguy import saves
+
+    monkeypatch.setattr(saves, "SAVE_DIR", tmp_path)
+
+    window = FakeWindow()
+    view = MapView(window)
+    window.views = [view]
+
+    view.on_key(arcade.key.F9, 0)
+
+    assert view.message == "No save files."
+    assert window.views == [view]
+
+
+def test_map_view_refuses_a_corp_only_save(tmp_path, monkeypatch):
+    from shadowguy import saves
+
+    monkeypatch.setattr(saves, "SAVE_DIR", tmp_path)
+
+    window = FakeWindow()
+    view = MapView(window)
+    window.views = [view]
+    window.session.app.corp_only = True
+    view.on_key(arcade.key.F5, 0)
+    window.session.app.corp_only = False
+    window.session.character.cash = 1
+
+    view.on_key(arcade.key.F9, 0)
+
+    assert "no corp mode" in view.message
+    assert window.session.character.cash == 1
+    assert window.views == [view]

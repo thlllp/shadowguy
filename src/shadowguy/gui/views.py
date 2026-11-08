@@ -145,7 +145,7 @@ class MapView(View):
     def __init__(self, window: "ShadowguyWindow") -> None:
         super().__init__(window)
         self.selected_id = window.session.character.location_id
-        self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | Q quit"
+        self.message = "Arrows move | Enter travel | R rest | F fixers | J jobs | S shops | I gear | F5 save | F9 load | Q quit"
 
     def draw(self) -> None:  # pragma: no cover - drawing
         self.window.selected_id = self.selected_id
@@ -158,6 +158,12 @@ class MapView(View):
         if symbol == arcade.key.R:
             self.window.session.rest()
             self.message = f"Rested - {self.window.clock()}"
+            return
+        if symbol == arcade.key.F5:
+            self._save()
+            return
+        if symbol == arcade.key.F9:
+            self._load()
             return
         if symbol == arcade.key.F:
             self._open_fixers()
@@ -225,6 +231,22 @@ class MapView(View):
             self.message = "No shop here."
             return
         self.window.push(ShopPickView(self.window, shops))
+
+    def _save(self) -> None:
+        try:
+            label = self.window.session.save()
+        except Exception as exc:
+            self.message = f"Couldn't save: {exc}"
+            return
+        self.message = f"Saved - {label}."
+
+    def _load(self) -> None:
+        error = self.window.session.load_latest()
+        if error is not None:
+            self.message = error
+            return
+        self.window.show_map()
+        self.window.map_view.message = "Loaded the newest save."
 
 
 class TollView(MenuView):

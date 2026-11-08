@@ -21,6 +21,7 @@ from shadowguy.encounters import (
     roll_gang_encounter,
 )
 from shadowguy.fixer import Fixer, discover_fixers_here
+from shadowguy.saves import list_saves, load_game
 from shadowguy.scene import Scene
 from shadowguy.travel import travel_hours
 
@@ -64,6 +65,32 @@ class GameSession:
     @property
     def seed(self) -> int | None:
         return self.app.seed
+
+    # ── saves ───────────────────────────────────────────────────────────────
+
+    def save(self) -> str:
+        """Write the run to a new save slot; returns its display label."""
+        return self.app.save_run().label
+
+    def load_latest(self) -> str | None:
+        """Load the newest save. Returns an error message, or None on success.
+
+        `reopen=False` keeps Textual's screen stack out of it: the GUI rebuilds
+        its own map view from the loaded state.
+        """
+        slots = list_saves()
+        if not slots:
+            return "No save files."
+        try:
+            state = load_game(slots[0].path)
+            if state.get("corp_only"):
+                return "That save is a corp run; the preview has no corp mode."
+            self.app.load_state(state, reopen=False)
+        except Exception as exc:
+            return f"Couldn't load: {exc}"
+        self.fight_encounter = None
+        self.pending_encounter = None
+        return None
 
     def travel_path(self, target_id: str) -> list[str]:
         return travel_path(self.corp_map, self.character.location_id, target_id)
