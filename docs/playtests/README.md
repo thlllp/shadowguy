@@ -36,12 +36,13 @@ Coverage now includes: crew hiring and the wage tick, safehouse purchase and
 workshop build, cyberdeck/program and cyberware purchase/install, shop selling,
 crafting, smuggling deliveries, corp-map intel and sabotage execution, corp
 attack, rival district losses, 80x24 matrix and burglary, the GUI
-death/KO/burglary/entrance, save/load, character-creation, corp-mode, HQ-takeover
-and surveillance-log flows, a live player capture, and a security contract blown
-through the app day tick.
+death/KO/burglary/entrance, save/load, character-creation, corp-mode, HQ-takeover,
+surveillance-log, crew-hiring and grenade flows, a live player capture, and a
+security contract blown through the app day tick.
 
-Remaining gaps: the GUI still leaves crew, burglary edge cases, grenades, hacker
-programs and cyberware to the TUI — preview limits, not test gaps.
+Remaining gaps: the GUI still leaves the phone/apps, hospital,
+real-estate/safehouse/workshop, junkyard, docks/fishing, legwork and
+security-contract tracking to the TUI — preview limits, not test gaps.
 
 Corp defeat was re-verified on this build with a passive corp-only soak (seed
 `555002`, Ironclad): 6 districts → 0 by day 104, `"Ironclad Dynamics has been
