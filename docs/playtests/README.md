@@ -38,11 +38,12 @@ crafting, smuggling deliveries, corp-map intel and sabotage execution, corp
 attack, rival district losses, 80x24 matrix and burglary, the GUI
 death/KO/burglary/entrance, save/load, character-creation, corp-mode, HQ-takeover,
 surveillance-log, crew-hiring, grenade, phone/app, hospital, property/workshop,
-junkyard, docks/fishing, legwork and security-contract flows, a live player
-capture, and a security contract blown through the app day tick.
+junkyard, docks/fishing, legwork, security-contract, skills/XP and corp-website
+flows, a live player capture, and a security contract blown through the app day
+tick.
 
-Remaining gaps: the GUI still leaves the Skills/XP screen and the corp website
-pages to the TUI — preview limits, not test gaps.
+Remaining gaps: the developer Test menu and the in-game manual are TUI-only —
+preview limits, not test gaps.
 
 Corp defeat was re-verified on this build with a passive corp-only soak (seed
 `555002`, Ironclad): 6 districts → 0 by day 104, `"Ironclad Dynamics has been

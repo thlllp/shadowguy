@@ -25,14 +25,14 @@ uv run shadowguy --dev
 ## Graphical front-end (preview)
 
 The TUI is the canonical game and the full test surface. The Arcade front-end is
-an **experimental preview slice**, not an alternative client yet: it shares the
-same `ShadowguyApp` state and rules and does not change the TUI, but it still
-leaves the Skills/XP screen and the corp website pages to the TUI. The start
-screen offers a Runner run (premade archetype or custom build), a Corp run, or
-loading the newest save. Corp mode covers the map, the daily economy, the Academy,
-the Research Facility and Operations; a runner can also take over a corp at its
-HQ and use the same action list. Saves are shared with the TUI: `F5` writes a
-normal run save and `F9` loads the newest save.
+an **experimental preview slice**, not a replacement yet: it shares the same
+`ShadowguyApp` state and rules and does not change the TUI, but the developer Test
+menu and the in-game manual remain TUI-only. The start screen offers a Runner run
+(premade archetype or custom build), a Corp run, or loading the newest save. Corp
+mode covers the map, the daily economy, the Academy, the Research Facility and
+Operations; a runner can also take over a corp at its HQ and use the same action
+list. Saves are shared with the TUI: `F5` writes a normal run save and `F9` loads
+the newest save.
 
 ```bash
 uv sync --group gui
@@ -45,21 +45,22 @@ runner run, so use the Down arrow for south), `Enter` travels or relocates, `R`
 rests/ends the day, `F` fixers, `J` jobs on site, `S` shops, `I` gear, `G` gang
 den, `V` deliver a smuggling job, `H` enter a corp HQ, `B` bar, `K` cyber clinic,
 `P` cyberdeck, `L` local places, `M` phone, `T` legwork, `N` security contracts,
-`C` opens the corp action list, `F5` saves, `F9` loads the newest save, `Q` quits.
-In a tactical fight: `g` grenade, `x` look, `r` reload, `z` stabilize,
-`y` support.
+`X` skills/XP, `C` opens the corp action list, `F5` saves, `F9` loads the newest
+save, `Q` quits. In a tactical fight: `g` grenade, `x` look, `r` reload,
+`z` stabilize, `y` support.
 
 The slice covers the map/character/district panels, character creation, travel
 with gang and corp encounters (toll or fight), fixer offers and job acceptance,
 legwork, security-contract tracking, the scene check runner,
 abstract/tactical/matrix fights, grenades, crew hiring, support hackers, shops,
-inventory, cyberware, programs, the phone's contacts/web/alarm/messages/app store,
-hospitals, property and workshops, junkyards, docks fishing, smuggling
-deliveries, save/load, corp takeover/HQ, the surveillance log, and a corp-only
-run: expand, survey, security/surveillance/development, fundraise, Academy
-training and grants, labs and efficiency, the research tree, and
-deploy/attack/intel/sabotage. See `src/shadowguy/gui/` and `shadowguy.travel`
-for the shared travel-time formula. Playtest reports live in `docs/playtests/`.
+inventory, cyberware, programs, the phone's contacts/web/corp sites/alarm/
+messages/app store, skills and XP spending, hospitals, property and workshops,
+junkyards, docks fishing, smuggling deliveries, save/load, corp takeover/HQ, the
+surveillance log, and a corp-only run: expand, survey,
+security/surveillance/development, fundraise, Academy training and grants, labs
+and efficiency, the research tree, and deploy/attack/intel/sabotage. See
+`src/shadowguy/gui/` and `shadowguy.travel` for the shared travel-time formula.
+Playtest reports live in `docs/playtests/`.
 
 ## What a run looks like
 
