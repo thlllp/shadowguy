@@ -1229,8 +1229,10 @@ def resolve_attack(
         defender_losses = territory.garrison
         capture_territory(territory, attacker_id)
         # Whoever walked out of the fight holds the ground they took: survivors
-        # become the new garrison rather than going back in the pool. Taking a
-        # district and leaving it empty would just invite it straight back.
+        # become the new garrison rather than going back in the pool. Committing
+        # no more than the defense can therefore take a district with nobody left
+        # to hold it (attacker_losses is capped at the force sent) -- a pyrrhic
+        # capture, not an oversight; the ForcePick prompt says so.
         territory.garrison = survivors
     else:
         defender_losses = min(territory.garrison, committed)

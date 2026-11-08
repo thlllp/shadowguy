@@ -790,11 +790,17 @@ class CorpActionsMixin:
             self.notify("No operatives to send. Train some at the Academy.", severity="warning")
             return
 
+        defense = defense_strength(territory)
         prompt = (
-            f"Attack {territory.name} — defense {defense_strength(territory)}. Commit how many?"
+            f"Attack {territory.name} — defense {defense}. Commit how many?"
             if is_attack
             else f"Reinforce {territory.name}. Send how many?"
         )
+        if is_attack and defense:
+            prompt += (
+                f" Losses equal the defense (up to the force sent); commit more "
+                f"than {defense} to leave a garrison."
+            )
         # Stashed rather than closed over: the callback fires after this handler has
         # returned, and it needs to know which district the count is for. Same
         # push_screen(screen, callback) shape TacticalScreen uses for its own picks.

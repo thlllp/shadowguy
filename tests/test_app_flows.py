@@ -4829,6 +4829,7 @@ def test_corp_only_attack_flow_resolves_on_the_map_screen():
             await pilot.click(f"#attack_{target}")
             await _settle(pilot)
             assert isinstance(app.screen, ForcePickScreen)
+            assert "leave a garrison" in app.screen._prompt
             await pilot.click("#force_4")
             await _settle(pilot)
 
