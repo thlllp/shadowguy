@@ -19,29 +19,31 @@ Reports are ordered by the build they were run against, not by filename.
 | `2026-11-06-gui-five-runs.md` | `7c761e4` | GUI slice: two P2 and two P3 defects |
 | `2026-11-06-cover-everything.md` | `7c761e4` | GUI sweep: one P1 (dead runner keeps playing), four P2, two P3 |
 | `2026-11-07-five-runs.md` | `e891049` | post-fix audit: corp intel/sabotage regression and burglary picker ordering (P2); death/KO/taken-offer fixes verified |
+| `2026-11-07-five-runs-2.md` | `5b8cba3` | both P2s verified in real play; three P3s re-confirmed; crew hiring and safehouse purchase/build now covered |
 
 ## Status after the follow-up fixes
 
-The reports were written against `7c761e4` and then `e891049`. Since then:
+The reports were written against `7c761e4`, `e891049` and `5b8cba3`. Since then:
 
 Fixed and verified: the TUI findings from the `2c3fd19` → `010a48f` sequence
 (corp ledger and panels at 80x24, Rest key, transient saves, off-site notify),
 plus the GUI death/knockout handling, knockout-as-victory, burglary starting
 stages, rival-taken offers, and the two `e891049` P2s — the burglary picker is
 now opened after `JobsView` pushes the scene (`3263118`), and the map's
-per-territory panel offers intel/sabotage again (`47382c4`). The GUI fixes are
-covered by `tests/test_gui_views.py`; the corp-panel regression by
-`test_corp_only_map_mode_offers_intel_and_sabotage_for_a_rival_district`.
+per-territory panel offers intel/sabotage again (`47382c4`).
 
-Still open in the GUI preview: the `S`/WASD conflict (the README documents the
-workaround, the in-game footer does not), the unaffordable-program message, and
-arrow-free aiming.
+The three remaining GUI P3s are also fixed: the footer no longer advertises WASD
+movement while `S` opens shops, an unaffordable program reports the real
+`buy_program` failure instead of "Bought", and arrow keys move the aim cursor.
+Sabotage is no longer offered on a rival already at Security 0, where it could
+only spend an operative and the day's move for nothing.
 
-Coverage still honestly marked **untested** by the reports: crew hiring (the
-timing precondition was never lined up), safehouse/cyberware/cyberdeck purchases
-(above the starting cash), corp sabotage execution, player-initiated captures,
-and a security contract blown by a critical failure. The last now has an app-level
-test (`test_security_contract_blown_by_a_forced_critical_failure_ends_the_contract`).
+Coverage now recorded as covered: crew hiring and the wage tick, safehouse
+purchase and workshop build, cyberdeck/program and cyberware purchase/install,
+corp-map intel and sabotage execution, shop selling, crafting, and the GUI
+burglary flow through `JobsView`. Remaining gaps: player-initiated captures
+(5/5 repels — dice, not a defect), corp defeat, and a security contract blown by
+a critical failure through the UI (app-level test only).
 
 ## Running again
 
