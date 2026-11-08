@@ -2574,7 +2574,7 @@ def test_docks_screen_character_sheet_reflects_cash_after_a_fishing_trip():
     Textual last painted."""
 
     async def body():
-        app = ShadowguyApp()
+        app = ShadowguyApp(seed=1)
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
@@ -2589,16 +2589,15 @@ def test_docks_screen_character_sheet_reflects_cash_after_a_fishing_trip():
             await pilot.click("#fish")
             await pilot.pause()
 
-            await pilot.click("#choices ListItem")  # cast
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past the resolved cast
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past wait's narration
-            await pilot.pause()
-            await pilot.click("#choices ListItem")  # reel
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past the resolved reel -- pops back
-            await pilot.pause()
+            # Drive the cast/wait/reel list by keyboard. Coordinate clicks on the
+            # rows race the async repopulate (clear-then-append) and can land on
+            # the pre-layout row; Enter against the focused list does not.
+            for _ in range(5):
+                if not isinstance(app.screen, SceneScreen):
+                    break
+                app.screen.query_one("#choices", ListView).focus()
+                await pilot.press("enter")
+                await _settle(pilot)
 
             assert isinstance(app.screen, DocksScreen)
             assert character.cash > cash_before
@@ -4747,7 +4746,7 @@ def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
     only way a corp-only game can fight."""
 
     async def body():
-        app = ShadowguyApp()
+        app = ShadowguyApp(seed=1)
         async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
@@ -4765,11 +4764,25 @@ def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
 
             ours = app.corp_state.faction_id
             target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
-            await pilot.click(f"#deploy_{target}")
+            activities = screen.query_one("#activities", ListView)
+            rows = [item.id for item in activities.children]
+            assert f"deploy_{target}" in rows
+            # Select by keyboard: the flat list is long enough to scroll, and a
+            # coordinate click can miss a row that has moved since layout.
+            activities.focus()
+            activities.index = rows.index(f"deploy_{target}")
+            await _settle(pilot)
+            await pilot.press("enter")
             await _settle(pilot)
             assert isinstance(app.screen, ForcePickScreen)
 
-            await pilot.click("#force_4")
+            force_list = app.screen.query_one("#force_dialog ListView", ListView)
+            force_list.focus()
+            force_list.index = [
+                item.id for item in force_list.children
+            ].index("force_4")
+            await _settle(pilot)
+            await pilot.press("enter")
             await _settle(pilot)
 
             assert app.corp_map.territories[target].garrison == 4
