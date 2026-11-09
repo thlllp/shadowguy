@@ -184,7 +184,14 @@ src/shadowguy/
   cybernetics.py the Cyberware catalog + install/remove, bought at a CYBER_CLINIC;
                  owns Humanity erosion (every operation scars, 0 free = run over)
   saves.py       pickle-based whole-run save/load
+  travel.py      travel-time formula shared by the TUI map screen and the GUI
   app.py         ShadowguyApp itself: spend_time/_apply_day_tick, save/load; no screens
+
+  gui/           experimental Arcade front-end (optional `gui` group)
+    __init__.py  main(): optional-dependency guard + CLI
+    session.py   GameSession: the GUI's boundary to ShadowguyApp (travel/encounters/work/saves)
+    views.py     map, creation, menus, local places, phone/websites, legwork, contracts, skills/XP, scene runner, corp actions/research, HQ, surveillance, smuggling, crew, cyberware, programs, property/workshop, abstract/tactical/matrix, shops, gear
+    window.py    view stack + map/character/corp/district renderer
 
   screens/
     __init__.py          shared UI: CharacterSheet (the always-visible runner panel),
@@ -233,6 +240,7 @@ Leaf modules, and why each has to stay one:
 - **`shops.py` / `inventory.py`** — `inventory.py` imports `shops.py` (for `Item`/`Program`/the catalog registries and `fits_in_slot`) and `shops.py` never imports `inventory.py` back; `buy_item`'s auto-equip check is why `fits_in_slot`/`slot_usage` stay in `shops.py` rather than moving over with the rest of the equip-state functions.
 - **`workshop.py`** — imports `shops.py` and nothing else from the package; only `screens/shop_screens.py` imports *it*. The split is retail vs. making: everything in `shops.py` is a cash-and-standing transaction over a catalog, everything here is a skill roll over scavenged materials. The mod **catalog** (`Mod`/`MOD_CATALOG`/`MODS_BY_ID`/`WEAPON_MOD_SLOTS`/`STOCK_MOD_IDS`) stays in `shops.py` — `buy_item` seeds a bought gun's slots from it and `effective_item` folds installed mods into the stats `combat.py` reads, so a `shops → workshop` edge would be a cycle.
 - **`job_archetypes.py`** — imports `character`/`scene`/`skills` and nothing else from the package; `jobs.py` imports *it*, never the reverse. The split is table vs. pass over the table: authoring a new archetype row is a different kind of change from retuning what the generator does with one. `PARTIAL_POOL_SIZE` lives here rather than in `jobs.py` because the import-time guard on pool width reads it, and `DAMAGE_FOR_DELTA` because `Approach.failure_damage` does.
+- **`travel.py` / `gui/`** — `travel.py` is a leaf over `inventory`/`shops`, shared by the TUI map and the Arcade client. `gui/` is an experimental Arcade front-end: its `GameSession` wraps `app`/logic and the views never import Textual screens. The Textual screens remain the canonical client and the test surface; `gui` is optional (`gui` dependency group).
 
 `scene.py` itself needn't import `jobs`: `Role` is plain data (strings + `Posture`, not `job_archetypes.StageType`). It *does* import `corpmap` (for `Outcome.security_delta`'s target) — a legal edge, since corpmap's own closure is `factions`/`gangs`/`relations`/`skills` and it never imports `scene` back.
 
@@ -310,6 +318,7 @@ A real test suite exists (`tests/`, 28 test files plus `conftest.py`/`helpers.py
 
 - **Model/generator changes** — a `pytest.mark.parametrize("seed", SEEDS)` test (`SEEDS = range(150)` is the norm; `test_corpmap_gen.py` widens to `range(200)`, `test_buildings.py`/`test_tactical.py` narrow to `range(80)`) over a module-scoped fixture, asserting invariants rather than exact values. This caught a real bug once: `_plan_injections` comparing a `Cell` tuple against a `str` id (always `True`, so the start territory's hospital/gang-den exclusion silently did nothing) — invisible without a wide seed sweep.
 - **Forcing an exact `CheckResult` branch** — a `random.Random` subclass whose `randint` always returns a fixed face, pinning a roll to `CRITICAL_SUCCESS`/`CRITICAL_FAILURE`/etc. deterministically. Now shared from **`tests/helpers.py`** (`AlwaysSix`/`AlwaysOne`, `ForcedChance` for a call-counted mix, `character_with_skill_value`) rather than re-derived per file — import it as a top-level module (`from helpers import ForcedChance`), the way `test_matrix.py`/`test_shops.py`/`test_rivals.py` do. The module-scoped `corp_map` fixture lives in **`tests/conftest.py`** and is shared by the eight suites that need a real map.
+- **Forcing a fight's end state** — `tests/helpers.py`'s `force_outcome(state, outcome)` writes `CombatState.outcome`/`TacticalState.outcome` directly, so a post-fight branch (death, knockout, victory) is exercised through the real handler without rolling a fight. `tests/test_gui_views.py` uses it for the GUI's death/knockout paths; pair it with `AlwaysSix`/`AlwaysOne` when the handler rolls a wake-up die.
 - **Forcing a *contest*** (corp conflict, where both sides roll) — both dice come off the same rng, so `AlwaysSix`/`AlwaysOne` fix them *equal* and the capture collapses to the deterministic `committed > defense`. Useful, but it means neither helper can bias one side of a contest against the other.
 - **UI changes** — Textual's `async with app.run_test() as pilot:` drives the real app headlessly (`tests/test_app_flows.py`); `pilot.press(...)`/`pilot.hover(...)`/`pilot.click(...)` exercise real screens. Prefer this over asserting on internals.
 - **UI tests on a generated map must not assume map shape** — e.g. that the player's corp borders a rival, or that a given district has a shop. The map is randomly seeded per run unless `ShadowguyApp(seed=...)` is passed, so construct the situation the test needs and re-run it 15–20× to confirm stability.

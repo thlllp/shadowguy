@@ -456,7 +456,10 @@ class ShadowguyApp(App):
         }
         return save_game(state, self.character.day)
 
-    def load_state(self, state: dict) -> None:
+    def load_state(self, state: dict, *, reopen: bool = True) -> None:
+        """Restore a run bundle. `reopen=False` is for a non-Textual client (the
+        Arcade GUI), which has no screen stack to reopen and rebuilds its own view
+        after the state lands."""
         self.rng = state["rng"]
         # Optional: saves written before run seeds existed don't carry one. Keep the
         # loaded rng stream intact either way; only the display and reproducibility
@@ -473,6 +476,8 @@ class ShadowguyApp(App):
         self.faction_events = state["faction_events"]
         self.corp_state = state["corp_state"]
         self.corp_only = state["corp_only"]
+        if not reopen:
+            return
         unspent = self.character.stat_points + self.character.skill_points
         if unspent:
             # Creation on top of BuildSelectScreen rather than on its own: the save was

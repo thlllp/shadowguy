@@ -50,7 +50,7 @@ from shadowguy.factions import (
 )
 from shadowguy.fixer import JobOffer
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, JobTiming, generate_job, generate_smuggling_job
-from shadowguy.security import generate_security_contract
+from shadowguy.security import BLOWN_REP_HIT, generate_security_contract
 from shadowguy.saves import load_game
 from shadowguy.matrix import ICE_TIERS, MatrixOutcome
 from shadowguy.screens import CharacterSheet, _compact_skill_label
@@ -99,7 +99,7 @@ from shadowguy.tactical import (
     enter_level,
 )
 from shadowguy.tactical import _settle as _settle_tactical_state
-from shadowguy.checks import CheckResult, resolve_check
+from shadowguy.checks import CheckResult, resolve_check, CRITICAL_MARGIN
 from shadowguy.skills import skill_for, skill_value
 
 # TestMenu is aliased -- an unaliased import would make pytest try (and fail, loudly
@@ -2574,7 +2574,7 @@ def test_docks_screen_character_sheet_reflects_cash_after_a_fishing_trip():
     Textual last painted."""
 
     async def body():
-        app = ShadowguyApp()
+        app = ShadowguyApp(seed=1)
         async with app.run_test(size=(80, 60)) as pilot:
             await pilot.pause()
 
@@ -2589,16 +2589,15 @@ def test_docks_screen_character_sheet_reflects_cash_after_a_fishing_trip():
             await pilot.click("#fish")
             await pilot.pause()
 
-            await pilot.click("#choices ListItem")  # cast
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past the resolved cast
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past wait's narration
-            await pilot.pause()
-            await pilot.click("#choices ListItem")  # reel
-            await pilot.pause()
-            await pilot.click("ListView ListItem")  # continue past the resolved reel -- pops back
-            await pilot.pause()
+            # Drive the cast/wait/reel list by keyboard. Coordinate clicks on the
+            # rows race the async repopulate (clear-then-append) and can land on
+            # the pre-layout row; Enter against the focused list does not.
+            for _ in range(5):
+                if not isinstance(app.screen, SceneScreen):
+                    break
+                app.screen.query_one("#choices", ListView).focus()
+                await pilot.press("enter")
+                await _settle(pilot)
 
             assert isinstance(app.screen, DocksScreen)
             assert character.cash > cash_before
@@ -3958,6 +3957,37 @@ def test_neon_choir_can_introduce_a_runner_for_a_fee():
     run(body())
 
 
+def test_security_contract_blown_by_a_forced_critical_failure_ends_the_contract():
+    """The one branch Allie's playtests could not reach: a critical failure on a
+    night's watch. AlwaysSix() plus a zero player pool and an opposing pool of
+    exactly CRITICAL_MARGIN pins it deterministically, so the app's own day tick
+    (not resolve_security_night in isolation) is what gets exercised here."""
+
+    async def body():
+        app = ShadowguyApp(seed=1)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            character = app.character
+            contract = generate_security_contract(
+                character.day, app.corp_map, app.fixers[0].id, random.Random(0)
+            )
+            contract.difficulty = 9 + 2 * CRITICAL_MARGIN
+            contract.territory_id = character.location_id
+            skill = skill_for(contract.skill)
+            setattr(character, skill.stat, 0)
+            character.skill_ranks[contract.skill] = 0
+            character.security_contracts.append(contract)
+            character.elapsed_hours = 23.0  # an 8h rest crosses midnight
+            app.rng = AlwaysSix()
+
+            app.rest()
+
+            assert contract not in character.security_contracts
+            assert character.rep == BLOWN_REP_HIT
+
+    run(body())
+
+
 def test_accepting_a_security_contract_moves_it_off_the_fixers_board():
     """Security contracts (security.py) share FixerOffersScreen's #offers list with
     ordinary jobs (rows id'd security_<uuid>, branched on in on_list_view_selected)
@@ -4716,7 +4746,7 @@ def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
     only way a corp-only game can fight."""
 
     async def body():
-        app = ShadowguyApp()
+        app = ShadowguyApp(seed=1)
         async with app.run_test(size=(80, 60)) as pilot:
             await _settle(pilot)
             await pilot.click("#new_game")
@@ -4734,11 +4764,25 @@ def test_corp_only_reinforce_flow_resolves_on_the_map_screen():
 
             ours = app.corp_state.faction_id
             target = sorted(t.id for t in app.corp_map.territories.values() if t.owner == ours)[0]
-            await pilot.click(f"#deploy_{target}")
+            activities = screen.query_one("#activities", ListView)
+            rows = [item.id for item in activities.children]
+            assert f"deploy_{target}" in rows
+            # Select by keyboard: the flat list is long enough to scroll, and a
+            # coordinate click can miss a row that has moved since layout.
+            activities.focus()
+            activities.index = rows.index(f"deploy_{target}")
+            await _settle(pilot)
+            await pilot.press("enter")
             await _settle(pilot)
             assert isinstance(app.screen, ForcePickScreen)
 
-            await pilot.click("#force_4")
+            force_list = app.screen.query_one("#force_dialog ListView", ListView)
+            force_list.focus()
+            force_list.index = [
+                item.id for item in force_list.children
+            ].index("force_4")
+            await _settle(pilot)
+            await pilot.press("enter")
             await _settle(pilot)
 
             assert app.corp_map.territories[target].garrison == 4
@@ -4798,6 +4842,7 @@ def test_corp_only_attack_flow_resolves_on_the_map_screen():
             await pilot.click(f"#attack_{target}")
             await _settle(pilot)
             assert isinstance(app.screen, ForcePickScreen)
+            assert "leave a garrison" in app.screen._prompt
             await pilot.click("#force_4")
             await _settle(pilot)
 
@@ -4859,6 +4904,58 @@ def test_corp_only_map_mode_shows_territory_actions_instead_of_locals():
             # Survived the callback and redrew from the map panel, rather than dying
             # inside it -- _refresh_corp_view's map-mode branch is what this covers.
             assert isinstance(app.screen, CorpMapScreen)
+
+    run(body())
+
+
+def test_corp_only_map_mode_offers_intel_and_sabotage_for_a_rival_district():
+    """Regression: 010a48f dropped intel/sabotage from the Corp tab's flat list on
+    the promise that the map's per-territory panel still offered them, but that
+    panel's id filter listed neither prefix -- so a corp-only run could not use
+    either move at all."""
+
+    async def body():
+        app = ShadowguyApp(seed=1)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#corp")
+            await pilot.pause()
+            await pilot.click(f"#faction_{FACTIONS[0].id}")
+            await _settle(pilot)
+
+            screen = app.screen
+            assert isinstance(screen, CorpMapScreen)
+            ours = app.corp_state.faction_id
+            target = next(
+                t.id
+                for t in app.corp_map.territories.values()
+                if t.owner not in (ours, "neutral")
+            )
+            app.corp_state.operatives = 1
+            app.corp_state.action_points = 2
+            # Sabotage is (correctly) not offered at Security 0.
+            app.corp_map.territories[target].modifiers[TerritoryModifier.SECURITY] = 1
+            screen.selected_id = target
+            screen.hovered_id = None
+            screen.refresh_map()
+            await _settle_map_corp_actions(pilot, screen)
+
+            rows = [
+                item.id
+                for item in screen.query_one("#map_corp_actions", ListView).children
+            ]
+            assert f"intel_{target}" in rows
+            assert f"sabotage_{target}" in rows
+
+            # The Corp tab still keeps them out, so its flat list stays usable.
+            await screen._select_category("corp")
+            await _settle(pilot)
+            tab_rows = [item.id for item in screen.query_one("#activities", ListView).children]
+            assert not any(
+                row_id.startswith(("intel_", "sabotage_")) for row_id in tab_rows
+            )
 
     run(body())
 

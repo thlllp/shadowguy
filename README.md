@@ -22,6 +22,46 @@ uv run shadowguy --dev
 
 **Terminal size:** the TUI needs at least **80×24**; **100×30 or larger is recommended**. At 80×24 the map is a small scrolling viewport, the Locals/actions strip and corp ledger are short and scroll internally, and a few footer hints are clipped.
 
+## Graphical front-end (preview)
+
+The TUI is the canonical game and the full test surface. The Arcade front-end is
+an **experimental preview slice**, not a replacement yet: it shares the same
+`ShadowguyApp` state and rules and does not change the TUI, but the developer Test
+menu and the in-game manual remain TUI-only. The start screen offers a Runner run
+(premade archetype or custom build), a Corp run, or loading the newest save. Corp
+mode covers the map, the daily economy, the Academy, the Research Facility and
+Operations; a runner can also take over a corp at its HQ and use the same action
+list. Saves are shared with the TUI: `F5` writes a normal run save and `F9` loads
+the newest save.
+
+```bash
+uv sync --group gui
+uv run --group gui python -m shadowguy.gui --seed 12345
+# or, once the gui extra is installed: shadowguy-gui --seed 12345
+```
+
+Controls: arrows move the cursor (`W`/`A`/`D` also work; `S` opens shops in a
+runner run, so use the Down arrow for south), `Enter` travels or relocates, `R`
+rests/ends the day, `F` fixers, `J` jobs on site, `S` shops, `I` gear, `G` gang
+den, `V` deliver a smuggling job, `H` enter a corp HQ, `B` bar, `K` cyber clinic,
+`P` cyberdeck, `L` local places, `M` phone, `T` legwork, `N` security contracts,
+`X` skills/XP, `C` opens the corp action list, `F5` saves, `F9` loads the newest
+save, `Q` quits. In a tactical fight: `g` grenade, `x` look, `r` reload,
+`z` stabilize, `y` support.
+
+The slice covers the map/character/district panels, character creation, travel
+with gang and corp encounters (toll or fight), fixer offers and job acceptance,
+legwork, security-contract tracking, the scene check runner,
+abstract/tactical/matrix fights, grenades, crew hiring, support hackers, shops,
+inventory, cyberware, programs, the phone's contacts/web/corp sites/alarm/
+messages/app store, skills and XP spending, hospitals, property and workshops,
+junkyards, docks fishing, smuggling deliveries, save/load, corp takeover/HQ, the
+surveillance log, and a corp-only run: expand, survey,
+security/surveillance/development, fundraise, Academy training and grants, labs
+and efficiency, the research tree, and deploy/attack/intel/sabotage. See
+`src/shadowguy/gui/` and `shadowguy.travel` for the shared travel-time formula.
+Playtest reports live in `docs/playtests/`.
+
 ## What a run looks like
 
 **Creation.** Everything starts at rank 1: six core stats (Body, Strength, Agility, Perception, Logic, Cool) and 39 skills. Spend 6 stat points and 20 skill points once. Points get dearer as a skill climbs, so a specialist can take one skill to 10 for 19 of the 20. Six presets — Enforcer, Hacker, Infiltrator, Gunslinger, Street Samurai, Fixer — or a hand-built character. Skill points can also be converted into creation-only gear budget (`1 point = 1000eb`); unspent gear budget is written off when the run begins, never banked as cash.

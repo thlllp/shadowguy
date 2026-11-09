@@ -40,6 +40,7 @@ from shadowguy.corp_turn import (
     expansion_cost,
     fundraise,
     fundraise_amount,
+    force_options,
     gather_intel,
     has_technology,
     intel_targets,
@@ -120,18 +121,6 @@ def _gate(label: str, corp_state: CorpState, cost: int, *, daily: bool = True) -
     if cost > corp_state.cash:
         return f"{label} (can't afford)"
     return label
-
-
-def force_options(available: int) -> list[int]:
-    """The operative counts ForcePickScreen offers out of a pool of `available`:
-    a quarter, half, three quarters and all of it, plus 1, deduplicated and sorted.
-
-    Quartiles rather than every number from 1 to N because the pool grows without
-    bound as a corp trains up, and a list of forty rows is not a decision anyone
-    makes. 1 is always in it — committing a token force to see what a district's
-    garrison is actually made of is a real move, and the quartiles of a small pool
-    would otherwise skip it."""
-    return sorted({1, *(available * n // 4 for n in (1, 2, 3, 4))} - {0})
 
 
 class ForcePickScreen(ModalScreen):
@@ -790,11 +779,17 @@ class CorpActionsMixin:
             self.notify("No operatives to send. Train some at the Academy.", severity="warning")
             return
 
+        defense = defense_strength(territory)
         prompt = (
-            f"Attack {territory.name} — defense {defense_strength(territory)}. Commit how many?"
+            f"Attack {territory.name} — defense {defense}. Commit how many?"
             if is_attack
             else f"Reinforce {territory.name}. Send how many?"
         )
+        if is_attack and defense:
+            prompt += (
+                f" Losses equal the defense (up to the force sent); commit more "
+                f"than {defense} to leave a garrison."
+            )
         # Stashed rather than closed over: the callback fires after this handler has
         # returned, and it needs to know which district the count is for. Same
         # push_screen(screen, callback) shape TacticalScreen uses for its own picks.

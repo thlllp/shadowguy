@@ -32,6 +32,18 @@ class ForcedChance(random.Random):
         return self._value
 
 
+def force_outcome(state, outcome):
+    """Pin a fight's end state without resolving it.
+
+    The post-fight branches (death, knockout, victory) only run when the engine
+    sets `state.outcome`; writing it directly is the deterministic harness a
+    playtest uses to reach one, and it exercises the real handler rather than
+    rolling a fight and hoping. Works for CombatState and TacticalState alike.
+    """
+    state.outcome = outcome
+    return state
+
+
 def character_with_skill_value(skill_id: str, value: int) -> Character:
     """A fresh Character with the given skill forced to an exact skill_value, by
     zeroing its rank and setting perception/logic directly (bypasses spend_*,

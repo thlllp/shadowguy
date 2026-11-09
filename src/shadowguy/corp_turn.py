@@ -1124,12 +1124,15 @@ def gather_intel(
 def sabotage_targets(corp_state: CorpState, corp_map: CorpMap) -> list[Territory]:
     """Rival-held territories an operative can be sent to sabotage. Only while the
     day's move is free and an operative is spare. Neutral ground and the corp's own
-    territory are excluded — sabotage is a hostile act."""
+    territory are excluded — sabotage is a hostile act — and so is any rival already
+    at Security 0, where the operation could only spend an operative and the day's
+    move without lowering anything."""
     if corp_state.action_points < AP_COST or corp_state.operatives <= 0:
         return []
     return [
         t for t in corp_map.territories.values()
         if t.owner not in (corp_state.faction_id, "neutral")
+        and t.modifiers.get(TerritoryModifier.SECURITY, 0) > 0
     ]
 
 
@@ -1226,8 +1229,10 @@ def resolve_attack(
         defender_losses = territory.garrison
         capture_territory(territory, attacker_id)
         # Whoever walked out of the fight holds the ground they took: survivors
-        # become the new garrison rather than going back in the pool. Taking a
-        # district and leaving it empty would just invite it straight back.
+        # become the new garrison rather than going back in the pool. Committing
+        # no more than the defense can therefore take a district with nobody left
+        # to hold it (attacker_losses is capped at the force sent) -- a pyrrhic
+        # capture, not an oversight; the ForcePick prompt says so.
         territory.garrison = survivors
     else:
         defender_losses = min(territory.garrison, committed)
@@ -1278,6 +1283,18 @@ def attack_territory(
         corp_state.operatives += committed - result.attacker_losses
     corp_state.action_points -= AP_COST
     return result
+
+
+def force_options(available: int) -> list[int]:
+    """The operative counts a force picker offers out of a pool of `available`:
+    a quarter, half, three quarters and all of it, plus 1, deduplicated and sorted.
+
+    Quartiles rather than every number from 1 to N because the pool grows without
+    bound as a corp trains up, and a list of forty rows is not a decision anyone
+    makes. 1 is always in it — committing a token force to see what a district's
+    garrison is actually made of is a real move, and the quartiles of a small pool
+    would otherwise skip it."""
+    return sorted({1, *(available * n // 4 for n in (1, 2, 3, 4))} - {0})
 
 
 @dataclass
