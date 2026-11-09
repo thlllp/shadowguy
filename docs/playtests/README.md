@@ -21,8 +21,9 @@ Reports are ordered by the build they were run against, not by filename.
 | `2026-11-07-five-runs.md` | `e891049` | post-fix audit: corp intel/sabotage regression and burglary picker ordering (P2); death/KO/taken-offer fixes verified |
 | `2026-11-07-five-runs-2.md` | `5b8cba3` | both P2s verified in real play; three P3s re-confirmed; crew hiring and safehouse purchase/build now covered |
 | `2026-11-07-five-runs-3.md` | `1dc8f16` | all open fixes verified; live capture and a blown security contract now covered; no new defects |
+| `2026-11-08-five-runs.md` | `56600fd` | GUI surfaces sweep; one P3 (corp actions don't log FactionEvents) — fixed in the follow-up |
 
-## Status at `1dc8f16`
+## Status at `56600fd`
 
 **No open findings.** Fixed and verified across the reports: the TUI findings
 from the `2c3fd19` → `010a48f` sequence (corp ledger and panels at 80x24, Rest
@@ -30,7 +31,9 @@ key, transient saves, off-site notify); the GUI death/knockout handling,
 knockout-as-victory, burglary starting stages, rival-taken offers; the two
 `e891049` P2s (burglary picker ordering `3263118`, map-panel intel/sabotage
 `47382c4`); the three GUI P3s (footer, unaffordable-program message, aim arrows,
-`f6e9929`); and sabotage-at-zero-Security being withheld (`9779ebf`).
+`f6e9929`); sabotage-at-zero-Security being withheld (`9779ebf`); and the
+`2026-11-08` P3 — GUI corp expand/attack/research now log `FactionEvent`s, so the
+player's own corp site updates.
 
 Coverage now includes: crew hiring and the wage tick, safehouse purchase and
 workshop build, cyberdeck/program and cyberware purchase/install, shop selling,
@@ -38,9 +41,9 @@ crafting, smuggling deliveries, corp-map intel and sabotage execution, corp
 attack, rival district losses, 80x24 matrix and burglary, the GUI
 death/KO/burglary/entrance, save/load, character-creation, corp-mode, HQ-takeover,
 surveillance-log, crew-hiring, grenade, phone/app, hospital, property/workshop,
-junkyard, docks/fishing, legwork, security-contract, skills/XP and corp-website
-flows, a live player capture, and a security contract blown through the app day
-tick.
+junkyard, docks/fishing (including a paying catch), legwork, security-contract,
+skills/XP, corp-website and corp-event-logging flows, a live player capture, and
+a security contract blown through the app day tick.
 
 Remaining gaps: the developer Test menu and the in-game manual are TUI-only —
 preview limits, not test gaps.
