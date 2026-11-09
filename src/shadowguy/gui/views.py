@@ -51,6 +51,7 @@ from shadowguy.corp_turn import (
     TRAINING_DAYS,
     CorpState,
     EmployeeCategory,
+    FactionEvent,
     academy_grant_rp,
     academy_research_grant,
     attack_territory,
@@ -72,6 +73,7 @@ from shadowguy.corp_turn import (
     intel_targets,
     investigate_sighting,
     investigate_sighting_targets,
+    log_faction_event,
     next_academy_upgrade_cost,
     next_efficiency_cost,
     next_lab_cost,
@@ -982,6 +984,15 @@ class CorpActionsView(MenuView):
         if kind == "expand":
             if expand_into(state, corp_map, argument, session.rng):
                 self.message = f"Claimed {corp_map.territories[argument].name}."
+                log_faction_event(
+                    session.app.faction_events,
+                    state.faction_id,
+                    FactionEvent(
+                        kind="territory",
+                        day=session.character.day,
+                        territory_id=argument,
+                    ),
+                )
             else:
                 self.message = "Can't expand there."
         elif kind == "survey":
@@ -1115,6 +1126,16 @@ class CorpActionsView(MenuView):
             self.message = (
                 f"{here.name} is yours — {result.attacker_losses} lost, "
                 f"{here.garrison} holding it."
+            )
+            log_faction_event(
+                self.window.session.app.faction_events,
+                state.faction_id,
+                FactionEvent(
+                    kind="seizure",
+                    day=self.window.session.character.day,
+                    territory_id=here.id,
+                    from_faction_id=result.defender_id,
+                ),
             )
         else:
             self.message = f"Attack repelled — {result.attacker_losses} lost."
@@ -1265,8 +1286,18 @@ class ResearchTreeView(MenuView):
 
     def pick(self, row_id: str) -> None:
         technology = TECHNOLOGIES_BY_ID[row_id.removeprefix("tech:")]
-        if research_technology(self._state(), technology.id):
+        state = self._state()
+        if research_technology(state, technology.id):
             self.message = f"Researched {technology.name}."
+            log_faction_event(
+                self.window.session.app.faction_events,
+                state.faction_id,
+                FactionEvent(
+                    kind="technology",
+                    day=self.window.session.character.day,
+                    technology_id=technology.id,
+                ),
+            )
         else:
             self.message = "Can't research that yet."
         self._build()

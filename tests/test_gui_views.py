@@ -19,6 +19,7 @@ from shadowguy.combat import Drop  # noqa: E402
 from shadowguy.corpmap import (  # noqa: E402
     LocationKind,
     SHOP_KINDS,
+    TerritoryModifier,
     expansion_candidates,
     unowned_territory_ids,
 )
@@ -1196,3 +1197,96 @@ def test_web_site_opens_a_corp_blog():
     blog = window.views[-1]
     assert isinstance(blog, CorpWebsiteView)
     assert any(row_id.startswith("post:") for row_id, _ in blog.rows)
+
+
+def test_corp_expand_logs_a_faction_event():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    corp_map = window.session.app.corp_map
+    target = expansion_candidates(corp_map, state.faction_id)[0]
+    window.map_view.selected_id = target
+    view = CorpActionsView(window, window.map_view)
+
+    view.pick(f"expand:{target}")
+
+    events = window.session.app.faction_events.get(state.faction_id, [])
+    assert events[0].kind == "territory"
+    assert events[0].territory_id == target
+
+
+def test_corp_research_logs_a_technology_event():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    state = window.session.app.corp_state
+    state.research_points = 10
+    view = ResearchTreeView(window)
+
+    view.pick("tech:worker_surveillance")
+
+    events = window.session.app.faction_events.get(state.faction_id, [])
+    assert events[0].kind == "technology"
+    assert events[0].technology_id == "worker_surveillance"
+
+
+def test_corp_attack_capture_logs_a_seizure():
+    window = FakeWindow()
+    window.start_corp(FACTIONS[0].id)
+    app = window.session.app
+    state = app.corp_state
+    corp_map = app.corp_map
+    ours = state.faction_id
+    opponent = next(faction.id for faction in FACTIONS if faction.id != ours)
+    target = next(
+        connection
+        for territory in corp_map.territories.values()
+        if territory.owner == ours
+        for connection in territory.connections
+        if corp_map.territories[connection].owner != ours
+    )
+    territory = corp_map.territories[target]
+    territory.owner = opponent
+    territory.garrison = 0
+    territory.modifiers[TerritoryModifier.SECURITY] = 0
+    state.operatives = 2
+    state.action_points = 2
+    app.rng = AlwaysSix()
+    window.map_view.selected_id = target
+    view = CorpActionsView(window, window.map_view)
+    assert f"attack:{target}" in [row_id for row_id, _ in view.rows]
+
+    view.pick(f"attack:{target}")
+    window.views[-1].pick("force:2")
+
+    events = app.faction_events.get(ours, [])
+    assert events[0].kind == "seizure"
+    assert events[0].territory_id == target
+    assert events[0].from_faction_id == opponent
+
+
+def test_docks_fishing_catches_and_pays():
+    window = FakeWindow()
+    character = window.session.character
+    character.perception = 20
+    character.body = 20
+    territory = next(
+        territory
+        for territory in window.session.corp_map.territories.values()
+        if any(location.kind is LocationKind.DOCKS for location in territory.locations)
+    )
+    character.location_id = territory.id
+    docks = next(
+        location for location in territory.locations if location.kind is LocationKind.DOCKS
+    )
+    view = DocksView(window, docks)
+    cash = character.cash
+
+    view.pick("fish")
+    scene = window.views[-1]
+    scene.pick(scene.rows[0][0])
+    scene.pick("continue")
+    scene.pick("continue")
+    scene.pick(scene.rows[0][0])
+    scene.pick("continue")
+
+    assert character.cash > cash
