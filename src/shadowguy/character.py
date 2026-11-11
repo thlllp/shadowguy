@@ -312,7 +312,8 @@ class Character:
         default_factory=lambda: {skill.id: STARTING_SKILL_RANK for skill in SKILLS}
     )
     # Unspent creation points. spend_stat_point()/spend_skill_point() draw these down;
-    # nothing puts them back.
+    # refund_stat_point() is the one thing that puts a stat point back (the creation
+    # screen's down arrow). Skill points are never refunded once spent.
     stat_points: int = STARTING_STAT_POINTS
     skill_points: int = STARTING_SKILL_POINTS
     # Creation-only eb, bought with skill points (convert_skill_point_to_gear) and
@@ -627,6 +628,13 @@ class Character:
             # Carry current health up with it, or the run starts already wounded.
             self.health += HEALTH_PER_BODY
 
+    def _lower_stat(self, name: str) -> None:
+        setattr(self, name, getattr(self, name) - 1)
+        if name == "body":
+            # Undo of _raise_stat: the ceiling drops and so does current health, so a
+            # refunded Body point leaves the runner at full health rather than over it.
+            self.adjust_health(-HEALTH_PER_BODY)
+
     def _raise_skill_rank(self, skill_id: str) -> None:
         self.skill_ranks[skill_id] = self.skill_rank(skill_id) + 1
 
@@ -646,6 +654,23 @@ class Character:
             return False
         self.stat_points -= 1
         self._raise_stat(name)
+        return True
+
+    def refund_stat_point(self, name: str) -> bool:
+        """Put one stat point back, for the creation screen's down arrow.
+
+        Creation-only, and floored at STARTING_STAT: a stat is a base value here, not
+        something that can be refunded below what the runner started with. Presets
+        spend through spend_stat_point like a hand-built runner, so this unwinds one of
+        their points too — the same "undo what you spent" reset_build offers, one arrow
+        press at a time.
+        """
+        if name not in CORE_STATS:
+            raise ValueError(f"not a core stat: {name!r}")
+        if getattr(self, name) <= STARTING_STAT:
+            return False
+        self.stat_points += 1
+        self._lower_stat(name)
         return True
 
     def convert_skill_point_to_gear(self) -> bool:

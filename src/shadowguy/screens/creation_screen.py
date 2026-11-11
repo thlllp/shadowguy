@@ -1,8 +1,8 @@
 from textual.app import ComposeResult
-from textual.containers import Grid, ScrollableContainer, Vertical
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.containers import Grid, Horizontal, ScrollableContainer, Vertical
+from textual.widgets import Button, Footer, Header, ListItem, ListView, Static
 
-from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, MAX_SKILL_RANK
+from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, MAX_SKILL_RANK, STARTING_STAT
 from shadowguy.shops import ITEMS_BY_ID, Slot, bonus_text
 from shadowguy.skills import SKILLS, skill_for
 
@@ -78,6 +78,33 @@ class CharacterCreationScreen(PanelNav, BackScreen):
         background: $boost;
     }
 
+    /* The stat row is a spinner in the shape of a list item: up/down arrows flank the
+       value, both clickable. Buttons are stripped to a single row of glyphs so the
+       header line still fits on an 80x24 terminal (see #build_scroll). */
+    .stat_spin {
+        height: 1;
+        width: auto;
+    }
+
+    .stat_spin Button {
+        border: none;
+        background: transparent;
+        height: 1;
+        min-width: 3;
+        width: 3;
+        padding: 0;
+    }
+
+    .stat_spin Button:hover {
+        background: $boost;
+    }
+
+    .stat_spin .stat_value {
+        width: 3;
+        padding: 0 1;
+        content-align: center middle;
+    }
+
     #begin_row {
         height: auto;
         border: round $success;
@@ -148,8 +175,21 @@ class CharacterCreationScreen(PanelNav, BackScreen):
 
     async def _refresh_column(self, stat: str, index: int = 0) -> None:
         character = self.app.character
-        self.query_one(f"#build_head_{stat}", Static).update(f"{stat.capitalize()} — {character.stat(stat)}")
-        items = [ListItem(Static(f"Raise {stat.capitalize()}\n  1 stat point"), id=f"stat_{stat}")]
+        self.query_one(f"#build_head_{stat}", Static).update(stat.capitalize())
+        # Row 1 is the stat itself, as an arrow-value-arrow spinner. The buttons are the
+        # click path; enter on the row still spends (see on_list_view_selected), so a
+        # keyboard-only player never has to tab into the arrows.
+        items = [
+            ListItem(
+                Horizontal(
+                    Button("▲", id=f"stat_up_{stat}"),
+                    Static(str(getattr(character, stat)), id=f"stat_value_{stat}", classes="stat_value"),
+                    Button("▼", id=f"stat_down_{stat}"),
+                    classes="stat_spin",
+                ),
+                id=f"stat_{stat}",
+            )
+        ]
         items += [
             ListItem(Static(_compact_skill_label(character, skill)), id=f"skill_{skill.id}")
             for skill in SKILLS
@@ -167,6 +207,32 @@ class CharacterCreationScreen(PanelNav, BackScreen):
         for stat in CORE_STATS:
             await self._refresh_column(stat)
         await self._refresh_begin()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        """The stat spinner's arrows. Raising is spend_stat_point, lowering is
+        refund_stat_point (floored at STARTING_STAT) — the down arrow is what makes
+        this a spinner rather than a one-way button."""
+        button_id = event.button.id or ""
+        character = self.app.character
+        if button_id.startswith("stat_up_"):
+            stat = button_id.removeprefix("stat_up_")
+            if not character.spend_stat_point(stat):
+                self.notify("No stat points left.", severity="warning")
+        elif button_id.startswith("stat_down_"):
+            stat = button_id.removeprefix("stat_down_")
+            if not character.refund_stat_point(stat):
+                self.notify(f"{stat.capitalize()} is already at {STARTING_STAT}.", severity="warning")
+        else:
+            return
+
+        # The clicked button is rebuilt along with the column, so focus the column's
+        # list explicitly: otherwise the arrow key path and enter-to-spend both stop
+        # working until the player clicks back into it.
+        self.query_one(CharacterSheet).refresh()
+        self._update_pools()
+        await self._refresh_column(stat)
+        await self._refresh_begin()
+        self.query_one(f"#build_list_{stat}", ListView).focus()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id

@@ -135,6 +135,9 @@ class ShadowguyWindow(arcade.Window):
     def on_key_press(self, symbol: int, modifiers: int) -> None:
         self.top_view.on_key(symbol, modifiers)
 
+    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> None:
+        self.top_view.on_mouse_press(x, y, button, modifiers)
+
     def on_draw(self) -> None:
         self.clear()
         self.top_view.draw()

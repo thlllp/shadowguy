@@ -159,6 +159,8 @@ src/shadowguy/
   corpmap.py     the territory map model, its Locations/LocalCharacters, the modifier
                  levers, and the ASCII renderer -- what every other system reads
   corpmap_gen.py generate_corp_map: laying one new map out, run once per run
+  townsquare.py  the intra-territory town square's geometry: building blocks and unit
+                 placement, deterministic from the territory id -- no Textual, no state
   buildings.py   burglary targets: rooms, levels and the links between them. Job-scoped
                  and never a corpmap.Location — see Burglary in DESIGN.md
 
@@ -207,6 +209,8 @@ src/shadowguy/
     burglary_screens.py  EntrancePickScreen (the interior itself plays on TacticalScreen)
     corp_map_screen.py   CorpMapScreen -- the home screen for both a runner and a
                          corp-only run; no separate MainMenu any more
+    town_square.py       TownSquareScreen -- the walkable town square opened with w:
+                         move around a district, bump into businesses/fixers/gigs
     map_encounters.py    EncounterMixin + TollScreen: what stops a runner mid-travel,
                          gang toll and corp security, toll-or-fight either way
     corp_screen.py       CorpScreen + ResearchTreeScreen + ForcePickScreen
@@ -232,6 +236,7 @@ Leaf modules, and why each has to stay one:
 - **`support.py`** — the one module that imports `tactical` rather than being imported by it. The fight only ever *carries* a `Support` (a string-annotated field plus a `TYPE_CHECKING` import) and touches `acted`/`blinded_cameras`; every entry point here is called by a screen, never by the engine mid-turn. Keep it that way or the arrow becomes a cycle.
 - **`grid.py`** — imports nothing from the package: `Grid`/`Tile` and the FOV/A*/distance functions over them, with no units, turns or game state. Both `buildings.py` and `tactical.py` import it, which is what lets the arrow run `grid → buildings → tactical` in one direction.
 - **`corpmap.py`** — no `scene`, which is why gigs live on `app.location_gigs` rather than on `Location`. `corpmap_gen.py` imports it and it never imports back; the modifier cluster (`make_modifiers` and friends) stays here rather than moving to the generator because `claim_territory` reseeds a district at runtime through it.
+- **`townsquare.py`** — imports `corpmap` and nothing else, and no Textual; `screens/town_square.py` is the screen over it. Deterministic geometry from the territory id, with no stored layout — that is what keeps the walkable square out of the save bundle and out of `SAVE_VERSION`.
 - **`buildings.py`** — imports `grid` for the geometry and nothing else from the package; `scene`/`jobs`/`tactical` import *it*. `tactical.py` imports `Building`/`Lock` at runtime, no `TYPE_CHECKING` dance: extracting `grid.py` is what removed the cycle that used to need one.
 - **`corp_turn.py` / `corp_rules.py` / `technologies.py`** — one arrow, `corp_rules → technologies → corp_turn`, and none of them imports `scene`/`app`. The data is split out and the behaviour stays: `corp_rules` is the base numbers plus `EmployeeCategory`, `technologies` is the tech table plus what each tech's effect is worth (it imports the base rates because a description quotes the rate it replaces), and `corp_turn` is every function that spends them. **`corp_turn` re-exports everything it pulls back in**, deliberately — 14 files reach the corp system through `from shadowguy.corp_turn import ...`, and pickled saves name `shadowguy.corp_turn` for `CorpState`/`PendingRecruit`/`EmployeeCategory`, which unpickle resolves by `getattr` on that module (verified: enum identity survives, so the split needed no `SAVE_VERSION` bump). The dozen names with no reader inside `corp_turn` are re-exported explicitly with a redundant `as`. `Sighting` lives in `corp_turn` rather than in `surveillance.py` to avoid a corp_turn↔surveillance cycle. `resolve_attack` deliberately takes a bare `Territory` rather than a `CorpState`, which is what lets `rivals.py`'s AI factions (which have no `CorpState`) settle an attack through the same dice the player does.
 - **`relations.py`** — imports only `factions.py`/`gangs.py`. Read by `rivals._pick_attack_target`; nothing writes to it after generation.

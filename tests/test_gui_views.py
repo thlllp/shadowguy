@@ -725,6 +725,22 @@ def test_runner_build_view_offers_premade_and_custom():
     assert isinstance(window.views[-1], CreationView)
 
 
+def test_custom_runner_after_a_preset_starts_with_full_pools():
+    """A preset spends the whole build; going back and choosing Custom must hand
+    the player a blank one rather than a creation screen with nothing to spend."""
+    window = FakeWindow()
+    ArchetypePickView(window).pick("archetype:gunslinger")
+    character = window.session.character
+    assert character.stat_points == 0
+    assert character.skill_points == 0
+
+    RunnerBuildView(window).pick("custom")
+
+    assert isinstance(window.views[-1], CreationView)
+    assert character.stat_points == 6
+    assert character.skill_points == 20
+
+
 def test_archetype_pick_applies_a_preset():
     window = FakeWindow()
     view = ArchetypePickView(window)
@@ -748,6 +764,40 @@ def test_creation_view_spends_a_stat_point():
 
     assert character.stat("body") == body + 1
     assert character.stat_points == 5
+
+
+def test_creation_view_stat_spinner_lowers_and_floors():
+    """The GUI's stat rows are spinners, same as the Textual screen: the down
+    direction refunds a point and stops at STARTING_STAT."""
+    window = FakeWindow()
+    character = window.session.character
+    view = CreationView(window)
+
+    view.adjust_stat("body", 1)
+    assert character.body == 2
+    assert character.stat_points == 5
+
+    view.adjust_stat("body", -1)
+    assert character.body == 1
+    assert character.stat_points == 6
+
+    view.adjust_stat("body", -1)
+    assert character.body == 1
+    assert character.stat_points == 6
+    assert "already at" in view.message
+
+
+def test_creation_view_left_right_adjust_the_selected_stat():
+    window = FakeWindow()
+    character = window.session.character
+    view = CreationView(window)
+    view.index = 0  # stat:body, the first row
+
+    view.on_key(arcade.key.RIGHT, 0)
+    assert character.body == 2
+
+    view.on_key(arcade.key.LEFT, 0)
+    assert character.body == 1
 
 
 def test_creation_skills_view_spends_a_skill_point():
