@@ -30,6 +30,7 @@ from shadowguy.corpmap import (
     GENERATED_KINDS,
     OWNER_TAGS,
     WORKSHOP_BUILD_COST,
+    LocalCharacter,
     Location,
     LocationKind,
     STARTING_RESEARCH_TIER,
@@ -132,6 +133,7 @@ from shadowguy.screens.info_screens import (
     WebScreen,
 )
 from shadowguy.screens.scene_screen import SceneScreen
+from shadowguy.screens.town_square import TownSquareScreen
 from shadowguy.screens.shop_screens import (
     BarScreen,
     CorpHQScreen,
@@ -649,6 +651,38 @@ def test_creation_screen_refuses_to_begin_with_unspent_points():
     run(body())
 
 
+def test_custom_character_after_a_preset_starts_with_full_pools():
+    """Picking a preset spends both pools; backing out and choosing the hand-built
+    path has to start from a blank build, or creation opens with 0 skill points and
+    no way to spend any."""
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _settle(pilot)
+            await pilot.click("#new_game")
+            await pilot.pause()
+            await pilot.click("#runner")
+            await pilot.pause()
+            await pilot.click("#premade")
+            await pilot.pause()
+            await pilot.click("#archetype_enforcer")
+            await _settle(pilot)
+            assert app.character.stat_points == 0
+            assert app.character.skill_points == 0
+
+            await pilot.press("escape")  # creation -> archetype picker
+            await pilot.pause()
+            await pilot.press("escape")  # archetype picker -> build choice
+            await pilot.pause()
+            await pilot.click("#custom")
+            await pilot.pause()
+            assert isinstance(app.screen, CharacterCreationScreen)
+            assert app.character.stat_points == 6
+            assert app.character.skill_points == 20
+
+    run(body())
+
+
 def test_creation_screen_escape_goes_back_to_the_build_choice():
     """The presets have their own screen now, so a wrong turn into creation must not
     put them out of reach for the rest of the run: escape pops back to whichever
@@ -678,6 +712,52 @@ def test_creation_screen_escape_goes_back_to_the_build_choice():
             await pilot.pause()
             assert isinstance(app.screen, ArchetypeSelectScreen)
             assert app.character.skill_rank("cybercombat") == 6
+
+    run(body())
+
+
+def test_creation_stat_spinner_raises_and_lowers_on_click():
+    """Each stat is an arrow-value-arrow spinner rather than a one-way "raise" row:
+    the up arrow spends a point, the down arrow puts it back (floored at
+    STARTING_STAT), and enter on the selected row still spends for keyboard players."""
+    from shadowguy.character import STARTING_STAT
+    from textual.widgets import Static
+
+    async def body():
+        app = ShadowguyApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await _settle(pilot)
+            app.push_screen(CharacterCreationScreen())
+            await _settle(pilot)
+            character = app.character
+            points = character.stat_points
+
+            await pilot.click("#stat_up_body")
+            await _settle(pilot)
+            assert character.body == STARTING_STAT + 1
+            assert character.stat_points == points - 1
+            assert str(app.screen.query_one("#stat_value_body", Static).content) == str(character.body)
+
+            await pilot.click("#stat_down_body")
+            await _settle(pilot)
+            assert character.body == STARTING_STAT
+            assert character.stat_points == points
+            assert str(app.screen.query_one("#stat_value_body", Static).content) == str(character.body)
+
+            # Enter on the spinner row is the keyboard path to the same raise.
+            await pilot.press("enter")
+            await _settle(pilot)
+            assert character.body == STARTING_STAT + 1
+
+            # The floor: back to the starting value, then nothing left to give back.
+            await pilot.click("#stat_down_body")
+            await _settle(pilot)
+            assert character.body == STARTING_STAT
+            assert character.stat_points == points
+            await pilot.click("#stat_down_body")
+            await _settle(pilot)
+            assert character.body == STARTING_STAT
+            assert character.stat_points == points
 
     run(body())
 
@@ -5356,3 +5436,200 @@ def test_corp_screen_free_actions_run_a_broke_corp_off_action_points_alone():
             await pilot.click(f"#{survey_row}")
             await _settle(pilot)
             assert app.corp_state.action_points == 0
+
+
+def _stand_next_to(screen, target: tuple[int, int]) -> tuple[tuple[int, int], str]:
+    """A walkable tile beside `target` and the direction that steps from it onto the
+    target. Shared by the town-square tests, which place the runner rather than walking
+    it across a generated plaza one key at a time."""
+    for direction, (dx, dy) in screen.DIRECTIONS.items():
+        tile = (target[0] - dx, target[1] - dy)
+        if screen.square.is_floor(*tile) and tile not in screen._units:
+            return tile, direction
+    raise AssertionError(f"no open tile beside {target}")
+
+
+def test_map_explore_opens_the_town_square_and_escape_returns():
+    async def body():
+        app = ShadowguyApp(seed=7)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            await pilot.press("w")
+            await _settle(pilot)
+            assert isinstance(app.screen, TownSquareScreen)
+            assert app.screen.territory.id == app.character.location_id
+
+            await pilot.press("escape")
+            await _settle(pilot)
+            assert isinstance(app.screen, CorpMapScreen)
+
+    run(body())
+
+
+def test_town_square_arrow_keys_move_the_runner_and_walls_do_not():
+    async def body():
+        app = ShadowguyApp(seed=13)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            await pilot.press("w")
+            await _settle(pilot)
+            screen = app.screen
+            start = screen.player
+
+            step = next(
+                (key, (dx, dy))
+                for key, (dx, dy) in (
+                    ("up", (0, -1)),
+                    ("down", (0, 1)),
+                    ("left", (-1, 0)),
+                    ("right", (1, 0)),
+                )
+                if screen.square.is_floor(start[0] + dx, start[1] + dy)
+                and (start[0] + dx, start[1] + dy) not in screen._units
+            )
+            key, (dx, dy) = step
+            await pilot.press(key)
+            await _settle(pilot)
+            assert screen.player == (start[0] + dx, start[1] + dy)
+
+    run(body())
+
+
+def test_town_square_walking_into_a_shop_opens_its_screen():
+    async def body():
+        app = ShadowguyApp(seed=11)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            shop = Location(id="square_test_pawn", name="Square Test Pawn", kind=LocationKind.PAWN)
+            territory.locations.append(shop)
+
+            await pilot.press("w")
+            await _settle(pilot)
+            screen = app.screen
+            assert isinstance(screen, TownSquareScreen)
+
+            target = next(tile for tile, location in screen.square.buildings.items() if location.id == shop.id)
+            player, direction = _stand_next_to(screen, target)
+            screen.player = player
+            screen._refresh()
+            screen.action_move(direction)
+            await _settle(pilot)
+
+            assert isinstance(app.screen, ShopScreen)
+            assert app.screen.location is shop
+
+    run(body())
+
+
+def test_town_square_walking_into_a_gig_owner_runs_their_gig():
+    async def body():
+        app = ShadowguyApp(seed=17)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            owner = LocalCharacter(id="square_test_owner", name="Nix", role="proprietor")
+            spot = Location(
+                id="square_test_gig_spot",
+                name="Nix's Nook",
+                kind=LocationKind.PAWN,
+                characters=[owner],
+            )
+            territory.locations.append(spot)
+            gig = generate_gig(
+                day=app.character.day,
+                location=spot,
+                character=owner,
+                territory=territory,
+                rng=random.Random(5),
+            )
+            app.location_gigs[spot.id] = gig
+
+            await pilot.press("w")
+            await _settle(pilot)
+            screen = app.screen
+            assert isinstance(screen, TownSquareScreen)
+
+            tile = next(
+                tile
+                for tile, (kind, target) in screen._units.items()
+                if kind == "gig" and target.id == spot.id
+            )
+            player, direction = _stand_next_to(screen, tile)
+            screen.player = player
+            screen._refresh()
+            hours_before = app.character.elapsed_hours
+            screen.action_move(direction)
+            await _settle(pilot)
+
+            assert isinstance(app.screen, SceneScreen)
+            assert app.screen.scene is gig
+            assert app.character.elapsed_hours == hours_before + gig.hours_cost
+
+    run(body())
+
+
+def test_town_square_walking_into_a_fixer_opens_their_offers():
+    async def body():
+        app = ShadowguyApp(seed=19)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            fixer = app.fixers[0]
+            fixer.location_id = app.character.location_id
+            app.character.discovered_fixers.add(fixer.id)
+
+            await pilot.press("w")
+            await _settle(pilot)
+            screen = app.screen
+            assert isinstance(screen, TownSquareScreen)
+
+            tile = next(
+                tile
+                for tile, (kind, target) in screen._units.items()
+                if kind == "fixer" and target.id == fixer.id
+            )
+            player, direction = _stand_next_to(screen, tile)
+            screen.player = player
+            screen._refresh()
+            screen.action_move(direction)
+            await _settle(pilot)
+
+            assert isinstance(app.screen, FixerOffersScreen)
+
+    run(body())
+
+
+def test_town_square_status_uses_singular_place_for_one_location():
+    async def body():
+        app = ShadowguyApp(seed=200020)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            slum = next(t for t in app.corp_map.territories.values() if t.is_slum)
+            app.character.location_id = slum.id
+            app.push_screen(TownSquareScreen(slum))
+            await _settle(pilot)
+            status = app.screen.query_one("#square_status", Static).content
+            assert "1 place" in status.plain
+            assert "1 places" not in status.plain
+
+    run(body())
+
+
+def test_locals_enter_on_a_non_walk_in_location_warns():
+    async def body():
+        app = ShadowguyApp(seed=200020)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = next(
+                t for t in app.corp_map.territories.values()
+                if any(location.kind is LocationKind.DATA for location in t.locations)
+            )
+            location = next(loc for loc in territory.locations if loc.kind is LocationKind.DATA)
+            app.push_screen(CorpMapScreen())
+            await pilot.pause()
+            notes = []
+            app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+            assert app.screen._push_location_screen(location, territory) is False
+            assert any("no door open" in note for note in notes)
+
+    run(body())

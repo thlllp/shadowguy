@@ -100,6 +100,32 @@ def test_spend_stat_point_rejects_unknown_stat():
         c.spend_stat_point("luck")
 
 
+def test_refund_stat_point_undoes_a_spend_and_floors_at_starting_stat():
+    c = Character(name="t")
+    assert c.spend_stat_point("strength")
+    assert c.refund_stat_point("strength")
+    assert c.strength == STARTING_STAT
+    assert c.stat_points == STARTING_STAT_POINTS
+    # A stat the runner never raised has nothing to give back.
+    assert not c.refund_stat_point("strength")
+    assert c.stat_points == STARTING_STAT_POINTS
+
+
+def test_refund_stat_point_carries_body_health_down_with_the_ceiling():
+    c = Character(name="t")
+    c.spend_stat_point("body")
+    assert c.refund_stat_point("body")
+    # Full health at the lowered ceiling, not over it.
+    assert c.max_health == BASE_HEALTH + STARTING_STAT * HEALTH_PER_BODY
+    assert c.health == c.max_health
+
+
+def test_refund_stat_point_rejects_unknown_stat():
+    c = Character(name="t")
+    with pytest.raises(ValueError):
+        c.refund_stat_point("luck")
+
+
 def test_next_rank_cost_matches_skill_rank_cost_table():
     c = Character(name="t")
     # A fresh skill starts at STARTING_SKILL_RANK; next rank cost is looked up

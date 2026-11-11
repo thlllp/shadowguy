@@ -4,9 +4,12 @@ from textual.widgets import Collapsible, Footer, Header, ListItem, ListView, Sta
 
 from shadowguy.character import HOURS_PER_DAY, SURGERY_SCARRING, Character
 from shadowguy.corpmap import (
+    PLAYER_OWNED_KINDS,
+    SHOP_KINDS,
     WORKSHOP_BUILD_COST,
     Location,
     LocationKind,
+    Territory,
     add_safehouse,
     build_workshop,
     has_home,
@@ -25,8 +28,8 @@ from shadowguy.factions import (
     takeover_gate,
 )
 from shadowguy.fishing import FISHING_HOURS_COST, generate_fishing_trip
-from shadowguy.fixer import RUNNER_BROKER_FIXER_IDS, Fixer, JobOffer
-from shadowguy.gangs import Gang
+from shadowguy.fixer import AMY_FIXER_ID, RUNNER_BROKER_FIXER_IDS, Fixer, JobOffer
+from shadowguy.gangs import GANGS_BY_ID, Gang
 from shadowguy.jobs import generate_smuggling_job
 from shadowguy.rivals import RunnerActivity
 from shadowguy.security import SecurityContract
@@ -1127,3 +1130,46 @@ class RipperdocScreen(PanelNav, RefreshOnResume, BackScreen):
 
         self.query_one(CharacterSheet).refresh()
         await self._refresh()
+
+
+def push_location_screen(app, location: Location, territory: Territory) -> bool:
+    """Open the screen a Location's own "Enter" row opens.
+
+    The one place a shop/hospital/bar/HQ/den/safehouse is resolved to a screen, shared by
+    CorpMapScreen's Locals panel and TownSquareScreen's bump-to-enter so the two can't
+    drift. Returns False for a place with no walk-in surface (a data hub, lab, depot,
+    research facility, academy or encampment), which is the caller's cue to say so rather
+    than silently doing nothing.
+    """
+    if location.kind in SHOP_KINDS:
+        app.push_screen(ShopScreen(location))
+    elif location.kind == LocationKind.HOSPITAL:
+        app.push_screen(HospitalScreen(location))
+    elif location.kind == LocationKind.JUNKYARD:
+        app.push_screen(JunkyardScreen(location))
+    elif location.kind == LocationKind.DOCKS:
+        app.push_screen(DocksScreen(location))
+    elif location.kind == LocationKind.REAL_ESTATE:
+        app.push_screen(RealEstateScreen(location))
+    elif location.kind == LocationKind.CORP_HQ:
+        if territory.owner is None:
+            return False
+        app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[territory.owner]))
+    elif location.kind == LocationKind.CYBER_CLINIC:
+        app.push_screen(RipperdocScreen(location))
+    elif location.kind == LocationKind.BAR:
+        app.push_screen(BarScreen(location))
+    elif location.kind == LocationKind.GANG_DEN:
+        if territory.gang_id is None:
+            return False
+        app.push_screen(GangDenScreen(location, GANGS_BY_ID[territory.gang_id]))
+    elif location.kind == LocationKind.AMYS_PLACE:
+        amy = next((fixer for fixer in app.fixers if fixer.id == AMY_FIXER_ID), None)
+        if amy is None:
+            return False
+        app.push_screen(FixerOffersScreen(amy))
+    elif location.kind in PLAYER_OWNED_KINDS:
+        app.push_screen(SafehouseScreen(location))
+    else:
+        return False
+    return True

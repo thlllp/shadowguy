@@ -113,6 +113,9 @@ Gigs are local, short scenes at locations in the territory you are standing in.
 Jobs come from fixers, and a fixer is only found by being in their district;
 the Locals panel names any fixer working next door as a rumour. Fixers also
 sell security contracts, which pay for spending nights on site.
+Press w on the map to walk the district's town square: steer the runner with
+the arrow keys (WASD/HJKL also work) and walk into a building, a fixer or a
+gig's owner to engage. Walking around costs no time.
 Jobs must be run on site and on the right day. Legwork is optional prep that
 banks a bonus on a job's first check.
 
@@ -155,6 +158,8 @@ g / b             creation: gear / begin run
 r                 creation: reset build
 i / d / k / c     map: Gear / Cyberdeck / Skills / Phone
 j / l             map: Jobs / Legwork
+w                 map: walk the district's town square
+arrows / WASD     town square: move; walk into a place to enter it
 tab / escape      map: cycle panels / release focus
 R                 map or corp screen: Rest
 t                 map or corp screen: Research Tree
@@ -424,7 +429,9 @@ class BuildSelectScreen(BackScreen):
     """The Runner branch's own first choice: take a preset build, or spend the 26
     points by hand. Both paths end on CharacterCreationScreen -- a preset just
     arrives there with everything already spent, so it stays editable (r resets it)
-    rather than being a one-way shortcut past the screen."""
+    rather than being a one-way shortcut past the screen. Custom always starts from a
+    blank build: a preset left applied, or a part-spent hand build, must not carry
+    over and leave the pools empty when the player asked for a fresh character."""
 
     BINDINGS = MENU_BACK_BINDINGS
     CSS = _menu_css("BuildSelectScreen", "build_select_dialog")
@@ -445,6 +452,10 @@ class BuildSelectScreen(BackScreen):
         if event.item.id == "premade":
             self.app.push_screen(ArchetypeSelectScreen())
         elif event.item.id == "custom":
+            # A preset (or a build left over from an earlier visit) is the *whole*
+            # build. "Custom character" means starting from scratch, so reset before
+            # opening creation -- otherwise its 20 skill points are already gone.
+            self.app.character.reset_build()
             self.app.push_screen(CharacterCreationScreen())
 
 

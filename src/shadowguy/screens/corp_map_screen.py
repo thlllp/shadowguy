@@ -13,7 +13,6 @@ from shadowguy.corp_turn import owned_academy, owned_research_facility
 from shadowguy.corpmap import (
     MODIFIER_LABELS,
     OWNER_COLORS,
-    PLAYER_OWNED_KINDS,
     SHOP_KINDS,
     Location,
     LocationKind,
@@ -24,7 +23,7 @@ from shadowguy.corpmap import (
     travel_path,
 )
 from shadowguy.factions import FACTIONS_BY_ID
-from shadowguy.fixer import AMY_FIXER_ID, discover_fixers_here
+from shadowguy.fixer import discover_fixers_here
 from shadowguy.gangs import GANGS_BY_ID
 from shadowguy.jobs import GANG_JOB_STANDING_GAIN, generate_legwork_for_job
 from shadowguy.cybernetics import catalog_for_standing
@@ -57,19 +56,8 @@ from .corp_screen import (
 from .info_screens import CyberdeckScreen, InventoryScreen, PhoneScreen, SkillsScreen
 from .map_encounters import EncounterMixin
 from .scene_screen import SceneScreen
-from .shop_screens import (
-    BarScreen,
-    CorpHQScreen,
-    DocksScreen,
-    FixerOffersScreen,
-    GangDenScreen,
-    HospitalScreen,
-    JunkyardScreen,
-    RealEstateScreen,
-    SafehouseScreen,
-    RipperdocScreen,
-    ShopScreen,
-)
+from .shop_screens import FixerOffersScreen, push_location_screen
+from .town_square import TownSquareScreen
 
 # How many columns #map_corp_actions lays its rows out in. Kept beside GridListView
 # rather than read back off the CSS (Textual exposes no such reader) -- change one and
@@ -162,6 +150,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         ("k", "skills", "Skills"),
         ("c", "phone", "Phone"),
         ("t", "research_tree", "Research"),
+        ("w", "explore", "Explore"),
         # Direct keyboard routes to the two categories a run cannot be played without
         # (jobs to run accepted work, legwork to prep it). Hidden from the Footer to
         # keep it readable; the category buttons themselves are Tab-focusable too.
@@ -593,6 +582,8 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
         # A corp-only run never builds a runner, so the runner-only quick keys
         # (r/i/d/k) have nothing to act on -- keep them out of the Footer entirely
         # instead of advertising a keybinding that silently no-ops when pressed.
+        if action == "explore":
+            return not self.app.corp_only and self.selected_category is None
         if self.app.corp_only and action in ("run_corp", "inventory", "cyberdeck", "skills"):
             return False
         # j/l name runner-only categories; ignore them in a corp-only run.
@@ -631,6 +622,14 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
     def action_research_tree(self) -> None:
         if self.app.corp_state is not None:
             self.app.push_screen(ResearchTreeScreen())
+
+    def action_explore(self) -> None:
+        """Walk around the district the runner is standing in. A corp-only run has no
+        runner to walk, and a category tab is a list to work with, not the map."""
+        if self.app.corp_only or self.selected_category is not None:
+            return
+        here = self.app.corp_map.territories[self.app.character.location_id]
+        self.app.push_screen(TownSquareScreen(here))
 
     # ── list-view dispatch ──────────────────────────────────────────────────
 
@@ -1044,7 +1043,7 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
 
     def _travel_hint(self, t: Territory, here: Territory, character: Character) -> str:
         if t.id == here.id:
-            return f"You are here. Day {character.day}."
+            return f"You are here. Day {character.day}. w: walk the district."
         hops = len(travel_path(self.app.corp_map, here.id, t.id))
         hours = hops * _travel_hours(character)
         if hops == 1:
@@ -1120,33 +1119,11 @@ class CorpMapScreen(CorpActionsMixin, EncounterMixin, BackScreen):
             self.selected_id = self.hovered_id
             self._refresh_map_view()
 
-    def _push_location_screen(self, location, territory) -> None:
-        if location.kind in SHOP_KINDS:
-            self.app.push_screen(ShopScreen(location))
-        elif location.kind == LocationKind.HOSPITAL:
-            self.app.push_screen(HospitalScreen(location))
-        elif location.kind == LocationKind.JUNKYARD:
-            self.app.push_screen(JunkyardScreen(location))
-        elif location.kind == LocationKind.DOCKS:
-            self.app.push_screen(DocksScreen(location))
-        elif location.kind == LocationKind.REAL_ESTATE:
-            self.app.push_screen(RealEstateScreen(location))
-        elif location.kind == LocationKind.CORP_HQ:
-            if territory.owner is not None:
-                self.app.push_screen(CorpHQScreen(location, FACTIONS_BY_ID[territory.owner]))
-        elif location.kind == LocationKind.CYBER_CLINIC:
-            self.app.push_screen(RipperdocScreen(location))
-        elif location.kind == LocationKind.BAR:
-            self.app.push_screen(BarScreen(location))
-        elif location.kind == LocationKind.GANG_DEN:
-            if territory.gang_id:
-                self.app.push_screen(GangDenScreen(location, GANGS_BY_ID[territory.gang_id]))
-        elif location.kind == LocationKind.AMYS_PLACE:
-            amy = next((f for f in self.app.fixers if f.id == AMY_FIXER_ID), None)
-            if amy is not None:
-                self.app.push_screen(FixerOffersScreen(amy))
-        elif location.kind in PLAYER_OWNED_KINDS:
-            self.app.push_screen(SafehouseScreen(location))
+    def _push_location_screen(self, location, territory) -> bool:
+        if push_location_screen(self.app, location, territory):
+            return True
+        self.notify(f"{location.name} has no door open to walk-ins.", severity="warning")
+        return False
 
     # ── activity lists ──────────────────────────────────────────────────────
 

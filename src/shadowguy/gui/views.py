@@ -13,7 +13,14 @@ import arcade
 
 from shadowguy.abstract_combat import CombatOutcome, available_actions, start_combat, take_turn
 from shadowguy.archetypes import ARCHETYPES, ARCHETYPES_BY_ID
-from shadowguy.character import CORE_STATS, GEAR_EB_PER_POINT, HOURS_PER_DAY, MAX_SKILL_RANK, SURGERY_SCARRING
+from shadowguy.character import (
+    CORE_STATS,
+    GEAR_EB_PER_POINT,
+    HOURS_PER_DAY,
+    MAX_SKILL_RANK,
+    STARTING_STAT,
+    SURGERY_SCARRING,
+)
 from shadowguy.combat import (
     KNOCKOUT_FATAL_MAX,
     KNOCKOUT_ROUGH_MAX,
@@ -224,6 +231,11 @@ class View:
     def on_key(self, symbol: int, modifiers: int) -> None:  # pragma: no cover - input
         ...
 
+    def on_mouse_press(
+        self, x: int, y: int, button: int, modifiers: int
+    ) -> None:  # pragma: no cover - input
+        ...
+
 
 class MenuView(View):
     """A list of rows with intro text. Subclasses set `rows` and implement `pick`."""
@@ -255,14 +267,26 @@ class MenuView(View):
             y -= 17
         if self.intro:
             y -= 6
-        for i, (_row_id, label) in enumerate(self.rows):
-            color = w.ACCENT if i == self.index else w.TEXT
-            prefix = "> " if i == self.index else "  "
-            w.text(prefix + label, x, y, size=11, color=color, bold=i == self.index)
+        for i, (row_id, label) in enumerate(self.rows):
+            self.draw_row(i, row_id, label, x, y)
             y -= 18
         if self.message:
             w.text(self.message, x, rect[1] + 26, size=11, color=w.YELLOW)
         w.text(self.footer, x, rect[1] + 10, size=10, color=w.MUTED)
+
+    def draw_row(self, index: int, row_id: str, label: str, x: float, y: float) -> None:
+        """One row, plain text by default. CreationView overrides this for its stat
+        spinner rows, which draw clickable arrows either side of the value."""
+        selected = index == self.index
+        prefix = "> " if selected else "  "
+        self.window.text(
+            prefix + label,
+            x,
+            y,
+            size=11,
+            color=self.window.ACCENT if selected else self.window.TEXT,
+            bold=selected,
+        )
 
     def on_key(self, symbol: int, modifiers: int) -> None:  # pragma: no cover - input
         if not self.rows:
@@ -293,6 +317,13 @@ def _corp_over(window) -> bool:
     faction = FACTIONS_BY_ID[app.corp_state.faction_id]
     window.push(GameOverView(window, f"{faction.name} has been broken up. Game over."))
     return True
+
+
+def _point_in(rect: tuple, x: int, y: int) -> bool:
+    """Arcade/window coordinates for a drawn rect: (x, y, width, height), origin
+    bottom-left — the same space the drawing and mouse callbacks share."""
+    rx, ry, rw, rh = rect
+    return rx <= x <= rx + rw and ry <= y <= ry + rh
 
 
 class StartView(MenuView):
@@ -363,6 +394,10 @@ class RunnerBuildView(MenuView):
         if row_id == "premade":
             self.window.push(ArchetypePickView(self.window))
         else:
+            # Custom means a blank build, even if a preset or a part-spent hand
+            # build is still on the character from an earlier visit -- otherwise
+            # creation opens with no points left to spend.
+            self.window.session.character.reset_build()
             self.window.push(CreationView(self.window))
 
 
@@ -386,9 +421,16 @@ class ArchetypePickView(MenuView):
 
 class CreationView(MenuView):
     title = "CREATE RUNNER"
+    footer = "Up/Down move   Left/Right lower/raise a stat   Enter select   Esc back"
+
+    # Spinner geometry: an arrow is a 14x16 box in text space, which is enough to hit
+    # with a mouse without overlapping the 18px row above or below it.
+    _ARROW_W = 14
+    _ARROW_H = 16
 
     def __init__(self, window: "ShadowguyWindow") -> None:
         super().__init__(window)
+        self._stat_arrows: dict[str, tuple[tuple, tuple]] = {}
         self._build()
 
     def _character(self):
@@ -400,25 +442,71 @@ class CreationView(MenuView):
             f"Stat points {character.stat_points} — skill points {character.skill_points} — "
             f"gear budget {character.gear_budget}eb"
         ]
-        rows = [
-            (
-                f"stat:{stat}",
-                f"Raise {stat.title()} ({character.stat(stat)}) — 1 point",
-            )
-            for stat in CORE_STATS
-        ]
+        rows = [(f"stat:{stat}", stat.title()) for stat in CORE_STATS]
         rows += [(f"skills:{stat}", f"Skills — {stat.title()}") for stat in CORE_STATS]
         rows.append(("gear", f"Gear — spend {character.gear_budget}eb"))
         rows.append(("reset", "Reset build"))
         rows.append(("begin", "Begin run"))
         self.rows = rows
 
+    def draw_row(self, index: int, row_id: str, label: str, x: float, y: float) -> None:
+        """Stat rows are spinners — `▲ Body 3 ▼` — matching the Textual creation
+        screen. The arrows are the click path and their hit boxes are recorded here;
+        left/right on the selected row is the keyboard path (see on_key)."""
+        if not row_id.startswith("stat:"):
+            super().draw_row(index, row_id, label, x, y)
+            return
+        stat = row_id.removeprefix("stat:")
+        selected = index == self.index
+        color = self.window.ACCENT if selected else self.window.TEXT
+        w = self.window
+        w.text("> " if selected else "  ", x, y, size=11, color=color, bold=selected)
+        up_x = x + 22
+        w.text("▲", up_x, y, size=11, color=color, bold=selected)
+        w.text(label, x + 44, y, size=11, color=color, bold=selected)
+        w.text(str(getattr(self._character(), stat)), x + 140, y, size=11, color=color, bold=selected)
+        down_x = x + 158
+        w.text("▼", down_x, y, size=11, color=color, bold=selected)
+        self._stat_arrows[stat] = (
+            (up_x, y - self._ARROW_H + 4, self._ARROW_W, self._ARROW_H),
+            (down_x, y - self._ARROW_H + 4, self._ARROW_W, self._ARROW_H),
+        )
+
+    def adjust_stat(self, stat: str, delta: int) -> None:
+        """Spend or refund one stat point. The down arrow is floored at STARTING_STAT
+        by Character.refund_stat_point, so a preset can be unwound here too."""
+        character = self._character()
+        if delta > 0:
+            if not character.spend_stat_point(stat):
+                self.message = "No stat points left."
+        elif not character.refund_stat_point(stat):
+            self.message = f"{stat.title()} is already at {STARTING_STAT}."
+        self._build()
+
+    def on_key(self, symbol: int, modifiers: int) -> None:
+        # MenuView clamps the index on every key; do the same before reading the row.
+        self.index = min(self.index, len(self.rows) - 1) if self.rows else 0
+        row_id = self.rows[self.index][0] if self.rows else ""
+        if row_id.startswith("stat:") and symbol in (arcade.key.LEFT, arcade.key.RIGHT):
+            self.adjust_stat(row_id.removeprefix("stat:"), -1 if symbol == arcade.key.LEFT else 1)
+            return
+        super().on_key(symbol, modifiers)
+
+    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> None:
+        for stat, (up, down) in self._stat_arrows.items():
+            if _point_in(up, x, y):
+                self.adjust_stat(stat, 1)
+                return
+            if _point_in(down, x, y):
+                self.adjust_stat(stat, -1)
+                return
+
     def pick(self, row_id: str) -> None:
         character = self._character()
         kind, _, argument = row_id.partition(":")
         if kind == "stat":
-            if not character.spend_stat_point(argument):
-                self.message = "No stat points left."
+            self.adjust_stat(argument, 1)
+            return
         elif kind == "skills":
             self.window.push(CreationSkillsView(self.window, argument, self._build))
             return
