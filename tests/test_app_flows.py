@@ -133,6 +133,8 @@ from shadowguy.screens.info_screens import (
     WebScreen,
 )
 from shadowguy.screens.scene_screen import SceneScreen
+from shadowguy.screens.npc_screens import NpcDialogueScreen
+from shadowguy.npcs import npcs_for_territory
 from shadowguy.screens.town_square import TownSquareScreen
 from shadowguy.screens.shop_screens import (
     BarScreen,
@@ -5642,5 +5644,89 @@ def test_locals_enter_on_a_non_walk_in_location_warns():
             app.notify = lambda message, *args, **kwargs: notes.append(str(message))
             assert app.screen._push_location_screen(location, territory) is False
             assert any("no door open" in note for note in notes)
+
+    run(body())
+
+
+def test_town_square_walking_into_an_npc_opens_dialogue():
+    async def body():
+        app = ShadowguyApp(seed=13)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            screen = app.screen
+            pos, person = next(
+                (position, unit)
+                for position, unit in screen._units.items()
+                if unit[0] == "npc" and unit[1].special
+            )
+            for direction, (dx, dy) in screen.DIRECTIONS.items():
+                neighbor = (pos[0] - dx, pos[1] - dy)
+                if screen.square.is_floor(*neighbor) and neighbor not in screen._units:
+                    screen.player = neighbor
+                    screen.action_move(direction)
+                    break
+            else:
+                raise AssertionError("no open tile beside the named NPC")
+            await _settle(pilot)
+            assert isinstance(app.screen, NpcDialogueScreen)
+
+    run(body())
+
+
+def test_named_npc_favour_pays_once():
+    async def body():
+        app = ShadowguyApp(seed=13)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            named = next(
+                npc for npc in npcs_for_territory(territory, app.seed, app.corp_map)
+                if npc.special
+            )
+            app.push_screen(NpcDialogueScreen(named))
+            await _settle(pilot)
+            screen = app.screen
+            character = app.character
+            character.skill_ranks[named.quest_skill] = 20
+            app.rng = AlwaysSix()
+            cash = character.cash
+
+            actions = screen.query_one("#npc_actions", ListView)
+            ids = [item.id for item in actions.children]
+            assert "quest" in ids
+            actions.index = ids.index("quest")
+            await pilot.press("enter")
+            await _settle(pilot)
+
+            assert character.cash == cash + named.reward_cash
+            assert character.local_standing_with(named.id) >= 1
+            ids = [item.id for item in screen.query_one("#npc_actions", ListView).children]
+            assert "thanks" in ids
+            assert "quest" not in ids
+
+    run(body())
+
+
+def test_town_square_locals_reposition_every_few_steps():
+    async def body():
+        app = ShadowguyApp(seed=13)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            screen = app.screen
+            seen = set()
+            for bucket in range(8):
+                screen._steps = bucket * 3
+                screen._refresh_units()
+                position = next(
+                    position for position, unit in screen._units.items() if unit[0] == "npc"
+                )
+                seen.add(position)
+            assert len(seen) > 1
 
     run(body())

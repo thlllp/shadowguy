@@ -17,6 +17,7 @@ from textual.widgets import Footer, Header, Static
 
 from shadowguy.corpmap import Location, Territory
 from shadowguy.fixer import Fixer
+from shadowguy.npcs import Npc, npcs_for_territory
 from shadowguy.scene import Scene
 from shadowguy.townsquare import (
     FIXER_GLYPH,
@@ -34,6 +35,7 @@ from shadowguy.townsquare import (
 
 from . import MENU_QUIT_BINDINGS, BackScreen, CharacterSheet
 from .scene_screen import SceneScreen
+from .npc_screens import NpcDialogueScreen
 from .shop_screens import FixerOffersScreen, push_location_screen
 
 
@@ -87,10 +89,13 @@ class TownSquareScreen(BackScreen):
         self.territory = territory
         self.square = self._build_square()
         self.player = self.square.start
-        # (x, y) -> ("fixer", Fixer) | ("gig", Location). Rebuilt on resume because a
-        # completed gig disappears from app.location_gigs while this screen sits under
-        # the SceneScreen that ran it.
+        # (x, y) -> ("fixer", Fixer) | ("gig", Location) | ("npc", Npc). Rebuilt on
+        # resume because a completed gig disappears from app.location_gigs while this
+        # screen sits under the SceneScreen that ran it.
         self._units: dict[tuple[int, int], tuple[str, object]] = {}
+        # Standard locals reposition every few steps so the plaza feels alive. A pure
+        # function of the step count, so it never needs saving.
+        self._steps = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -143,8 +148,16 @@ class TownSquareScreen(BackScreen):
         )
         locations = {location.id: location for location in self.territory.locations}
         gig_ids = sorted(location_id for location_id in self.app.location_gigs if location_id in locations)
+        hour = character.hour_of_day
+        npcs = [
+            npc
+            for npc in npcs_for_territory(self.territory, self.app.seed, self.app.corp_map)
+            if npc.is_present(hour)
+        ]
+        bucket = self._steps // 3
         keys = [f"fixer:{fixer.id}" for fixer in fixers]
         keys += [f"gig:{location_id}" for location_id in gig_ids]
+        keys += [f"npc:{npc.id}:{bucket}" for npc in npcs]
         positions = place_units(self.square, keys, blocked=(self.player,))
 
         self._units = {}
@@ -156,6 +169,10 @@ class TownSquareScreen(BackScreen):
             position = positions.get(f"gig:{location_id}")
             if position is not None:
                 self._units[position] = ("gig", locations[location_id])
+        for npc in npcs:
+            position = positions.get(f"npc:{npc.id}:{bucket}")
+            if position is not None:
+                self._units[position] = ("npc", npc)
 
     # ── movement ─────────────────────────────────────────────────────────────
 
@@ -176,6 +193,8 @@ class TownSquareScreen(BackScreen):
 
         if self.square.is_floor(*target):
             self.player = target
+            self._steps += 1
+            self._refresh_units()
             self._refresh()
 
     def _enter_location(self, location: Location) -> None:
@@ -185,6 +204,9 @@ class TownSquareScreen(BackScreen):
     def _interact_person(self, kind: str, target: object) -> None:
         if kind == "fixer":
             self.app.push_screen(FixerOffersScreen(target))
+            return
+        if kind == "npc":
+            self.app.push_screen(NpcDialogueScreen(target))
             return
 
         location: Location = target  # a gig's owner stands in for the gig here
@@ -218,11 +240,13 @@ class TownSquareScreen(BackScreen):
                     continue
                 person = self._units.get((x, y))
                 if person is not None:
-                    glyph, style = (
-                        (FIXER_GLYPH, "bold bright_cyan")
-                        if person[0] == "fixer"
-                        else (GIG_GLYPH, "bold bright_yellow")
-                    )
+                    if person[0] == "fixer":
+                        glyph, style = FIXER_GLYPH, "bold bright_cyan"
+                    elif person[0] == "gig":
+                        glyph, style = GIG_GLYPH, "bold bright_yellow"
+                    else:
+                        npc: Npc = person[1]
+                        glyph, style = npc.glyph, npc.style
                     text.append(glyph, style=style)
                     continue
                 location = self.square.location_at(x, y)
@@ -260,6 +284,9 @@ class TownSquareScreen(BackScreen):
             if kind == "fixer":
                 fixer: Fixer = target
                 return f"{fixer.name} — {fixer.specialty}. Walk into them to talk."
+            if kind == "npc":
+                npc: Npc = target
+                return f"{npc.name} — {npc.label}. Walk into them to talk."
             location: Location = target
             gig = self.app.location_gigs.get(location.id)
             if gig is None:
