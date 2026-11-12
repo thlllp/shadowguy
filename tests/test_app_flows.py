@@ -5441,11 +5441,22 @@ def test_corp_screen_free_actions_run_a_broke_corp_off_action_points_alone():
 def _stand_next_to(screen, target: tuple[int, int]) -> tuple[tuple[int, int], str]:
     """A walkable tile beside `target` and the direction that steps from it onto the
     target. Shared by the town-square tests, which place the runner rather than walking
-    it across a generated plaza one key at a time."""
-    for direction, (dx, dy) in screen.DIRECTIONS.items():
-        tile = (target[0] - dx, target[1] - dy)
-        if screen.square.is_floor(*tile) and tile not in screen._units:
-            return tile, direction
+    it across a generated plaza one key at a time.
+
+    For a building, `target` may be an interior tile with no open neighbour; walk into
+    any tile of the same block, so try every tile the Location occupies.
+    """
+    location = screen.square.location_at(*target)
+    targets = (
+        [tile for tile, owner in screen.square.buildings.items() if owner.id == location.id]
+        if location is not None
+        else [target]
+    )
+    for candidate in targets:
+        for direction, (dx, dy) in screen.DIRECTIONS.items():
+            tile = (candidate[0] - dx, candidate[1] - dy)
+            if screen.square.is_floor(*tile) and tile not in screen._units:
+                return tile, direction
     raise AssertionError(f"no open tile beside {target}")
 
 

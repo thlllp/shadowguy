@@ -1,19 +1,22 @@
 """The walkable town square of one Territory: where its Locations stand.
 
 Pure geometry and glyphs — no Textual and no game state beyond the `Territory` handed in.
-`build_square` is deterministic from the territory id, so a district's square looks the
-same on every visit and nothing about it needs saving. `screens/town_square.py` is the
-UI over this.
+`build_square` is deterministic from the territory id and the run seed, so a district's
+square looks the same on every visit and after a reload without anything about it being
+saved. `screens/town_square.py` is the UI over this.
 
-A district's Locations are drawn as building blocks around an open plaza: one row of
-blocks along the top, another along the bottom when there are enough places to need it.
-Each block is `BLOCK_WIDTH` wide and `BLOCK_HEIGHT` tall; every tile of a block resolves
-to the same Location, so walking into any of it enters the business. The glyph on the
-block's sign tile (`KIND_GLYPHS`) says what kind of place it is.
+A district's Locations are drawn as rectangular building blocks scattered around an open,
+fully-connected plaza. Block sizes vary and each district's arrangement is rolled fresh
+from the run seed: one territory can have a tight two-row market, another a sparse
+courtyard with oversized blocks. Every tile of a block resolves to the same Location, so
+walking into any of it enters the business. The glyph on the block's sign tile
+(`KIND_GLYPHS`) says what kind of place it is.
 """
 
+import math
 import random
 import zlib
+from collections import deque
 from dataclasses import dataclass
 
 from shadowguy.corpmap import Location, LocationKind, Territory
@@ -24,12 +27,22 @@ PLAYER_GLYPH = "@"
 FIXER_GLYPH = "F"
 GIG_GLYPH = "!"
 
-# A building block: four columns wide so a sign tile reads as part of the building rather
-# than the whole thing, two rows tall so it has a visible footprint. Two blank columns
-# between blocks leave room to walk between them.
-BLOCK_WIDTH = 4
-BLOCK_HEIGHT = 2
-BLOCK_GAP = 2
+# A building block is a small rectangle, not a single tile, so its sign reads as part of
+# a building rather than the whole building. Sizes are rolled per block; the bounds also
+# keep a district readable when several blocks sit close together.
+MIN_BLOCK_WIDTH = 3
+MAX_BLOCK_WIDTH = 5
+MIN_BLOCK_HEIGHT = 2
+MAX_BLOCK_HEIGHT = 3
+
+# At least one walkable tile between blocks and between a block and the wall. This is
+# what keeps the plaza connected: no block can seal off a pocket of floor.
+BLOCK_GAP = 1
+
+# The smallest square, and the size of an empty one. Wide enough that a lone shop still
+# gets a plaza around it rather than a corridor.
+MIN_SQUARE_WIDTH = 21
+MIN_SQUARE_HEIGHT = 9
 
 # One glyph per LocationKind. The stores are upper-case letters, services and the runner's
 # own places get their own marks. Deliberately ASCII: this is read in a terminal first.
@@ -140,33 +153,108 @@ class Square:
 
     @property
     def plaza_tiles(self) -> list[tuple[int, int]]:
-        """The open plaza proper — the floor between the building rows, not the narrow
-        gaps between two blocks. People stand here rather than tucked between shops."""
-        # The bottom row's sign sits on the block's own first row; its absence means a
-        # one-row square, whose plaza runs right down to the bottom wall.
-        two_rows = any(y == self.height - 1 - BLOCK_HEIGHT for _, y in self.signs.values())
-        last_row = self.height - 4 if two_rows else self.height - 2
-        return [
-            (x, y)
-            for y in range(3, last_row + 1)
-            for x in range(1, self.width - 1)
-            if self.is_floor(x, y)
-        ]
+        """Every walkable tile. The whole floor is plaza now that blocks are scattered
+        rather than confined to rows, and roaming people should be able to use all of it."""
+        return self.floor_tiles
 
 
-def _block_origins(count: int) -> tuple[int, int]:
-    """How many building blocks each row holds: top row gets the odd one when needed."""
-    blocks = max(1, (count + 1) // 2)
-    top = min(count, blocks)
-    return top, count - top
+Block = tuple[int, int, int, int]  # x, y, width, height
 
 
-def build_square(territory: Territory) -> Square:
-    """Lay out `territory`'s Locations around an open plaza.
+def _overlaps(a: Block, b: Block) -> bool:
+    """Whether two blocks are closer than BLOCK_GAP tiles. The gap is Chebyshev, so
+    diagonal neighbours can't pinch a one-tile passage closed either."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return not (
+        ax + aw + BLOCK_GAP <= bx
+        or bx + bw + BLOCK_GAP <= ax
+        or ay + ah + BLOCK_GAP <= by
+        or by + bh + BLOCK_GAP <= ay
+    )
 
-    Deterministic from the territory id alone: no rng state from the run, no stored
-    layout. The Locations are shuffled with that seed so a district's shop row does not
-    follow generation order, but the same district always yields the same square.
+
+def _floor_tiles(width: int, height: int, blocks: list[Block]) -> list[tuple[int, int]]:
+    """Every walkable tile inside the walls, row-major."""
+    blocked = {
+        (x + dx, y + dy)
+        for x, y, block_width, block_height in blocks
+        for dx in range(block_width)
+        for dy in range(block_height)
+    }
+    return [
+        (x, y)
+        for y in range(1, height - 1)
+        for x in range(1, width - 1)
+        if (x, y) not in blocked
+    ]
+
+
+def _floor_is_connected(floor: list[tuple[int, int]]) -> bool:
+    """All walkable floor in one 4-connected region, so the runner can reach every
+    building from the starting tile."""
+    remaining = set(floor)
+    if not remaining:
+        return False
+    start = min(remaining)
+    seen = {start}
+    frontier = deque([start])
+    while frontier:
+        x, y = frontier.popleft()
+        for tile in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if tile in remaining and tile not in seen:
+                seen.add(tile)
+                frontier.append(tile)
+    return seen == remaining
+
+
+def _starting_tile(
+    width: int, height: int, floor: list[tuple[int, int]], rng: random.Random
+) -> tuple[int, int]:
+    """A random floor tile as close to the middle as possible, so the runner starts in
+    the plaza rather than in a corner."""
+    center_x, center_y = width // 2, height // 2
+    nearest = min(abs(x - center_x) + abs(y - center_y) for x, y in floor)
+    candidates = sorted(
+        (x, y) for x, y in floor if abs(x - center_x) + abs(y - center_y) == nearest
+    )
+    return rng.choice(candidates)
+
+
+def _roll_blocks(
+    count: int, width: int, height: int, rng: random.Random
+) -> list[Block] | None:
+    """Try to scatter `count` blocks over the square. None if they don't fit, which
+    makes build_square give the square more room and try again."""
+    blocks: list[Block] = []
+    for _ in range(count):
+        for _attempt in range(120):
+            block_width = rng.randint(MIN_BLOCK_WIDTH, MAX_BLOCK_WIDTH)
+            block_height = rng.randint(MIN_BLOCK_HEIGHT, MAX_BLOCK_HEIGHT)
+            x = rng.randint(1, width - block_width - 1)
+            y = rng.randint(1, height - block_height - 1)
+            candidate = (x, y, block_width, block_height)
+            if not any(_overlaps(candidate, other) for other in blocks):
+                blocks.append(candidate)
+                break
+        else:
+            return None
+    if not _floor_is_connected(_floor_tiles(width, height, blocks)):
+        return None
+    return blocks
+
+
+def build_square(territory: Territory, *, seed: int | None = None) -> Square:
+    """Lay out `territory`'s Locations as scattered blocks around an open plaza.
+
+    Deterministic from the territory id *and* the run seed, so the same location looks
+    the same on every visit and after a reload, while two runs get different squares.
+    Nothing is stored on the Territory or in the save bundle; the run seed is already
+    saved, so this costs no SAVE_VERSION bump.
+
+    Locations are shuffled with the same seed so a district's blocks don't follow
+    generation order. Block sizes and positions are rolled until every block fits with a
+    walkable gap around it and all floor is connected.
     """
     locations = list(territory.locations)
     if not locations:
@@ -174,45 +262,52 @@ def build_square(territory: Territory) -> Square:
         # plaza, rather than a screen with nothing in it.
         return Square(
             territory_id=territory.id,
-            width=21,
-            height=9,
-            start=(10, 4),
+            width=MIN_SQUARE_WIDTH,
+            height=MIN_SQUARE_HEIGHT,
+            start=(MIN_SQUARE_WIDTH // 2, MIN_SQUARE_HEIGHT // 2),
             locations=(),
             buildings={},
             signs={},
         )
 
-    rng = random.Random(_seed(f"{territory.id}:layout"))
+    seed_text = f"{territory.id}:layout" if seed is None else f"{seed}:{territory.id}:layout"
+    rng = random.Random(_seed(seed_text))
     rng.shuffle(locations)
 
-    top_count, bottom_count = _block_origins(len(locations))
-    blocks_per_row = max(top_count, bottom_count)
-    width = blocks_per_row * (BLOCK_WIDTH + BLOCK_GAP) + 1
-    height = 14 if bottom_count else 10
-    start = (width // 2, (height - 1) // 2)
+    # Start compact and grow whichever dimension is currently tighter. Growth is rare
+    # for a real district (at most a handful of Locations) and bounded for tests.
+    side = max(1, math.ceil(math.sqrt(len(locations))))
+    width = max(MIN_SQUARE_WIDTH, side * 7)
+    height = max(MIN_SQUARE_HEIGHT, side * 3)
+    blocks: list[Block] = []
+    for _attempt in range(80):
+        rolled = _roll_blocks(len(locations), width, height, rng)
+        if rolled is not None:
+            blocks = rolled
+            break
+        if width <= height * 1.6:
+            width += 3
+        else:
+            height += 2
+    else:
+        raise RuntimeError(f"could not lay out {len(locations)} blocks for {territory.id!r}")
 
     buildings: dict[tuple[int, int], Location] = {}
     signs: dict[str, tuple[int, int]] = {}
+    for location, (x, y, block_width, block_height) in zip(locations, blocks, strict=True):
+        for dx in range(block_width):
+            for dy in range(block_height):
+                buildings[(x + dx, y + dy)] = location
+        # The sign sits on the block's front row, somewhere along its width, so a wider
+        # building reads as a frontage rather than a single glyph.
+        signs[location.id] = (x + rng.randrange(block_width), y)
 
-    def place_row(row: list[Location], y: int) -> None:
-        for index, location in enumerate(row):
-            x = 1 + index * (BLOCK_WIDTH + BLOCK_GAP)
-            for dx in range(BLOCK_WIDTH):
-                for dy in range(BLOCK_HEIGHT):
-                    buildings[(x + dx, y + dy)] = location
-            # The sign sits one tile in from the block's left edge, so the building
-            # reads as having a door and a frontage rather than being a single glyph.
-            signs[location.id] = (x + 1, y)
-
-    place_row(locations[:top_count], 1)
-    if bottom_count:
-        place_row(locations[top_count:], height - 1 - BLOCK_HEIGHT)
-
+    floor = _floor_tiles(width, height, blocks)
     return Square(
         territory_id=territory.id,
         width=width,
         height=height,
-        start=start,
+        start=_starting_tile(width, height, floor, rng),
         locations=tuple(locations),
         buildings=buildings,
         signs=signs,

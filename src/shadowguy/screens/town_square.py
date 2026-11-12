@@ -6,8 +6,8 @@ row does. Fixers and the owners of local gigs stand in the plaza as `F`/`!`; wal
 one talks to them or takes their work.
 
 Free to walk around: no step spends in-game time, and the square itself is generated from
-the territory id (`shadowguy.townsquare`) rather than stored, so a visit changes nothing
-and leaves nothing to save.
+the run seed plus the territory id (`shadowguy.townsquare`) rather than stored, so a
+visit changes nothing and leaves nothing to save.
 """
 
 from rich.text import Text
@@ -26,6 +26,7 @@ from shadowguy.townsquare import (
     KIND_STYLES,
     PLAYER_GLYPH,
     WALL_GLYPH,
+    Square,
     build_square,
     kind_label,
     place_units,
@@ -84,7 +85,7 @@ class TownSquareScreen(BackScreen):
     def __init__(self, territory: Territory) -> None:
         super().__init__()
         self.territory = territory
-        self.square = build_square(territory)
+        self.square = self._build_square()
         self.player = self.square.start
         # (x, y) -> ("fixer", Fixer) | ("gig", Location). Rebuilt on resume because a
         # completed gig disappears from app.location_gigs while this screen sits under
@@ -116,10 +117,16 @@ class TownSquareScreen(BackScreen):
             # square pushed, so the Location list itself can grow while we sit under it.
             # The layout moved with it; put the runner back on the square's starting tile
             # rather than risk standing inside a block.
-            self.square = build_square(self.territory)
+            self.square = self._build_square()
             self.player = self.square.start
         self._refresh_units()
         self._refresh()
+
+    def _build_square(self) -> Square:
+        # The run seed is what makes each playthrough's districts different; mixing in
+        # the territory id keeps one run's districts distinct from each other. The seed
+        # is part of the save, so a reload rebuilds the exact same square.
+        return build_square(self.territory, seed=self.app.seed)
 
     # ── people in the square ─────────────────────────────────────────────────
 
