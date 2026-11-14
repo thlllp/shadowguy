@@ -1750,24 +1750,21 @@ def test_investigate_sighting_targets_empty_without_tech():
     assert investigate_sighting_targets(corp_state, corp_map) == []
 
 
-def test_investigate_sighting_targets_empty_when_no_ap():
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"cash": 10_000, "action_points": 0}, id="no_action_points"),
+        pytest.param({"cash": INVESTIGATION_COST - 1}, id="short_on_cash"),
+    ],
+)
+def test_investigate_sighting_targets_empty_without_an_action_and_the_cash(kwargs):
     corp_state = CorpState(
-        faction_id=IRONCLAD, cash=10_000, action_points=0,
+        faction_id=IRONCLAD,
         researched={TOTAL_INFORMATION_AWARENESS_ID},
         sightings=[Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)],
+        **kwargs,
     )
-    corp_map = _map()
-    assert investigate_sighting_targets(corp_state, corp_map) == []
-
-
-def test_investigate_sighting_targets_empty_when_short_on_cash():
-    corp_state = CorpState(
-        faction_id=IRONCLAD, cash=INVESTIGATION_COST - 1,
-        researched={TOTAL_INFORMATION_AWARENESS_ID},
-        sightings=[Sighting(kind="player", actor_id="player", territory_id="iron_home", day=1)],
-    )
-    corp_map = _map()
-    assert investigate_sighting_targets(corp_state, corp_map) == []
+    assert investigate_sighting_targets(corp_state, _map()) == []
 
 
 def test_investigate_sighting_targets_returns_sightings_when_ready():
@@ -1961,18 +1958,16 @@ def test_tail_runner_targets_empty_without_sightings():
     assert tail_runner_targets(corp_state) == []
 
 
-def test_tail_runner_targets_empty_when_no_operatives():
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"operatives": 0}, id="no_operatives"),
+        pytest.param({"operatives": 1, "action_points": 0}, id="acted_today"),
+    ],
+)
+def test_tail_runner_targets_empty_without_an_operative_or_an_action(kwargs):
     sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
-    corp_state = CorpState(faction_id=IRONCLAD, operatives=0, sightings=[sighting])
-    assert tail_runner_targets(corp_state) == []
-
-
-def test_tail_runner_targets_empty_when_acted_today():
-    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
-    corp_state = CorpState(
-        faction_id=IRONCLAD, operatives=1, action_points=0,
-        sightings=[sighting],
-    )
+    corp_state = CorpState(faction_id=IRONCLAD, sightings=[sighting], **kwargs)
     assert tail_runner_targets(corp_state) == []
 
 
@@ -2014,18 +2009,16 @@ def test_tail_runner_marks_day_even_on_miss():
     assert corp_state.action_points == 1
 
 
-def test_tail_runner_fails_without_operatives():
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"operatives": 0}, id="no_operatives"),
+        pytest.param({"operatives": 1, "action_points": 0}, id="acted_today"),
+    ],
+)
+def test_tail_runner_fails_without_an_operative_or_an_action(kwargs):
     sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
-    corp_state = CorpState(faction_id=IRONCLAD, operatives=0, sightings=[sighting])
-    assert tail_runner(corp_state, sighting, random.Random()) is False
-
-
-def test_tail_runner_fails_when_acted_today():
-    sighting = Sighting(kind="runner", actor_id="r", territory_id="iron_home", day=1)
-    corp_state = CorpState(
-        faction_id=IRONCLAD, operatives=1, action_points=0,
-        sightings=[sighting],
-    )
+    corp_state = CorpState(faction_id=IRONCLAD, sightings=[sighting], **kwargs)
     assert tail_runner(corp_state, sighting, random.Random()) is False
 
 

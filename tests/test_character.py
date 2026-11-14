@@ -94,10 +94,18 @@ def test_spend_stat_point_exhausts_pool():
     assert not c.spend_stat_point("body")
 
 
-def test_spend_stat_point_rejects_unknown_stat():
-    c = Character(name="t")
+@pytest.mark.parametrize(
+    "read_or_spend",
+    [
+        pytest.param(lambda c: c.spend_stat_point("luck"), id="spend_stat_point"),
+        pytest.param(lambda c: c.refund_stat_point("luck"), id="refund_stat_point"),
+        pytest.param(lambda c: c.next_stat_cost("luck"), id="next_stat_cost"),
+        pytest.param(lambda c: c.stat("luck"), id="stat"),
+    ],
+)
+def test_every_stat_accessor_rejects_an_unknown_stat(read_or_spend):
     with pytest.raises(ValueError):
-        c.spend_stat_point("luck")
+        read_or_spend(Character(name="t"))
 
 
 def test_refund_stat_point_undoes_a_spend_and_floors_at_starting_stat():
@@ -118,12 +126,6 @@ def test_refund_stat_point_carries_body_health_down_with_the_ceiling():
     # Full health at the lowered ceiling, not over it.
     assert c.max_health == BASE_HEALTH + STARTING_STAT * HEALTH_PER_BODY
     assert c.health == c.max_health
-
-
-def test_refund_stat_point_rejects_unknown_stat():
-    c = Character(name="t")
-    with pytest.raises(ValueError):
-        c.refund_stat_point("luck")
 
 
 def test_next_rank_cost_matches_skill_rank_cost_table():
@@ -172,12 +174,6 @@ def test_next_stat_cost_escalates_with_current_value():
     assert c.next_stat_cost("body") == 1
     c.body += 2
     assert c.next_stat_cost("body") == 3
-
-
-def test_next_stat_cost_rejects_unknown_stat():
-    c = Character(name="t")
-    with pytest.raises(ValueError):
-        c.next_stat_cost("luck")
 
 
 def test_spend_experience_on_stat_charges_escalating_cost_and_raises_the_stat():
@@ -270,12 +266,6 @@ def test_reset_build_undoes_every_point():
     assert c.stat_points == STARTING_STAT_POINTS
     assert c.skill_points == STARTING_SKILL_POINTS
     assert c.health == c.max_health
-
-
-def test_stat_rejects_unknown_name():
-    c = Character(name="t")
-    with pytest.raises(ValueError):
-        c.stat("luck")
 
 
 def test_stat_subtracts_fatigue_penalty_capped_below_raw_fatigue():

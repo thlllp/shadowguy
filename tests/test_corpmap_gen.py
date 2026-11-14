@@ -416,25 +416,65 @@ def _slums(corp_map):
     return [t for t in corp_map.territories.values() if t.is_slum]
 
 
-@pytest.mark.parametrize("seed", SEEDS)
-def test_exactly_slum_count_slums(seed):
-    corp_map = _generated_map(seed)
-    assert len(_slums(corp_map)) == SLUM_COUNT
+def _outskirts(corp_map):
+    return [t for t in corp_map.territories.values() if t.is_outskirts]
+
+
+def _parks(corp_map):
+    return [t for t in corp_map.territories.values() if t.is_park]
+
+
+# Slums and outskirts share their whole invariant set -- parks differ (their unrest
+# stays 0 and they hold no locations, see the park tests below) -- so each shared rule
+# is one parametrized test over both selectors instead of two copies of the same body.
+SLUMS_AND_OUTSKIRTS = [_slums, _outskirts]
+NEUTRAL_DISTRICTS = [*SLUMS_AND_OUTSKIRTS, _parks]
+NEUTRAL_COUNTS = {_slums: SLUM_COUNT, _outskirts: OUTSKIRTS_COUNT, _parks: PARK_COUNT}
+
+
+def _district_id(select):
+    return select.__name__.lstrip("_")
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_slums_are_neutral_non_start(seed):
+@pytest.mark.parametrize("select", NEUTRAL_DISTRICTS, ids=_district_id)
+def test_neutral_district_kinds_are_counted_neutral_and_not_the_start(seed, select):
     corp_map = _generated_map(seed)
-    for t in _slums(corp_map):
+    districts = select(corp_map)
+    assert len(districts) == NEUTRAL_COUNTS[select]
+    for t in districts:
         assert t.owner == "neutral"
         assert t.id != corp_map.player_start_id
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_slums_have_no_gang_presence(seed):
+@pytest.mark.parametrize("select", SLUMS_AND_OUTSKIRTS, ids=_district_id)
+def test_slums_and_outskirts_have_no_gang_presence(seed, select):
     corp_map = _generated_map(seed)
-    for t in _slums(corp_map):
+    for t in select(corp_map):
         assert t.gang_id is None
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("select", SLUMS_AND_OUTSKIRTS, ids=_district_id)
+def test_slums_and_outskirts_never_share_with_junkyard_or_docks(seed, select):
+    corp_map = _generated_map(seed)
+    for t in select(corp_map):
+        kinds = {loc.kind for loc in t.locations}
+        assert LocationKind.JUNKYARD not in kinds
+        assert LocationKind.DOCKS not in kinds
+        assert LocationKind.AMYS_PLACE not in kinds
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("select", SLUMS_AND_OUTSKIRTS, ids=_district_id)
+def test_slums_and_outskirts_have_zero_development_security_surveillance(seed, select):
+    corp_map = _generated_map(seed)
+    for t in select(corp_map):
+        assert t.modifiers["development"] == 0
+        assert t.modifiers["security"] == 0
+        assert t.modifiers["surveillance"] == 0
+        assert t.modifiers["unrest"] == MODIFIER_MAX
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -454,75 +494,10 @@ def test_slums_have_encampment_not_shops(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_slums_never_share_with_junkyard_or_docks(seed):
-    corp_map = _generated_map(seed)
-    for t in _slums(corp_map):
-        kinds = {loc.kind for loc in t.locations}
-        assert LocationKind.JUNKYARD not in kinds
-        assert LocationKind.DOCKS not in kinds
-        assert LocationKind.AMYS_PLACE not in kinds
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_slums_have_zero_development_security_surveillance(seed):
-    corp_map = _generated_map(seed)
-    for t in _slums(corp_map):
-        assert t.modifiers["development"] == 0
-        assert t.modifiers["security"] == 0
-        assert t.modifiers["surveillance"] == 0
-        assert t.modifiers["unrest"] == MODIFIER_MAX
-
-
-def _outskirts(corp_map):
-    return [t for t in corp_map.territories.values() if t.is_outskirts]
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_exactly_outskirts_count_outskirts(seed):
-    corp_map = _generated_map(seed)
-    assert len(_outskirts(corp_map)) == OUTSKIRTS_COUNT
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_outskirts_are_neutral_non_start(seed):
-    corp_map = _generated_map(seed)
-    for t in _outskirts(corp_map):
-        assert t.owner == "neutral"
-        assert t.id != corp_map.player_start_id
-
-
-@pytest.mark.parametrize("seed", SEEDS)
 def test_outskirts_are_on_grid_edge(seed):
     corp_map = _generated_map(seed)
     for t in _outskirts(corp_map):
         assert t.x == 0 or t.x == 13 or t.y == 0 or t.y == 23
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_outskirts_have_no_gang_presence(seed):
-    corp_map = _generated_map(seed)
-    for t in _outskirts(corp_map):
-        assert t.gang_id is None
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_outskirts_have_zero_development_security_surveillance(seed):
-    corp_map = _generated_map(seed)
-    for t in _outskirts(corp_map):
-        assert t.modifiers["development"] == 0
-        assert t.modifiers["security"] == 0
-        assert t.modifiers["surveillance"] == 0
-        assert t.modifiers["unrest"] == MODIFIER_MAX
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_outskirts_never_share_with_junkyard_or_docks(seed):
-    corp_map = _generated_map(seed)
-    for t in _outskirts(corp_map):
-        kinds = {loc.kind for loc in t.locations}
-        assert LocationKind.JUNKYARD not in kinds
-        assert LocationKind.DOCKS not in kinds
-        assert LocationKind.AMYS_PLACE not in kinds
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -531,24 +506,6 @@ def test_outskirts_and_slums_are_disjoint(seed):
     outskirts_ids = {t.id for t in _outskirts(corp_map)}
     slum_ids = {t.id for t in _slums(corp_map)}
     assert not outskirts_ids & slum_ids
-
-
-def _parks(corp_map):
-    return [t for t in corp_map.territories.values() if t.is_park]
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_exactly_park_count_parks(seed):
-    corp_map = _generated_map(seed)
-    assert len(_parks(corp_map)) == PARK_COUNT
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_parks_are_neutral_non_start(seed):
-    corp_map = _generated_map(seed)
-    for t in _parks(corp_map):
-        assert t.owner == "neutral"
-        assert t.id != corp_map.player_start_id
 
 
 @pytest.mark.parametrize("seed", SEEDS)
