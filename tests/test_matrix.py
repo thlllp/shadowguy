@@ -401,11 +401,17 @@ def test_sleaze_success_rate_improves_with_hack_skill_against_tougher_ice():
     assert strong_rate > weak_rate  # more Hack against tougher ICE still comes out ahead
 
 
+# --- Action programs share one uses-per-fight rule -------------------------------
+
+
+@pytest.mark.parametrize("program_id", ["extract", "icebreaker"])
+def test_action_programs_have_unlimited_uses_per_the_catalog(program_id):
+    """EXTRACT_UNLIMITED_USES is the catalog's "no charge tracking" value, and both
+    action programs declare it -- neither has a counter the UI must show."""
+    assert PROGRAMS_BY_ID[program_id].uses_per_fight == EXTRACT_UNLIMITED_USES
+
+
 # --- Extract (Program.action_extract) ---------------------------------------------
-
-
-def test_extract_has_unlimited_uses_per_the_catalog():
-    assert PROGRAMS_BY_ID["extract"].uses_per_fight == EXTRACT_UNLIMITED_USES
 
 
 def test_extract_wastes_the_attempt_off_a_non_extractable_node():
@@ -499,10 +505,6 @@ def test_security_increases_the_ice_hit_rate_against_the_player():
 
 
 # --- Icebreaker (Program.action_damage) -------------------------------------------
-
-
-def test_icebreaker_has_unlimited_uses_per_the_catalog():
-    assert PROGRAMS_BY_ID["icebreaker"].uses_per_fight == EXTRACT_UNLIMITED_USES
 
 
 def test_icebreaker_deals_guaranteed_no_roll_damage_and_stays_offered_untracked():
