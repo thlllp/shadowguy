@@ -15,11 +15,11 @@ walking into any of it enters the business. The glyph on the block's sign tile
 
 import math
 import random
-import zlib
 from collections import deque
 from dataclasses import dataclass
 
 from shadowguy.corpmap import Location, LocationKind, Territory
+from shadowguy.seeding import seed_from
 
 WALL_GLYPH = "#"
 FLOOR_GLYPH = "·"
@@ -99,12 +99,6 @@ KIND_STYLES = {
     LocationKind.DOCKS: "bright_cyan",
     LocationKind.ENCAMPMENT: "bright_black",
 }
-
-# A stable seed from a string. Python's own hash() is salted per process, which would
-# make a district's square change between runs of the game -- the opposite of what a
-# fixed layout is for.
-def _seed(text: str) -> int:
-    return zlib.crc32(text.encode("utf-8"))
 
 
 def kind_label(kind: LocationKind) -> str:
@@ -271,7 +265,7 @@ def build_square(territory: Territory, *, seed: int | None = None) -> Square:
         )
 
     seed_text = f"{territory.id}:layout" if seed is None else f"{seed}:{territory.id}:layout"
-    rng = random.Random(_seed(seed_text))
+    rng = random.Random(seed_from(seed_text))
     rng.shuffle(locations)
 
     # Start compact and grow whichever dimension is currently tighter. Growth is rare
@@ -330,7 +324,7 @@ def place_units(
     taken: set[tuple[int, int]] = set()
     placed: dict[str, tuple[int, int]] = {}
     for key in sorted(keys):
-        start = _seed(f"{square.territory_id}:unit:{key}") % len(tiles)
+        start = seed_from(f"{square.territory_id}:unit:{key}") % len(tiles)
         for offset in range(len(tiles)):
             tile = tiles[(start + offset) % len(tiles)]
             if tile not in taken:

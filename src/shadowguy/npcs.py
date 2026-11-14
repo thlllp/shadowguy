@@ -15,11 +15,11 @@ territory id, and the square rebuilds the same people after a reload.
 from __future__ import annotations
 
 import random
-import zlib
 from dataclasses import dataclass
 from enum import StrEnum
 
 from shadowguy.corpmap import CorpMap, Territory
+from shadowguy.seeding import seed_from
 
 
 class NpcKind(StrEnum):
@@ -233,13 +233,9 @@ NAMED_TEMPLATES: tuple[NamedTemplate, ...] = (
 )
 
 
-def _seed(text: str) -> int:
-    return zlib.crc32(text.encode("utf-8"))
-
-
 def standard_npcs(territory: Territory, seed: int | None) -> list[Npc]:
     """The uniform local roster for one district. Seed + territory id, never saved."""
-    rng = random.Random(_seed(f"{seed}:{territory.id}:npcs"))
+    rng = random.Random(seed_from(f"{seed}:{territory.id}:npcs"))
     count = min(4, 2 + max(0, territory.value - 1) // 2)
     kinds = [NpcKind.RESIDENT, NpcKind.PUNK, NpcKind.VENDOR, NpcKind.DRUNK, NpcKind.COURIER]
     rng.shuffle(kinds)
@@ -264,7 +260,7 @@ def named_assignment(corp_map: CorpMap, seed: int | None) -> dict[str, NamedTemp
     """Which named contact stands where this run, unique and start-district aware."""
     ranked = sorted(
         corp_map.territories.values(),
-        key=lambda territory: _seed(f"{seed}:{territory.id}:named"),
+        key=lambda territory: seed_from(f"{seed}:{territory.id}:named"),
     )
     chosen = ranked[: len(NAMED_TEMPLATES)]
     start_id = corp_map.player_start_id
