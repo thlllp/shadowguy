@@ -11,6 +11,12 @@ from the run seed: one territory can have a tight two-row market, another a spar
 courtyard with oversized blocks. Every tile of a block resolves to the same Location, so
 walking into any of it enters the business. The glyph on the block's sign tile
 (`KIND_GLYPHS`) says what kind of place it is.
+
+The plaza is dressed as a street rather than left as empty floor: boarded-up houses
+(`EMPTY_HOUSE_GLYPH`) stand between the real places as blocks with no Location behind
+the door, and a handful of parked cars (`CAR_GLYPH`) sit on the road against the kerb.
+Cars are obstacles, so the generator only takes a tile when the remaining floor stays
+connected and every building keeps a door onto it.
 """
 
 import math
@@ -26,6 +32,10 @@ FLOOR_GLYPH = "·"
 PLAYER_GLYPH = "@"
 FIXER_GLYPH = "F"
 GIG_GLYPH = "!"
+# Boarded-up shells and parked cars: scenery, not destinations. They draw apart from
+# real building blocks and from the open road so the plaza reads as a street.
+EMPTY_HOUSE_GLYPH = "░"
+CAR_GLYPH = "="
 
 # A building block is a small rectangle, not a single tile, so its sign reads as part of
 # a building rather than the whole building. Sizes are rolled per block; the bounds also
@@ -35,14 +45,34 @@ MAX_BLOCK_WIDTH = 5
 MIN_BLOCK_HEIGHT = 2
 MAX_BLOCK_HEIGHT = 3
 
+# Empty houses are smaller than the places you can walk into -- a row of narrow facades
+# between the shops, not another row of businesses. They are rolled per district from the
+# run seed, so a district's skyline is as fixed as its layout.
+EMPTY_HOUSE_MIN = 3
+EMPTY_HOUSE_MAX = 6
+MIN_HOUSE_WIDTH = 2
+MAX_HOUSE_WIDTH = 4
+MIN_HOUSE_HEIGHT = 2
+MAX_HOUSE_HEIGHT = 3
+
+# Parked cars per district, and how far apart they keep: one clear tile between any two,
+# so they read as parked traffic rather than a barricade across the street.
+CAR_COUNT_MIN = 4
+CAR_COUNT_MAX = 8
+
 # At least one walkable tile between blocks and between a block and the wall. This is
 # what keeps the plaza connected: no block can seal off a pocket of floor.
 BLOCK_GAP = 1
 
-# The smallest square, and the size of an empty one. Wide enough that a lone shop still
-# gets a plaza around it rather than a corridor.
-MIN_SQUARE_WIDTH = 21
-MIN_SQUARE_HEIGHT = 9
+# The smallest square. A real district is typically larger than this (see build_square);
+# it is the floor for an empty one -- a park is still a street to walk.
+MIN_SQUARE_WIDTH = 41
+MIN_SQUARE_HEIGHT = 17
+
+# The floor when the terminal itself is the limit (see build_square's max_width/max_height):
+# one full-size block row plus the wall and the one-tile gap around it.
+SMALLEST_SQUARE_WIDTH = MAX_BLOCK_WIDTH + 2
+SMALLEST_SQUARE_HEIGHT = MAX_BLOCK_HEIGHT + 2
 
 # One glyph per LocationKind. The stores are upper-case letters, services and the runner's
 # own places get their own marks. Deliberately ASCII: this is read in a terminal first.
@@ -111,7 +141,7 @@ def kind_label(kind: LocationKind) -> str:
 
 @dataclass(frozen=True)
 class Square:
-    """A laid-out town square. Every tile either a wall, a plaza floor or a building."""
+    """A laid-out town square. Every tile is a wall, a plaza floor, a building or scenery."""
 
     territory_id: str
     width: int
@@ -122,6 +152,11 @@ class Square:
     buildings: dict[tuple[int, int], Location]
     # Each Location's sign tile (where its glyph is drawn) -> location id.
     signs: dict[str, tuple[int, int]]
+    # Boarded-up houses: blocks with nothing behind the door, drawn as scenery.
+    empty_houses: frozenset[tuple[int, int]]
+    # Parked cars: impassable scenery tiles on the road. Never a tile the generators
+    # would otherwise use, so they don't churn the save or the unit placement.
+    cars: frozenset[tuple[int, int]]
 
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
@@ -132,8 +167,21 @@ class Square:
     def location_at(self, x: int, y: int) -> Location | None:
         return self.buildings.get((x, y))
 
+    def is_empty_house(self, x: int, y: int) -> bool:
+        return (x, y) in self.empty_houses
+
+    def is_car(self, x: int, y: int) -> bool:
+        return (x, y) in self.cars
+
     def is_floor(self, x: int, y: int) -> bool:
-        return self.in_bounds(x, y) and not self.is_wall(x, y) and (x, y) not in self.buildings
+        """Whether the runner can stand there: not a wall, building, or parked car."""
+        return (
+            self.in_bounds(x, y)
+            and not self.is_wall(x, y)
+            and (x, y) not in self.buildings
+            and (x, y) not in self.empty_houses
+            and (x, y) not in self.cars
+        )
 
     @property
     def floor_tiles(self) -> list[tuple[int, int]]:
@@ -153,6 +201,17 @@ class Square:
 
 
 Block = tuple[int, int, int, int]  # x, y, width, height
+# A size request for one block: min width, max width, min height, max height.
+BlockSpec = tuple[int, int, int, int]
+
+LOCATION_BLOCK_SPEC = (MIN_BLOCK_WIDTH, MAX_BLOCK_WIDTH, MIN_BLOCK_HEIGHT, MAX_BLOCK_HEIGHT)
+HOUSE_BLOCK_SPEC = (MIN_HOUSE_WIDTH, MAX_HOUSE_WIDTH, MIN_HOUSE_HEIGHT, MAX_HOUSE_HEIGHT)
+
+
+def _neighbors(tile: tuple[int, int]) -> tuple[tuple[int, int], ...]:
+    x, y = tile
+    return ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+
 
 
 def _overlaps(a: Block, b: Block) -> bool:
@@ -195,7 +254,7 @@ def _floor_is_connected(floor: list[tuple[int, int]]) -> bool:
     frontier = deque([start])
     while frontier:
         x, y = frontier.popleft()
-        for tile in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+        for tile in _neighbors((x, y)):
             if tile in remaining and tile not in seen:
                 seen.add(tile)
                 frontier.append(tile)
@@ -216,15 +275,15 @@ def _starting_tile(
 
 
 def _roll_blocks(
-    count: int, width: int, height: int, rng: random.Random
+    specs: list[BlockSpec], width: int, height: int, rng: random.Random
 ) -> list[Block] | None:
-    """Try to scatter `count` blocks over the square. None if they don't fit, which
+    """Try to scatter one block per spec over the square. None if they don't fit, which
     makes build_square give the square more room and try again."""
     blocks: list[Block] = []
-    for _ in range(count):
+    for min_width, max_width, min_height, max_height in specs:
         for _attempt in range(120):
-            block_width = rng.randint(MIN_BLOCK_WIDTH, MAX_BLOCK_WIDTH)
-            block_height = rng.randint(MIN_BLOCK_HEIGHT, MAX_BLOCK_HEIGHT)
+            block_width = rng.randint(min_width, max_width)
+            block_height = rng.randint(min_height, max_height)
             x = rng.randint(1, width - block_width - 1)
             y = rng.randint(1, height - block_height - 1)
             candidate = (x, y, block_width, block_height)
@@ -238,7 +297,51 @@ def _roll_blocks(
     return blocks
 
 
-def build_square(territory: Territory, *, seed: int | None = None) -> Square:
+def _pick_cars(
+    floor: list[tuple[int, int]], structures: set[tuple[int, int]], rng: random.Random
+) -> set[tuple[int, int]]:
+    """Park a few cars on the road, against the kerb (tiles touching a building).
+
+    A car is an obstacle, so a candidate is only taken when what is left of the floor is
+    still one connected region and every building still has at least one reachable floor
+    tile to walk into it from -- a car must not close a passage or wall a shop in. Cars
+    keep a clear tile between them, so a street full of them still reads as traffic
+    rather than a barricade.
+    """
+    count = rng.randint(CAR_COUNT_MIN, CAR_COUNT_MAX)
+    remaining = set(floor)
+    curb = [
+        tile
+        for tile in floor
+        if any(neighbor in structures for neighbor in _neighbors(tile))
+    ]
+    rng.shuffle(curb)
+    # A "door" is a structure tile with road beside it; every one of them has to keep a
+    # walkable neighbour or the place becomes unreachable even while the road connects.
+    doors = [tile for tile in structures if any(n in remaining for n in _neighbors(tile))]
+    cars: set[tuple[int, int]] = set()
+    for tile in curb:
+        if len(cars) >= count:
+            break
+        if any(max(abs(tile[0] - car[0]), abs(tile[1] - car[1])) <= 1 for car in cars):
+            continue
+        remaining.discard(tile)
+        if not _floor_is_connected(sorted(remaining)) or not all(
+            any(n in remaining for n in _neighbors(door)) for door in doors
+        ):
+            remaining.add(tile)
+            continue
+        cars.add(tile)
+    return cars
+
+
+def build_square(
+    territory: Territory,
+    *,
+    seed: int | None = None,
+    max_height: int | None = None,
+    max_width: int | None = None,
+) -> Square:
     """Lay out `territory`'s Locations as scattered blocks around an open plaza.
 
     Deterministic from the territory id *and* the run seed, so the same location looks
@@ -248,47 +351,76 @@ def build_square(territory: Territory, *, seed: int | None = None) -> Square:
 
     Locations are shuffled with the same seed so a district's blocks don't follow
     generation order. Block sizes and positions are rolled until every block fits with a
-    walkable gap around it and all floor is connected.
+    walkable gap around it and all floor is connected. Empty houses and parked cars are
+    rolled from the same stream afterwards, so they are as fixed as the real layouts.
+
+    `max_height`/`max_width` cap the square to a terminal it has to fit (the screen
+    passes its viewport). A capped square can't buy room by growing, so it drops
+    boarded-up houses -- the decoration -- before it gives up: a short terminal loses
+    skyline, not the places you can walk into.
     """
     locations = list(territory.locations)
-    if not locations:
-        # A park (or any empty district) still gets somewhere to stand: a small empty
-        # plaza, rather than a screen with nothing in it.
-        return Square(
-            territory_id=territory.id,
-            width=MIN_SQUARE_WIDTH,
-            height=MIN_SQUARE_HEIGHT,
-            start=(MIN_SQUARE_WIDTH // 2, MIN_SQUARE_HEIGHT // 2),
-            locations=(),
-            buildings={},
-            signs={},
-        )
-
     seed_text = f"{territory.id}:layout" if seed is None else f"{seed}:{territory.id}:layout"
     rng = random.Random(seed_from(seed_text))
     rng.shuffle(locations)
 
-    # Start compact and grow whichever dimension is currently tighter. Growth is rare
-    # for a real district (at most a handful of Locations) and bounded for tests.
+    # A park is greenspace, so it gets no boarded-up shells; every other district gets
+    # a few, and an empty district still gets a street (cars and open floor) to stand in.
+    house_count = 0 if territory.is_park else rng.randint(EMPTY_HOUSE_MIN, EMPTY_HOUSE_MAX)
+    specs = [LOCATION_BLOCK_SPEC] * len(locations) + [HOUSE_BLOCK_SPEC] * house_count
+
+    # Start compact and grow whichever dimension is currently tighter. A real district is
+    # a handful of Locations, so this normally lands on MIN_SQUARE_WIDTH x MIN_SQUARE_HEIGHT
+    # (or a bit larger) -- big enough to read as a street rather than a corridor.
     side = max(1, math.ceil(math.sqrt(len(locations))))
-    width = max(MIN_SQUARE_WIDTH, side * 7)
-    height = max(MIN_SQUARE_HEIGHT, side * 3)
+    width = max(MIN_SQUARE_WIDTH, side * 9)
+    height = max(MIN_SQUARE_HEIGHT, side * 4)
+    if max_width is not None:
+        width = max(SMALLEST_SQUARE_WIDTH, min(width, max_width))
+    if max_height is not None:
+        height = max(SMALLEST_SQUARE_HEIGHT, min(height, max_height))
+
     blocks: list[Block] = []
-    for _attempt in range(80):
-        rolled = _roll_blocks(len(locations), width, height, rng)
+    relaxed = False
+    while True:
+        rolled = None
+        for _attempt in range(80):
+            rolled = _roll_blocks(specs, width, height, rng)
+            if rolled is not None:
+                break
+            at_max_height = max_height is not None and height >= max_height
+            at_max_width = max_width is not None and width >= max_width
+            if at_max_height and at_max_width:
+                break
+            if at_max_height:
+                width = width + 3 if max_width is None else min(max_width, width + 3)
+            elif at_max_width:
+                height = height + 2 if max_height is None else min(max_height, height + 2)
+            elif width <= height * 1.6:
+                width += 3
+            else:
+                height += 2
         if rolled is not None:
             blocks = rolled
             break
-        if width <= height * 1.6:
-            width += 3
-        else:
-            height += 2
-    else:
-        raise RuntimeError(f"could not lay out {len(locations)} blocks for {territory.id!r}")
+        if house_count:
+            # Boxed in on both axes: shed one shell and try again before giving up.
+            house_count -= 1
+            specs = [LOCATION_BLOCK_SPEC] * len(locations) + [HOUSE_BLOCK_SPEC] * house_count
+            continue
+        if relaxed:
+            raise RuntimeError(f"could not lay out {len(specs)} blocks for {territory.id!r}")
+        # Room for the places themselves is non-negotiable: a clipped square is better
+        # than a crash on a terminal smaller than SMALLEST_SQUARE_HEIGHT allows for.
+        max_height = max_width = None
+        relaxed = True
+
+    location_blocks = blocks[: len(locations)]
+    house_blocks = blocks[len(locations) :]
 
     buildings: dict[tuple[int, int], Location] = {}
     signs: dict[str, tuple[int, int]] = {}
-    for location, (x, y, block_width, block_height) in zip(locations, blocks, strict=True):
+    for location, (x, y, block_width, block_height) in zip(locations, location_blocks, strict=True):
         for dx in range(block_width):
             for dy in range(block_height):
                 buildings[(x + dx, y + dy)] = location
@@ -296,15 +428,26 @@ def build_square(territory: Territory, *, seed: int | None = None) -> Square:
         # building reads as a frontage rather than a single glyph.
         signs[location.id] = (x + rng.randrange(block_width), y)
 
+    empty_houses = {
+        (x + dx, y + dy)
+        for x, y, block_width, block_height in house_blocks
+        for dx in range(block_width)
+        for dy in range(block_height)
+    }
+
     floor = _floor_tiles(width, height, blocks)
+    cars = _pick_cars(floor, set(buildings) | empty_houses, rng)
+    open_floor = [tile for tile in floor if tile not in cars]
     return Square(
         territory_id=territory.id,
         width=width,
         height=height,
-        start=_starting_tile(width, height, floor, rng),
+        start=_starting_tile(width, height, open_floor, rng),
         locations=tuple(locations),
         buildings=buildings,
         signs=signs,
+        empty_houses=frozenset(empty_houses),
+        cars=frozenset(cars),
     )
 
 

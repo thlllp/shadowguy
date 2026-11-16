@@ -12,11 +12,16 @@ from shadowguy.corpmap import Location, LocationKind, Territory
 from shadowguy.corpmap_gen import generate_corp_map
 from shadowguy.factions import FACTIONS
 from shadowguy.townsquare import (
+    EMPTY_HOUSE_MIN,
+    KIND_GLYPHS,
     MAX_BLOCK_HEIGHT,
     MAX_BLOCK_WIDTH,
     MIN_BLOCK_HEIGHT,
     MIN_BLOCK_WIDTH,
-    KIND_GLYPHS,
+    MIN_HOUSE_HEIGHT,
+    MIN_HOUSE_WIDTH,
+    MIN_SQUARE_HEIGHT,
+    MIN_SQUARE_WIDTH,
     build_square,
     place_units,
 )
@@ -108,6 +113,8 @@ def test_layout_is_deterministic_from_the_territory_id():
         tile: location.id for tile, location in second.buildings.items()
     }
     assert first.signs == second.signs
+    assert first.empty_houses == second.empty_houses
+    assert first.cars == second.cars
 
 
 def test_layout_is_deterministic_from_the_run_seed():
@@ -124,6 +131,8 @@ def test_layout_is_deterministic_from_the_run_seed():
         tile: location.id for tile, location in second.buildings.items()
     }
     assert first.signs == second.signs
+    assert first.empty_houses == second.empty_houses
+    assert first.cars == second.cars
 
 
 def test_different_run_seeds_relayout_the_same_district():
@@ -165,6 +174,67 @@ def test_blocks_vary_in_size_between_districts():
         for location in square.locations:
             sizes.add(sum(1 for owner in square.buildings.values() if owner.id == location.id))
     assert len(sizes) > 1
+
+
+def test_the_square_is_a_street_not_a_corridor():
+    """The plaza was a 21x9 strip; it is deliberately bigger now that there is scenery
+    to fill it out."""
+    square = build_square(_territory(5))
+    assert square.width >= MIN_SQUARE_WIDTH
+    assert square.height >= MIN_SQUARE_HEIGHT
+
+
+@pytest.mark.parametrize("seed", range(15))
+def test_districts_are_dressed_with_empty_houses_and_parked_cars(seed):
+    square = build_square(_territory(5, territory_id=f"district_{seed}"), seed=seed)
+    structures = set(square.buildings) | set(square.empty_houses)
+
+    # More empty houses than the minimum, each one a filled block rather than a tile.
+    assert len(square.empty_houses) >= EMPTY_HOUSE_MIN * MIN_HOUSE_WIDTH * MIN_HOUSE_HEIGHT
+    assert square.cars
+    # Scenery never stands on a place, in the wall, or on top of other scenery.
+    scenery = set(square.empty_houses) | set(square.cars)
+    assert len(scenery) == len(square.empty_houses) + len(square.cars)
+    assert scenery.isdisjoint(square.buildings)
+    for x, y in scenery:
+        assert 0 < x < square.width - 1
+        assert 0 < y < square.height - 1
+    # A car is parked against the kerb: it touches a building.
+    for x, y in square.cars:
+        assert any(
+            tile in structures for tile in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+        )
+    # Cars keep a clear tile between them so they read as traffic, not a barricade.
+    for x, y in square.cars:
+        for other_x, other_y in square.cars:
+            if (x, y) != (other_x, other_y):
+                assert max(abs(x - other_x), abs(y - other_y)) > 1
+
+
+@pytest.mark.parametrize("seed", range(15))
+def test_cars_never_wall_a_place_in(seed):
+    """A car is an obstacle, so every place must keep a walkable tile to enter it from."""
+    square = build_square(_territory(6), seed=seed)
+    for location in square.locations:
+        tiles = [tile for tile, owner in square.buildings.items() if owner.id == location.id]
+        assert any(
+            square.is_floor(x + dx, y + dy)
+            for x, y in tiles
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        ), location.id
+
+
+def test_a_park_is_open_ground_with_no_boarded_up_houses():
+    """A park is greenspace: it gets the bigger street, but no shells and no kerb."""
+    territory = _territory(0, territory_id="park")
+    territory.is_park = True
+    square = build_square(territory)
+    assert square.empty_houses == frozenset()
+    assert square.cars == frozenset()
+    assert square.width >= MIN_SQUARE_WIDTH
+    assert square.height >= MIN_SQUARE_HEIGHT
+    assert len(square.floor_tiles) == square.width * square.height - 2 * (square.width + square.height) + 4
+
 
 
 def test_place_units_is_deterministic_and_never_overlaps():
@@ -215,3 +285,38 @@ def test_a_generated_map_lays_out_every_district(seed):
             location.id for location in territory.locations
         }, territory.id
         assert all(square.is_floor(*tile) for tile in place_units(square, ["fixer:a"]).values())
+
+
+@pytest.mark.parametrize("max_height", [8, 10, 12])
+@pytest.mark.parametrize("seed", range(8))
+def test_a_height_capped_square_keeps_every_place_reachable(seed, max_height):
+    """A short terminal (80x24 gives the map 12 rows) builds a shorter street rather
+    than clipping the frame and pushing the status line off-screen. The cap must not
+    cost a place its door or strand a pocket of floor."""
+    territory = _territory(6, territory_id=f"district_{seed}")
+    square = build_square(territory, seed=seed, max_height=max_height, max_width=78)
+
+    assert square.height <= max_height
+    assert square.width <= 78
+    assert {location.id for location in square.locations} == {
+        location.id for location in territory.locations
+    }
+    for location in square.locations:
+        tiles = [tile for tile, owner in square.buildings.items() if owner.id == location.id]
+        assert tiles, location.id
+        assert any(
+            square.is_floor(x + dx, y + dy)
+            for x, y in tiles
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        ), location.id
+    assert _reachable_floor(square) == set(square.floor_tiles)
+
+
+def test_a_height_capped_square_sheds_scenery_before_places():
+    """The cap is paid for by boarded-up houses, not by dropping a Location."""
+    territory = _territory(6, territory_id="crowded")
+    full = build_square(territory, seed=3)
+    capped = build_square(territory, seed=3, max_height=10, max_width=78)
+
+    assert len(capped.locations) == len(full.locations)
+    assert len(capped.empty_houses) <= len(full.empty_houses)

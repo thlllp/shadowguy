@@ -7,25 +7,32 @@ one talks to them or takes their work.
 
 Free to walk around: no step spends in-game time, and the square itself is generated from
 the run seed plus the territory id (`shadowguy.townsquare`) rather than stored, so a
-visit changes nothing and leaves nothing to save.
+visit changes nothing and leaves nothing to save. The square is also fitted to the
+terminal at mount: a short screen builds a shorter street rather than let the frame push
+its own status line off the bottom.
 """
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from shadowguy.corpmap import Location, Territory
+from shadowguy.corpmap import OWNER_COLORS, Location, Territory
 from shadowguy.fixer import Fixer
 from shadowguy.npcs import Npc, npcs_for_territory
 from shadowguy.scene import Scene
 from shadowguy.townsquare import (
+    CAR_GLYPH,
+    EMPTY_HOUSE_GLYPH,
     FIXER_GLYPH,
     FLOOR_GLYPH,
     GIG_GLYPH,
     KIND_GLYPHS,
     KIND_STYLES,
     PLAYER_GLYPH,
+    SMALLEST_SQUARE_HEIGHT,
+    SMALLEST_SQUARE_WIDTH,
     WALL_GLYPH,
     Square,
     build_square,
@@ -64,6 +71,14 @@ class TownSquareScreen(BackScreen):
     DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
     CSS = """
+    #square_frame {
+        width: 1fr;
+        height: auto;
+        /* The border colour is set in code from the district's owner (see
+        _refresh_frame); $accent is only what unclaimed ground shows. */
+        border: round $accent;
+    }
+
     #square_map {
         width: 1fr;
         height: auto;
@@ -87,7 +102,9 @@ class TownSquareScreen(BackScreen):
     def __init__(self, territory: Territory) -> None:
         super().__init__()
         self.territory = territory
-        self.square = self._build_square()
+        # Provisional: the full-size square. on_mount (and any resize) refits it to the
+        # terminal, once the character sheet's height is actually known.
+        self.square = build_square(self.territory, seed=self.app.seed)
         self.player = self.square.start
         # (x, y) -> ("fixer", Fixer) | ("gig", Location) | ("npc", Npc). Rebuilt on
         # resume because a completed gig disappears from app.location_gigs while this
@@ -96,11 +113,14 @@ class TownSquareScreen(BackScreen):
         # Standard locals reposition every few steps so the plaza feels alive. A pure
         # function of the step count, so it never needs saving.
         self._steps = 0
+        # The owner colour currently on #square_frame, so the border is rewritten only
+        # when the district changes hands rather than on every step.
+        self._frame_color: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield CharacterSheet(self.app.character)
-        yield Static(id="square_map")
+        yield Vertical(Static(id="square_map"), id="square_frame")
         yield Static(id="square_status")
         yield Static(
             Text("Arrows / WASD / HJKL move  ·  walk into a place or person to engage"),
@@ -109,8 +129,16 @@ class TownSquareScreen(BackScreen):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self._fit_square()
         self._refresh_units()
         self._refresh()
+
+    def on_resize(self) -> None:
+        # A terminal that shrinks under the square must not push the status line (the
+        # only description of what is next to the runner) and the help row off-screen.
+        if self.is_mounted and self._fit_square():
+            self._refresh_units()
+            self._refresh()
 
     async def on_screen_resume(self) -> None:
         # A shop bought from, a fixer's job accepted, or a gig run and consumed can all
@@ -127,11 +155,44 @@ class TownSquareScreen(BackScreen):
         self._refresh_units()
         self._refresh()
 
+    def _square_height_budget(self) -> int:
+        """Rows the square may use before it pushes the rest of the screen off.
+
+        Header + footer (2), the two status rows, the help row and the frame's two
+        border rows are fixed (7); the character sheet is as tall as it renders. At the
+        documented 80x24 minimum that leaves 12 rows for the map, which is why the
+        square builds a shorter street there instead of a 17-row one that hides its own
+        description.
+        """
+        sheet_rows = len(self.query_one(CharacterSheet).render().splitlines())
+        return self.app.size.height - 7 - sheet_rows
+
+    def _fit_square(self) -> bool:
+        """Shrink the square to the terminal, keeping the runner's view whole.
+
+        Returns whether it rebuilt. Only shrinking triggers a rebuild: a terminal that
+        grew again keeps the smaller square rather than moving the runner mid-walk.
+        """
+        height_budget = max(SMALLEST_SQUARE_HEIGHT, self._square_height_budget())
+        width_budget = max(SMALLEST_SQUARE_WIDTH, self.app.size.width - 2)
+        if self.square.height <= height_budget and self.square.width <= width_budget:
+            return False
+        self.square = self._build_square()
+        self.player = self.square.start
+        return True
+
     def _build_square(self) -> Square:
         # The run seed is what makes each playthrough's districts different; mixing in
         # the territory id keeps one run's districts distinct from each other. The seed
-        # is part of the save, so a reload rebuilds the exact same square.
-        return build_square(self.territory, seed=self.app.seed)
+        # is part of the save, so a reload rebuilds the exact same square. The viewport
+        # caps are the exception: a short terminal builds a shorter street (see
+        # build_square), which is why this shouldn't be called before mount.
+        return build_square(
+            self.territory,
+            seed=self.app.seed,
+            max_height=max(SMALLEST_SQUARE_HEIGHT, self._square_height_budget()),
+            max_width=max(SMALLEST_SQUARE_WIDTH, self.app.size.width - 2),
+        )
 
     # ── people in the square ─────────────────────────────────────────────────
 
@@ -228,8 +289,22 @@ class TownSquareScreen(BackScreen):
 
     def _refresh(self) -> None:
         self.query_one(CharacterSheet).refresh()
+        self._refresh_frame()
         self.query_one("#square_map", Static).update(self._render_map())
         self.query_one("#square_status", Static).update(self._status_text())
+
+    def _refresh_frame(self) -> None:
+        """Border the map in the colour the district's owner wears on the corp map.
+
+        Same `corpmap.OWNER_COLORS` table as `CorpMapScreen`'s territory tags, so a
+        district reads as the same holding in both views. Unclaimed ground has no entry
+        there -- it falls back to the theme accent, like every other bordered panel.
+        """
+        color = OWNER_COLORS.get(self.territory.owner) or self.app.current_theme.accent
+        if color == self._frame_color:
+            return
+        self._frame_color = color
+        self.query_one("#square_frame").styles.border = ("round", color)
 
     def _render_map(self) -> Text:
         text = Text()
@@ -256,6 +331,12 @@ class TownSquareScreen(BackScreen):
                         text.append(KIND_GLYPHS[location.kind], style=f"bold {style}")
                     else:
                         text.append("▒", style="grey30")
+                    continue
+                if self.square.is_empty_house(x, y):
+                    text.append(EMPTY_HOUSE_GLYPH, style="grey30")
+                    continue
+                if self.square.is_car(x, y):
+                    text.append(CAR_GLYPH, style="grey62")
                     continue
                 if self.square.is_wall(x, y):
                     text.append(WALL_GLYPH, style="grey35")
@@ -301,4 +382,8 @@ class TownSquareScreen(BackScreen):
         location = self.square.location_at(x, y)
         if location is not None:
             return f"{location.name} — {kind_label(location.kind)}. Walk into it to enter."
+        if self.square.is_empty_house(x, y):
+            return "A boarded-up house. Nobody's home."
+        if self.square.is_car(x, y):
+            return "A parked car. Doors locked."
         return None
