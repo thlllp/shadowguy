@@ -28,6 +28,7 @@ from shadowguy.abstract_combat import ActionKind
 from shadowguy.combat import ENEMIES_BY_ID, ENEMY_TIERS
 from shadowguy.corpmap import (
     GENERATED_KINDS,
+    OWNER_COLORS,
     OWNER_TAGS,
     WORKSHOP_BUILD_COST,
     LocalCharacter,
@@ -135,6 +136,7 @@ from shadowguy.screens.info_screens import (
 from shadowguy.screens.scene_screen import SceneScreen
 from shadowguy.screens.npc_screens import NpcDialogueScreen
 from shadowguy.npcs import npcs_for_territory
+from shadowguy.townsquare import MIN_SQUARE_HEIGHT
 from shadowguy.screens.town_square import TownSquareScreen
 from shadowguy.screens.shop_screens import (
     BarScreen,
@@ -163,6 +165,7 @@ from shadowguy.workshop import CRAFT_RECIPES, SCAVENGE_HOURS_COST
 from shadowguy.rivals import RunnerActivity, RunnerState
 from shadowguy.runners import RIVAL_RUNNERS, RUNNERS_BY_ID, complete_job, intro_cost
 from shadowguy.screens.shop_screens import FixerOffersScreen
+from textual.color import Color
 from textual.containers import ScrollableContainer
 from textual.geometry import Offset
 from textual.widgets import Button, Collapsible, ListItem, ListView, Static
@@ -5628,6 +5631,48 @@ def test_town_square_status_uses_singular_place_for_one_location():
     run(body())
 
 
+def test_town_square_borders_the_map_in_the_owners_colour():
+    async def body():
+        app = ShadowguyApp(seed=200020)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            owned = next(t for t in app.corp_map.territories.values() if t.owner != "neutral")
+            app.push_screen(TownSquareScreen(owned))
+            await _settle(pilot)
+            frame = app.screen.query_one("#square_frame")
+            assert frame.styles.border.top[1] == Color.parse(OWNER_COLORS[owned.owner])
+
+            # Unclaimed ground has no owner colour of its own: the frame keeps the theme
+            # accent rather than borrowing some corp's colour.
+            app.pop_screen()
+            await _settle(pilot)
+            neutral = next(t for t in app.corp_map.territories.values() if t.owner == "neutral")
+            app.character.location_id = neutral.id
+            app.push_screen(TownSquareScreen(neutral))
+            await _settle(pilot)
+            frame = app.screen.query_one("#square_frame")
+            assert frame.styles.border.top[1] == Color.parse(app.current_theme.accent)
+
+    run(body())
+
+
+def test_town_square_status_reads_the_scenery():
+    async def body():
+        app = ShadowguyApp(seed=200020)
+        async with app.run_test(size=(80, 60)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = next(t for t in app.corp_map.territories.values() if t.locations)
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            screen = app.screen
+            car = next(iter(screen.square.cars))
+            house = next(iter(screen.square.empty_houses))
+            assert "parked car" in screen._describe(*car)
+            assert "boarded-up house" in screen._describe(*house)
+
+    run(body())
+
+
 def test_locals_enter_on_a_non_walk_in_location_warns():
     async def body():
         app = ShadowguyApp(seed=200020)
@@ -5728,5 +5773,54 @@ def test_town_square_locals_reposition_every_few_steps():
                 )
                 seen.add(position)
             assert len(seen) > 1
+
+    run(body())
+
+
+def test_town_square_fits_its_frame_and_status_at_80x24():
+    """The documented minimum must keep the whole frame and the status line on screen.
+    Allie caught a 41x17 square at 80x24 pushing #square_status (the only in-square
+    description of what is next to the runner) behind the footer."""
+
+    async def body():
+        app = ShadowguyApp(seed=700001)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            screen = app.screen
+            frame = screen.query_one("#square_frame")
+            status = screen.query_one("#square_status")
+            help_row = screen.query_one("#square_help")
+
+            assert frame.region.y + frame.region.height <= 24
+            assert status.display
+            assert status.region.y + status.region.height <= 24
+            assert help_row.region.y + help_row.region.height <= 24
+            # It got there by building a shorter street, not by clipping the frame.
+            assert screen.square.height < MIN_SQUARE_HEIGHT
+
+            rendered = "\n".join(
+                "".join(segment.text for segment in strip)
+                for strip in screen._compositor.render_strips()
+            )
+            assert f"{territory.name}  ·  {len(territory.locations)} place" in rendered
+            assert any(line.startswith("╰") and "╯" in line for line in rendered.splitlines())
+
+    run(body())
+
+
+def test_town_square_keeps_its_full_layout_on_a_roomy_terminal():
+    """The viewport cap only shrinks the square; 100x40 still gets the full street."""
+
+    async def body():
+        app = ShadowguyApp(seed=700001)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            assert app.screen.square.height >= MIN_SQUARE_HEIGHT
 
     run(body())
