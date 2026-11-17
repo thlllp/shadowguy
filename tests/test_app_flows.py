@@ -5824,3 +5824,32 @@ def test_town_square_keeps_its_full_layout_on_a_roomy_terminal():
             assert app.screen.square.height >= MIN_SQUARE_HEIGHT
 
     run(body())
+
+
+def test_town_square_recolours_its_frame_when_ownership_flips_overnight():
+    """A takeover lands on a day boundary, not on a keypress. The frame reads the
+    territory's owner, so the day tick itself must repaint it -- waiting for the
+    runner's next step would leave the wrong corp's colour on screen."""
+
+    async def body():
+        app = ShadowguyApp(seed=700001)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await _boot_runner_game(pilot, app)
+            territory = app.corp_map.territories[app.character.location_id]
+            app.push_screen(TownSquareScreen(territory))
+            await _settle(pilot)
+            screen = app.screen
+            frame = screen.query_one("#square_frame")
+            before = frame.styles.border_top[1]
+
+            owner = next(faction.id for faction in FACTIONS if faction.id != territory.owner)
+            territory.owner = owner
+            # Cross midnight while the square is the active screen, with no move.
+            app.character.elapsed_hours = HOURS_PER_DAY - 1
+            app.spend_time(2)
+            await _settle(pilot)
+
+            assert frame.styles.border_top[1] == Color.parse(OWNER_COLORS[owner])
+            assert frame.styles.border_top[1] != before
+
+    run(body())

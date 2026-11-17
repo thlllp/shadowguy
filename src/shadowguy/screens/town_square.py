@@ -40,7 +40,7 @@ from shadowguy.townsquare import (
     place_units,
 )
 
-from . import MENU_QUIT_BINDINGS, BackScreen, CharacterSheet
+from . import MENU_QUIT_BINDINGS, BackScreen, CharacterSheet, DayTicked
 from .scene_screen import SceneScreen
 from .npc_screens import NpcDialogueScreen
 from .shop_screens import FixerOffersScreen, push_location_screen
@@ -139,6 +139,12 @@ class TownSquareScreen(BackScreen):
         if self.is_mounted and self._fit_square():
             self._refresh_units()
             self._refresh()
+
+    def on_day_ticked(self, event: DayTicked) -> None:
+        # Ownership can flip overnight: a rival claims neutral ground or a corp contest
+        # resolves. The frame reads the territory's owner, so recolour it now rather
+        # than waiting for the runner's next step (offers and gigs refresh too).
+        self._refresh()
 
     async def on_screen_resume(self) -> None:
         # A shop bought from, a fixer's job accepted, or a gig run and consumed can all

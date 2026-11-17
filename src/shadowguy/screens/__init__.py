@@ -1,6 +1,7 @@
 import re
 
 from rich.text import Text
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Collapsible, ListItem, ListView, Static
 
@@ -237,6 +238,17 @@ class RefreshOnResume:
 
     async def on_screen_resume(self) -> None:
         await self._refresh()
+
+
+class DayTicked(Message):
+    """The clock crossed midnight and the world's day resolved.
+
+    Posted by `ShadowguyApp.spend_time` to the screen that was on top when the boundary
+    landed, so a screen whose content reads world state (a territory's owner, a fixer's
+    offers) can redraw without waiting for the player's next action. Screens sitting
+    under a pushed screen don't get it; they redraw on resume via `RefreshOnResume`.
+    A screen that holds nothing world-derived can simply ignore it.
+    """
 
 
 def _in_collapsed_section(widget) -> bool:
