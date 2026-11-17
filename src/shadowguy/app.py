@@ -380,10 +380,13 @@ class ShadowguyApp(App):
                     target = self.corp_map.territories[action.territory_id].name
                     self.notify(f"{name} claimed {target}.")
         if corp_day.trained:
-            self.notify(
-                f"Training complete: {corp_day.trained.count} new "
-                f"{employee_plural(corp_day.trained.category)} report for duty."
-            )
+            count = corp_day.trained.count
+            category = corp_day.trained.category
+            if count == 1:
+                noun, verb = category.replace("_", " "), "reports"
+            else:
+                noun, verb = employee_plural(category), "report"
+            self.notify(f"Training complete: {count} new {noun} {verb} for duty.")
         if corp_day.returned_operatives:
             self.notify(f"{corp_day.returned_operatives} operative(s) returned from tasking.")
         sightings = resolve_surveillance_day(
