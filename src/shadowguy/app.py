@@ -4,7 +4,7 @@ import random
 import traceback
 from datetime import datetime, timezone
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Static
@@ -29,6 +29,7 @@ from shadowguy.rivals import RivalAction, RunnerState, resolve_rival_day
 from shadowguy.runners import live_runner, select_active_runners
 from shadowguy.saves import SaveSlot, save_game
 from shadowguy.scene import Scene
+from shadowguy.screens import DayTicked
 from shadowguy.screens.corp_map_screen import CorpMapScreen
 from shadowguy.screens.creation_screen import CharacterCreationScreen
 from shadowguy.screens.menu_screens import BuildSelectScreen, QuitMenu, TitleMenu
@@ -171,6 +172,14 @@ class ShadowguyApp(App):
             self.rival_actions = []
             for day in range(old_day + 1, new_day + 1):
                 self._apply_day_tick(day, skip_night_effects, protect_job_id)
+            # A day boundary is when ownership can flip (a rival expands, a corp contest
+            # resolves) and offers are refreshed. Tell the screen that was on top so it
+            # can redraw without waiting for the player's next action. The GUI drives the
+            # app with no screen stack, so there is nothing to tell there.
+            try:
+                self.screen.post_message(DayTicked())
+            except ScreenStackError:
+                pass
 
     def rest_cost(self) -> int:
         """What Rest would charge for lodging right now — also read by CorpMapScreen/
