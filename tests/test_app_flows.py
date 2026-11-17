@@ -70,12 +70,15 @@ from shadowguy.corp_turn import (
     TECHNOLOGIES,
     TECHNOLOGIES_BY_ID,
     CorpState,
+    EmployeeCategory,
     FactionEvent,
+    PendingRecruit,
     WORKER_SURVEILLANCE_ID,
     WORKER_SURVEILLANCE_INCOME_BONUS,
     collect_income,
     collect_research,
     has_technology,
+    operative_max,
     owned_research_facility,
 )
 from shadowguy.cybernetics import (
@@ -2420,6 +2423,100 @@ def test_corp_only_panels_show_corp_cash_and_track_it_across_a_rest():
             assert app.corp_state.cash > cash_before
             assert f"Cash: {app.corp_state.cash}eb" in sheet.render()
             assert f"{app.corp_state.cash}eb" in str(info.content)
+
+    run(body())
+
+
+def test_corp_sheet_and_ledger_quote_research_the_same_way():
+    """Both surfaces print CorpState.research_points, and the ledger used to keep the
+    float's trailing `.0` while the sheet trimmed it -- a flat 6 read as "6rp" on the
+    sheet and "6.0rp" in the ledger. Fractional points must still show their decimal."""
+
+    async def body():
+        app = ShadowguyApp(seed=720001)
+        async with app.run_test(size=(100, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            screen = app.screen
+            sheet = screen.query_one(CharacterSheet)
+            info = screen.query_one("#corp_info")
+
+            app.corp_state.research_points = 6.0
+            sheet.refresh()
+            screen._refresh_map_corp_info()
+            await _settle(pilot)
+            assert "Research: 6rp" in sheet.render()
+            assert "6rp" in str(info.content)
+            assert "6.0rp" not in str(info.content)
+
+            app.corp_state.research_points = 6.5
+            sheet.refresh()
+            screen._refresh_map_corp_info()
+            await _settle(pilot)
+            assert "Research: 6.5rp" in sheet.render()
+            assert "6.5rp" in str(info.content)
+
+    run(body())
+
+
+def test_training_at_the_operative_pool_cap_names_the_cap():
+    """train_employees fails on the pool cap before it prices the batch, so the generic
+    refusal told a corp holding thousands of eb that it couldn't afford 200eb."""
+
+    async def body():
+        app = ShadowguyApp(seed=815002)
+        async with app.run_test(size=(100, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            state = app.corp_state
+            state.operatives = operative_max(state)
+            state.cash = 5_000
+            state.action_points = 2
+            screen = app.screen
+            await screen._select_category("corp")
+            await _settle(pilot)
+
+            training = screen.query_one("#academy_list", ListView)
+            ids = [item.id for item in training.children]
+            assert "train_operative" in ids
+            notes: list[str] = []
+            app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+            training.focus()
+            training.index = ids.index("train_operative")
+            await pilot.press("enter")
+            await _settle(pilot)
+
+            assert any("Operative pool full" in note for note in notes), notes
+            assert not any("Can't afford" in note for note in notes), notes
+            assert state.cash == 5_000
+            assert state.action_points == 2
+            assert state.pending_recruit is None
+
+    run(body())
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [(1, "1 new operative reports for duty"), (2, "2 new operatives report for duty")],
+)
+def test_training_complete_toast_agrees_with_a_batch_of_one(count, expected):
+    """A tier-1 Academy trains exactly one, and the toast used to always say
+    "1 new operatives report for duty"."""
+
+    async def body():
+        app = ShadowguyApp(seed=815002)
+        async with app.run_test(size=(100, 60)) as pilot:
+            await _boot_corp_game(pilot, app)
+            state = app.corp_state
+            state.pending_recruit = PendingRecruit(
+                category=EmployeeCategory.OPERATIVE,
+                count=count,
+                ready_day=app.character.day + 1,
+            )
+            notes: list[str] = []
+            app.notify = lambda message, *args, **kwargs: notes.append(str(message))
+            app.spend_time(HOURS_PER_DAY)
+            await _settle(pilot)
+
+            assert any(expected in note for note in notes), notes
 
     run(body())
 

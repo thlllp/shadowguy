@@ -22,6 +22,7 @@ Reports are ordered by the build they were run against, not by filename.
 | `2026-11-07-five-runs-2.md` | `5b8cba3` | both P2s verified in real play; three P3s re-confirmed; crew hiring and safehouse purchase/build now covered |
 | `2026-11-07-five-runs-3.md` | `1dc8f16` | all open fixes verified; live capture and a blown security contract now covered; no new defects |
 | `2026-11-08-five-runs.md` | `56600fd` | GUI surfaces sweep; one P3 (corp actions don't log FactionEvents) — fixed in the follow-up |
+| `2026-11-16-corp-five-runs.md` | `9965e7d` + WIP | five corp-only sessions: research-formatting fix verified; no P0/P1/P2, three P3s (pool-cap copy and singular toast fixed after the run; save/load tab recorded as intended) |
 
 ## Status at `56600fd`
 
@@ -57,6 +58,20 @@ every committed operative dies (`attacker_losses = min(committed, defense)`). Th
 is an intended pyrrhic-capture risk, not a bug — committing more than the defense
 is what leaves a garrison, and the force picker now says so. See DESIGN.md's Corp
 conflict section.
+
+## Status at `9965e7d` + the corp research-formatting fix
+
+Five corp-only sessions found **no P0/P1/P2**. The working-tree fix — quoting
+`research_points` with `:g` in the ledger as well as the sheet — is verified in
+play: `6.0 → 6rp`, `6.5 → 6.5rp`, `7.25 → 7.25rp`, never a trailing `.0`. Three
+P3s were confirmed: the operative pool-cap refusal said "Can't afford it." while
+holding thousands of eb (fixed), the training-complete toast said "1 new
+operatives report for duty." (fixed), and a save made in map mode after visiting
+the Corp tab reloads onto that tab (intended per `main_menu_category`; recorded,
+not changed). Facility loss → RP stall → `rebuild_<district>` recovery,
+map-panel intel/sabotage, a repelled attack, save/load, and the 80×24 / 90×28
+layouts all behaved as designed. Still untested: attack capture, corp defeat on
+this build, and the Academy-loss `newacademy_` rebuild.
 
 ## Running again
 

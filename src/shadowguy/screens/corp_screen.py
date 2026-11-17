@@ -245,7 +245,7 @@ def corp_info_text(corp_state: CorpState, corp_map, day: int) -> str:
     if len(names) > 4:
         shown_names += f" +{len(names) - 4} more"
     return (
-        f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points}rp — "
+        f"{faction.name} — {corp_state.cash}eb — {corp_state.research_points:g}rp — "
         f"{corp_state.operatives}/{operative_max(corp_state)} ops "
         f"({corp_state.tasking_operatives} on task) — Day {day}\n"
         f"Territories ({len(owned)}): {shown_names}\n"
@@ -684,8 +684,29 @@ class CorpActionsMixin:
             )
         elif corp_state.pending_recruit is not None:
             self.notify("The Academy's already training a batch.", severity="warning")
+        elif self._operative_pool_is_full(category):
+            self.notify(
+                f"Operative pool full ({corp_state.operatives}/{operative_max(corp_state)}) "
+                "— deploy some first.",
+                severity="warning",
+            )
         else:
             self._notify_refusal()
+
+    def _operative_pool_is_full(self, category: EmployeeCategory) -> bool:
+        """Whether the pool cap -- not cash -- is what refused this training batch.
+
+        `train_employees` fails closed on the cap before it prices the batch, so the
+        generic refusal said "Can't afford it." to a corp holding thousands of eb. The
+        cap is only the reason when the daily move and the training slot are otherwise
+        free; AP and an in-progress batch keep their own messages.
+        """
+        corp_state = self.app.corp_state
+        if category is not EmployeeCategory.OPERATIVE or corp_state.action_points < AP_COST:
+            return False
+        academy = owned_academy(corp_state, self.app.corp_map)
+        count = (academy.academy_tier or 0) if academy is not None else 0
+        return count > 0 and corp_state.operatives + count > operative_max(corp_state)
 
     async def _row_upgrade_academy(self, _: str) -> None:
         corp_state, corp_map = self.app.corp_state, self.app.corp_map
